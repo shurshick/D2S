@@ -219,6 +219,10 @@ TGPROBE
 chmod +x /tmp/d2k-test-bin/ndmc /tmp/d2k-test-bin/curl /tmp/d2k-test-bin/d2ktg
 printf 'ip host www.instagram.com 157.240.9.175\nip host instagram.com 203.0.113.10\nip host unrelated.example 192.0.2.7\n' > /tmp/d2k-ndmc-state
 export D2K_STUB_PATH=/tmp/d2k-test-bin
+# The integration fixture provides an explicit test resolver; its curl wrapper
+# above serves the fixed response. Without this, refresh correctly skips when
+# D2K_RELAY_URL is unset and the lifecycle check has nothing to assert.
+export D2K_RELAY_URL=https://192.0.2.44.nip.io:9443/resolve
 panel_curl() {
     curl --connect-to "127.0.0.1:8090:$LAN_TEST_IP:8090" "$@"
 }
