@@ -502,36 +502,26 @@ static void suspect(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     suspect_num(s, at_ns, k, fl, code, det, 0);
 }
 
-/* Зовётся при забвении потока по молчанию. Приветствие ушло, ответа с той
-   стороны не было ни одного — и узнать это можно только здесь, в конце.
+/* UDP intentionally has no expiry callback. Field evidence (task 40,
+   docs/field/2026-10-12g) showed no reliable distinction between a blocked
+   QUIC flow and a healthy idle one: 5.3% of healthy sessions place a short
+   1-RTT header beyond the queue window, and client packet counts overlap. */
+static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns);
 
-   У UDP такого обработчика НЕТ, и это решение, снятое с поля (задача 40,
-   docs/field/2026-10-12g): калитка «поток QUIC истёк без прикладного
-   доказательства» просуществовала три редакции и снята. Отличить молчащий
-   поток от здорового наблюдаемыми датапата нечем — ни коротким заголовком
-   1-RTT (5,3 % здоровых сеансов кладут его за окно очереди), ни упорством
-   клиента (наших пакетов у кандидатов 11/12/6 против 6…12 у здоровых).
-   Подробности и числа — в шапке test_quic_no_proof_ask. */
+struct flow_expire_ctx {
+    d2k_session *s;
+    uint64_t now_ns;
+};
+
 static void on_flow_expire(void *ctx, const d2k_flow *f) {
-    d2k_session *s = ctx;
-    d2k_capture_forget(&s->capture, &f->key);
-    if (f->controller_probe || !f->saw_hello || f->rev_after_hello > 0 || f->suspected) {
-        return;
+    struct flow_expire_ctx *c = ctx;
+    d2k_capture_forget(&c->s->capture, &f->key);
+    /* The track callback is const; re-find the live entry so the shared
+       checker can set its duplicate guard before d2k_track_expire removes it. */
+    d2k_flow *live = d2k_track_find(c->s->flows, &f->key);
+    if (live) {
+        (void)tcp_silence_observe(c->s, live, c->now_ns);
     }
-    /* Та же оговорка, что у sweep_one: без правила на обратное направление
-       сервер невидим, и молчащим выглядит каждый поток. Улика тут сессионная
-       (см. rev_seen): к моменту забвения поток мог не получить ни одного
-       пакета оттуда именно потому, что его и не ждали. */
-    if (!s->rev_seen[shape_slot(f->key.proto, f->key.family)] &&
-        !(f->key.proto == 17 && s->udp_reverse_hook)) {
-        return;
-    }
-    s->suspects++;
-    d2k_jrn_detail d;
-    memset(&d, 0, sizeof d);
-    d.planned = f->plan_done ? D2K_PLANNED_YES : D2K_PLANNED_NO;
-    d.client_shape = f->client_shape;
-    d2k_journal_add(s->jrn, f->last_ns, &f->key, D2K_JRN_SUSPECT, D2K_SUSPECT_SILENT, 0, &d, NULL, 0, NULL);
 }
 
 static uint32_t rd32(const uint8_t *p) {
@@ -2002,6 +1992,9 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             det.planned = fl->plan_done ? D2K_PLANNED_YES : D2K_PLANNED_NO;
             suspect(s, now_ns, &key, fl, D2K_SUSPECT_RST_AFTER_APP, &det);
         }
+        /* Specific FIN/RST evidence above keeps priority. If it did not fire,
+           preserve any eligible ClientHello silence before removing the flow. */
+        (void)tcp_silence_observe(s, fl, now_ns);
         d2k_capture_forget(&s->capture, &key);
         d2k_track_remove(s->flows, &key);
         out->skipped = rst ? "соединение сброшено" : "соединение закрывается";
@@ -3007,6 +3000,27 @@ static uint64_t silence_deadline(const d2k_flow *f) {
     return d;
 }
 
+/* One TCP rule for sweep, idle expiry and close. Reverse visibility is
+   per-flow; empty ACKs establish visibility but only payload counts as a
+   response. One same-sequence ClientHello retransmission is an independent
+   retry signal; otherwise retain the measured RTT-based wait. */
+static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns) {
+    if (!s || !f || f->controller_probe || !f->saw_hello ||
+        f->silence_told || f->suspected || f->rev_pkts == 0 ||
+        f->rev_payload_after_hello > 0 || f->saw_rev_rst) {
+        return 0;
+    }
+    const int waited = now_ns >= f->hello_ns &&
+                       now_ns - f->hello_ns >= silence_deadline(f);
+    const int retransmitted = f->hello_repeats > 0;
+    if (!waited && !retransmitted) {
+        return 0;
+    }
+    f->silence_told = 1;
+    suspect(s, now_ns, &f->key, f, D2K_SUSPECT_SILENT, NULL);
+    return 1;
+}
+
 /* ОКНО ПОВТОРА FIN — сколько держать запись после FIN клиента.
  *
  * Сигнал один: повтор того же FIN, то есть ретрансмиссия по таймеру. Таймер
@@ -3042,29 +3056,7 @@ struct sweep_ctx {
  * блокировки: TCP жив, ответа нет. */
 static void sweep_one(void *ctx, d2k_flow *f) {
     struct sweep_ctx *c = ctx;
-    if (!f->saw_hello || f->silence_told || f->suspected) {
-        return;
-    }
-    if (f->rev_payload_after_hello > 0 || f->saw_rev_rst) {
-        return;
-    }
-    /* Обратная сторона должна быть ВИДНА. Правило на обратное направление
-       ставится не всегда, и без него в очередь не приходит ни один пакет
-       сервера: каждый поток выглядел бы молчащим. Это была бы подмена «не
-       смотрели» на «нет ответа» — ровно то, что §2.4 запрещает. Признаком
-       видимости служит любой пакет оттуда, обычно SYN-ACK. */
-    if (f->rev_pkts == 0) {
-        return;
-    }
-    if (c->now_ns < f->hello_ns) {
-        return;
-    }
-    if (c->now_ns - f->hello_ns < silence_deadline(f)) {
-        return;
-    }
-    f->silence_told = 1;
-    c->told++;
-    suspect(c->s, c->now_ns, &f->key, f, D2K_SUSPECT_SILENT, NULL);
+    c->told += (size_t)tcp_silence_observe(c->s, f, c->now_ns);
 }
 
 /* Молчание по UDP. Критерий СВОЙ, а не унаследованный от TCP, и разница не
@@ -3369,7 +3361,8 @@ size_t d2k_session_expire(d2k_session *s, uint64_t now_ns, uint64_t idle_ns) {
     /* Записи после FIN клиента — по своему окну (fin_retry_window), не по
        молчанию: ответ у них был, и on_flow_expire им сказать нечего. */
     size_t freed = d2k_track_remove_if(s->flows, fin_window_over, &now_ns);
-    freed += d2k_track_expire(s->flows, now_ns, idle_ns, on_flow_expire, s);
+    struct flow_expire_ctx ec = { s, now_ns };
+    freed += d2k_track_expire(s->flows, now_ns, idle_ns, on_flow_expire, &ec);
     freed += d2k_track_expire(s->uflows, now_ns, idle_ns, NULL, s);
     return freed;
 }

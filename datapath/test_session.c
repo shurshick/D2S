@@ -803,6 +803,155 @@ static void test_silent_cut_round1(void) {
     d2k_session_free(s);
 }
 
+/* TCP silence must survive the three ways a flow stops being observed:
+ * periodic sweep, idle expiry, and an ordinary FIN/RST close. A reverse empty
+ * ACK proves visibility but is not a TLS response. */
+static uint64_t tcp_silent_seed(d2k_session *s, uint16_t port,
+                                const uint8_t *hello, size_t hello_len,
+                                uint64_t rtt_ns, int server_empty_ack) {
+    uint8_t pkt[1024], out[4096];
+    d2k_result r;
+    size_t n = cut_seq(pkt, build_pkt(pkt, port, 0x02, NULL, 0), 999, 0);
+    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x12, NULL, 0), 4999, 1000);
+    d2k_session_packet(s, pkt, n, rtt_ns, out, sizeof out, &r);
+    uint64_t hello_ns = rtt_ns + 10000000ull;
+    n = cut_seq(pkt, build_pkt(pkt, port, 0x18, hello, hello_len), 1000, 5000);
+    d2k_session_packet(s, pkt, n, hello_ns, out, sizeof out, &r);
+    if (server_empty_ack) {
+        n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x10, NULL, 0),
+                    5000, 1000 + (uint32_t)hello_len);
+        d2k_session_packet(s, pkt, n, hello_ns + 10000000ull,
+                           out, sizeof out, &r);
+    }
+    return hello_ns;
+}
+
+static void test_tcp_silent_lifecycle(void) {
+    const uint64_t ms = 1000000ull;
+    const uint64_t sec = 1000000000ull;
+    uint8_t hello[512], pkt[1024], out[4096];
+    size_t hello_len = build_hello(hello);
+    d2k_result r;
+
+    /* SYN-ACK alone never creates a silent-flow event, even after both
+       observation windows have elapsed. */
+    d2k_session *s = d2k_session_new(16, 32);
+    CHECK(s != NULL, "SYN-ACK-only session allocation failed");
+    if (!s) { return; }
+    size_t n = cut_seq(pkt, build_pkt(pkt, 45100, 0x02, NULL, 0), 999, 0);
+    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    n = cut_seq(pkt, build_rev_pkt(pkt, 45100, 0x12, NULL, 0), 4999, 1000);
+    d2k_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
+    CHECK(d2k_session_sweep(s, 10 * sec) == 0,
+          "SYN-ACK without ClientHello emitted a silent suspicion");
+    d2k_session_expire(s, 20 * sec, 1 * sec);
+    CHECK(d2k_session_suspects(s) == 0,
+          "SYN-ACK alone reached the suspect journal at flow expiry");
+    d2k_session_free(s);
+
+    /* An empty server ACK is not TLS data. Sweep and expiry must use the same
+       decision, and expiry must report before removing the flow. */
+    s = d2k_session_new(16, 32);
+    CHECK(s != NULL, "empty-ACK session allocation failed");
+    if (!s) { return; }
+    uint64_t hello_ns = tcp_silent_seed(s, 45101, hello, hello_len, 20 * ms, 1);
+    CHECK(d2k_session_sweep(s, hello_ns + 1500 * ms) == 1,
+          "empty ACK was mistaken for a TLS response by sweep");
+    const d2k_jrn_entry *e = last_suspect(s);
+    CHECK(e && e->code == D2K_SUSPECT_SILENT,
+          "empty ACK did not retain the silent event kind");
+    CHECK(d2k_session_sweep(s, hello_ns + 3 * sec) == 0 &&
+          d2k_session_suspects(s) == 1,
+          "sweep duplicated the silent event");
+    d2k_session_free(s);
+
+    s = d2k_session_new(16, 32);
+    CHECK(s != NULL, "expiry session allocation failed");
+    if (!s) { return; }
+    hello_ns = tcp_silent_seed(s, 45102, hello, hello_len, 20 * ms, 1);
+    CHECK(d2k_session_expire(s, hello_ns + 2 * sec, 500 * ms) == 1,
+          "idle TCP flow was not expired");
+    e = last_suspect(s);
+    CHECK(e && e->code == D2K_SUSPECT_SILENT && d2k_session_suspects(s) == 1,
+          "expiry discarded eligible silence after a reverse empty ACK");
+    d2k_session_free(s);
+
+    /* An early close is not enough. Once the measured silence deadline has
+       elapsed, FIN and RST must emit before the flow slot is removed. */
+    const uint8_t close_flags[] = {0x11, 0x14}; /* client FIN|ACK, RST|ACK */
+    for (size_t i = 0; i < sizeof close_flags; i++) {
+        uint16_t port = (uint16_t)(45110 + i);
+        s = d2k_session_new(16, 32);
+        CHECK(s != NULL, "early-close session allocation failed");
+        if (!s) { continue; }
+        hello_ns = tcp_silent_seed(s, port, hello, hello_len, 20 * ms, 1);
+        n = cut_seq(pkt, build_pkt(pkt, port, close_flags[i], NULL, 0),
+                    1000 + (uint32_t)hello_len, 5000);
+        d2k_session_packet(s, pkt, n, hello_ns + 500 * ms,
+                           out, sizeof out, &r);
+        CHECK(d2k_session_suspects(s) == 0,
+              "early FIN/RST without a retransmission was treated as silence");
+        d2k_session_free(s);
+
+        s = d2k_session_new(16, 32);
+        CHECK(s != NULL, "late-close session allocation failed");
+        if (!s) { continue; }
+        hello_ns = tcp_silent_seed(s, (uint16_t)(port + 10), hello, hello_len,
+                                   20 * ms, 1);
+        n = cut_seq(pkt, build_pkt(pkt, (uint16_t)(port + 10), close_flags[i],
+                                   NULL, 0),
+                    1000 + (uint32_t)hello_len, 5000);
+        d2k_session_packet(s, pkt, n, hello_ns + 1500 * ms,
+                           out, sizeof out, &r);
+        e = last_suspect(s);
+        CHECK(e && e->code == D2K_SUSPECT_SILENT,
+              "FIN/RST removed an eligible silent flow before reporting it");
+        d2k_session_free(s);
+    }
+
+    /* One same-sequence ClientHello retransmission is a credible retry. It
+       can release a silent event before the RTT-scaled wait expires; the
+       server has not ACKed the ClientHello on this flow. */
+    s = d2k_session_new(16, 32);
+    CHECK(s != NULL, "retransmission session allocation failed");
+    if (!s) { return; }
+    hello_ns = tcp_silent_seed(s, 45130, hello, hello_len, 200 * ms, 0);
+    n = cut_seq(pkt, build_pkt(pkt, 45130, 0x18, hello, hello_len), 1000, 5000);
+    d2k_session_packet(s, pkt, n, hello_ns + 1100 * ms, out, sizeof out, &r);
+    CHECK(d2k_session_sweep(s, hello_ns + 1200 * ms) == 1,
+          "credible ClientHello retransmission did not release silence early");
+    e = last_suspect(s);
+    CHECK(e && e->code == D2K_SUSPECT_SILENT,
+          "credible retransmission emitted the wrong event");
+    d2k_session_free(s);
+
+    /* A TLS-looking but unrecognized ClientHello remains diagnosable and
+       cannot become a search signal merely because SYN-ACK was visible. */
+    s = d2k_session_new(16, 32);
+    CHECK(s != NULL, "unrecognized-hello session allocation failed");
+    if (!s) { return; }
+    n = cut_seq(pkt, build_pkt(pkt, 45140, 0x02, NULL, 0), 999, 0);
+    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    n = cut_seq(pkt, build_rev_pkt(pkt, 45140, 0x12, NULL, 0), 4999, 1000);
+    d2k_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
+    /* The handshake length exceeds the containing TLS record, so the parser
+       must not accept this as a ClientHello even though the type byte is 1. */
+    const uint8_t malformed_hello[] = {0x16, 0x03, 0x03, 0x00, 0x40,
+                                       0x01, 0x00, 0x00, 0x40};
+    n = cut_seq(pkt, build_pkt(pkt, 45140, 0x18, malformed_hello,
+                               sizeof malformed_hello), 1000, 5000);
+    d2k_session_packet(s, pkt, n, 30 * ms, out, sizeof out, &r);
+    d2k_payload_stats ps;
+    d2k_session_payload_stats(s, &ps);
+    CHECK(ps.not_hello == 1 && ps.last_first_byte == 0x16,
+          "unrecognized TLS handshake did not produce bounded parse diagnostics");
+    CHECK(d2k_session_sweep(s, 10 * sec) == 0 &&
+          d2k_session_suspects(s) == 0,
+          "unrecognized ClientHello triggered a silent suspicion/search");
+    d2k_session_free(s);
+}
+
 /* --- ОТВЕТ, КОТОРЫЙ СПРЯТАЛ УСКОРИТЕЛЬ -----------------------------------
  *
  * Keenetic (MediaTek PPE, fastnat) уводит транзитный поток в аппаратный путь
@@ -1575,6 +1724,7 @@ int main(void) {
     test_late_rst_after_tls_appdata();
     test_silent_cut_fin_retry();
     test_silent_cut_round1();
+    test_tcp_silent_lifecycle();
     d2k_session *s = d2k_session_new(64, 32);
     CHECK(s != NULL, "сессия не создалась");
     if (!s) {
@@ -1720,13 +1870,14 @@ int main(void) {
         d2k_session_packet(z, pkt, n, 5500, buf, sizeof buf, &r);
         CHECK(d2k_session_suspects(z) == 2, "подозрение отмечено по одному потоку дважды");
 
-        /* 3. Ответа не было вовсе — видно только при забвении потока. */
+        /* 3. Видимость другого потока не доказывает, что обратное правило
+           работало на этом: поток истекает без собственного SYN-ACK. */
         n = build_pkt(pkt, 41003, 0x18, hello, hlen);
         d2k_session_packet(z, pkt, n, 6000, buf, sizeof buf, &r);
         uint64_t before = d2k_session_suspects(z);
-        d2k_session_expire(z, 6000 + 100000, 50000);
-        CHECK(d2k_session_suspects(z) > before,
-              "молчание в ответ на приветствие не замечено при уборке");
+        d2k_session_expire(z, 6000 + 2000000000ull, 50000);
+        CHECK(d2k_session_suspects(z) == before,
+              "обратная видимость другого потока засчитана как SYN-ACK этого потока");
 
         /* Поток, на приветствие которого ответили, подозрения не вызывает. */
         d2k_session *w = d2k_session_new(64, 64);
