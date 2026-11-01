@@ -202,7 +202,7 @@ ssh_do '/opt/etc/init.d/S99d2k engine-restart'
 say "Проверяю datapath, контроллер, очередь и неизменность firewall-счётчика правил…"
 POST=
 POST_OK=0
-for attempt in {1..30}; do
+for _ in {1..30}; do
     if POST=$(ssh_do "$REMOTE_SNAPSHOT"); then
         POST_OK=1
         break

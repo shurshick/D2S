@@ -23,5 +23,6 @@ done
 
 n=$(wc -l < "$list" | tr -d ' ')
 # shellcheck disable=SC2046 # the list holds plain repository paths
-shellcheck -s sh $(sort -u "$list")
+# Let ShellCheck use each file's shebang (Bash deployment scripts are not POSIX sh).
+shellcheck $(sort -u "$list")
 echo "lint-shell: $n files clean"
