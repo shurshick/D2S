@@ -57,6 +57,19 @@ TESTS   = test_icmpguard test_addr test_hold test_udp_hold test_udp_release test
 
 .PHONY: all check san gcc-warn ctlprobe d2kd-linux-arm64 test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-quic-session test-stun-session test-udp-release test-udp-path test-routemark cross clean
 
+# Linux integration regression: the NFQUEUE receive buffer must honor a large
+# request even when net.core.rmem_max is lower (the target router setting).
+.PHONY: test-nfq-rcvbuf-linux
+test_nfq_rcvbuf: test_nfq_rcvbuf.c nfq.c nl.c include/d2k_nfq.h include/d2k_nl.h
+	$(CC) $(CFLAGS) -o $@ test_nfq_rcvbuf.c nfq.c nl.c $(LDFLAGS)
+
+test_nfq_rcvbuf_unit: test_nfq_rcvbuf_unit.c nfq.c nl.c include/d2k_nfq.h include/d2k_nl.h
+	$(CC) $(CFLAGS) -o $@ test_nfq_rcvbuf_unit.c nl.c $(LDFLAGS)
+
+test-nfq-rcvbuf-linux: test_nfq_rcvbuf test_nfq_rcvbuf_unit
+	./test_nfq_rcvbuf_unit
+	./test_nfq_rcvbuf
+
 all: planlab ctlprobe
 
 HDR += include/d2k_packet.h
@@ -529,4 +542,4 @@ test-ctlprobe: test_ctlprobe
 check: all test-hold test-udp-hold test-udp-release test-udp-path test-routemark test-capture test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-stun-session test-quic-session test-ctlprobe
 
 clean:
-	rm -f *.o $(TESTS) test_ctlprobe test_raw_cap planlab ctlprobe d2kd
+	rm -f *.o $(TESTS) test_ctlprobe test_raw_cap test_nfq_rcvbuf test_nfq_rcvbuf_unit planlab ctlprobe d2kd

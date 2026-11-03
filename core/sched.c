@@ -1202,14 +1202,15 @@ typedef struct {
     int64_t seen_ms;
 } late_rst_pending;
 
-/* ЧИСТОЕ РУКОПОЖАТИЕ БЕЗ ПЛАНА (поле 15.10.2026, медиа VK). Имя, которое
-   недавно завершило обмен с ответом сервера на потоке БЕЗ нашего плана,
-   работает само; RST/молчание по нему на рукопожатии — не блок, а штатный
-   сброс сервером лишних соединений. Гасит замер ТОЛЬКО на рукопожатии
-   (RST/SILENT/REPEAT); обрыв объёма и позднее закрытие мерятся как прежде. */
+/* ЧИСТОЕ РУКОПОЖАТИЕ БЕЗ ПЛАНА (поле 15.10.2026, медиа VK). Клиент, который
+   недавно завершил обмен с ответом сервера на потоке БЕЗ нашего плана,
+   проходит эту цель; RST/молчание его следующего рукопожатия — не блок, а
+   штатный сброс сервером лишних соединений. Другому LAN-клиенту это ничего
+   не доказывает. Гасит замер только на рукопожатии (RST/SILENT/REPEAT). */
 typedef struct {
     char name[256];
     uint8_t transport, family, used;
+    uint8_t client_ip[16];
     int64_t seen_ms;
 } clean_hs_seen;
 #define SCHED_CLEAN_HS_SLOTS 16
@@ -1768,16 +1769,24 @@ static int box_volume_bucket_agrees(const d2k_cat_fp *box, const d2k_cat_fp *fp)
  * Go-сторона решает это же place'ом `if k.LowPort == 443` (controller.go,
  * serverOf) — то есть зашитым номером порта. Повторять это здесь нельзя:
  * охват d2k — весь IP-трафик, все порты всегда, а не 443. */
-static void server_of(const d2k_ev *ev, char *ip, size_t ipcap, uint16_t *port) {
+static int server_is_low(const d2k_ev *ev) {
     int low_eph  = ev->low_port  >= EPHEMERAL_FROM;
     int high_eph = ev->high_port >= EPHEMERAL_FROM;
-    int server_is_low;
     if (low_eph != high_eph) {
-        server_is_low = high_eph; /* эфемерный — клиент, значит сервер другой */
-    } else {
-        server_is_low = ev->low_port <= ev->high_port;
+        return high_eph; /* эфемерный — клиент, значит сервер другой */
     }
-    if (server_is_low) {
+    return ev->low_port <= ev->high_port;
+}
+
+static void client_ip_of(const d2k_ev *ev, uint8_t ip[16]) {
+    const uint8_t *client = server_is_low(ev) ? ev->high_ip : ev->low_ip;
+    memset(ip, 0, 16);
+    memcpy(ip, client, ev->family == 6 ? 16 : 4);
+}
+
+static void server_of(const d2k_ev *ev, char *ip, size_t ipcap, uint16_t *port) {
+    int is_low = server_is_low(ev);
+    if (is_low) {
         (void)inet_ntop(ev->family == 6 ? AF_INET6 : AF_INET, ev->low_ip, ip, (socklen_t)ipcap);
         *port = ev->low_port;
     } else {
@@ -7672,8 +7681,7 @@ static int is_telegram_tunnel_domain(const char *name) {
     return strcasecmp(name + name_len - domain_len, domain) == 0;
 }
 
-static int clean_handshake_recent(d2k_sched *s, const char *name, uint8_t transport,
-                                  uint8_t family);
+static int clean_handshake_recent(d2k_sched *s, const char *name, const d2k_ev *ev);
 static int on_suspect(d2k_sched *s, const d2k_ev *ev, int replayed) {
     if (!replayed && s->suspect_events < UINT64_MAX) { s->suspect_events++; }
     s->last_suspect_ms = s->now_ms;
@@ -7759,7 +7767,7 @@ static int on_suspect(d2k_sched *s, const d2k_ev *ev, int replayed) {
     if (ev->transport == 6 && ev->planned != D2K_LINK_PLANNED_YES &&
         (ev->code == D2K_SUSPECT_RST || ev->code == D2K_SUSPECT_REPEAT ||
          ev->code == D2K_SUSPECT_SILENT) &&
-        clean_handshake_recent(s, name, 6, ev->family ? ev->family : 4)) {
+        clean_handshake_recent(s, name, ev)) {
         char quiet_key[300];
         snprintf(quiet_key, sizeof quiet_key, "clean-hs %s", name);
         say_quiet(s, quiet_key,
@@ -9626,14 +9634,17 @@ static void on_refused(d2k_sched *s, const d2k_ev *ev) {
    internal/classify/trigger.go), и теперь так же принимают оба наших
    опросника (0009, U1). Для ПОСЛЕДУЮЩЕГО живого соединения наблюдение
    остаётся прежним: там вопрос другой. */
-/* Запоминаем имя, завершившее обмен с ответом сервера БЕЗ нашего плана. */
-static void note_clean_handshake(d2k_sched *s, const char *name, uint8_t transport,
-                                 uint8_t family) {
+/* Запоминаем цель и LAN-клиента, завершившего обмен БЕЗ нашего плана. */
+static void note_clean_handshake(d2k_sched *s, const char *name, const d2k_ev *ev) {
     if (!name || !name[0]) return;
+    uint8_t family = ev->family ? ev->family : 4;
+    uint8_t client_ip[16];
+    client_ip_of(ev, client_ip);
     clean_hs_seen *slot = NULL;
     for (size_t i = 0; i < SCHED_CLEAN_HS_SLOTS; i++) {
         clean_hs_seen *c = &s->clean_hs[i];
-        if (c->used && c->transport == transport && c->family == family &&
+        if (c->used && c->transport == ev->transport && c->family == family &&
+            memcmp(c->client_ip, client_ip, family == 6 ? 16 : 4) == 0 &&
             strcmp(c->name, name) == 0) { slot = c; break; }
     }
     if (!slot) {
@@ -9641,19 +9652,23 @@ static void note_clean_handshake(d2k_sched *s, const char *name, uint8_t transpo
         s->clean_hs_next = (s->clean_hs_next + 1) % SCHED_CLEAN_HS_SLOTS;
         memset(slot, 0, sizeof *slot);
         snprintf(slot->name, sizeof slot->name, "%s", name);
-        slot->transport = transport;
+        slot->transport = ev->transport;
         slot->family = family;
+        memcpy(slot->client_ip, client_ip, family == 6 ? 16 : 4);
         slot->used = 1;
     }
     slot->seen_ms = s->now_ms;
 }
 
-/* Было ли у имени недавно чистое рукопожатие без плана. */
-static int clean_handshake_recent(d2k_sched *s, const char *name, uint8_t transport,
-                                  uint8_t family) {
+/* Завершал ли этот клиент чистое рукопожатие цели без плана. */
+static int clean_handshake_recent(d2k_sched *s, const char *name, const d2k_ev *ev) {
+    uint8_t family = ev->family ? ev->family : 4;
+    uint8_t client_ip[16];
+    client_ip_of(ev, client_ip);
     for (size_t i = 0; i < SCHED_CLEAN_HS_SLOTS; i++) {
         const clean_hs_seen *c = &s->clean_hs[i];
-        if (c->used && c->transport == transport && c->family == family &&
+        if (c->used && c->transport == ev->transport && c->family == family &&
+            memcmp(c->client_ip, client_ip, family == 6 ? 16 : 4) == 0 &&
             strcmp(c->name, name) == 0) {
             return s->now_ms - c->seen_ms <= SCHED_CLEAN_HS_MS;
         }
@@ -9669,7 +9684,7 @@ static void on_exchange(d2k_sched *s, const d2k_ev *ev) {
     if (ev->transport == 6 && ev->server_hello &&
         ev->planned == D2K_LINK_PLANNED_NO) {
         const char *nm = recall(s, ev);
-        if (nm) note_clean_handshake(s, nm, 6, ev->family ? ev->family : 4);
+        if (nm) note_clean_handshake(s, nm, ev);
     }
     /* Наблюдение UDP-ответа по потоку с применённым приёмом. Раньше
        всех прочих разборов: у UDP нет типов записей TLS, и проверка на

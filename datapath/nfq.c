@@ -5,6 +5,7 @@
  * атрибута, получал EINVAL и не смотрел на него. «Отправили» и «ядро приняло»
  * — разные события, и различать их обязательно.
  */
+#define _GNU_SOURCE
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -120,6 +121,29 @@ static int send_and_ack(d2k_nfq *q, const uint8_t *msg, size_t len, uint32_t seq
     return await_ack(q->fd, seq, err, errcap);
 }
 
+/* SO_RCVBUF is silently capped by net.core.rmem_max. The datapath requests a
+   multi-megabyte queue, so use the privileged override when available and
+   report the effective value instead of assuming the request was honored. */
+static int set_rcvbuf(int fd, int requested, int *effective) {
+    int v = requested;
+    int rc = -1;
+#ifdef SO_RCVBUFFORCE
+    rc = setsockopt(fd, SOL_SOCKET, SO_RCVBUFFORCE, &v, sizeof v);
+#endif
+    if (rc != 0 && setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &v, sizeof v) != 0) {
+        return -1;
+    }
+
+    socklen_t len = sizeof v;
+    if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &v, &len) != 0) {
+        return -1;
+    }
+    if (effective) {
+        *effective = v;
+    }
+    return v >= requested ? 0 : 1;
+}
+
 d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
     if (!cfg) {
         say(err, errcap, "нет настроек очереди");
@@ -154,10 +178,18 @@ d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
     }
 
     if (cfg->rcvbuf > 0) {
-        int v = cfg->rcvbuf;
-        /* Неудача не смертельна: маленький буфер означает больше потерь, а не
-           неработающую очередь. Потери всё равно видны через ENOBUFS. */
-        (void)setsockopt(q->fd, SOL_SOCKET, SO_RCVBUF, &v, sizeof v);
+        int effective = 0;
+        int rc = set_rcvbuf(q->fd, cfg->rcvbuf, &effective);
+        /* Невозможность увеличить буфер не выключает очередь: fail-open
+           сохраняет трафик. Но скрытый лимит должен быть виден в журнале. */
+        if (rc < 0) {
+            fprintf(stderr, "d2kd: не удалось настроить SO_RCVBUF NFQUEUE: %s\n",
+                    strerror(errno));
+        } else if (rc > 0) {
+            fprintf(stderr,
+                    "d2kd: SO_RCVBUF NFQUEUE ограничен: запрос %d, ядро установило %d\n",
+                    cfg->rcvbuf, effective);
+        }
     }
 
     uint8_t msg[256];

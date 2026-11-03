@@ -2097,6 +2097,36 @@ static d2k_ver_result stub_replay(int use_fd, const char *ip, uint16_t port,
     return r;
 }
 
+static void test_clean_handshake_multi_client(int ctl_fd) {
+    d2k_catalog empty = {0};
+    d2k_sched *s = d2k_sched_new(&empty, ctl_fd, 0x2d);
+    saidbuf[0] = '\0'; forget_sent();
+    d2k_sched_set_say(s, collect_say, NULL);
+    tcp_calls = quic_calls = 0;
+    const char *nm = "clean.multi-client.test";
+
+    d2k_ev hA = ev_hello(6, 40704, nm); d2k_sched_event(s, &hA);
+    d2k_ev xA = ev_exchange(6, 40704, 1);
+    xA.planned = D2K_LINK_PLANNED_NO;
+    d2k_sched_event(s, &xA);
+
+    d2k_ev hB = ev_hello(6, 40705, nm);
+    hB.high_ip[3] = 68; /* второй ПК: 192.168.1.68 вместо .67 */
+    d2k_sched_event(s, &hB);
+    d2k_ev suB = ev_suspect(6, 40705);
+    suB.high_ip[3] = 68;
+    suB.code = D2K_SUSPECT_RST;
+    suB.planned = D2K_LINK_PLANNED_NO;
+    int rcB = d2k_sched_event(s, &suB);
+    CHECK(rcB == 1,
+          "чистое рукопожатие первого ПК подавило подозрение второго");
+    settle(s);
+    CHECK(tcp_calls == 1,
+          "подозрение второго ПК не запустило отдельный замер");
+    if (fails) fprintf(stderr, "%s\n", saidbuf);
+    d2k_sched_free(s); d2k_catalog_free(&empty);
+}
+
 int main(int argc, char **argv) {
     /* A scheduler without the measured packet runtime must never silently
        substitute the legacy socket-write classifier and export its cuts. */
@@ -2124,8 +2154,9 @@ int main(int argc, char **argv) {
     int unfit_only = argc == 2 && strcmp(argv[1], "--unfit-only") == 0;
     int client_tcp_only = argc == 2 && strcmp(argv[1], "--client-tcp-only") == 0;
     int ech_only = argc == 2 && strcmp(argv[1], "--ech-only") == 0;
-    if (argc > 1 && !voice_only && !rx_only && !rst_only && !admission_only && !question_only && !shape_only && !groups_only && !retire_only && !recheck_only && !lifecycle_only && !own_first_only && !measured_only && !unfit_only && !client_tcp_only && !ech_only) {
-        fprintf(stderr, "usage: test_sched [--voice-only|--rst-only|--admission-only|--question-only|--retire-only|--recheck-only|--lifecycle-only|--own-first-only|--measured-only|--ech-only]\n");
+    int clean_hs_only = argc == 2 && strcmp(argv[1], "--clean-hs-multi-client-only") == 0;
+    if (argc > 1 && !voice_only && !rx_only && !rst_only && !admission_only && !question_only && !shape_only && !groups_only && !retire_only && !recheck_only && !lifecycle_only && !own_first_only && !measured_only && !unfit_only && !client_tcp_only && !ech_only && !clean_hs_only) {
+        fprintf(stderr, "usage: test_sched [--voice-only|--rst-only|--admission-only|--question-only|--retire-only|--recheck-only|--lifecycle-only|--own-first-only|--measured-only|--ech-only|--clean-hs-multi-client-only]\n");
         return 2;
     }
     /* Real default verifier, before replacing hooks: the Plan is scoped to
@@ -2177,6 +2208,12 @@ int main(int argc, char **argv) {
     {
         int fl = fcntl(drain_fd, F_GETFL, 0);
     if (fl >= 0) { (void)fcntl(drain_fd, F_SETFL, fl | O_NONBLOCK); }
+    }
+
+    if (clean_hs_only) {
+        test_clean_handshake_multi_client(sv[0]);
+        close(sv[0]); close(sv[1]);
+        return fails ? 1 : 0;
     }
 
     d2k_catalog cat;
@@ -5220,6 +5257,11 @@ admission_only_run:
               "чистое рукопожатие ошибочно погасило обрыв объёма");
         d2k_sched_free(s); d2k_catalog_free(&empty);
     }
+
+    /* Чистое рукопожатие одного LAN-клиента не доказывает, что другой
+       клиент проходит ту же цель: его отдельное подозрение должно запускать
+       замер. */
+    test_clean_handshake_multi_client(sv[0]);
 
     /* --- своё имя-приманка — не цель ------------------------------------
        Поле 14.10.2026: приветствия с disk.rzd.ru (приманка SCHED_DECOY) шли
