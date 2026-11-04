@@ -80,6 +80,7 @@ jobs:
           D2S_SIGNING_KEY: ${{ secrets.D2S_ED25519_PRIVATE_KEY }}
         run: |
           test -n "$D2S_SIGNING_KEY"
+          export NOTES="$(cat docs/release-notes.md)"
           sh scripts/package-release.sh builds release-out
           python3 scripts/test-d2s-package.py release-out
           umask 077

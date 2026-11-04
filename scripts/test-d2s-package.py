@@ -10,6 +10,7 @@ root = Path(__file__).resolve().parents[1]
 out = Path(sys.argv[1])
 installer = (root / 'scripts/install.sh').read_text()
 metadata = json.loads((out / 'latest.json').read_text())
+assert isinstance(metadata.get('notes'), str) and metadata['notes'].strip(), 'release notes must reach the panel'
 stage_limit = int(re.search(r'^TMP_NEED_KB=(\d+)$', installer, re.M)[1]) * 1024
 release_limit = int(re.search(r'^TMP_RELEASE_NEED_KB=(\d+)$', installer, re.M)[1]) * 1024
 for arch, asset in metadata['assets'].items():
