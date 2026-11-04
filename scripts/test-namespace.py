@@ -9,3 +9,6 @@ for directory in ("core","datapath","detect","runtime","panel","telegram","inter
         text=re.sub(r"https?://[^\s]+","",text)
         assert not re.search(r"d2k|D2K",text),str(p)
 print("D2S runtime namespace: PASS")
+
+for p in (root/"datapath/testdata").glob("*.tlv"):
+    assert p.read_bytes()[:4] == b"D2SP",str(p)

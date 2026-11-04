@@ -135,7 +135,7 @@ int main(void) {
         }
     }
     /* СОСТАВНОЙ ПЛАН СЕМЕЙСТВА C СОБИРАЕТСЯ И ИСПОЛНЯЕТСЯ (поле 10.10.2026).
-       Вопрос «ECH-приветствие под меткой» обязан дать ровно plan-680fbe00:
+       Вопрос «ECH-приветствие под меткой» обязан дать ровно plan-bb5131a8:
        fake под меткой времени, серия ×8, разрез настоящего приветствия +2,
        прямой порядок. Здесь сравниваются весь текст, TLV и каталожный ID;
        detect/test_raw.c независимо сравнивает полные runtime-пакеты. */
@@ -174,11 +174,11 @@ int main(void) {
                     d2s_plan_text_to_tlv(text, got_tlv, sizeof got_tlv, &got_n, err, sizeof err) ||
                     d2s_plan_text_to_tlv(expected, want_tlv, sizeof want_tlv, &want_n, err, sizeof err) ||
                     strcmp(text, expected) || got_n != want_n || memcmp(got_tlv, want_tlv, got_n)) {
-                    fprintf(stderr, "семейство C: arm != plan-680fbe00 (text/TLV)\n"); failures++;
+                    fprintf(stderr, "семейство C: arm != plan-bb5131a8 (text/TLV)\n"); failures++;
                 }
                 uint64_t hash = 1469598103934665603ULL;
                 for (const char *c = text; *c; c++) { hash ^= (unsigned char)*c; hash *= 1099511628211ULL; }
-                if ((uint32_t)hash != 0x680fbe00u) {
+                if ((uint32_t)hash != 0xbb5131a8u) {
                     fprintf(stderr, "семейство C: неверный ID plan-%08x\n", (unsigned)(uint32_t)hash); failures++;
                 }
             }
