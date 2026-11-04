@@ -630,7 +630,7 @@
           .from("#now-title", { y: 36, autoAlpha: 0, duration: 0.7 })
           .from("#now-lede", { y: 16, autoAlpha: 0, duration: 0.55 }, "-=0.5")
           .from(".slot-cell", { scale: 0.3, autoAlpha: 0, duration: 0.4, stagger: 0.05, ease: "back.out(2.4)" }, "-=0.4")
-          .from(rows, { y: 24, autoAlpha: 0, duration: 0.6, stagger: 0.08 }, "-=0.35");
+          .from(rows, { autoAlpha: 0, duration: 0.35, stagger: 0.04 }, "-=0.35");
       }
     }
   };
@@ -1167,15 +1167,8 @@
     }
     var firstLive = listNode.__d2sKey !== "live";
     listNode.__d2sKey = "live";
-    var animate = Motion.on() && Motion.Flip;
-    var stable = [];
-    for (var si = 0; si < listNode.children.length; si++) if (!listNode.children[si].__leaving) stable.push(listNode.children[si]);
-    var wantKeys = m.running.map(function (x) { return JSON.stringify([x.target, x.family, x.transport, x.ip, x.port]); });
-    if (m.queued.length) wantKeys.push("queue");
-    var haveKeys = stable.map(function (r) { return r.__d2sKey; });
-    var flipState = animate && stable.length && wantKeys.join("\n") !== haveKeys.join("\n") ? Motion.Flip.getState(stable) : null;
-    if (flipState) stable.forEach(function (r) { r.__oldTop = r.getBoundingClientRect().top; });
-    var entered = [], moved = false;
+    var animate = Motion.on();
+    var entered = [];
 
     var keep = {};
     m.running.forEach(function (s, index) {
@@ -1191,7 +1184,7 @@
         entered.push(row);
       }
       self.updateSearch(row, s);
-      if (listNode.children[index] !== row) { listNode.insertBefore(row, listNode.children[index] || null); moved = true; }
+      if (listNode.children[index] !== row) { listNode.insertBefore(row, listNode.children[index] || null); }
     });
     var queue = null;
     for (var q = 0; q < listNode.children.length; q++) if (listNode.children[q].__d2sKey === "queue") queue = listNode.children[q];
@@ -1199,41 +1192,23 @@
       if (!queue) { queue = el(doc, "li", "queue"); queue.__d2sKey = "queue"; }
       keep.queue = true;
       this.updateQueue(queue, m.queued);
-      if (listNode.lastChild !== queue) { listNode.appendChild(queue); moved = true; }
+      if (listNode.lastChild !== queue) { listNode.appendChild(queue); }
     }
-    var leaving = [];
+    // Keep layout in normal flow. Only the reserved empty edges overlap.
+    // Position/height tweens cannot track rows whose question text changes height.
     for (var j = listNode.children.length - 1; j >= 0; j--) {
-      var gone = listNode.children[j];
-      if (keep[gone.__d2sKey] || gone.__leaving) continue;
-      if (animate) leaving.push(gone); else listNode.removeChild(gone);
+      var row = listNode.children[j];
+      if (!keep[row.__d2sKey]) {
+        if (Motion.g) Motion.g.killTweensOf(row);
+        listNode.removeChild(row);
+      }
     }
-    if (!animate) return;
-    if (!entered.length && !leaving.length && !moved) return;
-    /* Ушедшая строка уезжает и гаснет; остальные плавно занимают её место. */
-    leaving.forEach(function (row) {
-      row.__leaving = true;
-      var done = row.getAttribute("data-done") === "true";
-      Motion.g.timeline({ onComplete: function () {
-        var rest = [];
-        for (var k = 0; k < listNode.children.length; k++) if (listNode.children[k] !== row && !listNode.children[k].__leaving) rest.push(listNode.children[k]);
-        var st = rest.length ? Motion.Flip.getState(rest) : null;
-        if (row.parentNode) row.parentNode.removeChild(row);
-        if (st) Motion.track(Motion.Flip.from(st, { duration: 0.5, ease: "power3.inOut", scale: true, simple: true }));
-      } })
-        .to(row, { x: done ? 0 : 36, y: done ? 18 : 0, autoAlpha: 0, duration: 0.4, ease: "power2.in" });
-    });
-    if (flipState) {
-      /* Переставляемые строки «приподнимаются» и проезжают поверх соседних, не сквозь них. */
-      var movers = stable.filter(function (r) { return !r.__leaving; });
-      movers.forEach(function (r) { r.__goesUp = r.getBoundingClientRect().top < r.__oldTop - 1; });
-      Motion.track(Motion.Flip.from(flipState, {
-        duration: 0.6, ease: "power3.inOut", scale: true, simple: true, targets: movers,
-        onStart: function () { movers.forEach(function (r) { r.classList.add("is-moving"); r.style.zIndex = r.__goesUp ? 3 : 2; }); },
-        onComplete: function () { movers.forEach(function (r) { r.classList.remove("is-moving"); r.style.zIndex = ""; }); }
-      }));
+    for (var layer = 0; layer < listNode.children.length; layer++) {
+      listNode.children[layer].style.zIndex = String(layer + 1);
     }
-    if (entered.length && !firstLive) {
-      Motion.g.fromTo(entered, { y: 28, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.6, stagger: 0.08, ease: "power4.out", clearProps: "transform,opacity,visibility" });
+    if (animate && entered.length && !firstLive) {
+      Motion.g.fromTo(entered, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.25,
+        ease: "power2.out", clearProps: "opacity,visibility" });
     }
   };
 

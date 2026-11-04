@@ -39,6 +39,11 @@ jobs:
           cc -O2 -std=c11 -Wall -Wextra -Werror -pedantic -o "$RUNNER_TEMP/dns-test" resolver-local/test-dns-media-watch.c
           "$RUNNER_TEMP/dns-test"
           make -C panel test test-js
+      - name: Clean-install bootstrap contracts
+        if: matrix.arch == 'arm64'
+        run: |
+          node scripts/test-install-release.cjs
+          node scripts/test-install-openwrt.cjs
       - name: Full core, datapath and detect regression gate
         if: matrix.arch == 'arm64'
         run: |

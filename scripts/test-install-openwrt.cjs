@@ -108,6 +108,10 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   fixture('builds/d2sd-linux-amd64', sh('exit 0'));
   fixture('builds/d2sc-linux-amd64', sh('exit 2'));
   fixture('builds/d2sfetch-linux-amd64', sh('exit 2'));
+  for (const name of ['d2s-resolver', 'd2s-dns-watch']) fixture(`builds/${name}-linux-amd64`, sh('exit 0'));
+  for (const name of ['d2s-lan.sh','d2s-meta-dns-core.sh','d2s-meta-dns-library.sh',
+    'd2s-meta-dns-scheduler-core.sh','d2s-whatsapp-media.sh','S96d2s-resolver','S97d2s-dns-watch']) fixture(`files/${name}`, sh('exit 0'));
+
   fixture('files/S99d2s', sh('printf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0'));
   fixture('files/config', 'PANEL_LISTEN=192.168.1.1:8090\nTG_ENABLED=0\nTG_MODE=local\n');
   // Sourced by uninstall.sh: definitions only, no exit.
