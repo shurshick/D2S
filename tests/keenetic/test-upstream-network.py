@@ -5,6 +5,8 @@ if len(sys.argv)>1: root=Path(sys.argv[1])
 manifest=json.loads((Path(__file__).with_name("upstream-network.json")).read_text())
 def original_namespace(data):
     data=data.replace(b"d2s",b"d2k").replace(b"D2S",b"D2K")
+    data=data.replace(b"buf[*pos + 2] = 'S'",b"buf[*pos + 2] = 'K'")
+    data=data.replace(b"cpath[o++] = 's';",b"cpath[o++] = 'k';")
     return re.sub(rb"('D',\s*'2',\s*)'S'",rb"\1'K'",data)
 for name,expected in manifest.items():
     assert hashlib.sha256(original_namespace((root/name).read_bytes())).hexdigest()==expected,name+" differs from t0fox/d2o fd4e262"

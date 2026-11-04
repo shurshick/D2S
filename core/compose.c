@@ -184,7 +184,7 @@ static int tlv_rec(uint8_t *buf, size_t cap, size_t *pos, uint16_t typ,
  * (Plan.NeedExec, plan.go — 2 только когда Guards!=0). */
 static int tlv_header(uint8_t *buf, size_t cap, size_t *pos, uint16_t n_records) {
     if (*pos + 12 > cap) { return -1; }
-    buf[*pos + 0] = 'D'; buf[*pos + 1] = '2'; buf[*pos + 2] = 'K'; buf[*pos + 3] = 'P';
+    buf[*pos + 0] = 'D'; buf[*pos + 1] = '2'; buf[*pos + 2] = 'S'; buf[*pos + 3] = 'P';
     wr16be(buf + *pos + 4, 1); /* schema */
     wr16be(buf + *pos + 6, 1); /* minexec */
     wr16be(buf + *pos + 8, 0); /* флаги — обязаны быть 0 (plan_parse.c) */

@@ -2705,7 +2705,7 @@ static d2s_vres classify_run(const char *ip, uint16_t port, const char *sni,
                             if (d2s_t13_random(rnd, sizeof rnd) == 0) {
                                 size_t o = 0;
                                 cpath[o++] = '/'; cpath[o++] = 'd'; cpath[o++] = '2';
-                                cpath[o++] = 'k'; cpath[o++] = '-';
+                                cpath[o++] = 's'; cpath[o++] = '-';
                                 for (size_t i = 0; i < sizeof rnd; i++) {
                                     cpath[o++] = hex[rnd[i] >> 4];
                                     cpath[o++] = hex[rnd[i] & 0x0f];
