@@ -108,6 +108,8 @@ async function main(){
    console.error('Browser exceptions during Telegram startup:',JSON.stringify(exceptions));
    throw error;
   }
+  await until('document.querySelector("[data-tg-accepted-count]").textContent==="77"',
+   'fresh C11 stats update the visible Telegram connection counters');
   assert.equal(await evaluate('document.querySelectorAll("[data-tg-visual-mode]").length'),0,
    'prototype demonstration controls are not exposed in the live panel');
   assert.equal(await evaluate('document.querySelectorAll(".tg-flow-block").length'),0,
@@ -500,6 +502,10 @@ async function main(){
   assert.equal(await evaluate('gsap.globalTimeline.getChildren(true,true,false).filter(t=>t.isActive()).length'),0,'reduced motion runs no tweens');
   assert.equal(await evaluate('!!document.querySelector("#telegram-body .tg-flow-canvas")'),true,'reduced motion preserves the C11 route visualization');
   assert.equal(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").dataset.state'),'mixed','reduced motion preserves the active route snapshot');
+  await evaluate('(()=>{window.__tgReducedMotionFrames=0;const raf=window.requestAnimationFrame;window.requestAnimationFrame=function(cb){return raf.call(window,ts=>{window.__tgReducedMotionFrames++;cb(ts)})}})()');
+  await wait(120);
+  assert.ok(await evaluate('window.__tgReducedMotionFrames>0'),
+   'the live Telegram route visualization continues animating when Windows requests reduced motion');
   if(process.env.D2K_TUNNEL_SHOTS){await evaluate('document.querySelector("#telegram").scrollIntoView({block:"center"})');await wait(200);
    const b=await evaluate('(()=>{const r=document.querySelector("#telegram-body").getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}})()');
    const s=await call('Page.captureScreenshot',{format:'png',clip:{...b,scale:2}});fs.writeFileSync(path.join(process.env.D2K_TUNNEL_SHOTS,'9-reduced-motion-connected.png'),Buffer.from(s.data,'base64'))}

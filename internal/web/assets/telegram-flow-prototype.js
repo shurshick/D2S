@@ -71,7 +71,6 @@ function mountTelegramFlow(canvas) {
   const context = canvas.getContext("2d", { alpha: false });
   if (!context || !api) throw new Error("Сцена Telegram недоступна");
   const root = canvas.closest(".tg-flow");
-  const reduceMotion = global.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
   const lanes = ROUTES.map(makeLane);
   const dcs = Array.from({ length: 5 }, () => ({ count: 0, media: 0, confirmed: 0, ping: 0 }));
   const sessions = new Map(), cursors = new Map(), previousTraffic = new Map();
@@ -190,7 +189,6 @@ function mountTelegramFlow(canvas) {
   function readTraffic(snapshot) {
     if (!snapshot) return;
     const deltas = api.collectConfirmedTrafficDeltas(previousTraffic, snapshot.active_sessions);
-    if (reduceMotion?.matches) return;
     deltas.forEach((delta, deltaIndex) => {
       const lane = lanes[delta.laneIndex];
       if (!lane) return;
@@ -279,7 +277,7 @@ function mountTelegramFlow(canvas) {
     setRouteState(snapshot);
     updateAccessibility();
     if (stale) { stopLoop(); draw(); }
-    else if (reduceMotion?.matches || !inView || document.hidden) draw();
+    else if (!inView || document.hidden) draw();
     else startLoop();
     return view;
   }
@@ -507,7 +505,7 @@ function mountTelegramFlow(canvas) {
     context.beginPath(); context.arc(0, 0, 5 + 2 * hub.pulse, 0, Math.PI * 2);
     context.fillStyle = rgba(COLORS.ink, 0.95); context.fill(); context.restore();
     Array.from(sessions.values()).forEach((item, index) => {
-      const orbit = index % 2, angle = item.seed + t * (reduceMotion?.matches ? 0 : (orbit ? -0.68 : 0.5))
+      const orbit = index % 2, angle = item.seed + t * (orbit ? -0.68 : 0.5)
         + index * 2.399, radius = 45 + orbit * 8;
       const x = hubX + radius * Math.cos(angle), y = hubY + radius * Math.sin(angle);
       let tint = COLORS.mute, alpha = 0.4, dotRadius = 2.4;
@@ -527,7 +525,7 @@ function mountTelegramFlow(canvas) {
 
   function animate(delta) {
     hub.pulse *= Math.exp(-delta * 2.4); client.pulse *= Math.exp(-delta * 2.2);
-    if (!reduceMotion?.matches) hub.angle += delta * (0.12 + 0.25 * hub.pulse);
+    hub.angle += delta * (0.12 + 0.25 * hub.pulse);
     for (const lane of lanes) { lane.selected = Number(lane.counts.selected) || 0;
       lane.connecting = (Number(lane.counts.connecting) || 0) + (Number(lane.counts.race) || 0); }
     for (const item of sessions.values()) for (const key of Object.keys(item.tries)) {
@@ -584,12 +582,14 @@ function mountTelegramFlow(canvas) {
 
   function frame(timestamp) {
     frameId = 0;
-    if (destroyed || view.state === "stale" || !inView || document.hidden || reduceMotion?.matches) return;
+    if (destroyed || view.state === "stale" || !inView || document.hidden) return;
     const delta = Math.min(0.05, Math.max(0, (timestamp - lastFrame) / 1000));
     lastFrame = timestamp; now += delta * 1000; animate(delta); draw(); startLoop();
   }
   function startLoop() {
-    if (!destroyed && view.state !== "stale" && !frameId && inView && !document.hidden && !reduceMotion?.matches)
+    // This canvas is live proxy telemetry; keep it animated independently of
+    // the browser's reduced-motion preference.
+    if (!destroyed && view.state !== "stale" && !frameId && inView && !document.hidden)
       frameId = global.requestAnimationFrame(frame);
   }
   function stopLoop() { if (frameId) global.cancelAnimationFrame(frameId); frameId = 0; }
@@ -607,14 +607,12 @@ function mountTelegramFlow(canvas) {
   }
   function onVisibility() { if (document.hidden) stopLoop(); else startLoop(); }
   function onIntersection(entries) { inView = Boolean(entries[0]?.isIntersecting); inView ? startLoop() : stopLoop(); }
-  function onMotionChange() { if (reduceMotion?.matches) stopLoop(); else startLoop(); draw(); }
   const resizeObserver = typeof global.ResizeObserver === "function" ? new global.ResizeObserver(resize) : null;
   const intersectionObserver = typeof global.IntersectionObserver === "function"
     ? new global.IntersectionObserver(onIntersection, { rootMargin: "80px" }) : null;
   resizeObserver?.observe(canvas); intersectionObserver?.observe(canvas);
   global.addEventListener("resize", resize, { passive: true });
   document.addEventListener("visibilitychange", onVisibility);
-  reduceMotion?.addEventListener("change", onMotionChange);
   resize();
 
   return {
@@ -624,7 +622,6 @@ function mountTelegramFlow(canvas) {
       if (destroyed) return;
       destroyed = true; stopLoop(); resizeObserver?.disconnect(); intersectionObserver?.disconnect();
       global.removeEventListener("resize", resize); document.removeEventListener("visibilitychange", onVisibility);
-      reduceMotion?.removeEventListener("change", onMotionChange);
       cursors.clear(); sessions.clear(); previousTraffic.clear(); parts.length = 0;
       sparks.length = 0; ripples.length = 0; spikes.length = 0;
     },
