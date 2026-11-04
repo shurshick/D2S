@@ -367,7 +367,16 @@ main { min-width: 0; padding-bottom: 80px; }
 }
 .slot-note { font-size: 0.8125rem; color: var(--ink-3); }
 
-.searches { margin-top: 8px; }
+.searches {
+  /* Keep FLIP transforms and the moving card's 17px shadow inside the list.
+     The inset preserves the shadow without painting over the counters. */
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  overflow: clip;
+  padding: 18px;
+  margin: 8px -18px -18px;
+}
 
 .search {
   display: grid;
