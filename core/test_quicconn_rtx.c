@@ -2,7 +2,7 @@
  *
  * Задача 42 (основание — задача 33): проверка читает ответ кусками по 200 мс,
  * а таймер повтора (300 мс) заводился заново в каждом вызове
- * d2k_qc_stream_recv. Срок не наступал никогда, и запрос HTTP/3 ни разу не
+ * d2s_qc_stream_recv. Срок не наступал никогда, и запрос HTTP/3 ни разу не
  * переотправлялся (подтверждено трассой). Состояние таймера обязано жить в
  * соединении. Соединение собирается прямо здесь, на петле, с ключами из
  * постоянного секрета: проверяется счёт датаграмм, а не разбор у сервера. */
@@ -21,7 +21,7 @@ static size_t drain(int fd) {
     return n;
 }
 
-static d2k_qc *app_conn(int *server) {
+static d2s_qc *app_conn(int *server) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     assert(s >= 0);
     struct sockaddr_in a;
@@ -34,17 +34,17 @@ static d2k_qc *app_conn(int *server) {
     assert(fcntl(s, F_SETFL, O_NONBLOCK) == 0);
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     assert(fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
-    d2k_qc *c = calloc(1, sizeof *c);
+    d2s_qc *c = calloc(1, sizeof *c);
     assert(c);
     c->fd = fd;
     c->peer_name = -1;
-    c->version = D2K_QW_V1;
+    c->version = D2S_QW_V1;
     c->dcid_len = 8;
     memset(c->dcid, 0x5a, c->dcid_len);
     uint8_t secret[32];
     memset(secret, 0x42, sizeof secret);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].tx) == 0);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].rx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].tx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].rx) == 0);
     *server = s;
     return c;
 }
@@ -58,30 +58,30 @@ int main(void) {
     /* Чтение кусками по 200 мс, как в verify.c: за 1,2 с запрос обязан уйти
        повторно (сроки 300 и 900 мс от отправки). */
     int server = -1;
-    d2k_qc *c = app_conn(&server);
-    CHECK(d2k_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0, "request sent");
+    d2s_qc *c = app_conn(&server);
+    CHECK(d2s_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0, "request sent");
     for (int i = 0; i < 6; i++) {
-        CHECK(d2k_qc_stream_recv(c, &sid, buf, sizeof buf, 200, err, sizeof err) == 0,
+        CHECK(d2s_qc_stream_recv(c, &sid, buf, sizeof buf, 200, err, sizeof err) == 0,
               "silent server: nothing to read");
     }
     size_t sliced = drain(server);
     CHECK(sliced >= 3, "200 ms read slices must not reset the request retransmit timer");
-    d2k_qc_close(c);
+    d2s_qc_close(c);
     close(server);
 
     /* Одно длинное чтение — прежнее поведение сохраняется. */
     c = app_conn(&server);
-    CHECK(d2k_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0, "request sent");
-    (void)d2k_qc_stream_recv(c, &sid, buf, sizeof buf, 1200, err, sizeof err);
+    CHECK(d2s_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0, "request sent");
+    (void)d2s_qc_stream_recv(c, &sid, buf, sizeof buf, 1200, err, sizeof err);
     size_t whole = drain(server);
     CHECK(whole >= 3 && whole <= 4, "one long read retransmits on the same schedule");
 
     /* Повторов не больше трёх на посылку, сколько ни читай. */
     for (int i = 0; i < 25; i++) {
-        (void)d2k_qc_stream_recv(c, &sid, buf, sizeof buf, 200, err, sizeof err);
+        (void)d2s_qc_stream_recv(c, &sid, buf, sizeof buf, 200, err, sizeof err);
     }
     CHECK(whole + drain(server) <= 4, "at most three retransmits of one request");
-    d2k_qc_close(c);
+    d2s_qc_close(c);
     close(server);
 
     /* Финальное ревью core, M7 (RFC 9000 §17.2.5.2): второй или
@@ -97,7 +97,7 @@ int main(void) {
         if (mode == 3) c->peer_cid_fixed = 1;    /* сервер уже ответил пакетом */
         static const uint8_t rscid[8] = {9, 9, 9, 9, 9, 9, 9, 9};
         uint8_t rb[256];
-        size_t rl = d2k_qw_retry_build(rb, sizeof rb, D2K_QW_V1, c->odcid, 8,
+        size_t rl = d2s_qw_retry_build(rb, sizeof rb, D2S_QW_V1, c->odcid, 8,
                                        c->scid, 8, rscid, sizeof rscid,
                                        (const uint8_t *)"tok", 3);
         CHECK(rl > 0, "retry fixture");
@@ -113,7 +113,7 @@ int main(void) {
             CHECK(c->retry_pending == 0 && c->dcid[0] == 0x22,
                   "discarded Retry changes nothing in the connection");
         }
-        d2k_qc_close(c);
+        d2s_qc_close(c);
         close(server);
     }
 
@@ -133,8 +133,8 @@ int main(void) {
         assert(getsockname(server, (struct sockaddr *)&a, &al) == 0);
         assert(fcntl(server, F_SETFL, O_NONBLOCK) == 0);
 
-        d2k_quic_form form = {2, 1200, 2100};
-        d2k_qc_opts o;
+        d2s_quic_form form = {2, 1200, 2100};
+        d2s_qc_opts o;
         memset(&o, 0, sizeof o);
         o.ip = "127.0.0.1";
         o.port = ntohs(a.sin_port);
@@ -142,9 +142,9 @@ int main(void) {
         o.alpn = "h3";
         o.deadline_ms = 50;
         o.form = &form;
-        d2k_qc *c = NULL;
+        d2s_qc *c = NULL;
         char err[256] = {0};
-        (void)d2k_qc_connect(&o, &c, err, sizeof err); /* сервера нет: важен первый полёт */
+        (void)d2s_qc_connect(&o, &c, err, sizeof err); /* сервера нет: важен первый полёт */
         uint8_t got[2048];
         size_t seen = 0, lens[4] = {0};
         for (;;) {
@@ -155,7 +155,7 @@ int main(void) {
         }
         CHECK(seen == 2, "первый полёт ушёл не двумя датаграммами");
         CHECK(lens[0] == 1200 && lens[1] == 1200, "датаграммы полёта не той длины");
-        if (c) { d2k_qc_close(c); }
+        if (c) { d2s_qc_close(c); }
         close(server);
     }
 

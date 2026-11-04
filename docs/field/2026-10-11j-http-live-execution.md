@@ -1,8 +1,8 @@
 # HTTP после прогона g: постоянная установка, исполнение и границы доказательства
 
 Работа от `main 9183e85`, продолжение #18/#20. Роутер, поле и push не
-выполнялись. При начале уже были изменены `builds/d2kc-linux-arm64` и
-`builds/d2kd-linux-arm64`; они сохранены побайтно и не входят в коммиты.
+выполнялись. При начале уже были изменены `builds/d2sc-linux-arm64` и
+`builds/d2sd-linux-arm64`; они сохранены побайтно и не входят в коммиты.
 
 ## Что установлено
 
@@ -11,14 +11,14 @@
 не подтвердилась: на исходной ревизии постоянный план доходит до датапата
 и применяется к новому немаркированному клиентскому потоку.
 
-Путь уже существовал: `d2kc.c:hs_set_plan` → `d2k_link_set_name_family`
-с `SHAPE_HTTP` → AF_UNIX → `d2k_ctlsrv_command` → таблица постоянных HTTP
-планов → `d2k_plantab_find_http` → `d2k_session_packet` → PlanApply/wire.
-При старте `d2kc` загружает `http-plans.txt` и публикует эти записи тем же
+Путь уже существовал: `d2sc.c:hs_set_plan` → `d2s_link_set_name_family`
+с `SHAPE_HTTP` → AF_UNIX → `d2s_ctlsrv_command` → таблица постоянных HTTP
+планов → `d2s_plantab_find_http` → `d2s_session_packet` → PlanApply/wire.
+При старте `d2sc` загружает `http-plans.txt` и публикует эти записи тем же
 путём. Удаление точного пробного ключа не удаляет постоянный.
 
-Это теперь проверяет `core/test_http_live.c`: реальный процесс `d2kc`,
-реальный Unix control socket и сервер команд `d2kd`, восстановление файла,
+Это теперь проверяет `core/test_http_live.c`: реальный процесс `d2sc`,
+реальный Unix control socket и сервер команд `d2sd`, восстановление файла,
 trial → permanent → cleanup, изоляция порта пробы и другого Host. Тест
 подаёт немаркированные IPv4/IPv6 пакеты на production Session-вход и
 сравнивает полные пакеты измерительного и постоянного исполнения через
@@ -46,7 +46,7 @@ baseline относится к шести проверкам неверной п
   границы запроса больше не объясняются отсутствием установленного плана.
   Решения о применении не менялись. Полная строка Host с незавершённой
   большой Cookie уже допускает применение whole-плана; это тоже проверено.
-- `46087b4`: `d2kd` пишет `HTTP execution` после реальных попыток raw-send
+- `46087b4`: `d2sd` пишет `HTTP execution` после реальных попыток raw-send
   и NFQUEUE verdict. Есть Host, tuple, seq, hook, mark, outdev, plan ID,
   execution ID, prepared/planned/raw_sent/queued, original и причина.
   Состояния `SKIPPED`, `FAILED`, `PENDING`, `COMPLETE`, `OBSERVE` раздельны.
@@ -68,15 +68,15 @@ baseline относится к шести проверкам неверной п
 заголовка линковка падает на UDP-символах. Текущий release проходит для
 обеих архитектур и из свежего архива. Повторное удаление UDP-исходников
 из release-рецепта также заставляет новый `check-release` упасть.
-Логи: `/tmp/d2k-release-link-red.log`,
-`/tmp/d2k-release-generated-header-red.log`,
-`/tmp/d2k-release-gate-mutation-red.log`,
-`/tmp/d2k-release-fresh-green.log`.
+Логи: `/tmp/d2s-release-link-red.log`,
+`/tmp/d2s-release-generated-header-red.log`,
+`/tmp/d2s-release-gate-mutation-red.log`,
+`/tmp/d2s-release-fresh-green.log`.
 
-Live baseline/green/mutation: `/tmp/d2k-http-live-red-results.json`,
-`/tmp/d2k-http-live-fresh-red-{build,run}.log`,
-`/tmp/d2k-http-live-green-{build,run}.log`,
-`/tmp/d2k-http-live-diverge.log`. Baseline: build 0 / run 1 только на шести
+Live baseline/green/mutation: `/tmp/d2s-http-live-red-results.json`,
+`/tmp/d2s-http-live-fresh-red-{build,run}.log`,
+`/tmp/d2s-http-live-green-{build,run}.log`,
+`/tmp/d2s-http-live-diverge.log`. Baseline: build 0 / run 1 только на шести
 причинах отказа; green: 0 / 0; преднамеренное расхождение: run 1.
 
 | Проверка | Результат |
@@ -90,9 +90,9 @@ Live baseline/green/mutation: `/tmp/d2k-http-live-red-results.json`,
 | HTTP trace ASan/UBSan | exit 0 |
 | `git diff --check` | exit 0 |
 
-Итоговые логи: `/tmp/d2k-http-live-{core-check,detect-check,datapath-check}.log`,
-`/tmp/d2k-http-live-cross-final.log`, `/tmp/d2k-http-live-datapath-cross.log`,
-`/tmp/d2k-http-live-san.log`, `/tmp/d2k-http-trace-san.log`.
+Итоговые логи: `/tmp/d2s-http-live-{core-check,detect-check,datapath-check}.log`,
+`/tmp/d2s-http-live-cross-final.log`, `/tmp/d2s-http-live-datapath-cross.log`,
+`/tmp/d2s-http-live-san.log`, `/tmp/d2s-http-trace-san.log`.
 
 ## Что остаётся для координатора
 
@@ -102,14 +102,14 @@ Live baseline/green/mutation: `/tmp/d2k-http-live-red-results.json`,
 Причина отказа g пока **не установлена**.
 В локальной выжимке g есть три portal-response строки и содержимое файла
 планов; нет полного trace установки/исполнения и pcap. Старый журнал
-применений `d2kd` печатался при завершении, поэтому отсутствие применения
+применений `d2sd` печатался при завершении, поэтому отсутствие применения
 в выжимке HTTP не доказывало отсутствие применения вообще.
 
 Следующий опыт — повтор g на этой ревизии, с сохранением **полных** логов
 обоих процессов и парного pcap зонда/нового браузерного потока. Для одного
 запроса `www.fast-torrent.ru:80` сопоставить tuple/seq и время:
 
-1. Есть ли сообщение `d2kc` о восстановлении/постоянной установке плана?
+1. Есть ли сообщение `d2sc` о восстановлении/постоянной установке плана?
 2. Что сообщает `HTTP execution`: `SKIPPED` с конкретной причиной,
    `FAILED`, `PENDING` или `COMPLETE` с одной приманкой и original=ACCEPT?
 3. При COMPLETE действительно ли на выходе видны checksum-приманка перед

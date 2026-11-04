@@ -4,7 +4,7 @@
 set -eu
 if [ "${1:-}" != --inside ]; then
     ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-    WORK=$(mktemp -d /tmp/d2k-native-protocols.XXXXXX)
+    WORK=$(mktemp -d /tmp/d2s-native-protocols.XXXXXX)
     trap 'rm -rf "$WORK"' EXIT INT TERM
     cd "$ROOT"
     tar -cf - core/include datapath/include core/verify.c core/tls13.c core/tls12.c core/p256.c \

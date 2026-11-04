@@ -1,7 +1,7 @@
 # TCP-блок провайдера: почему plan-680fbe00, а не вопрос «метка времени» — 10.10.2026
 
 Разбор без кода. Источник: журнал прогона 10.10
-(`/Library/Zapret2/d2k-backups/2026-10-10-field/run/d2kc.live.log`, каталог
+(`/Library/Zapret2/d2s-backups/2026-10-10-field/run/d2sc.live.log`, каталог
 `catalog-0327.json`), код `main` a2b962e. Отчёт прогона:
 [2026-10-10-field-run.md](2026-10-10-field-run.md).
 
@@ -13,13 +13,13 @@
 с другим именем. Дерево не задаёт вопроса «фальшивое приветствие под меткой
 времени» и не может собрать такой план из вектора свойств:
 
-- `d2k_compose_from_props` не ставит `tcp_ts` никогда;
+- `d2s_compose_from_props` не ставит `tcp_ts` никогда;
 - приманку-приветствие (`decoy_hello`) дерево сочетает только с битой суммой
   («разбор протокола», `badsum+hello`) или с перекрытием;
 - в перебор дерева входит `badsum+ts`, но там снова набивка, без приветствия.
 
 Поэтому план мог прийти только снаружи дерева. Он пришёл из RX-лестницы
-(`d2k_rx_volume_plan`, ступень 0), когда запасной перебор снял TLS-блок и
+(`d2s_rx_volume_plan`, ступень 0), когда запасной перебор снял TLS-блок и
 открыл второй слой: обрыв входящего тела на 17–21 КБ.
 
 Измеримое свойство, которое отличает план от вопроса, — **коробка разбирает
@@ -59,7 +59,7 @@ fost.club — 188.114.96.1.
 ### plan-680fbe00 (из каталога)
 
 ```
-d2k-plan 1 8 / proto tcp tls / wire tcp-template-v1 / input tls-sni / segment 1400
+d2s-plan 1 8 / proto tcp tls / wire tcp-template-v1 / input tls-sni / segment 1400
 payload 1 <ClientHello 675 байт, SNI hcaptcha.com, с ECH-расширением>
 poison 1 tcpts
 fake payload=1 poison=1 repeats=8 gap_us=0 place=before tlsmod=rnd,dupsid
@@ -67,7 +67,7 @@ split payload_start +2
 order forward
 ```
 
-Это ступень 0 из `d2k_rx_volume_plan`, `core/compose.c`. Пять ступеней
+Это ступень 0 из `d2s_rx_volume_plan`, `core/compose.c`. Пять ступеней
 отличаются только местом разреза: +2, +1, +3, +4, +5. Исходник — восстановленная
 ручная команда («восемь копий fake_default_tls по 675 байт, rnd/dupsid, TS−1000,
 split +2»). Плана без разреза лестница не пробует.
@@ -77,7 +77,7 @@ split +2»). Плана без разреза лестница не пробуе
 | | вопрос «метка времени» (`detect/props.c`) | plan-680fbe00 |
 |---|---|---|
 | отрава | `tcp_ts` = TS−1000 (PAWS) | `poison 1 tcpts` (тот же TS−1000) |
-| содержимое фальшивки | 0x0f-набивка длиной 2×n (`d2k_poison_sends`) | целый ClientHello 675 байт, имя `hcaptcha.com`, `tlsmod=rnd,dupsid` |
+| содержимое фальшивки | 0x0f-набивка длиной 2×n (`d2s_poison_sends`) | целый ClientHello 675 байт, имя `hcaptcha.com`, `tlsmod=rnd,dupsid` |
 | копий | 1 | 8 |
 | правда | целиком одним куском | разрез `payload_start +2` |
 | итог в поле | промах* | проход: 16 привязок к 15 целям в каталоге |
@@ -115,7 +115,7 @@ split +2»). Плана без разреза лестница не пробуе
   1. Рукопожатие с настоящим именем завершается (ServerHello), с тем же
      единогласием по `opt->repeats`, что у остальных вопросов.
   2. Если у цели измерен RX-обрыв (`vol.rx_cut`), под тем же воздействием
-     identity-тело проходит дальше `rx_at_kb` с запасом `D2K_VOLUME_SLACK`.
+     identity-тело проходит дальше `rx_at_kb` с запасом `D2S_VOLUME_SLACK`.
      Это пара identity-зондов, как в нынешней RX-проверке кандидата.
      Без пункта 2 вопрос снимал бы только первый слой, как план перебора 1.
 - **Правило вывода.**
@@ -157,10 +157,10 @@ split +2»). Плана без разреза лестница не пробуе
 
 Замер обеих целей взял «oob»: срочный байт в середине имени, который коробка
 глотает, а сервер выбрасывает. Приём отвергнут как невыразимый
-(`detect/bridge.c`, `d2k_arm_from_poison`, отказ с 14.09, 0e40dbd). Однако с
+(`detect/bridge.c`, `d2s_arm_from_poison`, отказ с 14.09, 0e40dbd). Однако с
 30.09 (9cdcd50):
 
-- `d2k_arm_plan_measured_cap` в `core/compose.c` собирает для `oob` план
+- `d2s_arm_plan_measured_cap` в `core/compose.c` собирает для `oob` план
   `wire detect-tcp-v1` / `oob sni_middle 0f` (minexec 8);
 - датапат его разбирает и исполняет (`datapath/plan_parse.c`,
   `datapath/plan_apply.c`);

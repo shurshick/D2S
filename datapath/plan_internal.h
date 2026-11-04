@@ -1,16 +1,16 @@
 /* plan_internal.h — внутреннее устройство плана.
  *
- * Отдельно от d2k_plan.h намеренно: наружу торчит контракт из четырёх
+ * Отдельно от d2s_plan.h намеренно: наружу торчит контракт из четырёх
  * функций, а раскладка структур — дело исполнителя и может меняться без
  * пересборки того, кто его зовёт.
  */
-#ifndef D2K_PLAN_INTERNAL_H
-#define D2K_PLAN_INTERNAL_H
+#ifndef D2S_PLAN_INTERNAL_H
+#define D2S_PLAN_INTERNAL_H
 
 #include <stddef.h>
 #include <stdint.h>
 
-#include "d2k_plan.h"
+#include "d2s_plan.h"
 
 /* Коды записей. Единственный их источник — этот файл: Go-сторона движка
  * удалена коммитом 1e95db1, и прежняя оговорка «обязаны совпадать с
@@ -67,20 +67,20 @@ enum {
 enum { PLACE_BEFORE = 0, PLACE_BETWEEN = 1 };
 enum { ORDER_FORWARD = 0, ORDER_REVERSE = 1 };
 
-struct d2k_payload {
+struct d2s_payload {
     uint16_t id;
     uint8_t *bytes;
     size_t   len;
 };
 
-struct d2k_poison {
+struct d2s_poison {
     uint16_t id;
     uint8_t  ttl;
     uint8_t  flags;
     int32_t  seq_shift;
     /* autottl: 1 — TTL считается на исполнении по TTL ответной стороны
        потока, delta/min/max из записи REC_AUTOTTL. */
-    /* tcp_ts_up: поднять опцию метки времени в начало (см. d2k_plan.h). */
+    /* tcp_ts_up: поднять опцию метки времени в начало (см. d2s_plan.h). */
     uint8_t  ts_up;
     uint8_t  autottl;
     int8_t   autottl_delta;
@@ -88,12 +88,12 @@ struct d2k_poison {
     uint8_t  autottl_max;
 };
 
-struct d2k_split {
+struct d2s_split {
     uint16_t anchor;
     int16_t  offset;
 };
 
-struct d2k_fake {
+struct d2s_fake {
     uint16_t payload_id;
     uint16_t poison_id;
     uint8_t  repeats;
@@ -102,15 +102,15 @@ struct d2k_fake {
     uint8_t  tls_mod;
 };
 
-#define D2K_TLS_MOD_RND    (1u << 0)
-#define D2K_TLS_MOD_DUPSID (1u << 1)
+#define D2S_TLS_MOD_RND    (1u << 0)
+#define D2S_TLS_MOD_DUPSID (1u << 1)
 
-struct d2k_seqovl {
+struct d2s_seqovl {
     uint16_t payload_id;
     uint16_t poison_id;
 };
 
-struct d2k_plan {
+struct d2s_plan {
     /* Installation metadata only; not serialized, hashed or executed. The
        table owns this object uniquely and snapshots it before replacement. */
     const void *binding_owner;
@@ -119,7 +119,7 @@ struct d2k_plan {
     uint8_t binding_kind, binding_family, binding_shape, binding_temporary;
     uint16_t schema;
     uint16_t minexec;
-    uint8_t  id[D2K_PLAN_ID_LEN];
+    uint8_t  id[D2S_PLAN_ID_LEN];
     uint8_t  transport;
     uint8_t  proto;
     uint8_t  order;
@@ -140,7 +140,7 @@ struct d2k_plan {
     uint16_t udplen;
     /* РАЗРЕЗ CLIENTHELLO НА КАДРЫ CRYPTO внутри того же Initial (задача 40);
        0 — записи нет, 1 — два кадра, хвост первым. Нагрузка пересобирается
-       функцией ядра d2k_quic_initial_split_crypto — той же, которой задан
+       функцией ядра d2s_quic_initial_split_crypto — той же, которой задан
        вопрос замера; план владеет нагрузкой, как при udplen. */
     uint8_t qsplit;
     /* QUIC ДЛЯ ИМЕНИ НЕ ПРОПУСКАЕТСЯ (задача 50, раунд 2); 0 — записи нет.
@@ -149,11 +149,11 @@ struct d2k_plan {
        воспроизведён своим запросом и обхода по QUIC нет. */
     uint8_t qdeny;
 
-    struct d2k_payload *payloads; size_t n_payloads;
-    struct d2k_poison  *poisons;  size_t n_poisons;
-    struct d2k_split   *splits;   size_t n_splits;
-    struct d2k_fake    *fakes;    size_t n_fakes;
-    struct d2k_seqovl  *seqovls;  size_t n_seqovls;
+    struct d2s_payload *payloads; size_t n_payloads;
+    struct d2s_poison  *poisons;  size_t n_poisons;
+    struct d2s_split   *splits;   size_t n_splits;
+    struct d2s_fake    *fakes;    size_t n_fakes;
+    struct d2s_seqovl  *seqovls;  size_t n_seqovls;
 
     /* РАЗНОС ПОСЫЛОК ВО ВРЕМЕНИ, микросекунды. 0 — не задан.
      *
@@ -192,7 +192,7 @@ struct d2k_plan {
     uint32_t delay_us;
 };
 
-const struct d2k_payload *d2k_find_payload(const d2k_plan *p, uint16_t id);
-const struct d2k_poison  *d2k_find_poison(const d2k_plan *p, uint16_t id);
+const struct d2s_payload *d2s_find_payload(const d2s_plan *p, uint16_t id);
+const struct d2s_poison  *d2s_find_poison(const d2s_plan *p, uint16_t id);
 
-#endif /* D2K_PLAN_INTERNAL_H */
+#endif /* D2S_PLAN_INTERNAL_H */

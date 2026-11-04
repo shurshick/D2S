@@ -17,11 +17,11 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 
 На `93c6555` существовали две программы одного воздействия:
 
-1. `detect/classify.c` / `detect/props.c` → `d2k_raw_probe_poison_family` →
-   `d2k_poison_sends` → `raw_send` / `raw_send_urg` → `build_ip_tcp` → `sendto`.
-2. `detect/bridge.c:d2k_arm_from_poison` →
-   `core/compose.c:d2k_arm_plan_measured_cap` → `plantlv` →
-   `datapath/plan_parse.c` → `plan_apply.c` → `wire.c:d2k_wire_build` → raw sink.
+1. `detect/classify.c` / `detect/props.c` → `d2s_raw_probe_poison_family` →
+   `d2s_poison_sends` → `raw_send` / `raw_send_urg` → `build_ip_tcp` → `sendto`.
+2. `detect/bridge.c:d2s_arm_from_poison` →
+   `core/compose.c:d2s_arm_plan_measured_cap` → `plantlv` →
+   `datapath/plan_parse.c` → `plan_apply.c` → `wire.c:d2s_wire_build` → raw sink.
 
 Старый `core/test_probe_plan` сравнивал действия датапата с описаниями посылок,
 но не вызывал сырой runtime и не сравнивал конечные IP/TCP-пакеты. OOB он вообще
@@ -32,7 +32,7 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 
 | Участок | Сырой замер / прежний measured-arm | Рабочий C-план / датапат |
 | --- | --- | --- |
-| Представление воздействия | `d2k_poison_sends` отдельно от compose | Независимый текст Plan, повторный выбор порядка и разрезов |
+| Представление воздействия | `d2s_poison_sends` отдельно от compose | Независимый текст Plan, повторный выбор порядка и разрезов |
 | Fake payload | Префикс ECH + `0x0f` до `2 × trigger_len` | Только ECH-шаблон, для hcaptcha.com 675 байт |
 | TLS modifiers | Нет | `tlsmod=rnd,dupsid`: random/SID, копирование реального SID при равной длине; одна модифицированная приманка на все повторы |
 | Wire profile | `detect-tcp-v1` | `tcp-template-v1` |
@@ -59,9 +59,9 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
   `core/measured.c`, чтобы standalone detect мог использовать их без
   планировщика и link-сокета. Существующий `plantlv.c` остаётся единственным
   сериализатором текста в TLV.
-- `raw_send_plan` переводит гипотезу тем же `d2k_arm_from_poison`, собирает Plan,
-  загружает его тем же parser и вызывает **те же** `d2k_plan_apply` и
-  `d2k_wire_build`, которые обслуживают датапат. На границе остаются только
+- `raw_send_plan` переводит гипотезу тем же `d2s_arm_from_poison`, собирает Plan,
+  загружает его тем же parser и вызывает **те же** `d2s_plan_apply` и
+  `d2s_wire_build`, которые обслуживают датапат. На границе остаются только
   задержка и отправка готового пакета в сокет. При отказе нет другого отправителя.
 - После успешного замера bridge сохраняет owned параметры/байты приманки;
   scheduler вызывает тот же чистый сборщик с теми же данными. `send_cap` может
@@ -69,7 +69,7 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 - C-arm и RX-лестница используют одну функцию `template_plan`. Для исходной
   приманки это побайтно тот же текст/TLV и ID **`plan-680fbe00`**. Имя другой
   измеренной приманки сохраняется из входа, не заменяется hcaptcha.com.
-- `d2k_poison_sends` и его типы удалены из продуктового пути; прежний алгоритм
+- `d2s_poison_sends` и его типы удалены из продуктового пути; прежний алгоритм
   сохранён только в `detect/tests/legacy_sends.h` как независимый оракул
   совместимости остальных гипотез. Это не второй runtime.
 - Raw сохраняет согласованные timestamps SYN-ACK для собственного контекста
@@ -91,7 +91,7 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 1. `core/test_probe_plan.c`: весь C-текст и TLV против RX-ступени 0, отдельно
    FNV-ID `680fbe00`. На исходном `93c6555`: exit 1, arm имеет ID `0e3148df`.
    После исправления: 0 mismatches.
-2. `detect/test_raw.c`: вызывается настоящий `d2k_raw_probe_poison_family`,
+2. `detect/test_raw.c`: вызывается настоящий `d2s_raw_probe_poison_family`,
    включая dial/send loop; OS-сокеты/правила/ожидание/энтропия подменены
    локальным стендом. Перехват `sendto` сравнивается с независимым выполнением
    загруженного Plan: длина, **весь пакет memcmp**, количество и назначенная
@@ -126,8 +126,8 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 | `make -C core san-probe-plan` | exit 0; 12 inputs, 85 hypotheses, 12 questions, 31 skipped, **0 mismatches** |
 | `make -C detect san-raw` | exit 0; runtime equality, ASan/UBSan без ошибок |
 | `make -C detect cross` | exit 0; aarch64/mipsel |
-| `make -C detect d2k-detect-linux-arm64` | exit 0; standalone static Linux arm64 |
-| `make -C core cross` | exit 0; aarch64/mipsel, включая полную линковку d2kc |
+| `make -C detect d2s-detect-linux-arm64` | exit 0; standalone static Linux arm64 |
+| `make -C core cross` | exit 0; aarch64/mipsel, включая полную линковку d2sc |
 | `git diff --check` | exit 0 |
 
 Новый runtime-тест входит в `detect check`, C golden и исторический oracle —
@@ -137,8 +137,8 @@ RST. Рабочий `plan-680fbe00` известен из [разбора 10.10]
 
 В изолированном архиве `93c6555` оба новых теста собраны напрямую из исходников
 после `touch`: сборка каждого exit 0, выполнение каждого exit 1. Локальные логи:
-`/tmp/d2k-baseline-runtime-final.log`, `/tmp/d2k-baseline-probe-final.log`;
-зелёные полные наборы — `/tmp/d2k-{core,detect,datapath}-check-final.log`.
+`/tmp/d2s-baseline-runtime-final.log`, `/tmp/d2s-baseline-probe-final.log`;
+зелёные полные наборы — `/tmp/d2s-{core,detect,datapath}-check-final.log`.
 Это временные диагностические файлы машины, не долговременные артефакты git.
 
 Это локальные и cross-свидетельства. Не проверены реальные Linux raw sockets,

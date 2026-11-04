@@ -43,34 +43,34 @@ p.write_text(json.dumps(s))
     def run_sh(self,body,**extra):
         return subprocess.run(['sh','-c','. "$1"; '+body,'sh',str(LIB)],env=dict(self.env,**extra),capture_output=True,text=True)
     def test_lan_and_guest_include_wan_exclude(self):
-        r=self.run_sh('d2k_lan_entries');self.assertEqual(r.returncode,0,r.stderr)
+        r=self.run_sh('d2s_lan_entries');self.assertEqual(r.returncode,0,r.stderr)
         self.assertEqual(set(r.stdout.splitlines()),{'custom_lan 192.168.31.0/24','guest42 10.1.30.0/24'})
     def test_new_address_and_mask_no_edit(self):
         self.fixture('172.22.17.1',20)
-        r=self.run_sh('d2k_lan_entries');self.assertEqual(r.returncode,0,r.stderr)
+        r=self.run_sh('d2s_lan_entries');self.assertEqual(r.returncode,0,r.stderr)
         self.assertIn('custom_lan 172.22.16.0/20',r.stdout)
         self.assertNotIn('192.168.31',r.stdout)
     def test_no_lan_fails_closed(self):
         (self.root/'config').write_text('interface ISP\n    security-level public\n    ip address 192.168.1.136 255.255.255.0\n!\n')
-        self.assertNotEqual(self.run_sh('d2k_lan_networks').returncode,0)
-        self.assertNotEqual(self.run_sh('d2k_lan_sync').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_networks').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_sync').returncode,0)
     def test_config_read_failure_fails_closed(self):
-        self.assertNotEqual(self.run_sh('d2k_lan_networks',FAIL_READ='1').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_networks',FAIL_READ='1').returncode,0)
     def test_empty_config_fails_closed(self):
         (self.root/'config').write_text('')
-        self.assertNotEqual(self.run_sh('d2k_lan_sync').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_sync').returncode,0)
     def test_mask_change_invalidates_and_refreshes_set(self):
-        self.assertEqual(self.run_sh('d2k_lan_sync && d2k_lan_installed').returncode,0)
+        self.assertEqual(self.run_sh('d2s_lan_sync && d2s_lan_installed').returncode,0)
         self.fixture('172.22.17.1',20)
-        self.assertNotEqual(self.run_sh('d2k_lan_installed').returncode,0)
-        self.assertEqual(self.run_sh('d2k_lan_sync && d2k_lan_installed').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_installed').returncode,0)
+        self.assertEqual(self.run_sh('d2s_lan_sync && d2s_lan_installed').returncode,0)
     def test_partial_update_preserves_old_set(self):
-        self.assertEqual(self.run_sh('d2k_lan_sync').returncode,0)
-        before=json.loads((self.root/'sets.json').read_text())['d2k_lan4']
+        self.assertEqual(self.run_sh('d2s_lan_sync').returncode,0)
+        before=json.loads((self.root/'sets.json').read_text())['d2s_lan4']
         self.fixture('172.22.17.1',20)
-        self.assertNotEqual(self.run_sh('d2k_lan_sync',FAIL_ADD='1').returncode,0)
+        self.assertNotEqual(self.run_sh('d2s_lan_sync',FAIL_ADD='1').returncode,0)
         after=json.loads((self.root/'sets.json').read_text())
-        self.assertEqual(after['d2k_lan4'],before)
-        self.assertNotIn('d2k_lan4_new',after)
+        self.assertEqual(after['d2s_lan4'],before)
+        self.assertNotIn('d2s_lan4_new',after)
 
 unittest.main(verbosity=2)

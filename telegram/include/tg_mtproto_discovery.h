@@ -1,5 +1,5 @@
-#ifndef D2K_TG_MTPROTO_DISCOVERY_H
-#define D2K_TG_MTPROTO_DISCOVERY_H
+#ifndef D2S_TG_MTPROTO_DISCOVERY_H
+#define D2S_TG_MTPROTO_DISCOVERY_H
 
 #include "tg_dc_map.h"
 

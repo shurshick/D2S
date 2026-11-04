@@ -1,5 +1,5 @@
 /* h3.c — HTTP/3 ровно настолько, чтобы получить код ответа. Контракт и
- * границы — в d2k_h3.h.
+ * границы — в d2s_h3.h.
  *
  * Числа переменной длины здесь ТЕ ЖЕ, что в QUIC (RFC 9114 §16 ссылается на
  * RFC 9000 §16), поэтому берутся из core/quicwire.c, а не пишутся заново.
@@ -8,15 +8,15 @@
  */
 #include <string.h>
 
-#include "d2k_h3.h"
-#include "d2k_quicwire.h"
+#include "d2s_h3.h"
+#include "d2s_quicwire.h"
 
 /* Типы кадров HTTP/3 (RFC 9114 §7.2). */
 #define H3_DATA     0x00
 #define H3_HEADERS  0x01
 #define H3_SETTINGS 0x04
 
-size_t d2k_h3_control(uint8_t *out, size_t cap) {
+size_t d2s_h3_control(uint8_t *out, size_t cap) {
     if (!out || cap < 3) { return 0; }
     size_t o = 0;
     out[o++] = 0x00;   /* тип однонаправленного потока: управляющий */
@@ -70,7 +70,7 @@ static int prefix_int_read(const uint8_t *p, size_t n, uint8_t prefix_bits,
     return 0;
 }
 
-size_t d2k_h3_request(const char *host, const char *path, uint8_t *out, size_t cap) {
+size_t d2s_h3_request(const char *host, const char *path, uint8_t *out, size_t cap) {
     if (!out || !host) { return 0; }
     if (!path || !path[0]) { path = "/"; }
     size_t hlen = strlen(host);
@@ -114,7 +114,7 @@ size_t d2k_h3_request(const char *host, const char *path, uint8_t *out, size_t c
     size_t r = 0;
     if (cap < 1) { return 0; }
     out[r++] = H3_HEADERS;
-    r += d2k_qw_varint_write(out + r, cap - r, o);
+    r += d2s_qw_varint_write(out + r, cap - r, o);
     if (r + o > cap) { return 0; }
     memcpy(out + r, sec, o); r += o;
     return r;
@@ -259,14 +259,14 @@ static int decode_section(const uint8_t *p, size_t n, int *status) {
     return -1;
 }
 
-int d2k_h3_status(const uint8_t *buf, size_t n, int *status) {
+int d2s_h3_status(const uint8_t *buf, size_t n, int *status) {
     if (!buf || !status) { return -1; }
     size_t i = 0;
     while (i < n) {
         uint64_t type = 0, len = 0; size_t w = 0;
-        if (d2k_qw_varint_read(buf + i, n - i, &type, &w) != 0) { return -1; }
+        if (d2s_qw_varint_read(buf + i, n - i, &type, &w) != 0) { return -1; }
         i += w;
-        if (d2k_qw_varint_read(buf + i, n - i, &len, &w) != 0) { return -1; }
+        if (d2s_qw_varint_read(buf + i, n - i, &len, &w) != 0) { return -1; }
         i += w;
         if (len > n - i) { return -1; }   /* кадр не доехал целиком */
         if (type == H3_HEADERS) {

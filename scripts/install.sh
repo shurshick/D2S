@@ -1,5 +1,5 @@
 #!/bin/sh
-# Установка d2k на Keenetic.
+# Установка d2s на Keenetic.
 #
 # BusyBox ash. Каждый значимый отказ обрабатывается: установщик, который
 # продолжает после неудачной загрузки, оставляет полусобранную систему, а
@@ -9,61 +9,67 @@
 #   * ничего не берётся у z2k при неудаче загрузки — подмена артефактов
 #     чужого продукта своими это не запасной путь, а сюрприз;
 #   * неподписанный комплект не ставится. И ручная установка, и ночное
-#     обновление (d2k-update.sh) берут один архив выпуска и запускают его
-#     собственный установщик с D2K_LOCAL.
+#     обновление (d2s-update.sh) берут один архив выпуска и запускают его
+#     собственный установщик с D2S_LOCAL.
 set -eu
 
-REPO=${D2K_REPO:-shurshick/D2S}
-REF=${D2K_REF:-main}
-BASE=${D2K_BASE:-https://raw.githubusercontent.com/$REPO/$REF}
+# Refuse a parallel installation of the retired namespace.
+if [ -d /opt/d2k ] || [ -e /opt/etc/init.d/S99d2k ]; then
+    echo 'D2S: обнаружена прежняя установка. Сначала удалите её штатным деинсталлятором; автоматической миграции нет.' >&2
+    exit 1
+fi
+
+REPO=${D2S_REPO:-shurshick/D2S}
+REF=${D2S_REF:-main}
+BASE=${D2S_BASE:-https://raw.githubusercontent.com/$REPO/$REF}
 
 # Откуда берётся комплект. Источник ОДИН и тот же у ручной установки и у
 # ночного обновления — подписанный выпуск:
 #
 #   release  выпуск GitHub: latest.json с хешами архивов, подпись Ed25519
 #            закреплённым здесь ключом, архив своей арки. По умолчанию.
-#   local    уже распакованный комплект ($D2K_LOCAL): так ставит
-#            files/d2k-update.sh, лаборатория и сам выпускной путь ниже.
+#   local    уже распакованный комплект ($D2S_LOCAL): так ставит
+#            files/d2s-update.sh, лаборатория и сам выпускной путь ниже.
 #   ref      файлы ветки по raw.githubusercontent, бинарники из builds/.
 #            Путь разработчика: подписи нет, а builds/ в ветке обновляет
 #            человек. Ручная установка им НЕ идёт — ровно из-за этого она
 #            ставила движок от 12.10 под страницы панели от 13.10.
-SOURCE=${D2K_SOURCE:-release}
-[ -z "${D2K_LOCAL:-}" ] || SOURCE=local
-# Те же адреса и тот же ключ, что у files/d2k-update.sh: выпуск, которому
+SOURCE=${D2S_SOURCE:-release}
+[ -z "${D2S_LOCAL:-}" ] || SOURCE=local
+# Те же адреса и тот же ключ, что у files/d2s-update.sh: выпуск, которому
 # верит ночное обновление, и выпуск, который ставит рука, — один файл.
 # Совпадение ключа с переменной репозитория сторожит .github/workflows/release.yml.
-LATEST=${D2K_UPDATE_LATEST:-https://github.com/$REPO/releases/latest/download}
-DOWNLOAD=${D2K_UPDATE_DOWNLOAD:-https://github.com/$REPO/releases/download}
-KEY=${D2K_UPDATE_KEY:-MCowBQYDK2VwAyEAvPw6qlJSGGZ9tFA6gZ3X7CP+cwtUdJJYh11/ZdskuAo=}
+LATEST=${D2S_UPDATE_LATEST:-https://github.com/$REPO/releases/latest/download}
+DOWNLOAD=${D2S_UPDATE_DOWNLOAD:-https://github.com/$REPO/releases/download}
+KEY=${D2S_UPDATE_KEY:-MCowBQYDK2VwAyEAvPw6qlJSGGZ9tFA6gZ3X7CP+cwtUdJJYh11/ZdskuAo=}
 
-DIR=/opt/d2k
+DIR=/opt/d2s
 SBIN=/opt/sbin
-INIT=/opt/etc/init.d/S99d2k
-OPENWRT_INIT=/etc/init.d/d2k
+INIT=/opt/etc/init.d/S99d2s
+OPENWRT_INIT=/etc/init.d/d2s
 # Признак OpenWrt — один на весь установщик: хук автозапуска, пакеты, правила.
-OPENWRT_RELEASE=${D2K_OPENWRT_RELEASE:-/etc/openwrt_release}
+OPENWRT_RELEASE=${D2S_OPENWRT_RELEASE:-/etc/openwrt_release}
 # Штатный менеджер пакетов OpenWrt: apk с 25.12, opkg до неё. Entware-opkg
 # для системных пакетов не годится никогда — у него свои пакеты и своя арка.
-OPENWRT_APK=${D2K_OPENWRT_APK:-/usr/bin/apk}
-# Прямой HTTPS по умолчанию. D2K_GATE — только добровольно указанный
+OPENWRT_APK=${D2S_OPENWRT_APK:-/usr/bin/apk}
+# Прямой HTTPS по умолчанию. D2S_GATE — только добровольно указанный
 # владельцем прокси; старый VPS в сборке не задан.
-GATE=${D2K_GATE:-}
+GATE=${D2S_GATE:-}
 # Где лежат источники пакетов OpenWrt (тесты подставляют свои).
-OPENWRT_APK_ETC=${D2K_OPENWRT_APK_ETC:-/etc/apk}
-OPENWRT_OPKG_ETC=${D2K_OPENWRT_OPKG_ETC:-/etc}
-OPENWRT_OPKG=${D2K_OPENWRT_OPKG:-/bin/opkg}
+OPENWRT_APK_ETC=${D2S_OPENWRT_APK_ETC:-/etc/apk}
+OPENWRT_OPKG_ETC=${D2S_OPENWRT_OPKG_ETC:-/etc}
+OPENWRT_OPKG=${D2S_OPENWRT_OPKG:-/bin/opkg}
 OPENWRT_STAGE=
 openwrt_check() {
     [ -f "$OPENWRT_RELEASE" ] || return 0
     if [ ! -r /etc/rc.common ] || [ ! -r /lib/functions/procd.sh ]; then
-        echo 'd2k: OpenWrt без rc.common/procd — автозапуск недоступен' >&2
+        echo 'd2s: OpenWrt без rc.common/procd — автозапуск недоступен' >&2
         return 0
     fi
     if [ -e "$OPENWRT_INIT" ] || [ -L "$OPENWRT_INIT" ]; then
         if [ -L "$OPENWRT_INIT" ] || [ ! -f "$OPENWRT_INIT" ] ||
-           ! grep -qx '# D2K-owned OpenWrt boot bridge v1' "$OPENWRT_INIT"; then
-            echo "d2k: чужой $OPENWRT_INIT — не перезаписываю; установка/обновление продолжится без хука" >&2
+           ! grep -qx '# D2S-owned OpenWrt boot bridge v1' "$OPENWRT_INIT"; then
+            echo "d2s: чужой $OPENWRT_INIT — не перезаписываю; установка/обновление продолжится без хука" >&2
             return 1
         fi
     fi
@@ -74,8 +80,8 @@ prepare_openwrt_hook() {
     [ -r /etc/rc.common ] && [ -r /lib/functions/procd.sh ] || return 0
     # Stage on the host filesystem before stopping/replacing the runtime.
     OPENWRT_STAGE=$(mktemp "$OPENWRT_INIT.XXXXXX") || die "не подготовить хук OpenWrt"
-    fetch "files/d2k-openwrt-init" "$OPENWRT_STAGE"
-    if ! grep -qx '# D2K-owned OpenWrt boot bridge v1' "$OPENWRT_STAGE" ||
+    fetch "files/d2s-openwrt-init" "$OPENWRT_STAGE"
+    if ! grep -qx '# D2S-owned OpenWrt boot bridge v1' "$OPENWRT_STAGE" ||
        ! sh -n "$OPENWRT_STAGE" || ! chmod 0755 "$OPENWRT_STAGE"; then
         die "неверный хук OpenWrt — прежняя установка сохранена"
     fi
@@ -86,12 +92,12 @@ install_openwrt_hook() (
     openwrt_check || exit 0
     mv -f "$OPENWRT_STAGE" "$OPENWRT_INIT" || exit 1
     sh /etc/rc.common "$OPENWRT_INIT" enable || exit 1
-    echo 'd2k: автозапуск OpenWrt включён (ожидание /opt, затем D2K)'
+    echo 'd2s: автозапуск OpenWrt включён (ожидание /opt, затем D2S)'
 )
 TMP=
 
-say()  { echo "d2k: $*"; }
-die()  { echo "d2k: $*" >&2; cleanup; exit 1; }
+say()  { echo "d2s: $*"; }
+die()  { echo "d2s: $*" >&2; cleanup; exit 1; }
 cleanup() {
     [ -z "$OPENWRT_STAGE" ] || rm -f "$OPENWRT_STAGE"
     [ -z "$TMP" ] || rm -rf "$TMP"
@@ -117,7 +123,7 @@ esac
 #
 # OpenWrt с fw4 (22.03+) — nftables: в 25.12 пакетов iptables нет вовсе, и
 # Entware для них не нужен. Keenetic и старый OpenWrt (fw3) — iptables. Тот же
-# выбор делает S99d2k; FW_BACKEND=iptables в конфигурации оставляет iptables.
+# выбор делает S99d2s; FW_BACKEND=iptables в конфигурации оставляет iptables.
 FW=iptables
 if [ -f "$OPENWRT_RELEASE" ] && command -v nft >/dev/null 2>&1; then
     cfg_fw=$(sed -n 's/^[[:space:]]*FW_BACKEND=//p' "$DIR/config" 2>/dev/null | tail -n 1 | tr -d "\"'")
@@ -234,9 +240,9 @@ else
 fi
 # Модули netfilter прошивка часто держит файлами, но не загружает: в /proc
 # видны только загруженные (Keenetic; Netis N6 04.10 — xt_connbytes ожил от
-# modprobe). Установщик загружает их сам тем же способом, что S99d2k при
+# modprobe). Установщик загружает их сам тем же способом, что S99d2s при
 # старте, и только потом проверяет.
-MODULES_DIR=${D2K_MODULES_DIR:-/lib/modules}
+MODULES_DIR=${D2S_MODULES_DIR:-/lib/modules}
 load_kmod() {
     modprobe "$1" 2>/dev/null && return 0
     kver=$(uname -r 2>/dev/null)
@@ -291,7 +297,7 @@ fi
 # Сперва всё скачивается и проверяется, и только потом заменяется. Замена по
 # ходу загрузки оставляет систему в состоянии, которого не предусматривал
 # никто.
-TMP=$(mktemp -d /tmp/d2k-install.XXXXXX) || die "не создать временный каталог"
+TMP=$(mktemp -d /tmp/d2s-install.XXXXXX) || die "не создать временный каталог"
 
 # Место под саму загрузку — ДО неё. Комплект скачивается целиком в /tmp (на
 # роутере это tmpfs, то есть RAM) и только потом раскладывается: не хватило —
@@ -299,13 +305,13 @@ TMP=$(mktemp -d /tmp/d2k-install.XXXXXX) || die "не создать време�
 # мерил только /opt, и то ПОСЛЕ загрузки: на 8/16-МиБ роутере обрыв случался
 # уже внутри fetch, когда отказываться было поздно.
 #
-# Замер d2kfetch для всех девяти арок: максимум 386 КиБ (mips64el).
+# Замер d2sfetch для всех девяти арок: максимум 386 КиБ (mips64el).
 # Старый комплект занимал 7635 КиБ на самой тяжёлой арке (mips64el; mips и
 # mipsel — 7470 и 7477). С новым инструментом остаётся около 950 КиБ запаса.
 TMP_NEED_KB=14000
 # Установка выпуска держит в /tmp распакованный архив и поверх него раскладку
 # комплекта, которую делает установщик ИЗ архива. Архив удаляется сразу после
-# распаковки; запас учитывает d2kfetch и изменения контроллера.
+# распаковки; запас учитывает d2sfetch и изменения контроллера.
 TMP_RELEASE_NEED_KB=32000
 # Оба числа сторожит scripts/test-install-manifest.sh: он измеряет и
 # раскладку, и дерево выпуска и отвергает число ниже замера.
@@ -348,11 +354,11 @@ sum256() {
 fetch() {
     # $1 — путь в комплекте (он же путь в репозитории), $2 — куда положить.
     #
-    # D2K_LOCAL берёт файлы из каталога вместо сети: так идёт установка из
+    # D2S_LOCAL берёт файлы из каталога вместо сети: так идёт установка из
     # архива выпуска и проверка С ЧИСТОГО СОСТОЯНИЯ в лаборатории — обещать
     # рабочую установку, ни разу её не пройдя, нельзя (§9).
-    if [ -n "${D2K_LOCAL:-}" ]; then
-        cp "$D2K_LOCAL/$1" "$2" || die "нет $D2K_LOCAL/$1"
+    if [ -n "${D2S_LOCAL:-}" ]; then
+        cp "$D2S_LOCAL/$1" "$2" || die "нет $D2S_LOCAL/$1"
         [ -s "$2" ] || die "$1 оказался пустым"
     else
         fetch_url "$BASE/$1" "$2"
@@ -404,8 +410,8 @@ esac
 # 1 — little-endian, 2 — big-endian) и e_machine (байты 18-19 в порядке
 # EI_DATA; 8 — MIPS, 183 — AArch64, 40 — ARM, 62 — x86-64, 3 — i386,
 # 243 — RISC-V, 21 — PPC64). od с -A/-N/-t есть в busybox (им уже пользуется
-# files/d2k-instagram-dns-scheduler.sh); xxd там нет.
-ABI_ELF_FILES=${D2K_ABI_ELF_FILES:-"/bin/busybox /bin/sh /bin/ash /usr/bin/env"}
+# files/d2s-instagram-dns-scheduler.sh); xxd там нет.
+ABI_ELF_FILES=${D2S_ABI_ELF_FILES:-"/bin/busybox /bin/sh /bin/ash /usr/bin/env"}
 if [ -z "$ABI_ARCH" ]; then
     abi_source "заголовок ELF ($ABI_ELF_FILES)"
     for elf_cand in $ABI_ELF_FILES; do
@@ -466,13 +472,13 @@ if [ "$SOURCE" = release ]; then
     openssl pkeyutl -verify -pubin -inkey "$TMP/key.pem" -rawin \
             -in "$TMP/latest.json" -sigfile "$TMP/latest.json.sig" >/dev/null 2>&1 ||
         die "подпись выпуска не сошлась — ничего не установлено"
-    # Те же выражения, что в files/d2k-update.sh: один формат, одно чтение.
+    # Те же выражения, что в files/d2s-update.sh: один формат, одно чтение.
     rid=$(sed -n 's/.*"release_id":"\([A-Za-z0-9][A-Za-z0-9._-]*\)".*/\1/p' "$TMP/latest.json")
     [ -n "$rid" ] || die "в сведениях о выпуске нет номера"
     want=$(sed -n "s/.*\"$ARCH\":{\"sha256\":\"\([0-9a-f]\{64\}\)\".*/\1/p" "$TMP/latest.json")
     [ -n "$want" ] || die "в выпуске $rid нет сборки для $ARCH"
     say "выпуск $rid: загрузка комплекта $ARCH"
-    fetch_url "$DOWNLOAD/$rid/d2k-$ARCH.tar.gz" "$TMP/release.tar.gz" 600
+    fetch_url "$DOWNLOAD/$rid/d2s-$ARCH.tar.gz" "$TMP/release.tar.gz" 600
     [ "$(sum256 "$TMP/release.tar.gz")" = "$want" ] ||
         die "архив выпуска $rid не совпал с подписанным хешем — ничего не установлено"
     mkdir "$TMP/release" || die "не создать $TMP/release"
@@ -485,37 +491,37 @@ if [ "$SOURCE" = release ]; then
     say "выпуск $rid: подпись сошлась, ставлю его установщиком"
     # Ставит установщик ИЗ архива: на роутер попадает только подписанное, и
     # комплект раскладывает тот же код, что при ночном обновлении.
-    D2K_LOCAL="$TMP/release" D2K_RELEASE_ID="$rid" D2K_SOURCE=local \
+    D2S_LOCAL="$TMP/release" D2S_RELEASE_ID="$rid" D2S_SOURCE=local \
         sh "$TMP/release/scripts/install.sh" || exit $?
     exit 0
 fi
 say "загрузка"
 fetch "scripts/select-panel-ip.sh" "$TMP/select-panel-ip.sh"
-fetch "builds/d2kpanel-linux-$ARCH" "$TMP/d2kpanel"
-fetch "builds/d2kc-linux-$ARCH" "$TMP/d2kc"
-fetch "builds/d2kfetch-linux-$ARCH" "$TMP/d2kfetch"
-fetch "builds/d2kd-linux-$ARCH" "$TMP/d2kd"
-fetch "builds/d2ktg-linux-$ARCH" "$TMP/d2ktg"
-fetch "files/d2k-lan.sh" "$TMP/d2k-lan.sh"
-fetch "files/d2k-meta-dns-core.sh" "$TMP/d2k-meta-dns-core.sh"
-fetch "files/d2k-meta-dns-library.sh" "$TMP/d2k-meta-dns-library.sh"
-fetch "files/d2k-meta-dns-scheduler-core.sh" "$TMP/d2k-meta-dns-scheduler-core.sh"
-fetch "files/d2k-whatsapp-media.sh" "$TMP/d2k-whatsapp-media.sh"
-fetch "files/S96d2o-resolver" "$TMP/S96d2o-resolver"
-fetch "files/S97d2o-dns-watch" "$TMP/S97d2o-dns-watch"
-fetch "builds/d2o-resolver-linux-$ARCH" "$TMP/d2o-resolver"
-fetch "builds/d2o-dns-watch-linux-$ARCH" "$TMP/d2o-dns-watch"
-fetch "files/S99d2k"            "$TMP/S99d2k"
+fetch "builds/d2spanel-linux-$ARCH" "$TMP/d2spanel"
+fetch "builds/d2sc-linux-$ARCH" "$TMP/d2sc"
+fetch "builds/d2sfetch-linux-$ARCH" "$TMP/d2sfetch"
+fetch "builds/d2sd-linux-$ARCH" "$TMP/d2sd"
+fetch "builds/d2stg-linux-$ARCH" "$TMP/d2stg"
+fetch "files/d2s-lan.sh" "$TMP/d2s-lan.sh"
+fetch "files/d2s-meta-dns-core.sh" "$TMP/d2s-meta-dns-core.sh"
+fetch "files/d2s-meta-dns-library.sh" "$TMP/d2s-meta-dns-library.sh"
+fetch "files/d2s-meta-dns-scheduler-core.sh" "$TMP/d2s-meta-dns-scheduler-core.sh"
+fetch "files/d2s-whatsapp-media.sh" "$TMP/d2s-whatsapp-media.sh"
+fetch "files/S96d2s-resolver" "$TMP/S96d2s-resolver"
+fetch "files/S97d2s-dns-watch" "$TMP/S97d2s-dns-watch"
+fetch "builds/d2s-resolver-linux-$ARCH" "$TMP/d2s-resolver"
+fetch "builds/d2s-dns-watch-linux-$ARCH" "$TMP/d2s-dns-watch"
+fetch "files/S99d2s"            "$TMP/S99d2s"
 fetch "files/config"            "$TMP/config"
-fetch "files/d2k-fw-heal.sh"    "$TMP/d2k-fw-heal.sh"
-fetch "files/d2k-ppe-deoffload.sh" "$TMP/d2k-ppe-deoffload.sh"
-fetch "files/d2k-log-maintenance.sh" "$TMP/d2k-log-maintenance.sh"
-fetch "files/d2k-update.sh" "$TMP/d2k-update.sh"
-fetch "files/001-d2k.sh"        "$TMP/001-d2k.sh"
-fetch "files/d2k-tg-firewall.sh" "$TMP/d2k-tg-firewall.sh"
-fetch "files/d2k-tg-watchdog.sh" "$TMP/d2k-tg-watchdog.sh"
-fetch "files/d2k-instagram-dns.sh" "$TMP/d2k-instagram-dns.sh"
-fetch "files/d2k-instagram-dns-scheduler.sh" "$TMP/d2k-instagram-dns-scheduler.sh"
+fetch "files/d2s-fw-heal.sh"    "$TMP/d2s-fw-heal.sh"
+fetch "files/d2s-ppe-deoffload.sh" "$TMP/d2s-ppe-deoffload.sh"
+fetch "files/d2s-log-maintenance.sh" "$TMP/d2s-log-maintenance.sh"
+fetch "files/d2s-update.sh" "$TMP/d2s-update.sh"
+fetch "files/001-d2s.sh"        "$TMP/001-d2s.sh"
+fetch "files/d2s-tg-firewall.sh" "$TMP/d2s-tg-firewall.sh"
+fetch "files/d2s-tg-watchdog.sh" "$TMP/d2s-tg-watchdog.sh"
+fetch "files/d2s-instagram-dns.sh" "$TMP/d2s-instagram-dns.sh"
+fetch "files/d2s-instagram-dns-scheduler.sh" "$TMP/d2s-instagram-dns-scheduler.sh"
 fetch "files/meta-ranges.txt" "$TMP/meta-ranges.txt"
 fetch "files/tg-roots.pem" "$TMP/tg-roots.pem"
 fetch "files/fake/stun.bin" "$TMP/stun.bin"
@@ -534,38 +540,38 @@ for face in onest jbmono; do
     fetch "internal/web/assets/fonts/OFL-$face.txt" "$TMP/panel/OFL-$face.txt"
 done
 
-chmod +x "$TMP/d2kpanel" "$TMP/d2kc" "$TMP/d2kfetch" "$TMP/d2kd" "$TMP/d2ktg" \
-         "$TMP/S99d2k" "$TMP/d2k-fw-heal.sh" "$TMP/d2k-ppe-deoffload.sh" "$TMP/d2k-log-maintenance.sh" "$TMP/d2k-update.sh" "$TMP/001-d2k.sh" \
-         "$TMP/d2k-tg-firewall.sh" "$TMP/d2k-tg-watchdog.sh" \
-         "$TMP/d2k-instagram-dns.sh" "$TMP/d2k-instagram-dns-scheduler.sh"
+chmod +x "$TMP/d2spanel" "$TMP/d2sc" "$TMP/d2sfetch" "$TMP/d2sd" "$TMP/d2stg" \
+         "$TMP/S99d2s" "$TMP/d2s-fw-heal.sh" "$TMP/d2s-ppe-deoffload.sh" "$TMP/d2s-log-maintenance.sh" "$TMP/d2s-update.sh" "$TMP/001-d2s.sh" \
+         "$TMP/d2s-tg-firewall.sh" "$TMP/d2s-tg-watchdog.sh" \
+         "$TMP/d2s-instagram-dns.sh" "$TMP/d2s-instagram-dns-scheduler.sh"
 
 # Проверка ДО замены: запускается ли то, что скачалось, и та ли это арка.
-for bin in d2o-resolver d2o-dns-watch; do
+for bin in d2s-resolver d2s-dns-watch; do
     chmod 0755 "$TMP/$bin"
     "$TMP/$bin" --version >/dev/null || die "не запускается $bin — прежняя версия не изменена"
 done
-PANEL_VERSION=$("$TMP/d2kpanel" --version 2>/dev/null) || die "скачанный d2kpanel не запускается на этой системе"
+PANEL_VERSION=$("$TMP/d2spanel" --version 2>/dev/null) || die "скачанный d2spanel не запускается на этой системе"
 case "$PANEL_VERSION" in
     *features=telegram-control*) ;;
-    *) die "скачанный d2kpanel устарел: в нём нет управления Telegram-туннелем" ;;
+    *) die "скачанный d2spanel устарел: в нём нет управления Telegram-туннелем" ;;
 esac
-"$TMP/d2kd" --help  >/dev/null 2>&1 || die "скачанный d2kd не запускается на этой системе"
-TG_VERSION=$("$TMP/d2ktg" --version 2>/dev/null) || die "скачанный d2ktg не запускается на этой системе"
+"$TMP/d2sd" --help  >/dev/null 2>&1 || die "скачанный d2sd не запускается на этой системе"
+TG_VERSION=$("$TMP/d2stg" --version 2>/dev/null) || die "скачанный d2stg не запускается на этой системе"
 case "$TG_VERSION" in
     *telegram-local-tcp-epoll*) ;;
-    *) die "скачанный d2ktg устарел: в нём нет локального Telegram-прокси" ;;
+    *) die "скачанный d2stg устарел: в нём нет локального Telegram-прокси" ;;
 esac
 case "$TG_VERSION" in
     *instagram-ip-probe*) ;;
-    *) die "скачанный d2ktg устарел: нет проверки доступности Instagram IP" ;;
+    *) die "скачанный d2stg устарел: нет проверки доступности Instagram IP" ;;
 esac
-# The DNS helper pins 18 Instagram/fbcdn/WhatsApp names; an older d2ktg knows
+# The DNS helper pins 18 Instagram/fbcdn/WhatsApp names; an older d2stg knows
 # fewer and would silently reject the rest.
 case "$TG_VERSION" in
     *meta-hosts-v3*) ;;
-    *) die "скачанный d2ktg устарел: нет проверки сертификатов WhatsApp и fbcdn" ;;
+    *) die "скачанный d2stg устарел: нет проверки сертификатов WhatsApp и fbcdn" ;;
 esac
-# d2kc без обязательного --control печатает использование и выходит кодом 2 —
+# d2sc без обязательного --control печатает использование и выходит кодом 2 —
 # это и есть признак «запускается и та арка». Ноль он здесь вернуть не может.
 #
 # Код снимается через `|| rc=$?`, а не отдельной строкой: при `set -e` (он
@@ -574,12 +580,12 @@ esac
 # проверке арки, ничего не сказав человеку, и до подмены файлов не доходила
 # никогда. Поймано scripts/lab-install.sh на первом же прогоне.
 rc=0
-"$TMP/d2kc" >/dev/null 2>&1 || rc=$?
-[ "$rc" = 2 ] || die "скачанный d2kc не запускается на этой системе (код $rc)"
+"$TMP/d2sc" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] || die "скачанный d2sc не запускается на этой системе (код $rc)"
 rc=0
-"$TMP/d2kfetch" >/dev/null 2>&1 || rc=$?
-[ "$rc" = 2 ] || die "скачанный d2kfetch не запускается на этой системе (код $rc)"
-say "проверено: $("$TMP/d2kpanel" --version | head -1)"
+"$TMP/d2sfetch" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] || die "скачанный d2sfetch не запускается на этой системе (код $rc)"
+say "проверено: $("$TMP/d2spanel" --version | head -1)"
 
 # --- OpenWrt на nftables: место, пакеты, ядро ----------------------------
 #
@@ -594,18 +600,18 @@ if [ "$FW" = nft ]; then
     opt_fs=/opt; [ -d "$opt_fs" ] || opt_fs=/
     avail_kb=$(df -kP "$opt_fs" 2>/dev/null | awk 'NR == 2 { print $4 }')
     new_kb=$(du -sk "$TMP" | awk '{ print $1 }')
-    old_kb=$(du -sk "$SBIN/d2kd" "$SBIN/d2kc" "$SBIN/d2kfetch" "$SBIN/d2kpanel" "$SBIN/d2ktg" "$DIR/panel" 2>/dev/null |
+    old_kb=$(du -sk "$SBIN/d2sd" "$SBIN/d2sc" "$SBIN/d2sfetch" "$SBIN/d2spanel" "$SBIN/d2stg" "$DIR/panel" 2>/dev/null |
         awk '{ s += $1 } END { print s + 0 }')
-    big_kb=$(du -sk "$TMP/d2ktg" | awk '{ print $1 }')
+    big_kb=$(du -sk "$TMP/d2stg" | awk '{ print $1 }')
     need_kb=$((new_kb - old_kb + big_kb))
     case "$avail_kb" in
         ''|*[!0-9]*) say "не узнать свободное место на $opt_fs — продолжаю" ;;
         *) [ "$avail_kb" -ge "$need_kb" ] ||
                die "мало места на $opt_fs: свободно $avail_kb КиБ, нужно $need_kb КиБ — подключите USB-накопитель под /opt" ;;
     esac
-    # Ядро: те же выражения, что в правилах S99d2k, — проверкой без применения.
+    # Ядро: те же выражения, что в правилах S99d2s, — проверкой без применения.
     {
-        echo 'table inet d2k_preflight {'
+        echo 'table inet d2s_preflight {'
         echo '	chain c {'
         echo '		type filter hook postrouting priority mangle; policy accept;'
         echo '		meta l4proto tcp ct direction original th dport { 443 } ct original packets 0-8 queue num 65000 bypass'
@@ -618,7 +624,7 @@ if [ "$FW" = nft ]; then
         echo '}'
     } > "$TMP/preflight.nft"
     nft -c -f "$TMP/preflight.nft" >/dev/null 2>&1 ||
-        die "nftables не принимает правила D2K (queue, ct, fib, masquerade) — $(openwrt_add_cmd kmod-nft-queue kmod-nfnetlink-queue kmod-nft-nat kmod-nft-fib)"
+        die "nftables не принимает правила D2S (queue, ct, fib, masquerade) — $(openwrt_add_cmd kmod-nft-queue kmod-nfnetlink-queue kmod-nft-nat kmod-nft-fib)"
     [ -e /proc/net/netfilter/nfnetlink_queue ] || { load_kmod nfnetlink; load_kmod nfnetlink_queue; }
     [ -e /proc/net/netfilter/nfnetlink_queue ] ||
         die "ядро без nfnetlink_queue — $(openwrt_add_cmd kmod-nfnetlink-queue)"
@@ -626,7 +632,7 @@ fi
 prepare_openwrt_hook
 
 # --- остановка прежней версии --------------------------------------------
-for extra_init in /opt/etc/init.d/S97d2o-dns-watch /opt/etc/init.d/S96d2o-resolver; do
+for extra_init in /opt/etc/init.d/S97d2s-dns-watch /opt/etc/init.d/S96d2s-resolver; do
     [ ! -x "$extra_init" ] || "$extra_init" stop || die "не остановилась дополнительная служба"
 done
 if [ -x "$INIT" ]; then
@@ -650,16 +656,16 @@ install_data_atomic() {
     chmod 0644 "$2.new"
     mv -f "$2.new" "$2" || die "не подменить $2"
 }
-install_atomic "$TMP/d2kpanel" "$SBIN/d2kpanel"
-install_atomic "$TMP/d2kc"   "$SBIN/d2kc"
-install_atomic "$TMP/d2kfetch" "$SBIN/d2kfetch"
-install_atomic "$TMP/d2kd"   "$SBIN/d2kd"
-# Прокси открытого HTTP (d2khttp) больше не нужен: вставку провайдера в
-# HTTP узнаёт d2kd (задача 51). Прежняя версия уже остановлена выше вместе с
+install_atomic "$TMP/d2spanel" "$SBIN/d2spanel"
+install_atomic "$TMP/d2sc"   "$SBIN/d2sc"
+install_atomic "$TMP/d2sfetch" "$SBIN/d2sfetch"
+install_atomic "$TMP/d2sd"   "$SBIN/d2sd"
+# Прокси открытого HTTP (d2shttp) больше не нужен: вставку провайдера в
+# HTTP узнаёт d2sd (задача 51). Прежняя версия уже остановлена выше вместе с
 # его правилами; бинарник убираем.
-rm -f "$SBIN/d2khttp"
-install_atomic "$TMP/d2ktg"  "$SBIN/d2ktg"
-install_atomic "$TMP/S99d2k" "$INIT"
+rm -f "$SBIN/d2shttp"
+install_atomic "$TMP/d2stg"  "$SBIN/d2stg"
+install_atomic "$TMP/S99d2s" "$INIT"
 install_data_atomic "$TMP/panel/index.html" "$DIR/panel/index.html"
 install_data_atomic "$TMP/panel/favicon.svg" "$DIR/panel/favicon.svg"
 install_data_atomic "$TMP/panel/panel.css"  "$DIR/panel/panel.css"
@@ -677,22 +683,22 @@ done
 for old in slide-left.webp slide-center.webp slide-right.webp slide-holder.webp ground.webp \
            rack.webp family-rack.webp slide-left.webp.json slide-center.webp.json \
            slide-right.webp.json slide-holder.webp.json ground.webp.json rack.webp.json \
-           family-rack.webp.json logo-d2k.png mascot-d2k.png mascot.svg \
+           family-rack.webp.json logo-d2s.png mascot-d2s.png mascot.svg \
            fonts/oswald.ttf fonts/OFL-oswald.txt; do
     rm -f "$DIR/panel/$old"
 done
-install_atomic "$TMP/d2k-fw-heal.sh" "$DIR/d2k-fw-heal.sh"
-install_atomic "$TMP/d2k-ppe-deoffload.sh" "$DIR/d2k-ppe-deoffload.sh"
-install_atomic "$TMP/d2k-log-maintenance.sh" "$DIR/d2k-log-maintenance.sh"
-install_atomic "$TMP/d2k-update.sh" "$DIR/d2k-update.sh"
+install_atomic "$TMP/d2s-fw-heal.sh" "$DIR/d2s-fw-heal.sh"
+install_atomic "$TMP/d2s-ppe-deoffload.sh" "$DIR/d2s-ppe-deoffload.sh"
+install_atomic "$TMP/d2s-log-maintenance.sh" "$DIR/d2s-log-maintenance.sh"
+install_atomic "$TMP/d2s-update.sh" "$DIR/d2s-update.sh"
 # Что стоит и под какую арку — для автообновления. Выпуск называет себя сам
-# (D2K_RELEASE_ID от d2k-update.sh); ручная установка из main выпуска не знает.
+# (D2S_RELEASE_ID от d2s-update.sh); ручная установка из main выпуска не знает.
 printf '%s\n' "$ARCH" > "$DIR/release-arch.new" && mv -f "$DIR/release-arch.new" "$DIR/release-arch"
-printf '%s\n' "${D2K_RELEASE_ID:-}" > "$DIR/release-id.new" && mv -f "$DIR/release-id.new" "$DIR/release-id"
-install_atomic "$TMP/d2k-tg-firewall.sh" "$DIR/d2k-tg-firewall.sh"
-install_atomic "$TMP/d2k-tg-watchdog.sh" "$DIR/d2k-tg-watchdog.sh"
-install_atomic "$TMP/d2k-instagram-dns.sh" "$DIR/d2k-instagram-dns.sh"
-install_atomic "$TMP/d2k-instagram-dns-scheduler.sh" "$DIR/d2k-instagram-dns-scheduler.sh"
+printf '%s\n' "${D2S_RELEASE_ID:-}" > "$DIR/release-id.new" && mv -f "$DIR/release-id.new" "$DIR/release-id"
+install_atomic "$TMP/d2s-tg-firewall.sh" "$DIR/d2s-tg-firewall.sh"
+install_atomic "$TMP/d2s-tg-watchdog.sh" "$DIR/d2s-tg-watchdog.sh"
+install_atomic "$TMP/d2s-instagram-dns.sh" "$DIR/d2s-instagram-dns.sh"
+install_atomic "$TMP/d2s-instagram-dns-scheduler.sh" "$DIR/d2s-instagram-dns-scheduler.sh"
 install_data_atomic "$TMP/meta-ranges.txt" "$DIR/files/meta-ranges.txt"
 install_data_atomic "$TMP/tg-roots.pem" "$DIR/files/tg-roots.pem"
 install_atomic "$TMP/stun.bin" "$DIR/files/fake/stun.bin"
@@ -701,9 +707,9 @@ install_atomic "$TMP/quic_initial_dbankcloud_ru.bin" "$DIR/files/fake/quic_initi
 # прошивке без netfilter.d: тогда остаётся периодический сторож, и это
 # ухудшение страховки, а не отказ установки.
 if [ -d /opt/etc/ndm/netfilter.d ]; then
-    install_atomic "$TMP/001-d2k.sh" "/opt/etc/ndm/netfilter.d/001-d2k.sh"
+    install_atomic "$TMP/001-d2s.sh" "/opt/etc/ndm/netfilter.d/001-d2s.sh"
 elif [ ! -f "$OPENWRT_RELEASE" ]; then
-    # На OpenWrt NDM нет; fw4 своих таблиц D2K не трогает, сторож — страховка.
+    # На OpenWrt NDM нет; fw4 своих таблиц D2S не трогает, сторож — страховка.
     say "нет /opt/etc/ndm/netfilter.d — событийного восстановления правил не будет"
 fi
 
@@ -728,17 +734,17 @@ if [ "$PANEL_LISTEN_CURRENT" = "127.0.0.1:8090" ]; then
     say "панель доступна в LAN: http://$PANEL_LAN_IP:8090/"
 fi
 # Установка из форка должна и дальше искать подписанные обновления в том же репозитории.
-if [ "$REPO" != necronicle/d2k ]; then
-    sed '/^D2K_REPO=/d' "$DIR/config" > "$TMP/config.repo" ||
+if [ "$REPO" != necronicle/d2s ]; then
+    sed '/^D2S_REPO=/d' "$DIR/config" > "$TMP/config.repo" ||
         die "не подготовить источник обновлений"
-    printf 'D2K_REPO=%s\n' "$REPO" >> "$TMP/config.repo" ||
+    printf 'D2S_REPO=%s\n' "$REPO" >> "$TMP/config.repo" ||
         die "не сохранить источник обновлений"
     install_data_atomic "$TMP/config.repo" "$DIR/config" ||
         die "не сохранить источник обновлений"
 fi
-if ! grep -q '^D2K_RELAY_URL=' "$DIR/config"; then
+if ! grep -q '^D2S_RELAY_URL=' "$DIR/config"; then
     printf '
-D2K_RELAY_URL=http://127.0.0.1:9083/resolve
+D2S_RELAY_URL=http://127.0.0.1:9083/resolve
 ' >> "$DIR/config"
 fi
 # В старой конфигурации могут оставаться relay-учётные данные. Сохраняем их
@@ -777,38 +783,38 @@ esac
 if [ -n "$dns_mark_at" ] && [ "$dns_mark_at" -le "$dns_now" ] && [ $((dns_now - dns_mark_at)) -lt 86400 ]; then
     say "DNS Instagram/WhatsApp обновлялся меньше суток назад — следующее обновление по расписанию"
 else
-    rm -f "$DNS_MARK" /tmp/d2k-instagram-dns-last-attempt
+    rm -f "$DNS_MARK" /tmp/d2s-instagram-dns-last-attempt
     say "DNS Instagram/WhatsApp обновляется в фоне после запуска: результат в $DIR/log/instagram-dns.log; прежние записи сохраняются"
 fi
 say "далее — ежедневно в 01:00–04:59 (своя минута у каждой установки), при неудаче повтор с нарастающей паузой"
 # Убираем только legacy Go-панельный бинарник прежней установки; новый C
-# runtime уже проверен выше и установлен отдельно как d2kpanel.
-rm -f "$SBIN/d2k"
+# runtime уже проверен выше и установлен отдельно как d2spanel.
+rm -f "$SBIN/d2s"
 
 # --- запуск и проверка ---------------------------------------------------
 # D2S additions are staged before replacing any running component.
-install_atomic "$TMP/d2k-lan.sh" "$DIR/d2k-lan.sh"
-install_atomic "$TMP/d2k-meta-dns-core.sh" "$DIR/d2k-meta-dns-core.sh"
-install_atomic "$TMP/d2k-meta-dns-library.sh" "$DIR/d2k-meta-dns-library.sh"
-install_atomic "$TMP/d2k-meta-dns-scheduler-core.sh" "$DIR/d2k-meta-dns-scheduler-core.sh"
-install_atomic "$TMP/d2k-whatsapp-media.sh" "$DIR/d2k-whatsapp-media.sh"
-for bin in d2o-resolver d2o-dns-watch; do
+install_atomic "$TMP/d2s-lan.sh" "$DIR/d2s-lan.sh"
+install_atomic "$TMP/d2s-meta-dns-core.sh" "$DIR/d2s-meta-dns-core.sh"
+install_atomic "$TMP/d2s-meta-dns-library.sh" "$DIR/d2s-meta-dns-library.sh"
+install_atomic "$TMP/d2s-meta-dns-scheduler-core.sh" "$DIR/d2s-meta-dns-scheduler-core.sh"
+install_atomic "$TMP/d2s-whatsapp-media.sh" "$DIR/d2s-whatsapp-media.sh"
+for bin in d2s-resolver d2s-dns-watch; do
     install_atomic "$TMP/$bin" "$SBIN/$bin"
 done
-install_atomic "$TMP/S96d2o-resolver" /opt/etc/init.d/S96d2o-resolver
-install_atomic "$TMP/S97d2o-dns-watch" /opt/etc/init.d/S97d2o-dns-watch
-if [ -f /opt/etc/ndm/netfilter.d/001-d2o-lab.sh ] && grep -q d2k-fw-heal /opt/etc/ndm/netfilter.d/001-d2o-lab.sh; then
+install_atomic "$TMP/S96d2s-resolver" /opt/etc/init.d/S96d2s-resolver
+install_atomic "$TMP/S97d2s-dns-watch" /opt/etc/init.d/S97d2s-dns-watch
+if [ -f /opt/etc/ndm/netfilter.d/001-d2o-lab.sh ] && grep -q d2s-fw-heal /opt/etc/ndm/netfilter.d/001-d2o-lab.sh; then
     rm -f /opt/etc/ndm/netfilter.d/001-d2o-lab.sh
 fi
-/opt/etc/init.d/S96d2o-resolver start || say "предупреждение: локальный DNS-помощник не запущен"
-/opt/etc/init.d/S97d2o-dns-watch start || say "предупреждение: наблюдатель DNS не запущен"
+/opt/etc/init.d/S96d2s-resolver start || say "предупреждение: локальный DNS-помощник не запущен"
+/opt/etc/init.d/S97d2s-dns-watch start || say "предупреждение: наблюдатель DNS не запущен"
 say "запуск"
 "$INIT" start || die "служба не запустилась"
 
 sleep 2
 if ! "$INIT" status | grep -q "датапат: работает"; then
     "$INIT" stop || true
-    die "служба запустилась и умерла — смотрите $DIR/log/d2kd.log"
+    die "служба запустилась и умерла — смотрите $DIR/log/d2sd.log"
 fi
 
 "$INIT" status

@@ -103,18 +103,18 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   fixture('scripts/architecture.sh',
     sh('printf "arch %s %s\\n" "$1" "$2" >> "$CALLS"; [ -n "$2" ] || exit 1; printf "amd64\\n"'));
   for (const name of ['check-cpu.sh', 'select-panel-ip.sh']) fixture(`scripts/${name}`, sh('exit 0'));
-  fixture('builds/d2kpanel-linux-amd64', sh('echo features=telegram-control'));
-  fixture('builds/d2ktg-linux-amd64', sh('echo features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v3'));
-  fixture('builds/d2kd-linux-amd64', sh('exit 0'));
-  fixture('builds/d2kc-linux-amd64', sh('exit 2'));
-  fixture('builds/d2kfetch-linux-amd64', sh('exit 2'));
-  fixture('files/S99d2k', sh('printf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0'));
+  fixture('builds/d2spanel-linux-amd64', sh('echo features=telegram-control'));
+  fixture('builds/d2stg-linux-amd64', sh('echo features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v3'));
+  fixture('builds/d2sd-linux-amd64', sh('exit 0'));
+  fixture('builds/d2sc-linux-amd64', sh('exit 2'));
+  fixture('builds/d2sfetch-linux-amd64', sh('exit 2'));
+  fixture('files/S99d2s', sh('printf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0'));
   fixture('files/config', 'PANEL_LISTEN=192.168.1.1:8090\nTG_ENABLED=0\nTG_MODE=local\n');
   // Sourced by uninstall.sh: definitions only, no exit.
-  fixture('files/d2k-ppe-deoffload.sh', sh('d2k_ppe_remove() { :; }'));
-  for (const name of ['d2k-fw-heal.sh', '001-d2k.sh', 'd2k-tg-firewall.sh', 'd2k-tg-watchdog.sh',
-    'd2k-instagram-dns-scheduler.sh', 'd2k-instagram-dns.sh', 'd2k-log-maintenance.sh', 'd2k-update.sh']) fixture(`files/${name}`, sh('exit 0'));
-  fixture('files/d2k-openwrt-init', fs.readFileSync(path.join(root, 'files/d2k-openwrt-init'), 'utf8').replace(/\r\n/g, '\n')
+  fixture('files/d2s-ppe-deoffload.sh', sh('d2s_ppe_remove() { :; }'));
+  for (const name of ['d2s-fw-heal.sh', '001-d2s.sh', 'd2s-tg-firewall.sh', 'd2s-tg-watchdog.sh',
+    'd2s-instagram-dns-scheduler.sh', 'd2s-instagram-dns.sh', 'd2s-log-maintenance.sh', 'd2s-update.sh']) fixture(`files/${name}`, sh('exit 0'));
+  fixture('files/d2s-openwrt-init', fs.readFileSync(path.join(root, 'files/d2s-openwrt-init'), 'utf8').replace(/\r\n/g, '\n')
     .replaceAll('/etc/rc.common', path.join(tmp, 'etc/rc.common')));
   for (const name of ['meta-ranges.txt', 'tg-roots.pem', 'fake/stun.bin', 'fake/quic_initial_dbankcloud_ru.bin']) fixture(`files/${name}`, 'fixture\n');
   for (const name of ['index.html', 'favicon.svg', 'panel.css', 'panel.js', 'telegram-flow.js', 'telegram-flow-prototype.js', 'diagnostics.js', 'gsap.js', 'fonts/onest.woff2',
@@ -133,19 +133,19 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
       .replaceAll('/opt', path.join(tmp, 'opt'))
       .replaceAll('/etc/openwrt_release', release)
       .replaceAll('/etc/rc.common', path.join(tmp, 'etc/rc.common'))
-      .replaceAll('/etc/init.d/d2k', path.join(tmp, 'etc/init.d/d2k'))
+      .replaceAll('/etc/init.d/d2s', path.join(tmp, 'etc/init.d/d2s'))
       .replaceAll('/lib/functions/procd.sh', path.join(tmp, 'lib/functions/procd.sh'))
       .replaceAll('/proc/', `${path.join(tmp, 'proc')}/`)
-      .replaceAll('/tmp/d2k', runtime);
+      .replaceAll('/tmp/d2s', runtime);
     fs.writeFileSync(path.join(tmp, `${name}.sh`), script);
   }
   const calls = path.join(tmp, 'calls');
   const env = {
     // Файлы ветки, а не выпуск: здесь проверяется поведение установщика на
     // чистой 25.12, а не канал выпуска (его проверяет test-install-release.cjs).
-    D2K_SOURCE: 'ref', D2K_GATE: 'http://192.0.2.44:9444', D2K_GATE: 'http://192.0.2.44:9444',
-    PATH: `${bin}:${sys}`, HOME: tmp, CALLS: calls, SRC: src, D2K_BASE: 'http://fixture.test',
-    D2K_OPENWRT_APK: path.join(bin, 'apk'), D2K_OPENWRT_OPKG: path.join(tmp, 'no-opkg'), D2K_KEEP_STATE: '1',
+    D2S_SOURCE: 'ref', D2S_GATE: 'http://192.0.2.44:9444', D2S_GATE: 'http://192.0.2.44:9444',
+    PATH: `${bin}:${sys}`, HOME: tmp, CALLS: calls, SRC: src, D2S_BASE: 'http://fixture.test',
+    D2S_OPENWRT_APK: path.join(bin, 'apk'), D2S_OPENWRT_OPKG: path.join(tmp, 'no-opkg'), D2S_KEEP_STATE: '1',
   };
   const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
   const reset = () => { for (const f of [calls, log('apk'), log('opkg'), log('nft'), log('wget'), log('curl'),
@@ -154,20 +154,20 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
     return spawnSync('/bin/sh', [path.join(tmp, `${name}.sh`)], { env: { ...env, ...extra }, encoding: 'utf8', timeout: 20000 });
   }
   const ok = (r) => { assert.equal(r.status, 0, r.stderr || r.stdout); return r.stdout + r.stderr; };
-  const d2kd = path.join(tmp, 'opt/sbin/d2kd');
+  const d2sd = path.join(tmp, 'opt/sbin/d2sd');
 
   // 1. Fresh 25.12: nothing installed, no curl — downloads through wget, then
   //    apk adds exactly the missing packages; no iptables anywhere.
   reset();
   const fresh = ok(run('install'));
-  assert(read(log('wget')).includes('http://fixture.test/builds/d2kd-linux-amd64'), 'without curl the installer must download through wget');
+  assert(read(log('wget')).includes('http://fixture.test/builds/d2sd-linux-amd64'), 'without curl the installer must download through wget');
   assert.match(read(log('apk')), /^add kmod-nft-queue kmod-nfnetlink-queue kmod-nf-conntrack-netlink ca-bundle curl openssl-util$/m,
     'apk must add the nft kmods, ca-bundle, curl and openssl-util');
   assert.match(read(log('nft')), /^-c -f .*preflight\.nft$/m, 'kernel support must be checked with nft -c before the switch');
   assert.match(read(calls), /^arch \S+ aarch64_generic$/m, 'architecture must come from DISTRIB_ARCH, not Entware');
-  assert(fs.existsSync(d2kd), 'runtime must be installed');
+  assert(fs.existsSync(d2sd), 'runtime must be installed');
   assert(read(calls).includes('service-start'), 'service must be started');
-  assert(fs.existsSync(path.join(tmp, 'etc/init.d/d2k')) && read(calls).includes('host-enable'), 'boot bridge must be installed and enabled');
+  assert(fs.existsSync(path.join(tmp, 'etc/init.d/d2s')) && read(calls).includes('host-enable'), 'boot bridge must be installed and enabled');
   assert.doesNotMatch(fresh, /Entware/, 'nothing may ask for Entware');
   assert.doesNotMatch(fresh, /ndm/, 'KeeneticOS NDM hook is not an OpenWrt concern');
 
@@ -220,41 +220,41 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   const script = path.join(elfDir, 'script');
   for (const [name, , , , expect] of elfCases) {
     reset();
-    ok(run('install', { APK_HAVE: have, APK_ARCH: '', D2K_ABI_ELF_FILES: `${script} ${path.join(elfDir, name)}` }));
+    ok(run('install', { APK_HAVE: have, APK_ARCH: '', D2S_ABI_ELF_FILES: `${script} ${path.join(elfDir, name)}` }));
     assert.match(read(calls), new RegExp(`^arch \\S+ ${expect}$`, 'm'),
       `${name}: with a silent apk the ABI must be read out of the ELF header`);
   }
   // A bare "mips" names no endianness, and on MIPS that is the whole question:
   // the ELF header must override it rather than pick a build by coin toss.
   reset();
-  ok(run('install', { APK_HAVE: have, APK_ARCH: 'mips', D2K_ABI_ELF_FILES: path.join(elfDir, 'mips-be') }));
+  ok(run('install', { APK_HAVE: have, APK_ARCH: 'mips', D2S_ABI_ELF_FILES: path.join(elfDir, 'mips-be') }));
   assert.match(read(calls), /^arch \S+ mips$/m, 'a bare "mips" must be resolved through the ELF header');
   reset();
-  ok(run('install', { APK_HAVE: have, APK_ARCH: 'mips', D2K_ABI_ELF_FILES: path.join(elfDir, 'mips-le') }));
+  ok(run('install', { APK_HAVE: have, APK_ARCH: 'mips', D2S_ABI_ELF_FILES: path.join(elfDir, 'mips-le') }));
   assert.match(read(calls), /^arch \S+ mipsel$/m, 'a bare "mips" on a little-endian box must become mipsel');
   // Nothing names the ABI: the refusal says which sources were asked.
   reset();
-  const blind = run('install', { APK_HAVE: have, APK_ARCH: '', D2K_ABI_ELF_FILES: script });
+  const blind = run('install', { APK_HAVE: have, APK_ARCH: '', D2S_ABI_ELF_FILES: script });
   assert.notEqual(blind.status, 0, 'with no ABI from any source the installer must refuse');
   assert.match(blind.stdout + blind.stderr, /пробовали:[^\n]*DISTRIB_ARCH[^\n]*--print-arch[^\n]*ELF/,
     `the refusal must name every source tried: ${blind.stdout}${blind.stderr}`);
   put(release, releaseText, 0o644);
 
   // 3-5. Refusals keep the working install: no stop, no replaced binary.
-  const before = fs.readFileSync(d2kd);
-  put(path.join(src, 'builds/d2kd-linux-amd64'), sh('# next release\nexit 0'));
+  const before = fs.readFileSync(d2sd);
+  put(path.join(src, 'builds/d2sd-linux-amd64'), sh('# next release\nexit 0'));
   const refuse = (extra, pattern, what) => {
     reset();
     const r = run('install', extra);
     assert.notEqual(r.status, 0, `${what}: installer must refuse`);
     assert.match(r.stdout + r.stderr, pattern, `${what}: ${r.stdout}${r.stderr}`);
     assert(!read(calls).includes('service-stop'), `${what}: the running version must not be stopped`);
-    assert.deepEqual(fs.readFileSync(d2kd), before, `${what}: binaries must not be replaced`);
+    assert.deepEqual(fs.readFileSync(d2sd), before, `${what}: binaries must not be replaced`);
   };
   fs.rmSync(path.join(bin, 'openssl'));
   refuse({ APK_HAVE: 'curl', APK_ADD_RC: '1' }, /apk update && apk add kmod-nft-queue .*openssl-util/, 'package failure');
   put(path.join(bin, 'openssl'), sh('exit 0'));
-  refuse({ APK_HAVE: have, NFT_CHECK_RC: '1' }, /nftables не принимает правила D2K/, 'kernel without nft queue');
+  refuse({ APK_HAVE: have, NFT_CHECK_RC: '1' }, /nftables не принимает правила D2S/, 'kernel without nft queue');
   reset();
   refuse({ APK_HAVE: have, DF_AVAIL: '10' }, /мало места .* USB/, 'no room for the runtime');
   // Room for the DOWNLOAD, in /tmp, before the first byte is fetched: the
@@ -273,7 +273,7 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   // 6. 24.10: the same through opkg (openssl missing again).
   fs.rmSync(path.join(bin, 'openssl'));
   reset();
-  const opkgEnv = { D2K_OPENWRT_APK: path.join(tmp, 'no-apk'), D2K_OPENWRT_OPKG: path.join(tmp, 'opkg'), APK_HAVE: 'curl' };
+  const opkgEnv = { D2S_OPENWRT_APK: path.join(tmp, 'no-apk'), D2S_OPENWRT_OPKG: path.join(tmp, 'opkg'), APK_HAVE: 'curl' };
   ok(run('install', opkgEnv));
   assert.match(read(log('opkg')), /^install kmod-nft-queue kmod-nfnetlink-queue kmod-nf-conntrack-netlink ca-bundle openssl-util$/m,
     'opkg must install the missing packages');
@@ -289,7 +289,7 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   put(path.join(opkgEtc, 'opkg/customfeeds.conf'), 'src/gz mine https://example.org/feed\n', 0o644);
   fs.rmSync(path.join(bin, 'openssl'));
   reset();
-  ok(run('install', { ...opkgEnv, D2K_OPENWRT_OPKG_ETC: opkgEtc }));
+  ok(run('install', { ...opkgEnv, D2S_OPENWRT_OPKG_ETC: opkgEtc }));
   assert.match(read(log('opkg-gate')), /^http:\/\/192\.0\.2\.44:9444 update$/m, 'opkg list update via the gate');
   assert.match(read(log('opkg-gate')), /^http:\/\/192\.0\.2\.44:9444 install$/m, 'opkg install via the gate');
   assert.equal(read(log('opkg-gate-conf')),
@@ -299,13 +299,13 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
     'gate attempt: opkg.conf without src plus official feeds over http:// only');
   fs.rmSync(path.join(bin, 'openssl'));
   reset();
-  ok(run('install', { ...opkgEnv, D2K_OPENWRT_OPKG_ETC: opkgEtc, GATE_DOWN: '1' }));
+  ok(run('install', { ...opkgEnv, D2S_OPENWRT_OPKG_ETC: opkgEtc, GATE_DOWN: '1' }));
   assert.match(read(log('opkg-gate')), /update$/m, 'the gate was tried first');
   assert.match(read(log('opkg')), /^install kmod-nft-queue kmod-nfnetlink-queue kmod-nf-conntrack-netlink ca-bundle openssl-util$/m,
     'with the gate down opkg installs directly');
 
   // 7. FW_BACKEND=iptables in the config keeps the iptables path: it needs iptables.
-  const config = path.join(tmp, 'opt/d2k/config');
+  const config = path.join(tmp, 'opt/d2s/config');
   const configText = read(config);
   fs.appendFileSync(config, 'FW_BACKEND=iptables\n');
   reset();
@@ -316,27 +316,27 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
 
   // 8. Uninstall removes the three nft tables even without init.
   reset();
-  fs.rmSync(path.join(tmp, 'opt/etc/init.d/S99d2k'));
+  fs.rmSync(path.join(tmp, 'opt/etc/init.d/S99d2s'));
   // Init is gone: the fallback still returns the owner's fw4 flow offloading.
-  put(path.join(tmp, 'opt/d2k/run/flow-offloading.saved'), '1\n', 0o644);
+  put(path.join(tmp, 'opt/d2s/run/flow-offloading.saved'), '1\n', 0o644);
   put(path.join(bin, 'uci'), sh(`printf 'uci %s\\n' "$*" >> '${log('nft')}'`));
   put(path.join(bin, 'fw4'), sh(`printf 'fw4 %s\\n' "$*" >> '${log('nft')}'`));
   ok(run('uninstall', { NFT_TABLES: '1' }));
   assert.match(read(log('nft')), /^uci set firewall\.@defaults\[0\]\.flow_offloading=1$/m, 'uninstall must restore flow offloading');
   assert.match(read(log('nft')), /^fw4 reload$/m, 'uninstall must reload fw4 after restoring');
   const nftLog = read(log('nft'));
-  for (const t of ['d2k', 'd2k_rst', 'd2k_tg']) assert.match(nftLog, new RegExp(`^delete table inet ${t}$`, 'm'), `uninstall must delete inet ${t}`);
-  assert(!fs.existsSync(path.join(tmp, 'etc/init.d/d2k')), 'uninstall must remove the boot bridge');
-  // Without Entware /opt was created by D2K: a full uninstall leaves no empty tree.
+  for (const t of ['d2s', 'd2s_rst', 'd2s_tg']) assert.match(nftLog, new RegExp(`^delete table inet ${t}$`, 'm'), `uninstall must delete inet ${t}`);
+  assert(!fs.existsSync(path.join(tmp, 'etc/init.d/d2s')), 'uninstall must remove the boot bridge');
+  // Without Entware /opt was created by D2S: a full uninstall leaves no empty tree.
   reset();
   ok(run('install', { APK_HAVE: have }));
-  ok(run('uninstall', { D2K_KEEP_STATE: '0' }));
-  assert(!fs.existsSync(path.join(tmp, 'opt')), 'full uninstall must remove the empty /opt tree D2K created');
+  ok(run('uninstall', { D2S_KEEP_STATE: '0' }));
+  assert(!fs.existsSync(path.join(tmp, 'opt')), 'full uninstall must remove the empty /opt tree D2S created');
   // With Entware (/opt/bin/opkg) its directories stay even when empty.
   reset();
   ok(run('install', { APK_HAVE: have }));
   put(path.join(tmp, 'opt/bin/opkg'), sh('exit 0'));
-  ok(run('uninstall', { D2K_KEEP_STATE: '0' }));
+  ok(run('uninstall', { D2S_KEEP_STATE: '0' }));
   assert(fs.existsSync(path.join(tmp, 'opt/etc/init.d')) && fs.existsSync(path.join(tmp, 'opt/sbin')), 'uninstall must not remove Entware directories');
   console.log('OpenWrt without Entware: wget bootstrap, apk/opkg packages, VPS gate, nft preflight, space, uninstall: PASS');
 } finally {

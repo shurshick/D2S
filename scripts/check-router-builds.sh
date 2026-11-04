@@ -17,7 +17,7 @@ for arch in $ARCHES; do
         riscv64) cpu=riscv64 ;;
         *) echo "Unknown architecture: $arch" >&2; exit 1 ;;
     esac
-    for component in d2kd d2kc d2kfetch d2kpanel d2ktg; do
+    for component in d2sd d2sc d2sfetch d2spanel d2stg; do
         bin="$ROOT/builds/$component-linux-$arch"
         test -s "$bin"
         readelf -h "$bin" >/dev/null
@@ -25,8 +25,8 @@ for arch in $ARCHES; do
             echo "Not a standalone static binary: $bin" >&2; exit 1
         fi
         case "$component" in
-            d2kd) timeout 20 "qemu-$cpu" "$bin" --help >/dev/null 2>&1 ;;
-            d2kc|d2kfetch)
+            d2sd) timeout 20 "qemu-$cpu" "$bin" --help >/dev/null 2>&1 ;;
+            d2sc|d2sfetch)
                 rc=0
                 timeout 20 "qemu-$cpu" "$bin" >/dev/null 2>&1 || rc=$?
                 [ "$rc" = 2 ] || { echo "$bin: expected usage exit 2, got $rc" >&2; exit 1; }
@@ -47,10 +47,10 @@ for arch in $ARCHES; do
                 echo "node is required for the MIPS controller startup regression" >&2
                 exit 1
             }
-            D2K_TEST_BINARY="$ROOT/builds/d2kc-linux-$arch" \
-            D2K_TEST_RUNNER="qemu-$cpu" \
-            D2K_TEST_RUNNER_ARGS='-cpu 24Kc' \
-            D2K_TEST_RELEASE_ID="${RELEASE_ID:-dev}" \
+            D2S_TEST_BINARY="$ROOT/builds/d2sc-linux-$arch" \
+            D2S_TEST_RUNNER="qemu-$cpu" \
+            D2S_TEST_RUNNER_ARGS='-cpu 24Kc' \
+            D2S_TEST_RELEASE_ID="${RELEASE_ID:-dev}" \
                 node "$ROOT/scripts/test-controller-handshake.cjs"
             ;;
     esac

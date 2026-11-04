@@ -1,5 +1,5 @@
-#ifndef D2K_TG_MTPROTO_AUTH_H
-#define D2K_TG_MTPROTO_AUTH_H
+#ifndef D2S_TG_MTPROTO_AUTH_H
+#define D2S_TG_MTPROTO_AUTH_H
 
 #include <stddef.h>
 #include <stdint.h>

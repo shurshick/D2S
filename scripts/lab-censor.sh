@@ -3,7 +3,7 @@
 #
 # Зачем. Полевой прогон стоит окна, в котором у автора дома нет обхода. Всё,
 # что можно проверить до него, надо проверить до него. lab-pair.sh доказывает,
-# что пара разговаривает; здесь проверяется то, ради чего d2k существует:
+# что пара разговаривает; здесь проверяется то, ради чего d2s существует:
 # пустой каталог → заблокированная цель → автономно найденное воздействие.
 #
 # Цензор игрушечный и назван таковым: правило iptables -m string режет ПАКЕТ,
@@ -64,14 +64,14 @@ control_passes() {
 #   - проверка подлинности (--cacert): зонд её не делает вовсе (0006);
 #   - ПРИВЕТСТВИЕ ДРУГОЙ ДЛИНЫ — вчетверо длиннее зондового. Ровно на этом
 #     различии ломается переносимость (седьмая находка), и здесь оно живое.
-#   - ВЕРСИЯ ПРОТОКОЛА, если задан D2K_LAB_TLS12=1. Тогда клиент говорит
+#   - ВЕРСИЯ ПРОТОКОЛА, если задан D2S_LAB_TLS12=1. Тогда клиент говорит
 #     ТОЛЬКО по TLS 1.2 — это телевизор, приставка, старая прошивка. Его
 #     приветствие другой ФОРМЫ (нет supported_versions), значит и план ему
 #     нужен свой, и подтверждать его обязан зонд той же версии
 #     (MVP_CHECKLIST, пункт 3). Без этого ключа весь класс таких клиентов
 #     в лаборатории не встречался ни разу.
 CURL_VER=""
-if [ "${D2K_LAB_TLS12:-0}" = "1" ]; then
+if [ "${D2S_LAB_TLS12:-0}" = "1" ]; then
     CURL_VER="--tlsv1.2 --tls-max 1.2"
 fi
 
@@ -87,9 +87,9 @@ real_client() {
 
 dump() {
     echo "--- ошибки отправки (все) ---"
-    grep -iE "sendto|d2kd: " /tmp/d2kd.log 2>/dev/null | sort | uniq -c | head -20 || true
-    echo "--- d2kd ---"; tail -40 /tmp/d2kd.log 2>/dev/null || true
-    echo "--- d2kc ---"; tail -60 /tmp/d2kc.log 2>/dev/null || true
+    grep -iE "sendto|d2sd: " /tmp/d2sd.log 2>/dev/null | sort | uniq -c | head -20 || true
+    echo "--- d2sd ---"; tail -40 /tmp/d2sd.log 2>/dev/null || true
+    echo "--- d2sc ---"; tail -60 /tmp/d2sc.log 2>/dev/null || true
     echo "--- правила ---"; iptables -t mangle -S 2>/dev/null || true
 }
 
@@ -122,7 +122,7 @@ ethtool -K lo gro off tso off gso off >/dev/null 2>&1 || true
 #
 # Измерено здесь же (tcpdump на lo, 13.09.2026): первый полёт сервера уходит
 # ОДНИМ сегментом в 1923 байта. Предел копирования датапата — 1600
-# (MAX_PKT, datapath/d2kd.c), и он не занижен: на любом реальном канале
+# (MAX_PKT, datapath/d2sd.c), и он не занижен: на любом реальном канале
 # пакет крупнее 1500 не приходит вовсе. Такой сегмент датапат честно
 # пропускает как обрезанный — и обмена не видит НИ ОДНОГО, сколько бы обход
 # ни работал. То есть без этой строки лаборатория меряет MTU петли.
@@ -137,7 +137,7 @@ ip link set lo mtu 1500 2>/dev/null || true
 # 127/8 targets; don't mask that refusal with the old fallback search.
 ip addr add 10.203.0.1/32 dev lo
 ip addr add "$SECOND_IP"/32 dev lo
-# d2kc uses the system resolver. Keep the second target independent at both
+# d2sc uses the system resolver. Keep the second target independent at both
 # the hostname and destination-IP level, not just a second SNI on the same IP.
 printf '%s %s\n' "$SECOND_IP" "$NAME2" >> /etc/hosts
 
@@ -161,7 +161,7 @@ printf '%s %s\n' "$SECOND_IP" "$NAME2" >> /etc/hosts
 # OpenSSL 3) на одно лишь CN не смотрит с 2000-х. Без SAN он отвергал бы
 # соединение по причине, не имеющей к обходу никакого отношения.
 SAN="DNS:$NAME,DNS:$NAME2,DNS:control.example"
-if [ "${D2K_LAB_WRONGCERT:-0}" = "1" ]; then
+if [ "${D2S_LAB_WRONGCERT:-0}" = "1" ]; then
     # ИНСЦЕНИРОВКА ТЕРМИНИРУЮЩЕЙ КОРОБКИ.
     #
     # Коробка, которая не режет, а сама завершает TLS и отдаёт страницу
@@ -170,7 +170,7 @@ if [ "${D2K_LAB_WRONGCERT:-0}" = "1" ]; then
     # измерением — именем в сертификате.
     #
     # Инсценируется это не отдельным сервером, а тем же сервером с чужим
-    # именем в сертификате: предмет опыта — что делает d2k, когда сервер
+    # именем в сертификате: предмет опыта — что делает d2s, когда сервер
     # представился не тем, кого спрашивали, а не то, как устроен посредник.
     SAN="DNS:control.example"
     echo "сертификат цели НЕ содержит её имени (инсценировка терминирующей коробки)"
@@ -210,7 +210,7 @@ echo "== ЛАБОРАТОРИЯ ПРОВЕРЯЕТ СВОЙ ИНСТРУМЕНТ
 # датапата: доходит ли наш зонд до приложения на голой линии.
 cat > /tmp/probecheck.c <<'PC'
 #include <stdio.h>
-#include "d2k_verify.h"
+#include "d2s_verify.h"
 /* ОБА ЗОНДА, А НЕ ОДИН. Подтверждать найденное надо ТЕМ ЖЕ протоколом, каким
    говорит клиент (MVP_CHECKLIST, пункт 3): у старого клиента это TLS 1.2, и
    зонд для него отдельный. Если он неисправен, опыт со старой формой покажет
@@ -218,16 +218,16 @@ cat > /tmp/probecheck.c <<'PC'
    заведена проверка зонда 1.3 ниже. */
 int main(void) {
     int bad = 0;
-    d2k_ver_result r = d2k_verify_probe("10.203.0.1", 4443, "control.example", 4000, 0);
+    d2s_ver_result r = d2s_verify_probe("10.203.0.1", 4443, "control.example", 4000, 0);
     printf("TLS 1.3: уровень %d, статус %d, причина: %s\n", (int)r.level, r.status, r.reason);
-    if (r.level != D2K_VER_APPLICATION) { bad = 1; }
-    d2k_verify_close(&r);
+    if (r.level != D2S_VER_APPLICATION) { bad = 1; }
+    d2s_verify_close(&r);
 
-    d2k_ver_result r12 = d2k_verify_probe12_on(-1, "10.203.0.1", 4443,
+    d2s_ver_result r12 = d2s_verify_probe12_on(-1, "10.203.0.1", 4443,
                                                "control.example", 4000, 0);
     printf("TLS 1.2: уровень %d, статус %d, имя %d, причина: %s\n",
            (int)r12.level, r12.status, r12.name_ok, r12.reason);
-    if (r12.level != D2K_VER_APPLICATION) { bad = 1; }
+    if (r12.level != D2S_VER_APPLICATION) { bad = 1; }
     /* Имя сверяется и здесь: терминирующая коробка со страницей блокировки
        обязана быть отличима от рабочего обхода в ОБЕИХ версиях протокола. */
     if (r12.name_ok != 1) {
@@ -235,7 +235,7 @@ int main(void) {
                "терминирующую коробку от сервера\n");
         bad = 1;
     }
-    d2k_verify_close(&r12);
+    d2s_verify_close(&r12);
     return bad;
 }
 PC
@@ -248,9 +248,9 @@ fi
 echo "инструмент исправен: оба зонда доходят до приложения без цензора"
 
 echo "== сборка =="
-make -s -C datapath d2kd
-cp datapath/d2kd /tmp/d2kd
-make -s -C core d2kc >/dev/null
+make -s -C datapath d2sd
+cp datapath/d2sd /tmp/d2sd
+make -s -C core d2sc >/dev/null
 
 echo "== цензор: режем пакет, в котором встретилось имя =="
 # ОЧЕРЕДЬ И ЦЕНЗОР — В РАЗНЫХ ХУКАХ, и это не стиль, а необходимость.
@@ -267,11 +267,11 @@ echo "== цензор: режем пакет, в котором встретил
 # идут сырым сокетом и начинают путь заново с raw OUTPUT, в mangle OUTPUT
 # отсекаются по метке и доходят до цензора в POSTROUTING — то есть цензор
 # видит ИМЕННО то, что выпустил датапат.
-iptables -t mangle -N D2KLAB 2>/dev/null || iptables -t mangle -F D2KLAB
-iptables -t mangle -A OUTPUT -j D2KLAB
+iptables -t mangle -N D2SLAB 2>/dev/null || iptables -t mangle -F D2SLAB
+iptables -t mangle -A OUTPUT -j D2SLAB
 # Свои пакеты мимо очереди — иначе выпущенное датапатом вернётся ему же.
-iptables -t mangle -A D2KLAB -m mark --mark "$MARK" -j RETURN
-iptables -t mangle -A D2KLAB -p tcp --dport "$PORT" \
+iptables -t mangle -A D2SLAB -m mark --mark "$MARK" -j RETURN
+iptables -t mangle -A D2SLAB -p tcp --dport "$PORT" \
     -m connbytes --connbytes 0:20 --connbytes-dir original --connbytes-mode packets \
     -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
 
@@ -283,12 +283,12 @@ iptables -t mangle -A D2KLAB -p tcp --dport "$PORT" \
 # доказательства: без него ни один кандидат подтвердить невозможно, сколько бы
 # обход ни работал.
 #
-# Ровно так же устроен боевой набор правил (files/S99d2k): цепочка на
+# Ровно так же устроен боевой набор правил (files/S99d2s): цепочка на
 # исходящее по --dports и цепочка на входящее по --sports.
-iptables -t mangle -N D2KLAB_IN 2>/dev/null || iptables -t mangle -F D2KLAB_IN
-iptables -t mangle -A INPUT -j D2KLAB_IN
-iptables -t mangle -A D2KLAB_IN -m mark --mark "$MARK" -j RETURN
-iptables -t mangle -A D2KLAB_IN -p tcp --sport "$PORT" \
+iptables -t mangle -N D2SLAB_IN 2>/dev/null || iptables -t mangle -F D2SLAB_IN
+iptables -t mangle -A INPUT -j D2SLAB_IN
+iptables -t mangle -A D2SLAB_IN -m mark --mark "$MARK" -j RETURN
+iptables -t mangle -A D2SLAB_IN -p tcp --sport "$PORT" \
     -m connbytes --connbytes 0:20 --connbytes-dir reply --connbytes-mode packets \
     -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
 # ЦЕНЗОР — НА ПРИЁМНОЙ СТОРОНЕ, и это не мелочь.
@@ -303,10 +303,10 @@ iptables -t mangle -A D2KLAB_IN -p tcp --sport "$PORT" \
 # Для петли путь такой: OUTPUT → POSTROUTING → (петля) → PREROUTING → INPUT.
 # Роняем в PREROUTING: отправка уже состоялась, до сервера не дошло — ровно
 # то, что делает цензор.
-if [ "${D2K_LAB_NOCENSOR:-0}" = "1" ]; then
-    echo "цензор ВЫКЛЮЧЕН (D2K_LAB_NOCENSOR=1): это контрольный прогон —"
+if [ "${D2S_LAB_NOCENSOR:-0}" = "1" ]; then
+    echo "цензор ВЫКЛЮЧЕН (D2S_LAB_NOCENSOR=1): это контрольный прогон —"
     echo "он отвечает на вопрос «доходят ли наши пакеты до сервера вообще»."
-elif [ "${D2K_LAB_REASM:-0}" = "1" ]; then
+elif [ "${D2S_LAB_REASM:-0}" = "1" ]; then
     # ЦЕНЗОР С ПАМЯТЬЮ. Собирает поток по номерам последовательности и ищет имя
     # в СОБРАННОМ — то есть разрезом не обходится вовсе. Плюс расстояние: пакет
     # с укороченным TTL он ОСМАТРИВАЕТ (сборка отравлена) и роняет, потому что
@@ -328,7 +328,7 @@ else
     # ЦЕНЗОР СБРАСЫВАЕТ СОЕДИНЕНИЕ, а не роняет пакет молча.
     #
     # Две причины, обе измеренные. Первая: подделанный RST — самая обычная
-    # форма блокировки на живых линиях, и d2k именно её и опознаёт приметой
+    # форма блокировки на живых линиях, и d2s именно её и опознаёт приметой
     # «rst». Вторая: молчаливый DROP оставляет однопоточный s_server висеть
     # внутри SSL_accept, и следующие соединения не обслуживаются вовсе —
     # отличить «цензор режет» от «сервер занят» становится нечем.
@@ -345,7 +345,7 @@ else
     # сервера не дошло — ровно то, что делает цензор.
     #
     # Действие: DROP, а не REJECT. Молчаливая потеря — та форма, в которой
-    # блокировку видит клиент, и та, на которой d2k учится отличать её от
+    # блокировку видит клиент, и та, на которой d2s учится отличать её от
     # недоступности контролем по другому имени.
     iptables -t mangle -A PREROUTING -p tcp --dport "$PORT" \
         -m string --string "$NAME" --algo bm -j DROP
@@ -358,7 +358,7 @@ else
 fi
 
 echo "== цензор работает? =="
-if [ "${D2K_LAB_NOCENSOR:-0}" = "1" ]; then
+if [ "${D2S_LAB_NOCENSOR:-0}" = "1" ]; then
     echo "пропущено: цензор выключен"
 elif timeout 5 openssl s_client -connect "10.203.0.1:$PORT" -servername "$NAME" \
        -tls1_3 </dev/null >/dev/null 2>&1; then
@@ -385,7 +385,7 @@ echo "== датапат в режиме apply =="
 # Это инсценировка НАШЕЙ неудачи, а не свойства коробки. Проверяемое
 # утверждение ровно одно: ложного подтверждения от этого не появляется.
 IFACE_ARG=""
-if [ "${D2K_LAB_TINYMTU:-0}" = "1" ]; then
+if [ "${D2S_LAB_TINYMTU:-0}" = "1" ]; then
     ip link add labtiny type dummy 2>/dev/null || true
     # 100 байт. Дорога сюда была поучительной, и цифры не подобраны:
     #   600 — куски клиентского приветствия в полтора килобайта ещё
@@ -404,20 +404,20 @@ fi
 # Журнал включён: без него «подготовлен 15, доисполнен 1» остаётся загадкой,
 # а с ним видно судьбу КАЖДОЙ попытки.
 # shellcheck disable=SC2086
-/tmp/d2kd --mode apply --control "$SOCK" --queue "$QUEUE" --mark 45 --probe-mark "$PROBE_MARK" $IFACE_ARG \
-    --journal 400 --duration 300 > /tmp/d2kd.log 2>&1 &
+/tmp/d2sd --mode apply --control "$SOCK" --queue "$QUEUE" --mark 45 --probe-mark "$PROBE_MARK" $IFACE_ARG \
+    --journal 400 --duration 300 > /tmp/d2sd.log 2>&1 &
 DPID=$!
 i=0; while [ ! -S "$SOCK" ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
 [ -S "$SOCK" ] || fail "датапат не открыл управляющий сокет"
 
 echo "== контроллер, каталог ПУСТОЙ =="
-./core/d2kc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2kc.log 2>&1 &
+./core/d2sc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2sc.log 2>&1 &
 CPID=$!
 sleep 1
 
 echo "== обращение пользователя к заблокированной цели =="
 # ОБРАЩАЕТСЯ НАСТОЯЩИЙ КЛИЕНТ, а не наш зонд и не s_client. Это меняет опыт по
-# существу: снимок приветствия, которым d2k будет мерить, снимается с ТОГО
+# существу: снимок приветствия, которым d2s будет мерить, снимается с ТОГО
 # ЖЕ клиента, которому потом предстоит работать. Мерить коротким приветствием
 # зонда, а проверять длинным приветствием браузера — это и есть седьмая
 # находка лаборатории.
@@ -430,16 +430,16 @@ for n in 1 2 3; do
 done
 
 # Поиск идёт своим ходом: ждём результата, а не спим наугад.
-if [ "${D2K_LAB_NOCENSOR:-0}" != "1" ]; then
+if [ "${D2S_LAB_NOCENSOR:-0}" != "1" ]; then
     i=0
     while [ $i -lt 60 ]; do
-        grep -q "подтверждено\|привязк" /tmp/d2kc.log 2>/dev/null && break
+        grep -q "подтверждено\|привязк" /tmp/d2sc.log 2>/dev/null && break
         i=$((i+1)); sleep 2
     done
 fi
 
 # ВТОРАЯ ЦЕЛЬ — уже после того, как коробка узнана по первой.
-if [ "${D2K_LAB_NOCENSOR:-0}" != "1" ]; then
+if [ "${D2S_LAB_NOCENSOR:-0}" != "1" ]; then
     echo "== вторая цель: обращение к ещё неизвестному имени =="
     for n in 1 2 3; do
         real_client "$NAME2" >/dev/null 2>&1 || true
@@ -447,11 +447,11 @@ if [ "${D2K_LAB_NOCENSOR:-0}" != "1" ]; then
     done
     i=0
     while [ $i -lt 40 ]; do
-        grep -q "$NAME2.*ПОДТВЕРЖДЕНО" /tmp/d2kc.log 2>/dev/null && break
+        grep -q "$NAME2.*ПОДТВЕРЖДЕНО" /tmp/d2sc.log 2>/dev/null && break
         i=$((i+1)); sleep 2
     done
     SECOND_CLIENT_OK=0
-    if grep -q "$NAME2.*ПОДТВЕРЖДЕНО" /tmp/d2kc.log 2>/dev/null; then
+    if grep -q "$NAME2.*ПОДТВЕРЖДЕНО" /tmp/d2sc.log 2>/dev/null; then
         # Повторяем уже после подтверждения: сам факт, что verifier принял
         # план, ещё не означает, что независимый hostname получил содержимое.
         for n in 1 2 3; do
@@ -489,17 +489,17 @@ echo "критерий 4 показан: контрольная цель раб�
 # нет. Поэтому он назван своими словами и валит прогон: молча пройти мимо
 # такого значило бы выдать каталог за обход.
 rm -f /tmp/lab-crit2
-if [ "${D2K_LAB_WRONGCERT:-0}" = "1" ]; then
+if [ "${D2S_LAB_WRONGCERT:-0}" = "1" ]; then
     echo "критерий 2 пропущен: сертификат намеренно чужой, обхода быть не должно"
-elif [ "${D2K_LAB_TINYMTU:-0}" = "1" ]; then
+elif [ "${D2S_LAB_TINYMTU:-0}" = "1" ]; then
     echo "критерий 2 пропущен: предел отправки сужен намеренно, воздействий нет"
-elif [ "${D2K_LAB_NOCENSOR:-0}" = "1" ]; then
+elif [ "${D2S_LAB_NOCENSOR:-0}" = "1" ]; then
     echo "критерий 2 пропущен: цензора нет, проверять нечего"
 elif real_client "$NAME"; then
     echo "КРИТЕРИЙ 2 ПОКАЗАН: настоящий клиент получил ожидаемое содержимое"
     echo "через цензора, проверив сертификат и имя ($NAME)"
     echo "КРИТЕРИЙ 2 ПОКАЗАН" > /tmp/lab-crit2
-elif [ "${D2K_LAB_REASM:-0}" = "1" ]; then
+elif [ "${D2S_LAB_REASM:-0}" = "1" ]; then
     # В режиме собирающей коробки это ОТКРЫТЫЙ вопрос, а не поломка стенда:
     # плечо, найденное зондом, клиенту может не достаться. Итог печатается
     # ниже вместе со статистикой цензора — прогон обязан дойти до него, а не
@@ -515,10 +515,10 @@ kill "$SRV" 2>/dev/null || true
 
 dump
 
-if [ "${D2K_LAB_NOCENSOR:-0}" = "1" ]; then
+if [ "${D2S_LAB_NOCENSOR:-0}" = "1" ]; then
     [ "$DIRECT_CLIENT_OK" -eq 3 ] || \
         fail "здоровый прямой TLS прошёл у клиента $DIRECT_CLIENT_OK/3 раз"
-    if grep -q "подозрение\|начинаю поиск\|спрашиваю коробку" /tmp/d2kc.log; then
+    if grep -q "подозрение\|начинаю поиск\|спрашиваю коробку" /tmp/d2sc.log; then
         fail "здоровый прямой TLS ошибочно запустил поиск"
     fi
     if [ -s "$CAT" ] && grep -q '"target"' "$CAT"; then
@@ -528,24 +528,24 @@ if [ "${D2K_LAB_NOCENSOR:-0}" = "1" ]; then
     exit 0
 fi
 
-if [ "${D2K_LAB_NOCENSOR:-0}" != "1" ] &&
-   [ "${D2K_LAB_WRONGCERT:-0}" != "1" ] &&
-   [ "${D2K_LAB_TINYMTU:-0}" != "1" ]; then
+if [ "${D2S_LAB_NOCENSOR:-0}" != "1" ] &&
+   [ "${D2S_LAB_WRONGCERT:-0}" != "1" ] &&
+   [ "${D2S_LAB_TINYMTU:-0}" != "1" ]; then
     awk -v endpoint="$SECOND_IP:$PORT" -v name="$NAME2" \
         'index($0, endpoint) && index($0, name) { found=1 } END { exit !found }' \
-        /tmp/d2kd.log || \
+        /tmp/d2sd.log || \
         fail "вторая цель не прошла через отдельный адрес $SECOND_IP"
 fi
 
-grep -q "подозрение\|начинаю поиск" /tmp/d2kc.log || \
-    fail "d2k не заметил проблемного трафика — поиск не начался"
+grep -q "подозрение\|начинаю поиск" /tmp/d2sc.log || \
+    fail "d2s не заметил проблемного трафика — поиск не начался"
 
 # ГЛАВНОЕ УТВЕРЖДЕНИЕ: найден ли обход. Не «поиск шёл», не «события были» —
 # появилась ли в каталоге ПОДТВЕРЖДЁННАЯ привязка.
 echo "--- каталог ---"
 cat "$CAT" 2>/dev/null || echo "(каталога нет)"
 
-if [ "${D2K_LAB_REASM:-0}" = "1" ]; then
+if [ "${D2S_LAB_REASM:-0}" = "1" ]; then
     kill "$DPI" 2>/dev/null || true
     echo "--- цензор с памятью ---"; cat /tmp/labdpi.log 2>/dev/null || true
     # ЗДЕСЬ ПРОВЕРЯЕТСЯ НЕ «НАШЁЛСЯ ЛИ ОБХОД», А ЧЕСТНОСТЬ.
@@ -564,16 +564,16 @@ if [ "${D2K_LAB_REASM:-0}" = "1" ]; then
             echo "Это ложное подтверждение по переносимости: плечо исполнилось зонду"
             echo "и не исполнилось клиенту. Разбор — в docs/field/2026-09-13-lab-censor.md."
             grep -n "потоку клиента\|не помещается\|подозрение при подтверждённом" \
-                /tmp/d2kc.log 2>/dev/null | tail -5 || true
+                /tmp/d2sc.log 2>/dev/null | tail -5 || true
         fi
     else
         echo "ПЛЕЧА ПРОТИВ СОБИРАЮЩЕЙ КОРОБКИ НЕ НАШЛОСЬ — это находка, а не поломка:"
-        echo "запас воздействий d2k не покрывает коробку, которая собирает поток."
+        echo "запас воздействий d2s не покрывает коробку, которая собирает поток."
     fi
     exit 0
 fi
 
-if [ "${D2K_LAB_WRONGCERT:-0}" = "1" ]; then
+if [ "${D2S_LAB_WRONGCERT:-0}" = "1" ]; then
     # СЕРВЕР ПРЕДСТАВИЛСЯ ЧУЖИМ ИМЕНЕМ — подтверждению взяться неоткуда.
     #
     # Требуется ровно два факта: ни одной привязки и НАЗВАННАЯ причина. Пустой
@@ -582,20 +582,20 @@ if [ "${D2K_LAB_WRONGCERT:-0}" = "1" ]; then
     if [ -s "$CAT" ] && grep -q '"target"' "$CAT"; then
         fail "разговор с сервером ЧУЖОГО имени записан подтверждением — каталог наполняется страницами блокировки"
     fi
-    grep -q "представился ЧУЖИМ" /tmp/d2kc.log || \
+    grep -q "представился ЧУЖИМ" /tmp/d2sc.log || \
         fail "имя в сертификате не сошлось, а причина нигде не названа"
     echo "показано: сервер ЧУЖОГО имени не даёт подтверждения, и причина названа"
     exit 0
 fi
 
-if [ "${D2K_LAB_TINYMTU:-0}" = "1" ]; then
+if [ "${D2S_LAB_TINYMTU:-0}" = "1" ]; then
     # КРИТЕРИЙ 6. Предел отправки заведомо мал, значит воздействия не
     # состоялись. Требуется ровно одно: НИ ОДНОГО подтверждения. Пустой
     # каталог здесь — правильный ответ, а не неудача опыта.
     if [ -s "$CAT" ] && grep -q '"target"' "$CAT"; then
         fail "при несостоявшихся воздействиях появилась привязка — ложное подтверждение"
     fi
-    grep -q "не активирован\|опыт невозможен\|не помещается" /tmp/d2kd.log /tmp/d2kc.log || \
+    grep -q "не активирован\|опыт невозможен\|не помещается" /tmp/d2sd.log /tmp/d2sc.log || \
         fail "отказ по длине нигде не назван — молчаливая потеря воздействия"
     echo "критерий 6 показан: отказ по длине не создал подтверждения и назван вслух"
     exit 0
@@ -610,19 +610,19 @@ grep -q '"bindings"' "$CAT" || fail "в каталоге нет привязок
 # Проверяем не «в каталоге стало две привязки» — это был бы результат любого
 # порядка, — а ИМЕННО ПОРЯДОК: сообщение о готовых планах обязано появиться
 # раньше первого вопроса по второй цели.
-if [ "${D2K_LAB_NOCENSOR:-0}" != "1" ]; then
-    if ! grep -q "готовых планов" /tmp/d2kc.log; then
+if [ "${D2S_LAB_NOCENSOR:-0}" != "1" ]; then
+    if ! grep -q "готовых планов" /tmp/d2sc.log; then
         echo "ВНИМАНИЕ: вторая цель не получила пробы готового плана — критерий 3 НЕ показан"
     else
-        ready_at=$(grep -n "готовых планов" /tmp/d2kc.log | head -1 | cut -d: -f1)
-        ask_at=$(grep -n "$NAME2.*спрашиваю коробку" /tmp/d2kc.log | head -1 | cut -d: -f1)
+        ready_at=$(grep -n "готовых планов" /tmp/d2sc.log | head -1 | cut -d: -f1)
+        ask_at=$(grep -n "$NAME2.*спрашиваю коробку" /tmp/d2sc.log | head -1 | cut -d: -f1)
         if [ -n "$ask_at" ] && [ "$ready_at" -gt "$ask_at" ]; then
             fail "вторая цель пошла в вопросы РАНЬШЕ пробы готового плана — порядок обучения нарушен"
         fi
         echo "критерий 3 показан: готовый план коробки пробуется до новых вопросов"
     fi
-    if [ "${D2K_LAB_WRONGCERT:-0}" != "1" ] &&
-       [ "${D2K_LAB_TINYMTU:-0}" != "1" ] &&
+    if [ "${D2S_LAB_WRONGCERT:-0}" != "1" ] &&
+       [ "${D2S_LAB_TINYMTU:-0}" != "1" ] &&
        [ "${SECOND_CLIENT_OK:-0}" -ne 3 ]; then
         fail "коробочный reuse на независимом имени не дал 3/3 прикладных ответов"
     fi
@@ -633,11 +633,11 @@ fi
 # перезапуск сам себе что-то дописал; падение — что знание потеряно.
 binds_before=$(grep -c '"target"' "$CAT")
 cp "$CAT" /tmp/lab-catalog-before.json
-/tmp/d2kd --mode apply --control "$SOCK" --queue "$QUEUE" --mark 45 --probe-mark "$PROBE_MARK" \
-    --journal 100 --duration 20 > /tmp/d2kd2.log 2>&1 &
+/tmp/d2sd --mode apply --control "$SOCK" --queue "$QUEUE" --mark 45 --probe-mark "$PROBE_MARK" \
+    --journal 100 --duration 20 > /tmp/d2sd2.log 2>&1 &
 DPID2=$!
 i=0; while [ ! -S "$SOCK" ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
-./core/d2kc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2kc2.log 2>&1 &
+./core/d2sc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2sc2.log 2>&1 &
 CPID2=$!
 sleep 8
 kill "$CPID2" 2>/dev/null || true; wait "$CPID2" 2>/dev/null || true
@@ -647,7 +647,7 @@ binds_after=$(grep -c '"target"' "$CAT")
 echo "привязок до перезапуска $binds_before, после $binds_after"
 [ "$binds_after" -ge "$binds_before" ] || fail "перезапуск ПОТЕРЯЛ подтверждённое знание"
 [ "$binds_after" -le "$binds_before" ] || fail "перезапуск САМ дописал привязки — знание расширено без замера"
-grep -q "поставлено планов по подтверждённым привязкам" /tmp/d2kc2.log || \
+grep -q "поставлено планов по подтверждённым привязкам" /tmp/d2sc2.log || \
     fail "после перезапуска планы каталога не поставлены датапату"
 echo "критерий 5 показан: перезапуск сохранил знание и не расширил его"
 
@@ -655,9 +655,9 @@ echo "ВСЁ ЗЕЛЕНО: обход найден автономно, прив�
 DRIVER
 
 docker run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
-    -e "D2K_LAB_NOCENSOR=${D2K_LAB_NOCENSOR:-0}" \
-    -e "D2K_LAB_TINYMTU=${D2K_LAB_TINYMTU:-0}" \
-    -e "D2K_LAB_WRONGCERT=${D2K_LAB_WRONGCERT:-0}" \
-    -e "D2K_LAB_REASM=${D2K_LAB_REASM:-0}" \
-    -e "D2K_LAB_TLS12=${D2K_LAB_TLS12:-0}" \
+    -e "D2S_LAB_NOCENSOR=${D2S_LAB_NOCENSOR:-0}" \
+    -e "D2S_LAB_TINYMTU=${D2S_LAB_TINYMTU:-0}" \
+    -e "D2S_LAB_WRONGCERT=${D2S_LAB_WRONGCERT:-0}" \
+    -e "D2S_LAB_REASM=${D2S_LAB_REASM:-0}" \
+    -e "D2S_LAB_TLS12=${D2S_LAB_TLS12:-0}" \
     -v "$WORK:/w" -w /w gcc:14 sh /w/censor.sh

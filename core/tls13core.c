@@ -1,4 +1,4 @@
-/* tls13core.c — ядро TLS 1.3 без транспорта. Контракт — в d2k_tls13core.h.
+/* tls13core.c — ядро TLS 1.3 без транспорта. Контракт — в d2s_tls13core.h.
  *
  * Здесь нет ни одного системного вызова, кроме чтения случайности: всё
  * остальное — арифметика над байтами. Это и делает ядро пригодным обоим
@@ -10,15 +10,15 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "d2k_crypto.h"
-#include "d2k_tls13core.h"
+#include "d2s_crypto.h"
+#include "d2s_tls13core.h"
 
 static void put16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 static uint16_t get16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0] << 8 | p[1]); }
 
 /* --- случайность --------------------------------------------------------- */
 
-int d2k_t13_random(uint8_t *b, size_t n) {
+int d2s_t13_random(uint8_t *b, size_t n) {
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f) { return -1; }
     size_t got = fread(b, 1, n, f);
@@ -163,7 +163,7 @@ static int cert_name_ok(const uint8_t *der, size_t len, const char *host) {
  * отдельный вход, а не «тот же разбор с поправкой». Сама сверка имени одна на
  * оба: второй её экземпляр означал бы, что терминирующая коробка отличима в
  * одной версии протокола и неотличима в другой. */
-int d2k_t13_cert_name_ok12(const uint8_t *body, size_t len, const char *host) {
+int d2s_t13_cert_name_ok12(const uint8_t *body, size_t len, const char *host) {
     if (len < 6) { return -1; }
     size_t list = (size_t)body[0] << 16 | (size_t)body[1] << 8 | body[2];
     size_t o = 3;
@@ -174,7 +174,7 @@ int d2k_t13_cert_name_ok12(const uint8_t *body, size_t len, const char *host) {
     return cert_name_ok(body + o, clen, host);
 }
 
-int d2k_t13_cert_name_ok(const uint8_t *body, size_t len, const char *host) {
+int d2s_t13_cert_name_ok(const uint8_t *body, size_t len, const char *host) {
     if (len < 1) { return -1; }
     size_t ctx = body[0];
     size_t o = 1 + ctx;
@@ -194,7 +194,7 @@ int d2k_t13_cert_name_ok(const uint8_t *body, size_t len, const char *host) {
    у нас нет по определению. Форма здесь минимальная и своя — её задача
    договориться, а не обмануть коробку (обманывает план в датапате, и этот
    зонд ходит НЕПОМЕЧЕННЫМ именно затем, чтобы план к нему применился). */
-size_t d2k_t13_ch_build(const d2k_t13_ch_opts *o, uint8_t *out, size_t cap) {
+size_t d2s_t13_ch_build(const d2s_t13_ch_opts *o, uint8_t *out, size_t cap) {
     if (!o || !out || !o->pub || !o->random || cap < 512) { return 0; }
     const char *sni = o->sni;
     const uint8_t *pub = o->pub;
@@ -203,7 +203,7 @@ size_t d2k_t13_ch_build(const d2k_t13_ch_opts *o, uint8_t *out, size_t cap) {
     size_t sni_len = sni ? strlen(sni) : 0;
     size_t p = 0;
 
-    out[p++] = D2K_T13_CLIENT_HELLO;
+    out[p++] = D2S_T13_CLIENT_HELLO;
     size_t len_at = p; p += 3;                    /* длина тела — впишем в конце */
     put16(out + p, 0x0303); p += 2;               /* legacy_version = TLS 1.2 */
     memcpy(out + p, rnd, 32); p += 32;            /* random */
@@ -358,53 +358,53 @@ size_t d2k_t13_ch_build(const d2k_t13_ch_opts *o, uint8_t *out, size_t cap) {
 
 /* --- ключевое расписание -------------------------------------------------- */
 
-int d2k_t13_derive_secret(const uint8_t secret[32], const char *label,
+int d2s_t13_derive_secret(const uint8_t secret[32], const char *label,
                           const uint8_t *msgs, size_t n, uint8_t out[32]) {
     uint8_t th[32];
-    d2k_sha256(msgs, n, th);
-    return d2k_hkdf_expand_label_ctx(secret, label, th, 32, out, 32);
+    d2s_sha256(msgs, n, th);
+    return d2s_hkdf_expand_label_ctx(secret, label, th, 32, out, 32);
 }
 
-int d2k_t13_schedule_hs(const uint8_t shared[32], const uint8_t *tr, size_t tr_len,
+int d2s_t13_schedule_hs(const uint8_t shared[32], const uint8_t *tr, size_t tr_len,
                         uint8_t c_hs[32], uint8_t s_hs[32], uint8_t hs_out[32]) {
     uint8_t zero[32], early[32], derived[32], hs[32];
     memset(zero, 0, sizeof zero);
-    d2k_hkdf_extract(zero, 32, zero, 32, early);
-    if (d2k_t13_derive_secret(early, "derived", NULL, 0, derived) != 0) { return -1; }
-    d2k_hkdf_extract(derived, 32, shared, 32, hs);
-    if (d2k_t13_derive_secret(hs, "c hs traffic", tr, tr_len, c_hs) != 0 ||
-        d2k_t13_derive_secret(hs, "s hs traffic", tr, tr_len, s_hs) != 0) {
+    d2s_hkdf_extract(zero, 32, zero, 32, early);
+    if (d2s_t13_derive_secret(early, "derived", NULL, 0, derived) != 0) { return -1; }
+    d2s_hkdf_extract(derived, 32, shared, 32, hs);
+    if (d2s_t13_derive_secret(hs, "c hs traffic", tr, tr_len, c_hs) != 0 ||
+        d2s_t13_derive_secret(hs, "s hs traffic", tr, tr_len, s_hs) != 0) {
         return -1;
     }
     if (hs_out) { memcpy(hs_out, hs, 32); }
     return 0;
 }
 
-int d2k_t13_schedule_ap(const uint8_t hs[32], const uint8_t *tr, size_t tr_len,
+int d2s_t13_schedule_ap(const uint8_t hs[32], const uint8_t *tr, size_t tr_len,
                         uint8_t c_ap[32], uint8_t s_ap[32]) {
     uint8_t zero[32], derived[32], master[32];
     memset(zero, 0, sizeof zero);
-    if (d2k_t13_derive_secret(hs, "derived", NULL, 0, derived) != 0) { return -1; }
-    d2k_hkdf_extract(derived, 32, zero, 32, master);
-    if (d2k_t13_derive_secret(master, "c ap traffic", tr, tr_len, c_ap) != 0 ||
-        d2k_t13_derive_secret(master, "s ap traffic", tr, tr_len, s_ap) != 0) {
+    if (d2s_t13_derive_secret(hs, "derived", NULL, 0, derived) != 0) { return -1; }
+    d2s_hkdf_extract(derived, 32, zero, 32, master);
+    if (d2s_t13_derive_secret(master, "c ap traffic", tr, tr_len, c_ap) != 0 ||
+        d2s_t13_derive_secret(master, "s ap traffic", tr, tr_len, s_ap) != 0) {
         return -1;
     }
     return 0;
 }
 
-int d2k_t13_finished_mac(const uint8_t secret[32], const uint8_t *tr, size_t tr_len,
+int d2s_t13_finished_mac(const uint8_t secret[32], const uint8_t *tr, size_t tr_len,
                          uint8_t out[32]) {
     uint8_t fin_key[32], th[32];
-    if (d2k_hkdf_expand_label(secret, "finished", fin_key, 32) != 0) { return -1; }
-    d2k_sha256(tr, tr_len, th);
-    d2k_hmac_sha256(fin_key, 32, th, 32, out);
+    if (d2s_hkdf_expand_label(secret, "finished", fin_key, 32) != 0) { return -1; }
+    d2s_sha256(tr, tr_len, th);
+    d2s_hmac_sha256(fin_key, 32, th, 32, out);
     return 0;
 }
 
 /* --- разбор ServerHello ---------------------------------------------------- */
 
-unsigned d2k_t13_sh_version(const uint8_t *sh, size_t sh_len) {
+unsigned d2s_t13_sh_version(const uint8_t *sh, size_t sh_len) {
     size_t q = 4 + 2 + 32;
     if (!sh || q + 1 > sh_len) { return 0; }
     unsigned legacy = get16(sh + 4);
@@ -425,7 +425,7 @@ unsigned d2k_t13_sh_version(const uint8_t *sh, size_t sh_len) {
     return legacy;
 }
 
-int d2k_t13_sh_parse(const uint8_t *sh, size_t sh_len, const uint8_t **peer_key,
+int d2s_t13_sh_parse(const uint8_t *sh, size_t sh_len, const uint8_t **peer_key,
                      char *err, size_t errcap) {
     if (!sh || !peer_key) { return -1; }
     *peer_key = NULL;
@@ -476,7 +476,7 @@ trunc:
 
 /* --- ход по флайту --------------------------------------------------------- */
 
-int d2k_t13_flight_next(const uint8_t *buf, size_t len, size_t *off,
+int d2s_t13_flight_next(const uint8_t *buf, size_t len, size_t *off,
                         uint8_t *type, const uint8_t **body, size_t *blen) {
     if (!buf || !off || *off + 4 > len) { return 0; }
     size_t o = *off;
@@ -507,9 +507,9 @@ static int ech_host_ok(const uint8_t *p, size_t n) {
     return label && label <= 63 && p[n - 1] != '-';
 }
 
-int d2k_ech_config_parse(const uint8_t *list, size_t len, d2k_ech_config *out) {
+int d2s_ech_config_parse(const uint8_t *list, size_t len, d2s_ech_config *out) {
     if (!list || !out || len < 2 || get16(list) != len - 2) return -1;
-    d2k_ech_config selected;
+    d2s_ech_config selected;
     memset(&selected, 0, sizeof selected);
     size_t at = 2;
     int have = 0;
@@ -576,7 +576,7 @@ static int hpke_extract(const uint8_t *salt, size_t salt_len,
     memcpy(b, "HPKE-v1", 7); memcpy(b + 7, suite, suite_len);
     memcpy(b + 7 + suite_len, label, l);
     if (ikm_len) memcpy(b + 7 + suite_len + l, ikm, ikm_len);
-    d2k_hkdf_extract(salt, salt_len, b, n, out);
+    d2s_hkdf_extract(salt, salt_len, b, n, out);
     return 0;
 }
 
@@ -590,19 +590,19 @@ static int hpke_expand(const uint8_t prk[32], const uint8_t *suite, size_t suite
     memcpy(b + 9, suite, suite_len); memcpy(b + 9 + suite_len, label, l);
     if (info_len) memcpy(b + 9 + suite_len + l, info, info_len);
     b[n] = 1;
-    d2k_hmac_sha256(prk, 32, b, n + 1, block);
+    d2s_hmac_sha256(prk, 32, b, n + 1, block);
     memcpy(out, block, out_len);
     return 0;
 }
 
-static int ech_hpke(const d2k_ech_config *c, const uint8_t priv[32],
+static int ech_hpke(const d2s_ech_config *c, const uint8_t priv[32],
     uint8_t enc[32], uint8_t key[16], uint8_t nonce[12]) {
     const uint8_t kem_suite[] = {'K','E','M',0,0x20};
     const uint8_t suite[] = {'H','P','K','E',0,0x20,0,1,0,1};
     uint8_t dh[32], context[64], eae[32], shared[32], info[520];
     uint8_t psk_hash[32], info_hash[32], schedule[65], secret[32];
     if (!c || c->wire_len > 512 || !c->wire_len ||
-        d2k_x25519_base(enc, priv) || d2k_x25519(dh, priv, c->public_key)) return -1;
+        d2s_x25519_base(enc, priv) || d2s_x25519(dh, priv, c->public_key)) return -1;
     memcpy(context, enc, 32); memcpy(context + 32, c->public_key, 32);
     memcpy(info, "tls ech", 7); info[7] = 0; memcpy(info + 8, c->wire, c->wire_len);
     if (hpke_extract(NULL, 0, kem_suite, sizeof kem_suite, "eae_prk", dh, 32, eae) ||
@@ -618,7 +618,7 @@ static int ech_hpke(const d2k_ech_config *c, const uint8_t priv[32],
     return rc ? -1 : 0;
 }
 
-size_t d2k_t13_ech_build(const d2k_t13_ch_opts *o, const d2k_ech_config *c,
+size_t d2s_t13_ech_build(const d2s_t13_ch_opts *o, const d2s_ech_config *c,
     const uint8_t priv[32], const uint8_t outer_random[32],
     uint8_t *outer, size_t cap, uint8_t *inner, size_t inner_cap, size_t *inner_len) {
     if (!o || !c || !priv || !outer_random || !outer || !inner || !inner_len ||
@@ -629,9 +629,9 @@ size_t d2k_t13_ech_build(const d2k_t13_ch_opts *o, const d2k_ech_config *c,
     uint8_t enc[32], key[16], nonce[12], encoded[1024], extension[1100];
     if (ech_hpke(c, priv, enc, key, nonce)) return 0;
     const uint8_t inner_ext[] = {0xfe,0x0d,0,1,1};
-    d2k_t13_ch_opts opts = *o;
+    d2s_t13_ch_opts opts = *o;
     opts.extra = inner_ext; opts.extra_len = sizeof inner_ext; opts.pad_to = 0;
-    size_t n = d2k_t13_ch_build(&opts, inner, inner_cap);
+    size_t n = d2s_t13_ch_build(&opts, inner, inner_cap);
     size_t sid = o->session_id_len;
     if (!n || n < 39 + sid || n - 4 - sid > sizeof encoded) return 0;
     /* Reconstructed inner transcript uses the outer's compatibility session ID. */
@@ -651,7 +651,7 @@ size_t d2k_t13_ech_build(const d2k_t13_ch_opts *o, const d2k_ech_config *c,
     memset(extension + 46, 0, plain_len + 16);
     opts = *o; opts.sni = c->public_name; opts.random = outer_random;
     opts.extra = extension; opts.extra_len = 46 + plain_len + 16;
-    size_t outer_len = d2k_t13_ch_build(&opts, outer, cap);
+    size_t outer_len = d2s_t13_ch_build(&opts, outer, cap);
     if (!outer_len) return 0;
     /* Locate the extension rather than assuming ordering in the TLS builder. */
     size_t p = 39 + sid;
@@ -667,7 +667,7 @@ size_t d2k_t13_ech_build(const d2k_t13_ch_opts *o, const d2k_ech_config *c,
         if (get16(outer + p) == 0xfe0d) {
             if (elen != 42 + plain_len + 16) return 0;
             uint8_t tag[16], ciphertext[1024];
-            int rc = d2k_aes128_gcm_encrypt(key, nonce, outer + 4, outer_len - 4,
+            int rc = d2s_aes128_gcm_encrypt(key, nonce, outer + 4, outer_len - 4,
                 encoded, plain_len, ciphertext, tag);
             memset(key, 0, sizeof key);
             if (rc) return 0;
@@ -681,18 +681,18 @@ size_t d2k_t13_ech_build(const d2k_t13_ch_opts *o, const d2k_ech_config *c,
     return 0;
 }
 
-int d2k_t13_ech_accepted(const uint8_t *inner, size_t n,
+int d2s_t13_ech_accepted(const uint8_t *inner, size_t n,
                          const uint8_t *sh, size_t sn) {
     if (!inner || !sh || n < 38 || n > 4096 || sn < 38 || sn > 4096 ||
         inner[0] != 1 || sh[0] != 2) return 0;
     const uint8_t *peer = NULL;
     char err[80];
-    if (d2k_t13_sh_parse(sh, sn, &peer, err, sizeof err)) return 0;
+    if (d2s_t13_sh_parse(sh, sn, &peer, err, sizeof err)) return 0;
     uint8_t tr[8192], hash[32], secret[32], expected[8];
     memcpy(tr, inner, n); memcpy(tr + n, sh, sn); memset(tr + n + 30, 0, 8);
-    d2k_sha256(tr, n + sn, hash);
-    d2k_hkdf_extract(NULL, 0, inner + 6, 32, secret);
-    if (d2k_hkdf_expand_label_ctx(secret, "ech accept confirmation", hash, 32,
+    d2s_sha256(tr, n + sn, hash);
+    d2s_hkdf_extract(NULL, 0, inner + 6, 32, secret);
+    if (d2s_hkdf_expand_label_ctx(secret, "ech accept confirmation", hash, 32,
                                  expected, 8)) return 0;
     unsigned diff = 0;
     for (size_t i = 0; i < 8; i++) diff |= expected[i] ^ sh[30 + i];

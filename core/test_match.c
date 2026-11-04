@@ -31,7 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_catalog.h"
+#include "d2s_catalog.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -47,8 +47,8 @@ static int fails;
  * internal/catalog/catalog_test.go: первый аргумент TTL САМОЙ ПОДДЕЛКИ, не
  * разность с сервером (см. её комментарий там же). method — 2, как
  * FingerprintMethod в Go и как во всех коробках testdata/catalog-real.json. */
-static d2k_cat_fp rst_fp(uint8_t ttl, uint16_t ipid, uint8_t tos) {
-    d2k_cat_fp f;
+static d2s_cat_fp rst_fp(uint8_t ttl, uint16_t ipid, uint8_t tos) {
+    d2s_cat_fp f;
     memset(&f, 0, sizeof f);
     f.method = 2;
     f.n_sig = 1;
@@ -62,8 +62,8 @@ static d2k_cat_fp rst_fp(uint8_t ttl, uint16_t ipid, uint8_t tos) {
 /* Дописывает в отпечаток ЕЩЁ одну примету "rst" — накопленная коробка, а не
  * единственное наблюдение (как c.Boxes[0].Fingerprint.Signals, насильно
  * составленный в TestУзнаваниеСмотритВсеПриметыОдногоВида). */
-static void add_rst(d2k_cat_fp *f, uint8_t ttl, uint16_t ipid, uint8_t tos) {
-    d2k_cat_signal *s = &f->sig[f->n_sig++];
+static void add_rst(d2s_cat_fp *f, uint8_t ttl, uint16_t ipid, uint8_t tos) {
+    d2s_cat_signal *s = &f->sig[f->n_sig++];
     memset(s, 0, sizeof *s);
     strcpy(s->kind, "rst");
     s->ttl = ttl;
@@ -73,22 +73,22 @@ static void add_rst(d2k_cat_fp *f, uint8_t ttl, uint16_t ipid, uint8_t tos) {
 
 /* Дописывает примету без числовых улик (как "silent" у Go: только kind и
  * факт встречи). */
-static void add_kind(d2k_cat_fp *f, const char *kind) {
-    d2k_cat_signal *s = &f->sig[f->n_sig++];
+static void add_kind(d2s_cat_fp *f, const char *kind) {
+    d2s_cat_signal *s = &f->sig[f->n_sig++];
     memset(s, 0, sizeof *s);
     strcpy(s->kind, kind);
 }
 
 /* Дописывает примету обрыва по объёму (kb — килобайты). */
-static void add_volume(d2k_cat_fp *f, int kb) {
-    d2k_cat_signal *s = &f->sig[f->n_sig++];
+static void add_volume(d2s_cat_fp *f, int kb) {
+    d2s_cat_signal *s = &f->sig[f->n_sig++];
     memset(s, 0, sizeof *s);
     strcpy(s->kind, "volume");
     s->volume = kb;
 }
 
-static void add_rx_volume(d2k_cat_fp *f, int kb) {
-    d2k_cat_signal *s = &f->sig[f->n_sig++];
+static void add_rx_volume(d2s_cat_fp *f, int kb) {
+    d2s_cat_signal *s = &f->sig[f->n_sig++];
     memset(s, 0, sizeof *s);
     strcpy(s->kind, "rx-volume");
     s->volume = kb;
@@ -103,7 +103,7 @@ int main(void) {
      * коробку ещё до сравнения улик — сама эта проверка о том и была.
      * ===================================================================== */
     {
-        d2k_cat_fp box;
+        d2s_cat_fp box;
         memset(&box, 0, sizeof box);
         box.method = 2;
         add_rst(&box, 200, 1,     0x01); /* не совпадёт ни с чем */
@@ -111,8 +111,8 @@ int main(void) {
         add_rst(&box, 90,  2,     0x02); /* не совпадёт */
         add_rst(&box, 50,  3,     0x03); /* не совпадёт */
 
-        d2k_cat_fp probe = rst_fp(127, 54321, 0x88);
-        CHECK(d2k_fp_same(&box, &probe) == 1,
+        d2s_cat_fp probe = rst_fp(127, 54321, 0x88);
+        CHECK(d2s_fp_same(&box, &probe) == 1,
               "накопленная коробка из четырёх примет не узнала свежую по второй в списке");
     }
 
@@ -122,16 +122,16 @@ int main(void) {
      * !quiet.Compatible(rst)).
      * ===================================================================== */
     {
-        d2k_cat_fp rst = rst_fp(127, 54321, 0x88);
-        d2k_cat_fp quiet;
+        d2s_cat_fp rst = rst_fp(127, 54321, 0x88);
+        d2s_cat_fp quiet;
         memset(&quiet, 0, sizeof quiet);
         quiet.method = 2;
         add_rst(&quiet, 127, 54321, 0x88); /* та же улика, что у rst */
         add_kind(&quiet, "silent");        /* рода, которого у rst вовсе нет */
 
-        CHECK(d2k_fp_same(&rst, &quiet) == 1,
+        CHECK(d2s_fp_same(&rst, &quiet) == 1,
               "лишний род в новом наблюдении объявлен противоречием");
-        CHECK(d2k_fp_same(&quiet, &rst) == 1,
+        CHECK(d2s_fp_same(&quiet, &rst) == 1,
               "недостающий у кандидата род объявлен противоречием");
     }
 
@@ -143,9 +143,9 @@ int main(void) {
      * ===================================================================== */
     {
         /* Go: rst.Compatible(other) — сброс с другим TTL и IPID. */
-        d2k_cat_fp rst   = rst_fp(127, 54321, 0x88);
-        d2k_cat_fp other = rst_fp(64, 111, 0x10);
-        CHECK(d2k_fp_same(&rst, &other) == 0,
+        d2s_cat_fp rst   = rst_fp(127, 54321, 0x88);
+        d2s_cat_fp other = rst_fp(64, 111, 0x10);
+        CHECK(d2s_fp_same(&rst, &other) == 0,
               "сброс с другими уликами объявлен тем же поведением");
     }
     {
@@ -155,52 +155,52 @@ int main(void) {
          * дают одну и ту же 0 на одном роде. Здесь b согласен по volume
          * (это дало бы common>0) И противоречит по rst — итог обязан
          * остаться 0: одно совпавшее ещё не отменяет одно поспорившее. */
-        d2k_cat_fp a, b;
+        d2s_cat_fp a, b;
         memset(&a, 0, sizeof a); a.method = 2;
         add_rst(&a, 127, 54321, 0x88);
         add_volume(&a, 19);
         memset(&b, 0, sizeof b); b.method = 2;
         add_rst(&b, 64, 111, 0x10); /* противоречит */
         add_volume(&b, 19);         /* согласился бы один */
-        CHECK(d2k_fp_same(&a, &b) == 0,
+        CHECK(d2s_fp_same(&a, &b) == 0,
               "согласие по объёму перевесило противоречие по сбросу");
     }
     {
-        /* Граница допуска TTL: ±D2K_TTL_SLACK — да, за ним — нет. */
-        d2k_cat_fp a = rst_fp(126, 0, 0);
-        d2k_cat_fp b = rst_fp(127, 0, 0);
-        CHECK(d2k_fp_same(&a, &b) == 1, "TTL 126 и 127 сочтены разными коробками");
+        /* Граница допуска TTL: ±D2S_TTL_SLACK — да, за ним — нет. */
+        d2s_cat_fp a = rst_fp(126, 0, 0);
+        d2s_cat_fp b = rst_fp(127, 0, 0);
+        CHECK(d2s_fp_same(&a, &b) == 1, "TTL 126 и 127 сочтены разными коробками");
         b.sig[0].ttl = 120;
-        CHECK(d2k_fp_same(&a, &b) == 0, "TTL 126 и 120 сочтены одной коробкой");
+        CHECK(d2s_fp_same(&a, &b) == 0, "TTL 126 и 120 сочтены одной коробкой");
     }
     {
-        /* Граница допуска объёма: ровно D2K_VOLUME_SLACK — да, шире — нет. */
-        d2k_cat_fp a, b;
+        /* Граница допуска объёма: ровно D2S_VOLUME_SLACK — да, шире — нет. */
+        d2s_cat_fp a, b;
         memset(&a, 0, sizeof a); a.method = 2; add_volume(&a, 19);
         memset(&b, 0, sizeof b); b.method = 2; add_volume(&b, 23);
-        CHECK(d2k_fp_same(&a, &b) == 1, "19 и 23 КБ сочтены разными коробками");
+        CHECK(d2s_fp_same(&a, &b) == 1, "19 и 23 КБ сочтены разными коробками");
         b.sig[0].volume = 40;
-        CHECK(d2k_fp_same(&a, &b) == 0, "19 и 40 КБ сочтены одной коробкой");
+        CHECK(d2s_fp_same(&a, &b) == 0, "19 и 40 КБ сочтены одной коробкой");
     }
     {
         /* Старая коробка, у которой порог обрыва не записан (volume 0 —
            «корзина не измерена»), не поглощает новую измеренную коробку
            (задача 23): лучше завести новую, оставив старую нетронутой. */
-        d2k_cat_fp old, cut;
+        d2s_cat_fp old, cut;
         memset(&old, 0, sizeof old); old.method = 2; add_volume(&old, 0);
         memset(&cut, 0, sizeof cut); cut.method = 2; add_volume(&cut, 16);
-        CHECK(d2k_fp_same(&old, &cut) == 0,
+        CHECK(d2s_fp_same(&old, &cut) == 0,
               "коробка с неизмеренным порогом поглотила обрыв 16 КБ");
     }
     {
         /* Направление — часть класса: исходящая лестница и обрыв входящего
            HTTP-тела нельзя склеить в одну коробку при равном объёме. */
-        d2k_cat_fp a, b;
+        d2s_cat_fp a, b;
         memset(&a, 0, sizeof a); a.method = 2; add_volume(&a, 24);
         memset(&b, 0, sizeof b); b.method = 2; add_rx_volume(&b, 24);
-        CHECK(d2k_fp_same(&a, &b) == 0, "TX и RX объём ошибочно сочлись одной коробкой");
+        CHECK(d2s_fp_same(&a, &b) == 0, "TX и RX объём ошибочно сочлись одной коробкой");
         add_rx_volume(&a, 24);
-        CHECK(d2k_fp_same(&a, &b) == 1, "одинаковый RX-объём не распознался");
+        CHECK(d2s_fp_same(&a, &b) == 1, "одинаковый RX-объём не распознался");
     }
 
     /* =====================================================================
@@ -208,13 +208,13 @@ int main(void) {
      * (Go: rst.Compatible(onlySilent)).
      * ===================================================================== */
     {
-        d2k_cat_fp rst = rst_fp(127, 54321, 0x88);
-        d2k_cat_fp only_silent;
+        d2s_cat_fp rst = rst_fp(127, 54321, 0x88);
+        d2s_cat_fp only_silent;
         memset(&only_silent, 0, sizeof only_silent);
         only_silent.method = 2;
         add_kind(&only_silent, "silent");
 
-        CHECK(d2k_fp_same(&rst, &only_silent) == 0,
+        CHECK(d2s_fp_same(&rst, &only_silent) == 0,
               "непересекающиеся наблюдения объявлены одним поведением");
     }
 
@@ -224,10 +224,10 @@ int main(void) {
      * проверка ничем не была пришпилена (см. отчёт о задаче 2, круг 0).
      * ===================================================================== */
     {
-        d2k_cat_fp a = rst_fp(126, 54321, 0x88);
-        d2k_cat_fp b = rst_fp(126, 54321, 0x88);
+        d2s_cat_fp a = rst_fp(126, 54321, 0x88);
+        d2s_cat_fp b = rst_fp(126, 54321, 0x88);
         b.method = 3; /* тот же снимок улик, другой способ съёма */
-        CHECK(d2k_fp_same(&a, &b) == 0, "разный method сочтён одним и тем же способом");
+        CHECK(d2s_fp_same(&a, &b) == 0, "разный method сочтён одним и тем же способом");
     }
 
     /* =====================================================================
@@ -238,14 +238,14 @@ int main(void) {
      * Раньше (n_sig 1 против 5) такая проба не узнавалась бы никогда.
      * ===================================================================== */
     {
-        d2k_catalog c; char err[200] = {0};
-        CHECK(d2k_catalog_load("testdata/catalog-real.json", &c, err, sizeof err) == 0, "загрузка");
+        d2s_catalog c; char err[200] = {0};
+        CHECK(d2s_catalog_load("testdata/catalog-real.json", &c, err, sizeof err) == 0, "загрузка");
         CHECK(c.n_boxes > 0, "нет коробок");
-        CHECK(d2k_catalog_match(&c, &c.boxes[0].fp) == 0, "коробка не узнала саму себя");
+        CHECK(d2s_catalog_match(&c, &c.boxes[0].fp) == 0, "коробка не узнала саму себя");
 
-        d2k_cat_fp alien = {0}; alien.method = 99; alien.n_sig = 1;
+        d2s_cat_fp alien = {0}; alien.method = 99; alien.n_sig = 1;
         strcpy(alien.sig[0].kind, "выдуманный"); alien.sig[0].ttl = 7;
-        CHECK(d2k_catalog_match(&c, &alien) == -1, "чужая примета узнана как своя");
+        CHECK(d2s_catalog_match(&c, &alien) == -1, "чужая примета узнана как своя");
 
         /* box-ebdd4506 — четвёртая в файле (индекс 3): пять примет, из них
            четыре "rst" с разными ttl/tos/ipid. Берём ТРЕТЬЮ улику её
@@ -254,23 +254,23 @@ int main(void) {
         CHECK(c.n_boxes > 3 && strcmp(c.boxes[3].id, "box-ebdd4506") == 0,
               "индекс box-ebdd4506 в файле изменился — проверка бьёт не туда");
         {
-            d2k_cat_fp probe = rst_fp(55, 48320, 112);
-            int m = d2k_catalog_match(&c, &probe);
+            d2s_cat_fp probe = rst_fp(55, 48320, 112);
+            int m = d2s_catalog_match(&c, &probe);
             CHECK(m == 3,
                   "накопленная коробка box-ebdd4506 не узнана по свежей однопримётной пробе");
         }
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
 
     {
-        d2k_cat_fp a = {0}, b = {0}; a.method = b.method = 2;
+        d2s_cat_fp a = {0}, b = {0}; a.method = b.method = 2;
         add_rx_volume(&a, 14); add_rx_volume(&b, 14);
         strcpy(a.sig[0].kind, "rx-volume-wire");
-        CHECK(!d2k_fp_same(&a, &b), "ciphertext and body byte domains merged");
+        CHECK(!d2s_fp_same(&a, &b), "ciphertext and body byte domains merged");
         strcpy(b.sig[0].kind, "rx-volume-wire");
-        CHECK(d2k_fp_same(&a, &b), "same wire RX evidence did not match");
+        CHECK(d2s_fp_same(&a, &b), "same wire RX evidence did not match");
         b.sig[0].volume = 40;
-        CHECK(!d2k_fp_same(&a, &b), "different wire RX cut sizes matched");
+        CHECK(!d2s_fp_same(&a, &b), "different wire RX cut sizes matched");
     }
 
     if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }

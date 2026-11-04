@@ -1,20 +1,20 @@
 /* The pre-unification schedule is a frozen compatibility oracle.
  * Include the property catalog itself, as detect/test_repeats.c does: new
  * questions automatically enter this test without a second handwritten list. */
-#include "d2k_compose.h"
-#include "d2k_plantlv.h"
-#include "d2k_plan.h"
-#include "d2k_detect.h"
+#include "d2s_compose.h"
+#include "d2s_plantlv.h"
+#include "d2s_plan.h"
+#include "d2s_detect.h"
 #include "../detect/props.c"
 #include <stdio.h>
 #include <string.h>
 
-int d2k_arm_from_poison(const d2k_poison *, d2k_arm *, char *, size_t);
+int d2s_arm_from_poison(const d2s_poison *, d2s_arm *, char *, size_t);
 /* Scheduler reporting is unrelated to the pure bridge conversion. */
-void d2k_sched_progress_note(const char *q, int pass, int fail) {
+void d2s_sched_progress_note(const char *q, int pass, int fail) {
     (void)q; (void)pass; (void)fail;
 }
-#ifndef D2K_SEND_MAX
+#ifndef D2S_SEND_MAX
 #include "../detect/tests/legacy_sends.h"
 #endif
 static unsigned failures, cases, skipped;
@@ -24,15 +24,15 @@ static unsigned failures, cases, skipped;
             tr->sni_off, tr->sni_len, __LINE__, #c); failures++; goto done; \
 } } while (0)
 
-static void run_case(d2k_poison p, const d2k_trigger *tr, const uint8_t *decoy, size_t dn) {
-    d2k_arm a;
-    d2k_arm_input in = {0};
-    d2k_sends sends;
-    d2k_plan *plan = NULL;
-    d2k_actions out = {0};
-    d2k_pkt pkt = {0};
-    uint8_t fake[2 * D2K_TRIGGER_MAX], seg[D2K_TRIGGER_MAX + 4096];
-    uint8_t tlv[D2K_PLAN_TLV_MAX];
+static void run_case(d2s_poison p, const d2s_trigger *tr, const uint8_t *decoy, size_t dn) {
+    d2s_arm a;
+    d2s_arm_input in = {0};
+    d2s_sends sends;
+    d2s_plan *plan = NULL;
+    d2s_actions out = {0};
+    d2s_pkt pkt = {0};
+    uint8_t fake[2 * D2S_TRIGGER_MAX], seg[D2S_TRIGGER_MAX + 4096];
+    uint8_t tlv[D2S_PLAN_TLV_MAX];
     char text[8192], err[200];
     size_t tn = 0, index = 0;
     /* C uses the recovered field program, not the historical padded fake.
@@ -41,7 +41,7 @@ static void run_case(d2k_poison p, const d2k_trigger *tr, const uint8_t *decoy, 
     if (!strcmp(p.name, "white-hello-ts")) return;
     if (p.decoy_hello) { p.decoy = decoy; p.decoy_len = dn; }
     if (p.seqovl_exact) { p.seqovl = (int)dn; }
-    int bridge_rc = d2k_arm_from_poison(&p, &a, err, sizeof err);
+    int bridge_rc = d2s_arm_from_poison(&p, &a, err, sizeof err);
     /* MD5 is now required to traverse the complete measured-plan path. */
     REQUIRE(!p.md5 || bridge_rc == 0);
     /* oob (срочный байт) выражается планом «oob sni_middle 0f» и исполняется
@@ -60,38 +60,38 @@ static void run_case(d2k_poison p, const d2k_trigger *tr, const uint8_t *decoy, 
     if (p.decoy_len) { memcpy(in.decoy, p.decoy, p.decoy_len); }
     /* Larger triggers do not expand the existing owned-overlap contract.
        A non-representable overlap must refuse, not clamp its measured bytes. */
-    if ((unsigned)p.seqovl > D2K_ARM_DECOY_MAX) {
-        REQUIRE(d2k_arm_plan_measured(&a, &in, text, sizeof text) == -1);
+    if ((unsigned)p.seqovl > D2S_ARM_DECOY_MAX) {
+        REQUIRE(d2s_arm_plan_measured(&a, &in, text, sizeof text) == -1);
         skipped++; goto done;
     }
-    REQUIRE(d2k_poison_sends(tr, &p, fake, sizeof fake, seg, sizeof seg, &sends) == 0);
-    REQUIRE(d2k_arm_plan_measured(&a, &in, text, sizeof text) == 0);
-    REQUIRE(d2k_plan_text_to_tlv(text, tlv, sizeof tlv, &tn, err, sizeof err) == 0);
-    REQUIRE(d2k_plan_load(tlv, tn, &plan, err, sizeof err) == 0);
+    REQUIRE(d2s_poison_sends(tr, &p, fake, sizeof fake, seg, sizeof seg, &sends) == 0);
+    REQUIRE(d2s_arm_plan_measured(&a, &in, text, sizeof text) == 0);
+    REQUIRE(d2s_plan_text_to_tlv(text, tlv, sizeof tlv, &tn, err, sizeof err) == 0);
+    REQUIRE(d2s_plan_load(tlv, tn, &plan, err, sizeof err) == 0);
     pkt.seq = BASE; pkt.payload = tr->payload; pkt.payload_len = tr->len;
     pkt.have_sni = tr->sni_len > 0; pkt.sni_off = tr->sni_off; pkt.sni_len = tr->sni_len;
-    REQUIRE(d2k_plan_apply(plan, NULL, &pkt, &out) == 0);
-    REQUIRE(out.fate == D2K_ORIG_DROP);
+    REQUIRE(d2s_plan_apply(plan, NULL, &pkt, &out) == 0);
+    REQUIRE(out.fate == D2S_ORIG_DROP);
     for (size_t i = 0; i < sends.n; i++) {
-        const d2k_send *s = &sends.v[i];
+        const d2s_send *s = &sends.v[i];
         for (size_t off = 0; off < s->len; ) {
             size_t n = s->len - off;
-            if (n > D2K_ARM_SEGMENT_MAX) { n = D2K_ARM_SEGMENT_MAX; }
+            if (n > D2S_ARM_SEGMENT_MAX) { n = D2S_ARM_SEGMENT_MAX; }
             REQUIRE(index < out.n);
-            const d2k_emit *e = &out.v[index++];
+            const d2s_emit *e = &out.v[index++];
             /* Зеркало порчи: план обязан нести РОВНО те биты, что описаны в
                гипотезе — ни больше (иначе исполнение разойдётся с замером),
                ни меньше. tcp_ts_up добавлен 23.10.2026 отдельной осью. */
-            unsigned flags = (s->poison.badsum ? D2K_POISON_BADSUM : 0) |
-                (s->poison.tcp_ts ? D2K_POISON_TCPTS_BACK : 0) |
-                (s->poison.tcp_ts_up ? D2K_POISON_TS_UP : 0) |
-                (s->poison.ip_id_zero ? D2K_POISON_IPID_ZERO : 0) |
-                (s->poison.md5 ? D2K_POISON_MD5 : 0);
+            unsigned flags = (s->poison.badsum ? D2S_POISON_BADSUM : 0) |
+                (s->poison.tcp_ts ? D2S_POISON_TCPTS_BACK : 0) |
+                (s->poison.tcp_ts_up ? D2S_POISON_TS_UP : 0) |
+                (s->poison.ip_id_zero ? D2S_POISON_IPID_ZERO : 0) |
+                (s->poison.md5 ? D2S_POISON_MD5 : 0);
             REQUIRE(e->seq == (uint32_t)(BASE + s->seq_off + (int64_t)off));
             REQUIRE(e->seq_shift == s->poison.seq_shift);
-            REQUIRE(e->kind == (s->kind == D2K_SEND_FAKE ? D2K_EMIT_FAKE : D2K_EMIT_PAYLOAD));
-            REQUIRE(e->wire_profile == D2K_WIRE_DETECT_TCP);
-            REQUIRE(e->urgent == (s->kind == D2K_SEND_URG));
+            REQUIRE(e->kind == (s->kind == D2S_SEND_FAKE ? D2S_EMIT_FAKE : D2S_EMIT_PAYLOAD));
+            REQUIRE(e->wire_profile == D2S_WIRE_DETECT_TCP);
+            REQUIRE(e->urgent == (s->kind == D2S_SEND_URG));
             REQUIRE(e->poison == flags && e->ttl == s->poison.ttl);
             REQUIRE(e->delay_us == (off ? 0u : (unsigned)s->delay_ms * 1000u));
             REQUIRE(e->pre_len + e->len == n);
@@ -103,18 +103,18 @@ static void run_case(d2k_poison p, const d2k_trigger *tr, const uint8_t *decoy, 
     REQUIRE(index == out.n);
     /* tail_ms is a wait before reading, with no subsequent wire send. */
 done:
-    d2k_actions_free(&out); d2k_plan_free(plan);
+    d2s_actions_free(&out); d2s_plan_free(plan);
 }
 
 int main(void) {
-    static const size_t lengths[] = {512, 1400, 1401, 2048, 2049, D2K_TRIGGER_MAX};
+    static const size_t lengths[] = {512, 1400, 1401, 2048, 2049, D2S_TRIGGER_MAX};
     uint8_t decoy[681];
     int np;
-    const d2k_poison *ps = d2k_poisons(&np);
+    const d2s_poison *ps = d2s_poisons(&np);
     for (size_t i = 0; i < sizeof decoy; i++) { decoy[i] = (uint8_t)(i * 23 + 5); }
     for (size_t k = 0; k < sizeof lengths / sizeof lengths[0]; k++) {
         for (int named = 0; named < 2; named++) {
-            d2k_trigger tr = {0};
+            d2s_trigger tr = {0};
             tr.len = lengths[k]; tr.sni_off = named ? (int)tr.len / 3 : 0;
             tr.sni_len = named ? 11 : 0;
             for (size_t i = 0; i < tr.len; i++) { tr.payload[i] = (uint8_t)(i * 13 + 3); }
@@ -142,37 +142,37 @@ int main(void) {
     {
         prop_probe pp[16];
         int nq = prop_probes(pp, 16), found = 0, i;
-        d2k_trigger tr = {0};
+        d2s_trigger tr = {0};
         tr.len = 1400; tr.sni_off = 466; tr.sni_len = 11;
         for (size_t j = 0; j < tr.len; j++) { tr.payload[j] = (uint8_t)(j * 13 + 3); }
         tr.payload[0] = 0x16; tr.payload[1] = 3; tr.payload[2] = 1;
         for (i = 0; i < nq; i++) {
-            d2k_poison p = pp[i].p;
-            d2k_arm a;
-            d2k_arm_input in = {0};
+            d2s_poison p = pp[i].p;
+            d2s_arm a;
+            d2s_arm_input in = {0};
             char text[8192], err[200];
             if (strcmp(p.name, "white-hello-ts") != 0) { continue; }
             found = 1;
             p.decoy = decoy; p.decoy_len = sizeof decoy;
             in.trigger_len = tr.len; in.sni_off = tr.sni_off; in.sni_len = tr.sni_len;
             in.decoy_len = p.decoy_len; memcpy(in.decoy, p.decoy, p.decoy_len);
-            if (d2k_arm_from_poison(&p, &a, err, sizeof err) != 0) {
+            if (d2s_arm_from_poison(&p, &a, err, sizeof err) != 0) {
                 printf("семейство C: мост отверг приём: %s\n", err); failures++; break;
             }
-            if (d2k_arm_plan_measured(&a, &in, text, sizeof text) != 0) {
+            if (d2s_arm_plan_measured(&a, &in, text, sizeof text) != 0) {
                 printf("семейство C: план не собрался\n"); failures++; break;
             }
             {
                 char expected[8192];
-                uint8_t got_tlv[D2K_PLAN_TLV_MAX], want_tlv[D2K_PLAN_TLV_MAX];
+                uint8_t got_tlv[D2S_PLAN_TLV_MAX], want_tlv[D2S_PLAN_TLV_MAX];
                 size_t got_n = 0, want_n = 0;
                 /* Real ECH seed: the complete serialized program, including ID. */
-                if (d2k_white_decoy_hello("hcaptcha.com", in.decoy, sizeof in.decoy,
+                if (d2s_white_decoy_hello("hcaptcha.com", in.decoy, sizeof in.decoy,
                                          &in.decoy_len) ||
-                    d2k_arm_plan_measured(&a, &in, text, sizeof text) ||
-                    d2k_rx_volume_plan(0, D2K_SHAPE_MODERN, 0, expected, sizeof expected) ||
-                    d2k_plan_text_to_tlv(text, got_tlv, sizeof got_tlv, &got_n, err, sizeof err) ||
-                    d2k_plan_text_to_tlv(expected, want_tlv, sizeof want_tlv, &want_n, err, sizeof err) ||
+                    d2s_arm_plan_measured(&a, &in, text, sizeof text) ||
+                    d2s_rx_volume_plan(0, D2S_SHAPE_MODERN, 0, expected, sizeof expected) ||
+                    d2s_plan_text_to_tlv(text, got_tlv, sizeof got_tlv, &got_n, err, sizeof err) ||
+                    d2s_plan_text_to_tlv(expected, want_tlv, sizeof want_tlv, &want_n, err, sizeof err) ||
                     strcmp(text, expected) || got_n != want_n || memcmp(got_tlv, want_tlv, got_n)) {
                     fprintf(stderr, "семейство C: arm != plan-680fbe00 (text/TLV)\n"); failures++;
                 }

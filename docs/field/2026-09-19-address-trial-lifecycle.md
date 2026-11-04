@@ -10,21 +10,21 @@
 
 ## Исходное состояние
 
-D2K: ветка `classify-core`, HEAD `8604f74`, большой незакоммиченный набор
+D2S: ветка `classify-core`, HEAD `8604f74`, большой незакоммиченный набор
 изменений коллеги уже присутствовал. Эта работа его не отменяет и не объявляет
 принятым целиком. Донор z2k сейчас на `bbd2edd769f47fa128e081d763c667be7e9de0b2`
-и тоже dirty; базу переноса из D2K_SPEC не меняли. Донор не редактировали.
+и тоже dirty; базу переноса из D2S_SPEC не меняли. Донор не редактировали.
 `git diff e9a3913..HEAD` по трём пакетам `internal/classify`,
 `internal/quicprobe`, `internal/voiceprobe` в `z2k-detect` пуст: смена общего
 HEAD z2k не означает изменение этих донорских алгоритмов.
 
 В этой итерации изменены только `core/sched.c`, `core/link.c`,
-`core/include/d2k_link.h`, `core/test_sched.c`, две строки cross-рецепта в
+`core/include/d2s_link.h`, `core/test_sched.c`, две строки cross-рецепта в
 `core/Makefile` и документация. Измеритель/вопросник оригинала не переписан.
 Роутер, firewall и службы не трогали. Коммит не создавался.
 
 Снимки пяти исходных файлов и чеклиста до этих правок для отделения от чужого
-diff сохранены локально: `/tmp/d2k-lifecycle-before.YyPTiJ/`. Это временная
+diff сохранены локально: `/tmp/d2s-lifecycle-before.YyPTiJ/`. Это временная
 страховка, не замена коммиту; не откатывать всё дерево по этим файлам.
 
 ## Что воспроизведено и исправлено
@@ -48,7 +48,7 @@ diff сохранены локально: `/tmp/d2k-lifecycle-before.YyPTiJ/`. �
    деградации: один transient не должен означать подтверждённую потерю обхода.
 
 3. **Очистка посылала DEL_NAME для IP-цели.** Адресная запись оставалась
-   установлена после таймаута задачи. Добавлен `d2k_link_del_addr`: команда
+   установлена после таймаута задачи. Добавлен `d2s_link_del_addr`: команда
    существующего протокола с четырьмя байтами IPv4; task_fail выбирает вид
    ключа. Тест читает настоящие кадры команд из socketpair, различает DEL_ADDR
    и DEL_NAME, проверяет адрес; таймаут подтверждённого WATCHING не снимает план.
@@ -56,7 +56,7 @@ diff сохранены локально: `/tmp/d2k-lifecycle-before.YyPTiJ/`. �
    не закрыты этими тестами.
 
 4. **Cross-сборка пропускала зависимости нового QUIC-теста.** После добавления
-   вызовов d2k_qc_first_initial host-рецепт получил quicconn/meas, а Linux-рецепты
+   вызовов d2s_qc_first_initial host-рецепт получил quicconn/meas, а Linux-рецепты
    нет. Настоящий `make -C core cross` упал на undefined symbol. В обе cross-
    команды добавлены те же модули; повторная сборка/линковка прошла.
 
@@ -74,13 +74,13 @@ diff сохранены локально: `/tmp/d2k-lifecycle-before.YyPTiJ/`. �
   с датапатом, планировщик, уровни доказательства и точное исполнение measured.
   `test_compose` выполнялся несколько минут, но завершился без вмешательства.
 
-Локальные журналы: `/tmp/d2k-lifecycle-red-20260919.log`,
-`/tmp/d2k-lifecycle-green-20260919.log`,
-`/tmp/d2k-lifecycle-cleanup-red-20260919.log`,
-`/tmp/d2k-lifecycle-cleanup-green-20260919.log`,
-`/tmp/d2k-resume-{core,datapath,detect}-check-20260919.log`,
-`/tmp/d2k-resume-core-cross{,-green}-20260919.log`,
-`/tmp/d2k-resume-sched-san-20260919.log`.
+Локальные журналы: `/tmp/d2s-lifecycle-red-20260919.log`,
+`/tmp/d2s-lifecycle-green-20260919.log`,
+`/tmp/d2s-lifecycle-cleanup-red-20260919.log`,
+`/tmp/d2s-lifecycle-cleanup-green-20260919.log`,
+`/tmp/d2s-resume-{core,datapath,detect}-check-20260919.log`,
+`/tmp/d2s-resume-core-cross{,-green}-20260919.log`,
+`/tmp/d2s-resume-sched-san-20260919.log`.
 
 Воспроизведение адресных регрессий: `make -C core test_sched`, затем
 `(cd core && ./test_sched)`. Отдельная sanitizer-проверка без перезаписи
@@ -90,8 +90,8 @@ diff сохранены локально: `/tmp/d2k-lifecycle-before.YyPTiJ/`. �
 cd core
 make -f Makefile -f - san-sched-resume-final <<'MAKE'
 san-sched-resume-final: hello_profiles.inc
-	$(CC) $(SANFLAGS) -o /tmp/d2k-resume-san-test_sched-final test_sched.c $(SRC) -lpthread
-	/tmp/d2k-resume-san-test_sched-final
+	$(CC) $(SANFLAGS) -o /tmp/d2s-resume-san-test_sched-final test_sched.c $(SRC) -lpthread
+	/tmp/d2s-resume-san-test_sched-final
 MAKE
 ```
 
@@ -114,7 +114,7 @@ delay=15000, не вызывает оригинальный вопросник �
 
 Проверка поколения/запоздавших событий, составного ключа (включая порт),
 исключение проб на чужом трафике, восстановление после перезапуска и повторное
-использование коробки остаются сквозными задачами. `d2k_sched_active` пока
+использование коробки остаются сквозными задачами. `d2s_sched_active` пока
 не считает T_VOICE_TRIAL/T_VOICE_WATCH/T_TRIAL_SETTLE — это отдельный изъян
 отчётности, а не доказательство отсутствия задач.
 

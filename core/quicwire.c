@@ -1,4 +1,4 @@
-/* quicwire.c — байтовый уровень QUIC. Контракт и границы — в d2k_quicwire.h.
+/* quicwire.c — байтовый уровень QUIC. Контракт и границы — в d2s_quicwire.h.
  *
  * Ни одна функция здесь не выделяет память и не ходит в сеть: всё считается
  * на месте, в буферах вызывающего. Это не стиль, а условие проверяемости —
@@ -7,16 +7,16 @@
  */
 #include <string.h>
 
-#include "d2k_crypto.h"
-#include "d2k_quicwire.h"
+#include "d2s_crypto.h"
+#include "d2s_quicwire.h"
 
 /* RFC 9001 §5.2, приложение A.1. */
-static const uint8_t salt_v1[D2K_QW_SALT_LEN] = {
+static const uint8_t salt_v1[D2S_QW_SALT_LEN] = {
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
     0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a,
 };
 /* RFC 9369 §3.3.1: первые 20 байт sha256("QUICv2 salt"). */
-static const uint8_t salt_v2[D2K_QW_SALT_LEN] = {
+static const uint8_t salt_v2[D2S_QW_SALT_LEN] = {
     0x0d, 0xed, 0xe3, 0xde, 0xf7, 0x00, 0xa6, 0xdb, 0x81, 0x93,
     0x81, 0xbe, 0x6e, 0x26, 0x9d, 0xcb, 0xf9, 0xbd, 0x2e, 0xd9,
 };
@@ -39,21 +39,21 @@ static const uint8_t retry_nonce_v2[12] = {
 };
 
 static const uint8_t *salt_for(uint32_t version) {
-    return version == D2K_QW_V2 ? salt_v2 : salt_v1;
+    return version == D2S_QW_V2 ? salt_v2 : salt_v1;
 }
 static const char *label_key(uint32_t version) {
-    return version == D2K_QW_V2 ? "quicv2 key" : "quic key";
+    return version == D2S_QW_V2 ? "quicv2 key" : "quic key";
 }
 static const char *label_iv(uint32_t version) {
-    return version == D2K_QW_V2 ? "quicv2 iv" : "quic iv";
+    return version == D2S_QW_V2 ? "quicv2 iv" : "quic iv";
 }
 static const char *label_hp(uint32_t version) {
-    return version == D2K_QW_V2 ? "quicv2 hp" : "quic hp";
+    return version == D2S_QW_V2 ? "quicv2 hp" : "quic hp";
 }
 
 /* --- числа переменной длины --------------------------------------------- */
 
-int d2k_qw_varint_read(const uint8_t *p, size_t avail, uint64_t *val, size_t *width) {
+int d2s_qw_varint_read(const uint8_t *p, size_t avail, uint64_t *val, size_t *width) {
     if (!p || avail < 1) { return -1; }
     /* Два старших бита ПЕРВОГО байта задают ширину, поэтому её нельзя
        проверить на помещаемость раньше, чем прочитан этот байт. */
@@ -66,7 +66,7 @@ int d2k_qw_varint_read(const uint8_t *p, size_t avail, uint64_t *val, size_t *wi
     return 0;
 }
 
-size_t d2k_qw_varint_len(uint64_t v) {
+size_t d2s_qw_varint_len(uint64_t v) {
     if (v <= 63ull) { return 1; }
     if (v <= 16383ull) { return 2; }
     if (v <= 1073741823ull) { return 4; }
@@ -74,9 +74,9 @@ size_t d2k_qw_varint_len(uint64_t v) {
     return 0;   /* больше 2^62-1 переменной длиной не представимо */
 }
 
-size_t d2k_qw_varint_write_w(uint8_t *p, size_t cap, uint64_t v, size_t w) {
+size_t d2s_qw_varint_write_w(uint8_t *p, size_t cap, uint64_t v, size_t w) {
     if (w == 0) {
-        w = d2k_qw_varint_len(v);
+        w = d2s_qw_varint_len(v);
     }
     if (!p || w == 0 || cap < w) { return 0; }
     switch (w) {
@@ -104,8 +104,8 @@ size_t d2k_qw_varint_write_w(uint8_t *p, size_t cap, uint64_t v, size_t w) {
     return w;
 }
 
-size_t d2k_qw_varint_write(uint8_t *p, size_t cap, uint64_t v) {
-    return d2k_qw_varint_write_w(p, cap, v, 0);
+size_t d2s_qw_varint_write(uint8_t *p, size_t cap, uint64_t v) {
+    return d2s_qw_varint_write_w(p, cap, v, 0);
 }
 
 /* --- заголовки ---------------------------------------------------------- */
@@ -117,12 +117,12 @@ size_t d2k_qw_varint_write(uint8_t *p, size_t cap, uint64_t v) {
  * заголовка обязан был бы знать про версии, и однажды один из них не узнал
  * бы. */
 static uint8_t long_type_v1(uint32_t version, uint8_t raw) {
-    if (version != D2K_QW_V2) { return raw; }
+    if (version != D2S_QW_V2) { return raw; }
     switch (raw) {
-    case 1: return D2K_QW_LT_INITIAL;
-    case 2: return D2K_QW_LT_0RTT;
-    case 3: return D2K_QW_LT_HANDSHAKE;
-    default: return D2K_QW_LT_RETRY;
+    case 1: return D2S_QW_LT_INITIAL;
+    case 2: return D2S_QW_LT_0RTT;
+    case 3: return D2S_QW_LT_HANDSHAKE;
+    default: return D2S_QW_LT_RETRY;
     }
 }
 
@@ -130,30 +130,30 @@ static uint8_t long_type_v1(uint32_t version, uint8_t raw) {
  * проводе для этой версии. Пишется здесь, рядом с прямым преобразованием, —
  * разъехаться они могут только вместе. */
 static uint8_t long_type_wire(uint32_t version, uint8_t v1) {
-    if (version != D2K_QW_V2) { return v1; }
+    if (version != D2S_QW_V2) { return v1; }
     switch (v1) {
-    case D2K_QW_LT_INITIAL:   return 1;
-    case D2K_QW_LT_0RTT:      return 2;
-    case D2K_QW_LT_HANDSHAKE: return 3;
+    case D2S_QW_LT_INITIAL:   return 1;
+    case D2S_QW_LT_0RTT:      return 2;
+    case D2S_QW_LT_HANDSHAKE: return 3;
     default:                  return 0;   /* Retry в v2 — нулевой */
     }
 }
 
-size_t d2k_qw_long_hdr_token_w(uint8_t *out, size_t cap, uint32_t version,
+size_t d2s_qw_long_hdr_token_w(uint8_t *out, size_t cap, uint32_t version,
                                uint8_t type, const uint8_t *dcid, size_t dcid_len,
                                const uint8_t *scid, size_t scid_len,
                                const uint8_t *token, size_t token_len,
                                size_t pn_len, size_t payload_len,
                                size_t length_width) {
-    if (!out || dcid_len > D2K_QW_CID_MAX || scid_len > D2K_QW_CID_MAX) { return 0; }
+    if (!out || dcid_len > D2S_QW_CID_MAX || scid_len > D2S_QW_CID_MAX) { return 0; }
     if ((dcid_len && !dcid) || (scid_len && !scid)) { return 0; }
-    if (type != D2K_QW_LT_INITIAL && token_len != 0) { return 0; }
+    if (type != D2S_QW_LT_INITIAL && token_len != 0) { return 0; }
     if (token_len && !token) { return 0; }
-    size_t tw = type == D2K_QW_LT_INITIAL ? d2k_qw_varint_len(token_len) : 0;
-    if (type == D2K_QW_LT_INITIAL && tw == 0) { return 0; }
+    size_t tw = type == D2S_QW_LT_INITIAL ? d2s_qw_varint_len(token_len) : 0;
+    if (type == D2S_QW_LT_INITIAL && tw == 0) { return 0; }
     size_t lw = length_width ? length_width : 8;
     size_t need = 1 + 4 + 1 + dcid_len + 1 + scid_len + tw + token_len + lw;
-    if (cap < need || (type == D2K_QW_LT_INITIAL && token_len > D2K_QW_MAX_DGRAM)) { return 0; }
+    if (cap < need || (type == D2S_QW_LT_INITIAL && token_len > D2S_QW_MAX_DGRAM)) { return 0; }
 
     uint8_t w = long_type_wire(version, type);
     size_t o = 0;
@@ -162,47 +162,47 @@ size_t d2k_qw_long_hdr_token_w(uint8_t *out, size_t cap, uint32_t version,
     out[o++] = (uint8_t)(version >> 8);  out[o++] = (uint8_t)version;
     out[o++] = (uint8_t)dcid_len; if (dcid_len) { memcpy(out + o, dcid, dcid_len); } o += dcid_len;
     out[o++] = (uint8_t)scid_len; if (scid_len) { memcpy(out + o, scid, scid_len); } o += scid_len; /* пустой CID — NULL */
-    if (type == D2K_QW_LT_INITIAL) {
-        size_t n = d2k_qw_varint_write(out + o, cap - o, token_len);
+    if (type == D2S_QW_LT_INITIAL) {
+        size_t n = d2s_qw_varint_write(out + o, cap - o, token_len);
         if (n == 0) { return 0; }
         o += n;
         if (token_len) { memcpy(out + o, token, token_len); o += token_len; }
     }
-    size_t vl = d2k_qw_varint_write_w(out + o, cap - o, (uint64_t)(pn_len + payload_len + 16), length_width);
+    size_t vl = d2s_qw_varint_write_w(out + o, cap - o, (uint64_t)(pn_len + payload_len + 16), length_width);
     if (vl == 0) { return 0; }
     return o + vl;
 }
 
-size_t d2k_qw_long_hdr_w(uint8_t *out, size_t cap, uint32_t version, uint8_t type,
+size_t d2s_qw_long_hdr_w(uint8_t *out, size_t cap, uint32_t version, uint8_t type,
                          const uint8_t *dcid, size_t dcid_len,
                          const uint8_t *scid, size_t scid_len,
                          size_t pn_len, size_t payload_len,
                          size_t length_width) {
-    return d2k_qw_long_hdr_token_w(out, cap, version, type, dcid, dcid_len,
+    return d2s_qw_long_hdr_token_w(out, cap, version, type, dcid, dcid_len,
                                    scid, scid_len, NULL, 0, pn_len, payload_len,
                                    length_width);
 }
 
-size_t d2k_qw_long_hdr_token(uint8_t *out, size_t cap, uint32_t version,
+size_t d2s_qw_long_hdr_token(uint8_t *out, size_t cap, uint32_t version,
                              uint8_t type, const uint8_t *dcid, size_t dcid_len,
                              const uint8_t *scid, size_t scid_len,
                              const uint8_t *token, size_t token_len,
                              size_t pn_len, size_t payload_len) {
-    return d2k_qw_long_hdr_token_w(out, cap, version, type, dcid, dcid_len,
+    return d2s_qw_long_hdr_token_w(out, cap, version, type, dcid, dcid_len,
                                    scid, scid_len, token, token_len,
                                    pn_len, payload_len, 0);
 }
 
-size_t d2k_qw_long_hdr(uint8_t *out, size_t cap, uint32_t version, uint8_t type,
+size_t d2s_qw_long_hdr(uint8_t *out, size_t cap, uint32_t version, uint8_t type,
                        const uint8_t *dcid, size_t dcid_len,
                        const uint8_t *scid, size_t scid_len,
                        size_t pn_len, size_t payload_len) {
-    return d2k_qw_long_hdr_token(out, cap, version, type, dcid, dcid_len,
+    return d2s_qw_long_hdr_token(out, cap, version, type, dcid, dcid_len,
                                  scid, scid_len, NULL, 0, pn_len, payload_len);
 }
 
-int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
-                     d2k_qw_hdr *out) {
+int d2s_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
+                     d2s_qw_hdr *out) {
     if (!p || !out || n < 1) { return -1; }
     memset(out, 0, sizeof *out);
 
@@ -210,7 +210,7 @@ int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
         /* КОРОТКИЙ ЗАГОЛОВОК. Длина DCID на проводе не объявлена: её знает
            только тот, кто этот идентификатор выдал. Без неё разбирать нечего,
            и гадать нельзя — ошибка на байт сдвигает весь пакет. */
-        if (dcid_len_short == 0 || dcid_len_short > D2K_QW_CID_MAX) { return -1; }
+        if (dcid_len_short == 0 || dcid_len_short > D2S_QW_CID_MAX) { return -1; }
         if (n < 1 + dcid_len_short + 1) { return -1; }
         out->long_hdr = 0;
         out->dcid_off = 1;
@@ -232,13 +232,13 @@ int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
 
     size_t o = 5;
     size_t dl = p[o++];
-    if (dl > D2K_QW_CID_MAX || o + dl >= n) { return -1; }
+    if (dl > D2S_QW_CID_MAX || o + dl >= n) { return -1; }
     out->dcid_off = o; out->dcid_len = dl; o += dl;
     size_t sl = p[o++];
-    if (sl > D2K_QW_CID_MAX || o + sl > n) { return -1; }
+    if (sl > D2S_QW_CID_MAX || o + sl > n) { return -1; }
     out->scid_off = o; out->scid_len = sl; o += sl;
 
-    if (out->type == D2K_QW_LT_RETRY) {
+    if (out->type == D2S_QW_LT_RETRY) {
         /* У Retry нет ни Length, ни номера пакета: остаток датаграммы это
            токен и шестнадцать байт метки целостности (RFC 9000 §17.2.5). */
         if (n - o < 16) { return -1; }
@@ -248,9 +248,9 @@ int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
         return 0;
     }
 
-    if (out->type == D2K_QW_LT_INITIAL) {
+    if (out->type == D2S_QW_LT_INITIAL) {
         uint64_t tlen = 0; size_t tw = 0;
-        if (d2k_qw_varint_read(p + o, n - o, &tlen, &tw) != 0) { return -1; }
+        if (d2s_qw_varint_read(p + o, n - o, &tlen, &tw) != 0) { return -1; }
         o += tw;
         if (tlen > n - o) { return -1; }
         out->token_off = o; out->token_len = (size_t)tlen;
@@ -258,7 +258,7 @@ int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
     }
 
     uint64_t plen = 0; size_t pw = 0;
-    if (d2k_qw_varint_read(p + o, n - o, &plen, &pw) != 0) { return -1; }
+    if (d2s_qw_varint_read(p + o, n - o, &plen, &pw) != 0) { return -1; }
     o += pw;
     if (plen < 1 + 16 || plen > n - o) { return -1; }  /* номер + тег — минимум */
     out->length_claimed = (size_t)plen;
@@ -274,7 +274,7 @@ int d2k_qw_hdr_parse(const uint8_t *p, size_t n, size_t dcid_len_short,
 
 /* --- номера пакетов ------------------------------------------------------ */
 
-size_t d2k_qw_pn_len(uint64_t pn, int64_t largest_acked) {
+size_t d2s_qw_pn_len(uint64_t pn, int64_t largest_acked) {
     /* Дословно алгоритм RFC 9000 A.2, а не «на глаз».
        num_unacked НЕ удваивается: требование «покрыть вдвое больший диапазон»
        выполняется добавлением ОДНОГО бита к длине числа, и именно так оно
@@ -292,7 +292,7 @@ size_t d2k_qw_pn_len(uint64_t pn, int64_t largest_acked) {
     return bytes;
 }
 
-uint64_t d2k_qw_pn_decode(uint64_t largest_pn, uint64_t truncated, size_t pn_len) {
+uint64_t d2s_qw_pn_decode(uint64_t largest_pn, uint64_t truncated, size_t pn_len) {
     /* Дословно алгоритм RFC 9000 A.3. Своими словами его пересказывать
        нельзя: «дополнить нулями» верно только в самом начале соединения, а
        дальше даёт номер из прошлого и провал расшифровки. */
@@ -314,23 +314,23 @@ uint64_t d2k_qw_pn_decode(uint64_t largest_pn, uint64_t truncated, size_t pn_len
 
 /* --- ключи --------------------------------------------------------------- */
 
-int d2k_qw_initial_secret(uint32_t version, const uint8_t *dcid, size_t dcid_len,
-                          d2k_qw_side side, uint8_t out[32]) {
-    if (!dcid || !out || dcid_len > D2K_QW_CID_MAX) { return -1; }
+int d2s_qw_initial_secret(uint32_t version, const uint8_t *dcid, size_t dcid_len,
+                          d2s_qw_side side, uint8_t out[32]) {
+    if (!dcid || !out || dcid_len > D2S_QW_CID_MAX) { return -1; }
     uint8_t initial[32];
-    d2k_hkdf_extract(salt_for(version), D2K_QW_SALT_LEN, dcid, dcid_len, initial);
+    d2s_hkdf_extract(salt_for(version), D2S_QW_SALT_LEN, dcid, dcid_len, initial);
     /* Метки уровня общие для обеих версий: RFC 9369 меняет только защиту. */
-    return d2k_hkdf_expand_label(initial, side == D2K_QW_SERVER ? "server in" : "client in",
+    return d2s_hkdf_expand_label(initial, side == D2S_QW_SERVER ? "server in" : "client in",
                                  out, 32);
 }
 
-int d2k_qw_keys_from_secret(uint32_t version, const uint8_t secret[32],
-                            d2k_qw_keys *out) {
+int d2s_qw_keys_from_secret(uint32_t version, const uint8_t secret[32],
+                            d2s_qw_keys *out) {
     if (!secret || !out) { return -1; }
     memset(out, 0, sizeof *out);
-    if (d2k_hkdf_expand_label(secret, label_key(version), out->key, sizeof out->key) != 0 ||
-        d2k_hkdf_expand_label(secret, label_iv(version), out->iv, sizeof out->iv) != 0 ||
-        d2k_hkdf_expand_label(secret, label_hp(version), out->hp, sizeof out->hp) != 0) {
+    if (d2s_hkdf_expand_label(secret, label_key(version), out->key, sizeof out->key) != 0 ||
+        d2s_hkdf_expand_label(secret, label_iv(version), out->iv, sizeof out->iv) != 0 ||
+        d2s_hkdf_expand_label(secret, label_hp(version), out->hp, sizeof out->hp) != 0) {
         return -1;
     }
     out->have = 1;
@@ -348,7 +348,7 @@ static void nonce_of(const uint8_t iv[12], uint64_t pn, uint8_t out[12]) {
     }
 }
 
-size_t d2k_qw_seal(const d2k_qw_keys *k, int long_hdr,
+size_t d2s_qw_seal(const d2s_qw_keys *k, int long_hdr,
                    const uint8_t *hdr, size_t hdr_len,
                    uint64_t pn, size_t pn_len,
                    const uint8_t *payload, size_t payload_len,
@@ -376,7 +376,7 @@ size_t d2k_qw_seal(const d2k_qw_keys *k, int long_hdr,
     size_t aad_len = hdr_len + pn_len;
     /* Тег кладётся СРАЗУ за шифртекстом — так он лежит и на проводе
        (RFC 9001 §5.3: «AEAD output» это ct||tag). */
-    if (d2k_aes128_gcm_encrypt(k->key, nonce, out, aad_len,
+    if (d2s_aes128_gcm_encrypt(k->key, nonce, out, aad_len,
                                payload, payload_len,
                                out + aad_len, out + aad_len + payload_len) != 0) {
         return 0;
@@ -385,7 +385,7 @@ size_t d2k_qw_seal(const d2k_qw_keys *k, int long_hdr,
     /* Защита заголовка наводится ПОСЛЕ шифрования: сэмпл берётся из уже
        зашифрованного (RFC 9001 §5.4.2). */
     uint8_t mask[16];
-    d2k_aes128_ecb(k->hp, out + hdr_len + 4, mask);
+    d2s_aes128_ecb(k->hp, out + hdr_len + 4, mask);
     out[0] = (uint8_t)(out[0] ^ (mask[0] & (long_hdr ? 0x0f : 0x1f)));
     for (size_t i = 0; i < pn_len; i++) {
         out[hdr_len + i] = (uint8_t)(out[hdr_len + i] ^ mask[1 + i]);
@@ -393,15 +393,15 @@ size_t d2k_qw_seal(const d2k_qw_keys *k, int long_hdr,
     return total;
 }
 
-int d2k_qw_open(const d2k_qw_keys *k, const d2k_qw_hdr *h,
+int d2s_qw_open(const d2s_qw_keys *k, const d2s_qw_hdr *h,
                 const uint8_t *p, uint64_t largest_pn,
                 uint8_t *plain, size_t *plain_len, uint64_t *pn_out) {
     if (!k || !k->have || !h || !p || !plain || !plain_len) { return -1; }
-    if (h->long_hdr && h->type == D2K_QW_LT_RETRY) { return -1; }
+    if (h->long_hdr && h->type == D2S_QW_LT_RETRY) { return -1; }
 
     size_t sample_off = h->pn_offset + 4;
     uint8_t mask[16];
-    d2k_aes128_ecb(k->hp, p + sample_off, mask);
+    d2s_aes128_ecb(k->hp, p + sample_off, mask);
 
     uint8_t byte0 = (uint8_t)(p[0] ^ (mask[0] & (h->long_hdr ? 0x0f : 0x1f)));
     size_t pn_len = (size_t)(byte0 & 0x03) + 1;
@@ -422,10 +422,10 @@ int d2k_qw_open(const d2k_qw_keys *k, const d2k_qw_hdr *h,
 
     uint64_t truncated = 0;
     for (size_t i = 0; i < pn_len; i++) { truncated = (truncated << 8) | pn_bytes[i]; }
-    uint64_t pn = d2k_qw_pn_decode(largest_pn, truncated, pn_len);
+    uint64_t pn = d2s_qw_pn_decode(largest_pn, truncated, pn_len);
 
     size_t aad_len = h->pn_offset + pn_len;
-    uint8_t aad[D2K_QW_MAX_DGRAM];
+    uint8_t aad[D2S_QW_MAX_DGRAM];
     if (aad_len > sizeof aad) { return -1; }
     memcpy(aad, p, aad_len);
     aad[0] = byte0;
@@ -433,7 +433,7 @@ int d2k_qw_open(const d2k_qw_keys *k, const d2k_qw_hdr *h,
 
     uint8_t nonce[12];
     nonce_of(k->iv, pn, nonce);
-    if (d2k_aes128_gcm_decrypt(k->key, nonce, aad, aad_len,
+    if (d2s_aes128_gcm_decrypt(k->key, nonce, aad, aad_len,
                                p + h->pn_offset + pn_len, ct_len, plain) != 0) {
         return -1;
     }
@@ -451,14 +451,14 @@ int d2k_qw_open(const d2k_qw_keys *k, const d2k_qw_hdr *h,
 
 /* --- Retry ---------------------------------------------------------------- */
 
-int d2k_qw_retry_verify(uint32_t version, const uint8_t *odcid, size_t odcid_len,
+int d2s_qw_retry_verify(uint32_t version, const uint8_t *odcid, size_t odcid_len,
                         const uint8_t *retry, size_t retry_len) {
-    if (!odcid || !retry || odcid_len > D2K_QW_CID_MAX) { return -1; }
-    if (retry_len < 17 || retry_len + 1 + odcid_len > D2K_QW_MAX_DGRAM) { return -1; }
+    if (!odcid || !retry || odcid_len > D2S_QW_CID_MAX) { return -1; }
+    if (retry_len < 17 || retry_len + 1 + odcid_len > D2S_QW_MAX_DGRAM) { return -1; }
 
     /* Псевдопакет: длина исходного DCID, он сам, затем весь Retry без
        последних шестнадцати байт метки (RFC 9001 §5.8). */
-    uint8_t pseudo[D2K_QW_MAX_DGRAM];
+    uint8_t pseudo[D2S_QW_MAX_DGRAM];
     size_t o = 0;
     pseudo[o++] = (uint8_t)odcid_len;
     memcpy(pseudo + o, odcid, odcid_len); o += odcid_len;
@@ -466,9 +466,9 @@ int d2k_qw_retry_verify(uint32_t version, const uint8_t *odcid, size_t odcid_len
     memcpy(pseudo + o, retry, body); o += body;
 
     uint8_t tag[16];
-    const uint8_t *key = version == D2K_QW_V2 ? retry_key_v2 : retry_key_v1;
-    const uint8_t *nonce = version == D2K_QW_V2 ? retry_nonce_v2 : retry_nonce_v1;
-    if (d2k_aes128_gcm_encrypt(key, nonce, pseudo, o, NULL, 0, NULL, tag) != 0) {
+    const uint8_t *key = version == D2S_QW_V2 ? retry_key_v2 : retry_key_v1;
+    const uint8_t *nonce = version == D2S_QW_V2 ? retry_nonce_v2 : retry_nonce_v1;
+    if (d2s_aes128_gcm_encrypt(key, nonce, pseudo, o, NULL, 0, NULL, tag) != 0) {
         return -1;
     }
     /* Сравнение за постоянное время: метка — аутентификатор, и утечка через
@@ -478,14 +478,14 @@ int d2k_qw_retry_verify(uint32_t version, const uint8_t *odcid, size_t odcid_len
     return diff == 0 ? 0 : -1;
 }
 
-size_t d2k_qw_retry_build(uint8_t *out, size_t cap, uint32_t version,
+size_t d2s_qw_retry_build(uint8_t *out, size_t cap, uint32_t version,
                           const uint8_t *odcid, size_t odcid_len,
                           const uint8_t *dcid, size_t dcid_len,
                           const uint8_t *scid, size_t scid_len,
                           const uint8_t *token, size_t token_len) {
     if (!out || !odcid || !dcid || !scid || (token_len && !token) ||
-        odcid_len > D2K_QW_CID_MAX || dcid_len > D2K_QW_CID_MAX ||
-        scid_len > D2K_QW_CID_MAX || token_len > D2K_QW_MAX_DGRAM) {
+        odcid_len > D2S_QW_CID_MAX || dcid_len > D2S_QW_CID_MAX ||
+        scid_len > D2S_QW_CID_MAX || token_len > D2S_QW_MAX_DGRAM) {
         return 0;
     }
     /* Retry has no Length field and no packet number.  Its fixed header is
@@ -493,10 +493,10 @@ size_t d2k_qw_retry_build(uint8_t *out, size_t cap, uint32_t version,
        constructor, which would insert a token-length varint in the wrong
        place. */
     size_t body = 1 + 4 + 1 + dcid_len + 1 + scid_len + token_len;
-    if (body + 16 > cap || body + 16 + 1 + odcid_len > D2K_QW_MAX_DGRAM) {
+    if (body + 16 > cap || body + 16 + 1 + odcid_len > D2S_QW_MAX_DGRAM) {
         return 0;
     }
-    uint8_t wire_type = long_type_wire(version, D2K_QW_LT_RETRY);
+    uint8_t wire_type = long_type_wire(version, D2S_QW_LT_RETRY);
     size_t o = 0;
     out[o++] = (uint8_t)(0xc0 | (uint8_t)(wire_type << 4));
     out[o++] = (uint8_t)(version >> 24); out[o++] = (uint8_t)(version >> 16);
@@ -506,14 +506,14 @@ size_t d2k_qw_retry_build(uint8_t *out, size_t cap, uint32_t version,
     if (token_len) { memcpy(out + o, token, token_len); o += token_len; }
 
     /* Integrity input is ODCID length || ODCID || Retry without tag. */
-    uint8_t pseudo[D2K_QW_MAX_DGRAM];
+    uint8_t pseudo[D2S_QW_MAX_DGRAM];
     size_t po = 0;
     pseudo[po++] = (uint8_t)odcid_len;
     memcpy(pseudo + po, odcid, odcid_len); po += odcid_len;
     memcpy(pseudo + po, out, o); po += o;
-    const uint8_t *key = version == D2K_QW_V2 ? retry_key_v2 : retry_key_v1;
-    const uint8_t *nonce = version == D2K_QW_V2 ? retry_nonce_v2 : retry_nonce_v1;
-    if (d2k_aes128_gcm_encrypt(key, nonce, pseudo, po, NULL, 0, NULL,
+    const uint8_t *key = version == D2S_QW_V2 ? retry_key_v2 : retry_key_v1;
+    const uint8_t *nonce = version == D2S_QW_V2 ? retry_nonce_v2 : retry_nonce_v1;
+    if (d2s_aes128_gcm_encrypt(key, nonce, pseudo, po, NULL, 0, NULL,
                                out + o) != 0) {
         return 0;
     }
@@ -522,11 +522,11 @@ size_t d2k_qw_retry_build(uint8_t *out, size_t cap, uint32_t version,
 
 /* --- принятые байты одного потока ---------------------------------------- */
 
-void d2k_qw_ranges_reset(d2k_qw_ranges *r) {
+void d2s_qw_ranges_reset(d2s_qw_ranges *r) {
     if (r) { memset(r, 0, sizeof *r); }
 }
 
-void d2k_qw_ranges_add(d2k_qw_ranges *r, uint64_t off, uint64_t len, int fin) {
+void d2s_qw_ranges_add(d2s_qw_ranges *r, uint64_t off, uint64_t len, int fin) {
     if (!r) { return; }
     uint64_t end = off + len;
     if (end < off) { return; } /* переполнение — не наш кадр */
@@ -543,7 +543,7 @@ void d2k_qw_ranges_add(d2k_qw_ranges *r, uint64_t off, uint64_t len, int fin) {
         j++;
     }
     if (j == i) {
-        if (r->n == D2K_QW_RANGES_MAX) { return; }
+        if (r->n == D2S_QW_RANGES_MAX) { return; }
         memmove(&r->start[i + 1], &r->start[i], (r->n - i) * sizeof r->start[0]);
         memmove(&r->end[i + 1], &r->end[i], (r->n - i) * sizeof r->end[0]);
         r->n++;
@@ -557,13 +557,13 @@ void d2k_qw_ranges_add(d2k_qw_ranges *r, uint64_t off, uint64_t len, int fin) {
     r->end[i] = e;
 }
 
-uint64_t d2k_qw_ranges_bytes(const d2k_qw_ranges *r) {
+uint64_t d2s_qw_ranges_bytes(const d2s_qw_ranges *r) {
     uint64_t sum = 0;
     for (size_t i = 0; r && i < r->n; i++) { sum += r->end[i] - r->start[i]; }
     return sum;
 }
 
-int d2k_qw_ranges_complete(const d2k_qw_ranges *r) {
+int d2s_qw_ranges_complete(const d2s_qw_ranges *r) {
     if (!r || !r->fin) { return 0; }
     /* Пустой поток с FIN — не ответ: ни заголовков, ни тела (раунд 2). */
     if (r->fin_off == 0) { return 0; }

@@ -2,18 +2,18 @@ CC ?= cc
 CFLAGS ?= -O2 -g
 CFLAGS += -std=c11 -Wall -Wextra -Werror -pedantic
 RELEASE_ID ?= dev
-CPPFLAGS += -D_POSIX_C_SOURCE=200809L -Iinclude -DD2K_RELEASE_ID='"$(RELEASE_ID)"'
+CPPFLAGS += -D_POSIX_C_SOURCE=200809L -Iinclude -DD2S_RELEASE_ID='"$(RELEASE_ID)"'
 BUILD_DIR ?= build
 OPENSSL_CFLAGS ?= $(shell pkg-config --cflags openssl 2>/dev/null)
 OPENSSL_LIBS ?= $(shell pkg-config --libs openssl 2>/dev/null || echo -lssl -lcrypto)
 ZLIB_LIBS ?= -lz
 
-.PHONY: test san test-ws test-tls test-config test-enroll test-identity test-mtproto test-mtproto-probe test-mtproto-splitter test-mtproto-auth test-mtproto-encrypted test-mtproto-config test-listener test-dc-map test-dc-map-json test-dc-map-store test-cf-domains test-route-plan test-route-dns test-limits test-memory-budget test-epoll-proxy test-transparent clean arm64 d2ktg
+.PHONY: test san test-ws test-tls test-config test-enroll test-identity test-mtproto test-mtproto-probe test-mtproto-splitter test-mtproto-auth test-mtproto-encrypted test-mtproto-config test-listener test-dc-map test-dc-map-json test-dc-map-store test-cf-domains test-route-plan test-route-dns test-limits test-memory-budget test-epoll-proxy test-transparent clean arm64 d2stg
 
 test: test-ws test-tls test-config test-enroll test-identity test-mtproto test-mtproto-probe test-mtproto-splitter test-mtproto-auth test-mtproto-encrypted test-mtproto-config test-listener test-dc-map test-dc-map-json test-dc-map-store test-cf-domains test-route-plan test-route-dns test-limits test-memory-budget test-epoll-proxy test-transparent
 
 san:
-	$(MAKE) BUILD_DIR=build/san CFLAGS='-O1 -g -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer' test d2ktg
+	$(MAKE) BUILD_DIR=build/san CFLAGS='-O1 -g -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer' test d2stg
 
 test-mtproto-auth: $(BUILD_DIR)/test-mtproto-auth
 	./$(BUILD_DIR)/test-mtproto-auth
@@ -151,10 +151,10 @@ test-tls: $(BUILD_DIR)/test-tls
 test-config: $(BUILD_DIR)/test-config
 	./$(BUILD_DIR)/test-config
 
-d2ktg: $(BUILD_DIR)/d2ktg
+d2stg: $(BUILD_DIR)/d2stg
 
 
-$(BUILD_DIR)/d2ktg: ../runtime/d2k_runtime.h ../runtime/d2k_protocol.h src/main.c src/config.c src/tls.c src/ws.c src/ws_pump.c src/memory_budget.c src/net.c src/listener.c src/mtproto_crypto.c src/mtproto_encrypted.c src/mtproto_config.c src/mtproto_probe.c src/mtproto_auth.c src/mtproto_auth_keys.inc src/mtproto_splitter.c src/dc_map.c src/dc_map_json.c src/dc_map_store.c src/cf_domains.c src/route_plan.c src/route_dns.c src/limits.c src/epoll_proxy.c src/transparent.c src/stats_socket.c include/tg_limits.h include/tg_mtproto_auth.h include/tg_mtproto_discovery.h include/tg_tls.h include/tg_ws.h include/tg_mtproto.h include/tg_cf_domains.h include/tg_route_plan.h include/tg_route_dns.h include/tg_stats_socket.h include/tg_memory_budget.h
+$(BUILD_DIR)/d2stg: ../runtime/d2s_runtime.h ../runtime/d2s_protocol.h src/main.c src/config.c src/tls.c src/ws.c src/ws_pump.c src/memory_budget.c src/net.c src/listener.c src/mtproto_crypto.c src/mtproto_encrypted.c src/mtproto_config.c src/mtproto_probe.c src/mtproto_auth.c src/mtproto_auth_keys.inc src/mtproto_splitter.c src/dc_map.c src/dc_map_json.c src/dc_map_store.c src/cf_domains.c src/route_plan.c src/route_dns.c src/limits.c src/epoll_proxy.c src/transparent.c src/stats_socket.c include/tg_limits.h include/tg_mtproto_auth.h include/tg_mtproto_discovery.h include/tg_tls.h include/tg_ws.h include/tg_mtproto.h include/tg_cf_domains.h include/tg_route_plan.h include/tg_route_dns.h include/tg_stats_socket.h include/tg_memory_budget.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(OPENSSL_CFLAGS) $(CFLAGS) -pthread -o $@ $(filter %.c,$^) $(OPENSSL_LIBS) $(ZLIB_LIBS)
 
@@ -183,7 +183,7 @@ clean:
 .PHONY: gcc-warn
 gcc-warn:
 	$(MAKE) clean
-	$(MAKE) CC=gcc test d2ktg
+	$(MAKE) CC=gcc test d2stg
 
 .PHONY: test-identity
 test-identity: $(BUILD_DIR)/test-identity

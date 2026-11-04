@@ -1,5 +1,5 @@
-#ifndef D2K_TG_ROUTE_DNS_H
-#define D2K_TG_ROUTE_DNS_H
+#ifndef D2S_TG_ROUTE_DNS_H
+#define D2S_TG_ROUTE_DNS_H
 
 #include "tg_listener.h"
 

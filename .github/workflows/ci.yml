@@ -60,7 +60,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       # One list for CI and scripts/check.sh, kept in scripts/lint-shell.sh.
-      # It also covers the extensionless scripts in files/ (S99d2k and the
+      # It also covers the extensionless scripts in files/ (S99d2s and the
       # rest), which a *.sh glob misses.
       - name: shellcheck
         run: sh scripts/lint-shell.sh
@@ -124,7 +124,7 @@ jobs:
           sha256: ${{ env.ZIG_SHA256 }}
           mips64el-version: ${{ env.ZIG_MIPS64EL_VERSION }}
           mips64el-sha256: ${{ env.ZIG_MIPS64EL_SHA256 }}
-      - name: Build d2kd, d2kc, d2kfetch and d2kpanel
+      - name: Build d2sd, d2sc, d2sfetch and d2spanel
         env:
           ARCH: ${{ matrix.arch }}
         run: |
@@ -234,9 +234,9 @@ jobs:
       - name: Install tools
         run: sudo apt-get update -qq && sudo apt-get install -y -qq busybox
       # Integration tests run against built code, not source. The controller
-      # handshake test starts the real core/d2kc.
+      # handshake test starts the real core/d2sc.
       - name: Build the controller
-        run: make -C core d2kc
+        run: make -C core d2sc
       # Every scripts/test-* runs. A hand-picked list drifts away from the
       # tree; discovery does not. All tests run even after a failure, and
       # every failure is named at the end: stopping at the first one hides the
@@ -277,7 +277,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      D2K_CHROME_NO_SANDBOX: '1'
+      D2S_CHROME_NO_SANDBOX: '1'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -290,15 +290,15 @@ jobs:
         with:
           chrome-version: stable
       - name: Build the panel
-        run: make -C panel d2kpanel
+        run: make -C panel d2spanel
       - name: Rendering, controls and layout
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
-          D2K_CAPTURE_DIR: ${{ runner.temp }}/panel-browser
+          D2S_CAPTURE_DIR: ${{ runner.temp }}/panel-browser
         run: |
           set -euo pipefail
-          mkdir -p "$D2K_CAPTURE_DIR"
-          node panel/test_browser.cjs 2>&1 | tee "$D2K_CAPTURE_DIR/browser.log"
+          mkdir -p "$D2S_CAPTURE_DIR"
+          node panel/test_browser.cjs 2>&1 | tee "$D2S_CAPTURE_DIR/browser.log"
       - name: Keep screenshots on failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

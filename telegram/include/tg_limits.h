@@ -1,5 +1,5 @@
-#ifndef D2K_TG_LIMITS_H
-#define D2K_TG_LIMITS_H
+#ifndef D2S_TG_LIMITS_H
+#define D2S_TG_LIMITS_H
 
 #include <stddef.h>
 

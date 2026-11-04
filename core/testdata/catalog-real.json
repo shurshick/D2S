@@ -23,7 +23,7 @@
         {
           "id": "plan-e2ebe9cd",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
           "added": "2026-09-06T04:08:02.8376028Z",
           "successes": 4,
           "enabled": true
@@ -31,7 +31,7 @@
         {
           "id": "plan-87bbf136",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
           "added": "2026-09-06T04:09:29.08957744Z",
           "successes": 48,
           "enabled": true
@@ -509,7 +509,7 @@
         {
           "id": "plan-e2ebe9cd",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
           "added": "2026-09-06T04:08:07.95694392Z",
           "successes": 110,
           "enabled": true
@@ -517,7 +517,7 @@
         {
           "id": "plan-8485f6d4",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
           "added": "2026-09-06T04:38:54.42539312Z",
           "successes": 1994,
           "enabled": true
@@ -525,7 +525,7 @@
         {
           "id": "plan-87bbf136",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
           "added": "2026-09-06T04:55:42.31193184Z",
           "successes": 68,
           "enabled": true
@@ -533,7 +533,7 @@
         {
           "id": "plan-16cf1120",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit hello_middle +0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit hello_middle +0\norder reverse\n",
           "added": "2026-09-06T07:30:55.75457464Z",
           "successes": 12,
           "enabled": true
@@ -541,7 +541,7 @@
         {
           "id": "plan-24ef7fca",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
           "added": "2026-09-06T14:23:04.02112216Z",
           "successes": 36,
           "enabled": true
@@ -549,7 +549,7 @@
         {
           "id": "plan-8aa11a82",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\nsplit sni_middle +0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\nsplit sni_middle +0\norder reverse\n",
           "added": "2026-09-06T20:09:17.10454456Z",
           "successes": 2,
           "enabled": true
@@ -557,7 +557,7 @@
         {
           "id": "plan-b8d4f81b",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
           "added": "2026-09-07T00:27:24.5012904Z",
           "successes": 1,
           "enabled": true
@@ -2858,7 +2858,7 @@
         {
           "id": "plan-e2ebe9cd",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npayload 2 41\npoison 1 badsum\nsplit hello_middle +0\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\nseqovl payload=2 poison=0\norder reverse\n",
           "added": "2026-09-06T04:08:26.14378408Z",
           "successes": 43,
           "enabled": true
@@ -2866,7 +2866,7 @@
         {
           "id": "plan-8485f6d4",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
           "added": "2026-09-06T04:14:10.40504488Z",
           "successes": 107,
           "enabled": true
@@ -2874,7 +2874,7 @@
         {
           "id": "plan-87bbf136",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41\nseqovl payload=1 poison=0\norder forward\n",
           "added": "2026-09-06T04:24:20.10444888Z",
           "successes": 5,
           "enabled": true
@@ -2882,7 +2882,7 @@
         {
           "id": "plan-16cf1120",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit hello_middle +0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit hello_middle +0\norder reverse\n",
           "added": "2026-09-06T22:16:09.13009384Z",
           "successes": 1,
           "enabled": true
@@ -2890,7 +2890,7 @@
         {
           "id": "plan-b8d4f81b",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
           "added": "2026-09-07T00:48:11.18775224Z",
           "successes": 2,
           "enabled": true
@@ -2898,7 +2898,7 @@
         {
           "id": "plan-24ef7fca",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 41414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141\npoison 1 badsum\nfake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n",
           "added": "2026-09-07T03:05:53.97156616Z",
           "successes": 2,
           "enabled": true
@@ -2906,7 +2906,7 @@
         {
           "id": "plan-8aa11a82",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\nsplit sni_middle +0\norder reverse\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\nsplit sni_middle +0\norder reverse\n",
           "added": "2026-09-07T05:46:28.68943888Z",
           "successes": 1,
           "enabled": true
@@ -3104,7 +3104,7 @@
         {
           "id": "plan-8485f6d4",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\npayload 1 16030100520100004e0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00000a130113021303c02bc02f0100001b00000010000e00000b6469736b2e727a642e7275002b0003020304\npoison 1 badsum\nfake payload=1 poison=1 repeats=2 gap_us=20000 place=before\norder forward\n",
           "added": "2026-09-07T00:30:39.875926Z",
           "successes": 1,
           "enabled": true
@@ -3141,7 +3141,7 @@
         {
           "id": "plan-8e1f58c7",
           "proto": "tls",
-          "text": "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\norder forward\n",
+          "text": "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\nsplit payload_start +1\norder forward\n",
           "added": "2026-09-07T06:23:09.78481168Z",
           "successes": 1,
           "enabled": true

@@ -2,8 +2,8 @@
  *
  * ОДНО РАСХОЖДЕНИЕ С ЭТАЛОНОМ, И ОНО НАМЕРЕННОЕ. Там приветствие берётся у
  * crypto/tls: поднимают клиента над трубой и забирают первую запись. Здесь
- * взять его негде и незачем — у d2k уже есть профили, СНЯТЫЕ С ЖИВОГО
- * БРАУЗЕРА (core/profiles/ — файлы .hex, см. их шапки и d2k_hello.h). Форма
+ * взять его негде и незачем — у d2s уже есть профили, СНЯТЫЕ С ЖИВОГО
+ * БРАУЗЕРА (core/profiles/ — файлы .hex, см. их шапки и d2s_hello.h). Форма
  * приветствия и есть измерительный инструмент: DPI решает по ней, и
  * самодельное приветствие мерило бы не ту коробку, что видит браузер.
  *
@@ -12,13 +12,13 @@
  * триггере, заданном шестнадцатеричной строкой обоим инструментам
  * (-raw у эталона, --raw здесь) — см. tests/compare.sh.
  */
-#include "d2k_detect.h"
-#include "d2k_hello.h"
+#include "d2s_detect.h"
+#include "d2s_hello.h"
 
 #include <stdio.h>
 #include <string.h>
 
-int d2k_trigger_tls(const char *sni, int legacy, d2k_trigger *out, char *err, size_t errcap)
+int d2s_trigger_tls(const char *sni, int legacy, d2s_trigger *out, char *err, size_t errcap)
 {
     size_t n = 0, off = 0, slen = 0;
 
@@ -27,7 +27,7 @@ int d2k_trigger_tls(const char *sni, int legacy, d2k_trigger *out, char *err, si
         snprintf(err, errcap, "classify: пустой SNI");
         return -1;
     }
-    if (d2k_hello_from_profile(legacy ? D2K_SHAPE_LEGACY : D2K_SHAPE_MODERN,
+    if (d2s_hello_from_profile(legacy ? D2S_SHAPE_LEGACY : D2S_SHAPE_MODERN,
                                sni, out->payload, sizeof(out->payload), &n) != 0) {
         snprintf(err, errcap, "classify: приветствие для «%s» не собралось", sni);
         return -1;
@@ -38,11 +38,11 @@ int d2k_trigger_tls(const char *sni, int legacy, d2k_trigger *out, char *err, si
     }
     out->len = n;
     snprintf(out->name, sizeof(out->name), "tls:%s", sni);
-    out->accept = D2K_ACCEPT_SERVERHELLO;
+    out->accept = D2S_ACCEPT_SERVERHELLO;
     /* Запоминаем, где в приветствии лежит имя: по нему режут, а не по
      * середине пакета. Координатами из разбора, а не поиском подстроки —
      * подстрока может случайно встретиться в шифре или в случайных полях. */
-    if (d2k_hello_sni(out->payload, n, &off, &slen) == 0) {
+    if (d2s_hello_sni(out->payload, n, &off, &slen) == 0) {
         out->sni_off = (int)off;
         out->sni_len = (int)slen;
     }
@@ -64,7 +64,7 @@ static int hexval(int c)
  * сюда как есть. Доказательством прохода тогда считается любой непустой ответ:
  * разбирать чужой протокол ради вердикта незачем, важно лишь, ответил сервер
  * или промолчал. */
-int d2k_trigger_raw_hex(const char *hex, d2k_trigger *out, char *err, size_t errcap)
+int d2s_trigger_raw_hex(const char *hex, d2s_trigger *out, char *err, size_t errcap)
 {
     size_t n = 0;
     int hi = -1;
@@ -103,7 +103,7 @@ int d2k_trigger_raw_hex(const char *hex, d2k_trigger *out, char *err, size_t err
     }
     out->len = n;
     snprintf(out->name, sizeof(out->name), "raw:%dB", (int)n);
-    out->accept = D2K_ACCEPT_ANY;
+    out->accept = D2S_ACCEPT_ANY;
     return 0;
 }
 
@@ -115,19 +115,19 @@ int d2k_trigger_raw_hex(const char *hex, d2k_trigger *out, char *err, size_t err
  * TLS, включая алерт: сервер, отвечающий отказом на незнакомое имя, — это всё
  * равно сервер, до которого дошли. А вот тишина означает, что до него не
  * дошло ничего, и тогда дело не в содержимом. */
-int d2k_trigger_control(const char *tag, d2k_trigger *out, char *err, size_t errcap)
+int d2s_trigger_control(const char *tag, d2s_trigger *out, char *err, size_t errcap)
 {
     char name[128];
     snprintf(name, sizeof(name), "probe-%s.invalid-control.example", tag);
-    if (d2k_trigger_tls(name, 0, out, err, errcap) != 0) {
+    if (d2s_trigger_tls(name, 0, out, err, errcap) != 0) {
         return -1;
     }
     snprintf(out->name, sizeof(out->name), "control");
-    out->accept = D2K_ACCEPT_TLSRECORD;
+    out->accept = D2S_ACCEPT_TLSRECORD;
     return 0;
 }
 
-const d2k_trigger *d2k_opts_decoy(const d2k_opts *o)
+const d2s_trigger *d2s_opts_decoy(const d2s_opts *o)
 {
     if (!o) {
         return NULL;
@@ -153,7 +153,7 @@ const d2k_trigger *d2k_opts_decoy(const d2k_opts *o)
  * чтение файла на каждый вопрос — лишняя работа в горячем пути. */
 static int host_ts_override = -1;
 
-void d2k_trigger_host_ts_override(int v) { host_ts_override = v; }
+void d2s_trigger_host_ts_override(int v) { host_ts_override = v; }
 
 static int host_offers_ts(void)
 {
@@ -177,7 +177,7 @@ static int host_offers_ts(void)
     return cached;
 }
 
-int d2k_trigger_offers_ts(const d2k_trigger *t)
+int d2s_trigger_offers_ts(const d2s_trigger *t)
 {
     if (!t || !t->client_tcp_known) {
         return host_offers_ts();
@@ -198,10 +198,10 @@ int d2k_trigger_offers_ts(const d2k_trigger *t)
     return 0;
 }
 
-int d2k_trigger_allows_poison(const d2k_trigger *t, const d2k_poison *p)
+int d2s_trigger_allows_poison(const d2s_trigger *t, const d2s_poison *p)
 {
     if (!p) {
         return 0;
     }
-    return !p->tcp_ts || d2k_trigger_offers_ts(t);
+    return !p->tcp_ts || d2s_trigger_offers_ts(t);
 }

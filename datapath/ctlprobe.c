@@ -1,7 +1,7 @@
 /* ctlprobe — стенд управляющего сокета.
  *
  * Поднимает НАСТОЯЩИЙ управляющий сокет с настоящим разбором команд
- * (d2k_ctlsrv_command) и настоящей сессией датапата. Отличие от d2kd ровно
+ * (d2s_ctlsrv_command) и настоящей сессией датапата. Отличие от d2sd ровно
  * одно: пакеты приходят не из NFQUEUE, а собираются здесь по командам со
  * stdin. Всё остальное — тот же код, что пойдёт на роутер.
  *
@@ -19,7 +19,7 @@
  *                 портом, что и последний hello/raw/quic, — нарочно, чтобы
  *                 проверить, что TCP- и UDP-поток с одинаковым адресом и
  *                 портом не путают состояние (ключ несёт транспорт, см.
- *                 d2k_key в d2k_track.h)
+ *                 d2s_key в d2s_track.h)
  *   plans         напечатать, сколько планов в таблице
  *   shape         напечатать, поймана ли форма приветствия
  *   quit
@@ -34,8 +34,8 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "d2k_ctl.h"
-#include "d2k_ctlsrv.h"
+#include "d2s_ctl.h"
+#include "d2s_ctlsrv.h"
 
 static void wr16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 static void wr32(uint8_t *p, uint32_t v) {
@@ -235,8 +235,8 @@ static size_t build_udp_pkt(uint8_t *o, uint16_t port, const uint8_t *pay, size_
 }
 
 int main(int argc, char **argv) {
-    /* Тот же приём, что в d2kd.c: сервер не имеет права умирать оттого, что
-       клиент отвалился между его записями. Понадобилось, когда d2k_props_ask
+    /* Тот же приём, что в d2sd.c: сервер не имеет права умирать оттого, что
+       клиент отвалился между его записями. Понадобилось, когда d2s_props_ask
        научилась снимать план (DEL_NAME) по итогу полного промаха: утилита
        шлёт команду и почти сразу закрывает сокет, а ctlprobe в этот момент
        пишет ей подтверждение — до этой строки он на том и умирал, унося с
@@ -247,25 +247,25 @@ int main(int argc, char **argv) {
         return 2;
     }
     char err[200];
-    d2k_ctl *ctl = d2k_ctl_open(argv[1], err, sizeof err);
+    d2s_ctl *ctl = d2s_ctl_open(argv[1], err, sizeof err);
     if (!ctl) {
         fprintf(stderr, "сокет: %s\n", err);
         return 1;
     }
-    d2k_session *sess = d2k_session_new(64, 128);
+    d2s_session *sess = d2s_session_new(64, 128);
     if (!sess) {
         fprintf(stderr, "нет памяти\n");
         return 1;
     }
 
-    d2k_ctlsrv cx;
+    d2s_ctlsrv cx;
     memset(&cx, 0, sizeof cx);
     cx.sess = sess;
     cx.ctl = ctl;
-    d2k_ctl_set_disconnect_hook(ctl, d2k_ctlsrv_peer_closed, &cx);
+    d2s_ctl_set_disconnect_hook(ctl, d2s_ctlsrv_peer_closed, &cx);
     /* Пределы как у сырого сокета: стенд обязан отвергать те же планы, что и
        служба, иначе он проверял бы не то. */
-    cx.send_limits = D2K_RAW_CANT_IPID | D2K_RAW_CANT_IPSUM;
+    cx.send_limits = D2S_RAW_CANT_IPID | D2S_RAW_CANT_IPSUM;
 
     uint64_t seen = 0;
     uint64_t now = 1000;
@@ -280,8 +280,8 @@ int main(int argc, char **argv) {
         struct pollfd p[3];
         nfds_t n = 0;
         p[n].fd = 0; p[n].events = POLLIN; p[n].revents = 0; n++;
-        p[n].fd = d2k_ctl_listen_fd(ctl); p[n].events = POLLIN; p[n].revents = 0; n++;
-        int peer = d2k_ctl_peer_fd(ctl);
+        p[n].fd = d2s_ctl_listen_fd(ctl); p[n].events = POLLIN; p[n].revents = 0; n++;
+        int peer = d2s_ctl_peer_fd(ctl);
         nfds_t ip = (nfds_t)-1;
         if (peer >= 0) {
             p[n].fd = peer; p[n].events = POLLIN; p[n].revents = 0; ip = n; n++;
@@ -290,19 +290,19 @@ int main(int argc, char **argv) {
             break;
         }
         if (p[1].revents & POLLIN) {
-            d2k_ctl_accept(ctl);
+            d2s_ctl_accept(ctl);
             /* Версия провода — первым делом, до любых других событий. */
-            d2k_ctlsrv_greet(ctl, 0u);   /* стенд без сырого сокета: предела нет */
+            d2s_ctlsrv_greet(ctl, 0u);   /* стенд без сырого сокета: предела нет */
         }
         if (ip != (nfds_t)-1 && (p[ip].revents & (POLLIN | POLLHUP))) {
             /* Тот же счётчик, что метит симулированные пакеты ниже: единые
-               монотонные часы для вытеснения в таблице планов (d2k_plans.h)
+               монотонные часы для вытеснения в таблице планов (d2s_plans.h)
                и для остального стенда, а не два независимых источника
                времени в одном процессе. */
             cx.now_ns = now++;
-            d2k_ctl_poll(ctl, d2k_ctlsrv_command, &cx);
+            d2s_ctl_poll(ctl, d2s_ctlsrv_command, &cx);
         }
-        d2k_ctl_flush(ctl);
+        d2s_ctl_flush(ctl);
 
         if (p[0].revents & (POLLIN | POLLHUP)) {
             char line[512];
@@ -311,7 +311,7 @@ int main(int argc, char **argv) {
             }
             line[strcspn(line, "\r\n")] = '\0';
             uint8_t pkt[2048], buf[4096];
-            d2k_result r;
+            d2s_result r;
             memset(&r, 0, sizeof r);
 
             if (strncmp(line, "hello ", 6) == 0) {
@@ -321,11 +321,11 @@ int main(int argc, char **argv) {
                 /* Рукопожатие целиком: SYN, SYN-ACK, приветствие. Без SYN-ACK
                    защите не от чего отсчитывать ориентир. */
                 size_t sz = build_pkt(pkt, 0, port, 0x02, 64, NULL, 0);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 sz = build_pkt(pkt, 1, port, 0x12, 124, NULL, 0);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 sz = build_pkt(pkt, 0, port, 0x18, 64, hello, hl);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 printf("hello %s: посылок %zu, пропуск %s\n", line + 6, r.n_out,
                        r.skipped ? r.skipped : "нет");
             } else if (strcmp(line, "quic") == 0) {
@@ -333,13 +333,13 @@ int main(int argc, char **argv) {
                    переиспользовать порт последнего hello/raw/quic и создать
                    TCP- и UDP-поток с ОДИНАКОВЫМ адресом и портом — тот самый
                    случай гонки QUIC/TCP у браузера, который и потребовал
-                   транспорт в ключе (см. шапку файла и d2k_key). */
+                   транспорт в ключе (см. шапку файла и d2s_key). */
                 size_t sz = build_udp_pkt(pkt, port, v1_initial, sizeof v1_initial);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 printf("quic: посылок %zu, пропуск %s, приветствий %llu, с именем %llu\n",
                        r.n_out, r.skipped ? r.skipped : "нет",
-                       (unsigned long long)d2k_session_hellos(sess),
-                       (unsigned long long)d2k_session_with_sni(sess));
+                       (unsigned long long)d2s_session_hellos(sess),
+                       (unsigned long long)d2s_session_with_sni(sess));
             } else if (strncmp(line, "raw ", 4) == 0) {
                 /* Произвольные байты как нагрузка клиента. Нужно, чтобы
                    проверить приманку, собранную на Go, ТЕМ ЖЕ разборщиком,
@@ -364,14 +364,14 @@ int main(int argc, char **argv) {
                 }
                 port++;
                 size_t sz = build_pkt(pkt, 0, port, 0x02, 64, NULL, 0);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 sz = build_pkt(pkt, 1, port, 0x12, 124, NULL, 0);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 sz = build_pkt(pkt, 0, port, 0x18, 64, pay, pl);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 printf("raw %zu байт: приветствий %llu, с именем %llu\n", pl,
-                       (unsigned long long)d2k_session_hellos(sess),
-                       (unsigned long long)d2k_session_with_sni(sess));
+                       (unsigned long long)d2s_session_hellos(sess),
+                       (unsigned long long)d2s_session_with_sni(sess));
             } else if (strncmp(line, "reply ", 6) == 0) {
                 uint8_t rec[64];
                 memset(rec, 0, sizeof rec);
@@ -382,7 +382,7 @@ int main(int argc, char **argv) {
                     /* Запись рукопожатия обязана нести НАСТОЯЩИЙ ServerHello,
                        иначе "reply 22" изображает ответ сервера, которого не
                        было: приёмка вопроса разбирает содержимое, а не тип
-                       записи (d2k_tls.h). Тип сообщения 0x02 и длина 38 —
+                       записи (d2s_tls.h). Тип сообщения 0x02 и длина 38 —
                        минимальное тело ServerHello (RFC 8446 §4.1.3), и оно
                        укладывается в обещанные записью 42 байта (4 байта
                        заголовка рукопожатия + 38). */
@@ -390,21 +390,21 @@ int main(int argc, char **argv) {
                     rec[6] = 0x00; rec[7] = 0x00; rec[8] = 0x26;
                 }
                 size_t sz = build_pkt(pkt, 1, port, 0x18, 124, rec, sizeof rec);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 printf("reply: обменов %llu\n",
-                       (unsigned long long)d2k_session_exchanges(sess));
+                       (unsigned long long)d2s_session_exchanges(sess));
             } else if (strcmp(line, "rst") == 0) {
                 size_t sz = build_pkt(pkt, 1, port, 0x14, 127, NULL, 0);
-                d2k_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
+                d2s_session_packet(sess, pkt, sz, now++, buf, sizeof buf, &r);
                 printf("rst: вердикт %s\n",
-                       r.verdict == D2K_VERDICT_DROP ? "снять" : "пропустить");
+                       r.verdict == D2S_VERDICT_DROP ? "снять" : "пропустить");
             } else if (strcmp(line, "shape") == 0) {
                 size_t sl = 0;
-                const uint8_t *sh = d2k_session_shape(sess, 6, &sl);
+                const uint8_t *sh = d2s_session_shape(sess, 6, &sl);
                 printf("shape: %zu байт\n", sh ? sl : (size_t)0);
             } else if (strcmp(line, "plans") == 0) {
                 printf("planов %zu, команд принято %llu, отвергнуто %llu\n",
-                       d2k_session_plan_count(sess),
+                       d2s_session_plan_count(sess),
                        (unsigned long long)cx.ok_cmds,
                        (unsigned long long)cx.bad_cmds);
             } else if (strcmp(line, "quit") == 0) {
@@ -415,17 +415,17 @@ int main(int argc, char **argv) {
             /* Laboratory transport: simulate every send plus original verdict. */
             if (r.applied) {
                 for (size_t i = 0; i <= r.n_out; i++) {
-                    d2k_session_sent(sess, now++, &r.key, r.execution_id);
+                    d2s_session_sent(sess, now++, &r.key, r.execution_id);
                 }
             }
-            d2k_ctlsrv_pump(ctl, sess, &seen);
-            d2k_ctl_flush(ctl);
+            d2s_ctlsrv_pump(ctl, sess, &seen);
+            d2s_ctl_flush(ctl);
         }
-        d2k_ctlsrv_pump(ctl, sess, &seen);
-        d2k_ctl_flush(ctl);
+        d2s_ctlsrv_pump(ctl, sess, &seen);
+        d2s_ctl_flush(ctl);
     }
 
-    d2k_session_free(sess);
-    d2k_ctl_close(ctl);
+    d2s_session_free(sess);
+    d2s_ctl_close(ctl);
     return 0;
 }

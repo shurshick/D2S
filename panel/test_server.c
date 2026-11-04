@@ -18,14 +18,14 @@
 
 typedef struct {
     int fd;
-    const d2k_panel_config *cfg;
+    const d2s_panel_config *cfg;
 } server_call;
 
-static void wait_action_done(const d2k_panel_config *cfg);
+static void wait_action_done(const d2s_panel_config *cfg);
 
 static void *serve_thread(void *arg) {
     server_call *call = arg;
-    (void)d2k_panel_handle_fd(call->fd, call->cfg);
+    (void)d2s_panel_handle_fd(call->fd, call->cfg);
     close(call->fd);
     return NULL;
 }
@@ -48,7 +48,7 @@ static void send_request(int fd, const char *s) {
     }
 }
 
-static size_t request(const d2k_panel_config *cfg, const char *req,
+static size_t request(const d2s_panel_config *cfg, const char *req,
                       char *response, size_t cap) {
     int sv[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
@@ -84,11 +84,11 @@ static void rewrite_file(const char *path,const char *contents) {
 }
 
 static void test_api_exposes_live_knowledge(void) {
-    char live[] = "/tmp/d2k-panel-live.XXXXXX";
+    char live[] = "/tmp/d2s-panel-live.XXXXXX";
     write_temp_file(live, "{\"linked\":true,\"link_note\":\"\",\"boxes\":[],\"searches\":[],\"targets\":0,\"confirms\":0,\"probes_used\":0,\"client_unfit\":0}");
 
     static const char *unknown[] = { "FUTURE_OPTION" };
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = live,
         .asset_dir = "panel/assets",
         .version = "test-version",
@@ -96,8 +96,8 @@ static void test_api_exposes_live_knowledge(void) {
         .built = "2026-09-27T00:00:00Z",
         .mode = "observe",
         .panel_listen = "127.0.0.1:8090",
-        .config_path = "/tmp/d2k/config",
-        .state_dir = "/tmp/d2k/state",
+        .config_path = "/tmp/d2s/config",
+        .state_dir = "/tmp/d2s/state",
         .state_dir_note = "есть",
         .unknown_keys = unknown,
         .unknown_key_count = 1,
@@ -120,8 +120,8 @@ static void test_api_exposes_live_knowledge(void) {
     assert(strstr(response, "\"groups\":[") != NULL);
     assert(strstr(response, "clean.googlevideo.com") != NULL);
     assert(strstr(response, "Content-Security-Policy:") != NULL);
-    cfg.engine_pid_path = "/tmp/d2k-panel-no-such-engine.pid";
-    cfg.controller_pid_path = "/tmp/d2k-panel-no-such-controller.pid";
+    cfg.engine_pid_path = "/tmp/d2s-panel-no-such-engine.pid";
+    cfg.controller_pid_path = "/tmp/d2s-panel-no-such-controller.pid";
     (void)request(&cfg, "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n",
                   response, sizeof response);
     assert(strstr(response, "\"engine_running\":false") != NULL);
@@ -140,9 +140,9 @@ static void test_api_exposes_live_knowledge(void) {
 }
 
 static void test_invalid_live_json_is_not_reported_as_empty_knowledge(void) {
-    char live[] = "/tmp/d2k-panel-invalid.XXXXXX";
+    char live[] = "/tmp/d2s-panel-invalid.XXXXXX";
     write_temp_file(live, "{broken json}");
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = live,
         .asset_dir = "panel/assets",
         .version = "test-version",
@@ -150,8 +150,8 @@ static void test_invalid_live_json_is_not_reported_as_empty_knowledge(void) {
         .built = "2026-09-27T00:00:00Z",
         .mode = "observe",
         .panel_listen = "127.0.0.1:8090",
-        .config_path = "/tmp/d2k/config",
-        .state_dir = "/tmp/d2k/state",
+        .config_path = "/tmp/d2s/config",
+        .state_dir = "/tmp/d2s/state",
         .state_dir_note = "есть",
         .queue_num = 2000,
         .started_epoch = 1,
@@ -168,12 +168,12 @@ static void test_invalid_live_json_is_not_reported_as_empty_knowledge(void) {
 }
 
 static void test_telegram_status_is_dynamic_and_never_exposes_secret(void) {
-    char live[]="/tmp/d2k-panel-tg-live.XXXXXX",config[]="/tmp/d2k-panel-tg-config.XXXXXX";
-    char status[]="/tmp/d2k-panel-tg-status.XXXXXX",pid[]="/tmp/d2k-panel-tg-pid.XXXXXX";
+    char live[]="/tmp/d2s-panel-tg-live.XXXXXX",config[]="/tmp/d2s-panel-tg-config.XXXXXX";
+    char status[]="/tmp/d2s-panel-tg-status.XXXXXX",pid[]="/tmp/d2s-panel-tg-pid.XXXXXX";
     write_temp_file(live,"{\"linked\":false,\"boxes\":[],\"searches\":[],\"targets\":0,\"confirms\":0,\"probes_used\":0,\"client_unfit\":0}");
     write_temp_file(config,"TG_ENABLED=0\nTG_MODE=local\nTG_RELAY_URL=wss://relay.example/ws\nTG_RELAY_SECRET=secret-must-not-leak\n");
     write_temp_file(status,"connected\n");write_temp_file(pid,"1\n");
-    d2k_panel_config cfg={.live_path=live,.asset_dir="panel/assets",.config_path=config,
+    d2s_panel_config cfg={.live_path=live,.asset_dir="panel/assets",.config_path=config,
         .telegram_status_path=status,.telegram_pid_path=pid,.mode="observe",.state_dir="/tmp/state",.started_epoch=1};
     char response[32768];
     (void)request(&cfg,"GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n",response,sizeof response);
@@ -252,10 +252,10 @@ static void *serve_telegram_stats(void *opaque) {
 }
 
 static void test_telegram_stats_socket_is_normalized_for_status_api(void) {
-    char live[] = "/tmp/d2k-panel-tg-stats-live.XXXXXX";
-    char status[] = "/tmp/d2k-panel-tg-stats-status.XXXXXX";
-    char pid[] = "/tmp/d2k-panel-tg-stats-pid.XXXXXX";
-    char socket_path[] = "/tmp/d2k-panel-tg-stats.XXXXXX";
+    char live[] = "/tmp/d2s-panel-tg-stats-live.XXXXXX";
+    char status[] = "/tmp/d2s-panel-tg-stats-status.XXXXXX";
+    char pid[] = "/tmp/d2s-panel-tg-stats-pid.XXXXXX";
+    char socket_path[] = "/tmp/d2s-panel-tg-stats.XXXXXX";
     write_temp_file(live, "{\"linked\":false,\"boxes\":[],\"searches\":[],\"targets\":0,\"confirms\":0,\"probes_used\":0,\"client_unfit\":0}");
     write_temp_file(status, "connected\n");
     write_temp_file(pid, "1\n");
@@ -275,7 +275,7 @@ static void test_telegram_stats_socket_is_normalized_for_status_api(void) {
     pthread_t server;
     assert(pthread_create(&server, NULL, serve_telegram_stats, &fixture) == 0);
 
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = live,
         .asset_dir = "panel/assets",
         .telegram_pid_path = pid,
@@ -316,9 +316,9 @@ static void test_telegram_stats_socket_is_normalized_for_status_api(void) {
 }
 
 static void test_telegram_worker_domains_are_validated_and_restart_only_c11(void) {
-    char config[] = "/tmp/d2k-panel-workers-config.XXXXXX";
-    char service[] = "/tmp/d2k-panel-workers-service.XXXXXX";
-    char marker[] = "/tmp/d2k-panel-workers-marker.XXXXXX";
+    char config[] = "/tmp/d2s-panel-workers-config.XXXXXX";
+    char service[] = "/tmp/d2s-panel-workers-service.XXXXXX";
+    char marker[] = "/tmp/d2s-panel-workers-marker.XXXXXX";
     write_temp_file(config, "MODE=apply\nTG_ENABLED=1\nTG_MODE=local\n"
                            "TG_CF_WORKER_DOMAIN=HTTPS://Old.Example/path\n");
     write_temp_file(marker, "");
@@ -328,7 +328,7 @@ static void test_telegram_worker_domains_are_validated_and_restart_only_c11(void
     assert(script_len > 0 && (size_t)script_len < sizeof service_script);
     rewrite_file(service, service_script);
     assert(chmod(service, 0700) == 0);
-    d2k_panel_config cfg = { .config_path = config, .service_path = service,
+    d2s_panel_config cfg = { .config_path = config, .service_path = service,
         .control_enabled = 1 };
     char response[8192];
     (void)request(&cfg,
@@ -381,12 +381,12 @@ static void test_telegram_worker_domains_are_validated_and_restart_only_c11(void
     unlink(marker);
 }
 
-/* Состояние автообновления пишет d2k-update.sh; панель отдаёт файл как есть.
+/* Состояние автообновления пишет d2s-update.sh; панель отдаёт файл как есть.
    Нет утилиты — «не подключено», есть, но не проверялось — пустое состояние. */
 static void test_update_state_is_served_from_file(void) {
-    char state[] = "/tmp/d2k-panel-update-state.XXXXXX";
+    char state[] = "/tmp/d2s-panel-update-state.XXXXXX";
     write_temp_file(state, "{\"busy\":\"\",\"current\":\"r2\"}\n");
-    d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets",
+    d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets",
                              .update_state_path = state, .updater_path = "/bin/sh" };
     char response[4096];
     (void)request(&cfg, "GET /api/update HTTP/1.1\r\nHost: localhost\r\n\r\n", response, sizeof response);
@@ -395,7 +395,7 @@ static void test_update_state_is_served_from_file(void) {
     unlink(state);
     (void)request(&cfg, "GET /api/update HTTP/1.1\r\nHost: localhost\r\n\r\n", response, sizeof response);
     assert(strstr(response, "HTTP/1.1 200 OK") != NULL && strstr(response, "{\"never\":true}") != NULL);
-    cfg.updater_path = "/absent/d2k-update.sh";
+    cfg.updater_path = "/absent/d2s-update.sh";
     (void)request(&cfg, "GET /api/update HTTP/1.1\r\nHost: localhost\r\n\r\n", response, sizeof response);
     assert(strstr(response, "{\"absent\":true}") != NULL);
     (void)request(&cfg, "POST /api/update HTTP/1.1\r\nHost: localhost\r\n\r\n", response, sizeof response);
@@ -403,14 +403,14 @@ static void test_update_state_is_served_from_file(void) {
 }
 
 static void test_unsupported_method_is_rejected(void) {
-    d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
+    d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
     char response[4096];
     (void)request(&cfg, "POST /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n",
                   response, sizeof response);
     assert(strstr(response, "HTTP/1.1 405 Method Not Allowed") != NULL);
 }
 
-static void wait_action_done(const d2k_panel_config *cfg) {
+static void wait_action_done(const d2s_panel_config *cfg) {
     char result[8192];
     for (int i=0; i<300; i++) {
         request(cfg, "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n", result, sizeof result);
@@ -421,8 +421,8 @@ static void wait_action_done(const d2k_panel_config *cfg) {
 }
 
 static void test_panel_accepts_a_control_action_request(void) {
-    char service[] = "/tmp/d2k-panel-service.XXXXXX";
-    char marker[] = "/tmp/d2k-panel-action.XXXXXX";
+    char service[] = "/tmp/d2s-panel-service.XXXXXX";
+    char marker[] = "/tmp/d2s-panel-action.XXXXXX";
     int marker_fd = mkstemp(marker);
     assert(marker_fd >= 0);
     close(marker_fd);
@@ -435,7 +435,7 @@ static void test_panel_accepts_a_control_action_request(void) {
     write_all(service_fd, script);
     close(service_fd);
     assert(chmod(service, 0700) == 0);
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent", .asset_dir = "panel/assets",
         .service_path = service, .control_enabled = 1,
     };
@@ -482,7 +482,7 @@ static void test_panel_accepts_a_control_action_request(void) {
         "Origin: http://localhost:8090\r\nContent-Length: 0\r\n\r\n",
         response, sizeof response);
     assert(strstr(response,"HTTP/1.1 409 Conflict")!=NULL);
-    char tg_config[]="/tmp/d2k-panel-tg-control-config.XXXXXX";
+    char tg_config[]="/tmp/d2s-panel-tg-control-config.XXXXXX";
     write_temp_file(tg_config,"TG_ENABLED=0\nTG_RELAY_URL=wss://relay.example/ws\nTG_ENROLL_PORT=9443\n");
     cfg.config_path=tg_config;
     (void)request(&cfg,
@@ -561,10 +561,10 @@ static void test_panel_accepts_a_control_action_request(void) {
 }
 
 static void test_slow_control_does_not_block_status(void) {
-    char service[] = "/tmp/d2k-panel-slow.XXXXXX";
+    char service[] = "/tmp/d2s-panel-slow.XXXXXX";
     write_temp_file(service, "#!/bin/sh\nsleep 2\n");
     assert(chmod(service, 0700) == 0);
-    d2k_panel_config cfg = { .service_path = service, .control_enabled = 1 };
+    d2s_panel_config cfg = { .service_path = service, .control_enabled = 1 };
     char result[8192];
     struct timespec a, b;
     clock_gettime(CLOCK_MONOTONIC, &a);
@@ -586,7 +586,7 @@ static void test_slow_control_does_not_block_status(void) {
 }
 
 static void test_unknown_and_traversal_paths_are_not_served(void) {
-    d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
+    d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
     char response[4096];
     (void)request(&cfg, "GET /../../etc/passwd HTTP/1.1\r\nHost: localhost\r\n\r\n",
                   response, sizeof response);
@@ -603,7 +603,7 @@ static void test_oversized_request_header_gets_431(void) {
     memset(req + used, 'a', n);
     used += n;
     memcpy(req + used, "\r\n\r\n", 5);
-    d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
+    d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
     char response[4096];
     (void)request(&cfg, req, response, sizeof response);
     assert(strstr(response, "HTTP/1.1 431 Request Header Fields Too Large") != NULL);
@@ -612,14 +612,14 @@ static void test_oversized_request_header_gets_431(void) {
 
 static void test_asset_symlink_cannot_escape_asset_directory(void) {
     char dir[PATH_MAX];
-    int dn = snprintf(dir, sizeof dir, "/tmp/d2k-panel-assets.%ld", (long)getpid());
+    int dn = snprintf(dir, sizeof dir, "/tmp/d2s-panel-assets.%ld", (long)getpid());
     assert(dn > 0 && (size_t)dn < sizeof dir);
     assert(mkdir(dir, 0700) == 0);
     char linkpath[PATH_MAX];
     int n = snprintf(linkpath, sizeof linkpath, "%s/panel.css", dir);
     assert(n > 0 && (size_t)n < sizeof linkpath);
     assert(symlink("/etc/passwd", linkpath) == 0);
-    d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = dir };
+    d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = dir };
     char response[4096];
     (void)request(&cfg, "GET /assets/panel.css HTTP/1.1\r\nHost: localhost\r\n\r\n",
                   response, sizeof response);
@@ -630,7 +630,7 @@ static void test_asset_symlink_cannot_escape_asset_directory(void) {
 }
 
 static void test_root_serves_static_offline_panel_shell(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -644,7 +644,7 @@ static void test_root_serves_static_offline_panel_shell(void) {
 }
 
 static void test_panel_javascript_is_served_same_origin(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -656,12 +656,12 @@ static void test_panel_javascript_is_served_same_origin(void) {
 }
 
 static void test_retired_slidoscope_assets_are_not_served(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
     static const char *retired[] = {
-        "/assets/logo-d2k.png", "/assets/mascot-d2k.png", "/assets/mascot.svg",
+        "/assets/logo-d2s.png", "/assets/mascot-d2s.png", "/assets/mascot.svg",
         "/assets/oswald.ttf", "/assets/ground.webp", "/assets/rack.webp",
         "/assets/family-rack.webp", "/assets/slide-left.webp", "/assets/slide-center.webp",
         "/assets/slide-right.webp", "/assets/slide-holder.webp",
@@ -675,7 +675,7 @@ static void test_retired_slidoscope_assets_are_not_served(void) {
 }
 
 static void test_offline_text_fonts_are_served_as_woff2(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -691,7 +691,7 @@ static void test_offline_text_fonts_are_served_as_woff2(void) {
 }
 
 static void test_vendored_animation_library_is_served_same_origin(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -703,7 +703,7 @@ static void test_vendored_animation_library_is_served_same_origin(void) {
 }
 
 static void test_telegram_prototype_animation_is_served_same_origin(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -716,7 +716,7 @@ static void test_telegram_prototype_animation_is_served_same_origin(void) {
 }
 
 static void test_static_assets_revalidate_with_etag(void) {
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = "/absent",
         .asset_dir = "../internal/web/assets",
     };
@@ -748,15 +748,15 @@ static void test_disconnected_client_cannot_sigpipe_server(void) {
     assert(child >= 0);
     if (child == 0) {
         (void)signal(SIGPIPE, SIG_DFL);
-        d2k_panel_ignore_sigpipe();
+        d2s_panel_ignore_sigpipe();
         int sv[2];
         if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { _exit(10); }
         const char req[] = "GET /api/status HTTP/1.1\r\nHost: localhost\r\n\r\n";
         if (write(sv[0], req, sizeof req - 1) != (ssize_t)(sizeof req - 1)) { _exit(11); }
         shutdown(sv[0], SHUT_RDWR);
         close(sv[0]);
-        d2k_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
-        (void)d2k_panel_handle_fd(sv[1], &cfg);
+        d2s_panel_config cfg = { .live_path = "/absent", .asset_dir = "panel/assets" };
+        (void)d2s_panel_handle_fd(sv[1], &cfg);
         close(sv[1]);
         _exit(0);
     }
@@ -767,8 +767,8 @@ static void test_disconnected_client_cannot_sigpipe_server(void) {
 
 static void test_diagnostic_history_controls_and_download(void) {
     char dir[128],path[256],reply[8192];
-    snprintf(dir,sizeof dir,"/tmp/d2k-panel-diag-api-%ld",(long)getpid());assert(mkdir(dir,0700)==0);
-    d2k_panel_config cfg={.control_enabled=1,.diagnostics_dir=dir};
+    snprintf(dir,sizeof dir,"/tmp/d2s-panel-diag-api-%ld",(long)getpid());assert(mkdir(dir,0700)==0);
+    d2s_panel_config cfg={.control_enabled=1,.diagnostics_dir=dir};
     request(&cfg,"GET /api/diagnostics HTTP/1.1\r\nHost: localhost\r\n\r\n",reply,sizeof reply);
     assert(strstr(reply,"\"enabled\":false"));assert(strstr(reply,"Cache-Control: no-store"));
     const char *enable="POST /api/diagnostics?enable HTTP/1.1\r\nHost: localhost\r\nOrigin: http://localhost\r\nContent-Length: 0\r\n\r\n";

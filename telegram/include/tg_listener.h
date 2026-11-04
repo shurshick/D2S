@@ -1,5 +1,5 @@
-#ifndef D2K_TG_LISTENER_H
-#define D2K_TG_LISTENER_H
+#ifndef D2S_TG_LISTENER_H
+#define D2S_TG_LISTENER_H
 
 #include <stddef.h>
 #include <stdint.h>

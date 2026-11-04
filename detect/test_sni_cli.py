@@ -26,7 +26,7 @@ names = ["a" * 50 + "." + "b" * 50 + "." + "c" * 50 + ".example.test",
 for hello in ["modern", "legacy"]:
     for name in names:
         for explicit in [True, False]:
-            args = ["./d2k-detect", "classify", "127.0.0.1:443" if explicit else name + ":443",
+            args = ["./d2s-detect", "classify", "127.0.0.1:443" if explicit else name + ":443",
                     "--hello", hello, "--dump-trigger"]
             if explicit:
                 args += ["--sni", name]
@@ -36,7 +36,7 @@ for length in [254, 255, 256]:
     for explicit in [True, False]:
         name = ".".join(["a" * 63, "b" * 63, "c" * 63, "d" * (length - 192)])
         assert len(name) == length
-        args = ["./d2k-detect", "classify", "127.0.0.1:443" if explicit else name + ":443", "--dump-trigger"]
+        args = ["./d2s-detect", "classify", "127.0.0.1:443" if explicit else name + ":443", "--dump-trigger"]
         if explicit:
             args += ["--sni", name]
         result = subprocess.run(args, capture_output=True, text=True)

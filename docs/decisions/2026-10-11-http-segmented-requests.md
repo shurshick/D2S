@@ -16,10 +16,10 @@ Session применял план при полном Host в первом се�
 
 ## Исправление
 
-`d2k_http_request_stream.h` — общий инкрементальный разбор framing для
-Session, HTTP-наблюдателя и прежнего stateless `d2k_http_request`.
+`d2s_http_request_stream.h` — общий инкрементальный разбор framing для
+Session, HTTP-наблюдателя и прежнего stateless `d2s_http_request`.
 Сохраняет только состояние поля и численную длину: Cookie/другие значения
-не накапливаются в памяти. Выделений памяти на пакетном пути нет. Локальное сравнение sizeof(d2k_flow)
+не накапливаются в памяти. Выделений памяти на пакетном пути нет. Локальное сравнение sizeof(d2s_flow)
 со старым заголовком: 2864 → 2920 байт (+56); это размер текущей macOS-сборки,
 а не замер памяти или CPU на роутере.
 
@@ -36,7 +36,7 @@ binding с первого сегмента, затем завершает framin
 ответ и портал следующего запроса относятся к своим request_no/execution.
 Положительный ответ требует завершённого, однозначного входного запроса.
 Перенаправление на подтверждённый HTTPS также требует законченного запроса
-без тела; прежний публичный `d2k_httpup_request_safe` не ослаблен.
+без тела; прежний публичный `d2s_httpup_request_safe` не ослаблен.
 
 Изменился диагностический счётчик `requests`: распознанный request line/Host
 с ожидаемым хвостом Cookie теперь учитывается как наблюдаемый запрос, а не
@@ -46,15 +46,15 @@ binding с первого сегмента, затем завершает framin
 
 - Перед исправлением штатный `core/test_http_live` провалил оба IPv4/IPv6
   случая второго запроса, `datapath/test_http80` — четыре случая ответа/
-  портала. Логи `/tmp/d2k-http-segment-{live,observer}-red.log`.
+  портала. Логи `/tmp/d2s-http-segment-{live,observer}-red.log`.
 - Расширенный test_http_live со свежей компиляцией старых session.c/http80.c
   из cabe6c4 в отдельном временном каталоге: exit 1, восемь CHECK. Checkout
-  и старые объектники не используются. `/tmp/d2k-http-segment-baseline.log`.
+  и старые объектники не используются. `/tmp/d2s-http-segment-baseline.log`.
 - Новый live-regress: IPv4/IPv6 × пробный/постоянный план × Cookie, разрез
   Content-Length/тела, CL-дубли, TE и потерянный байт. Пакеты строит настоящий
   Session; полные выходные пакеты и интервалы trial/permanent сравниваются.
   После исправления — exit 0. `--diverge` повреждает пакет и даёт exit 1
-  (12 CHECK), `/tmp/d2k-http-segment-diverge.log`.
+  (12 CHECK), `/tmp/d2s-http-segment-diverge.log`.
 - Наблюдатель проверяет полный первый ответ и портал второго, отдельные
   execution ID и binding. Stream-тест перебирает каждую точку разреза,
   повтор, wrap TCP seq, CL/TE/Upgrade/obs-fold/дубли Host, gap/overlap.
@@ -83,15 +83,15 @@ Mailsuite и общий QUIC замер данным изменением не �
 ## Локальные проверки
 
 - `make -C datapath check` — exit 0 (после обновления устаревшего ожидания
-  test_http_hello), `/tmp/d2k-http-segment-datapath-check-r2.log`.
-- `make -C detect check` — exit 0, `/tmp/d2k-http-segment-detect-check.log`.
-- `make -C datapath cross` — exit 0, d2kd/planlab целиком arm64+mipsel,
-  `/tmp/d2k-http-segment-cross.log`; вывод только во временные файлы.
+  test_http_hello), `/tmp/d2s-http-segment-datapath-check-r2.log`.
+- `make -C detect check` — exit 0, `/tmp/d2s-http-segment-detect-check.log`.
+- `make -C datapath cross` — exit 0, d2sd/planlab целиком arm64+mipsel,
+  `/tmp/d2s-http-segment-cross.log`; вывод только во временные файлы.
 - `make -C core san-http-live` — exit 0;
   отдельная свежая ASan/UBSan-сборка test_http80 — exit 0.
 - Read-only review: важных замечаний нет. Проверены неоднозначный framing,
   sequence, identity и граница безопасного HTTPS redirect.
-- `make -C core check` — exit 0, `/tmp/d2k-http-segment-core-check.log`:
+- `make -C core check` — exit 0, `/tmp/d2s-http-segment-core-check.log`:
   release arm64/mipsel, probe-plan 0 mismatches, UDP 130 full-packet cases,
   HTTP trial/permanent и live controller/Session — 0 failures, QUIC sink — 0.
 - `git diff --check` и staged diff check — чисто. В коммит входят только

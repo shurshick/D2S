@@ -1,4 +1,4 @@
-/* p256.c — ECDH на secp256r1 для зонда подтверждения (d2k_p256.h).
+/* p256.c — ECDH на secp256r1 для зонда подтверждения (d2s_p256.h).
  *
  * УСТРОЙСТВО. Поле — восемь 32-битных слов, младшее первым; умножение —
  * Монтгомери (CIOS) с 64-битным накоплением: одна и та же арифметика на
@@ -10,8 +10,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "d2k_p256.h"
-#include "d2k_tls13core.h"
+#include "d2s_p256.h"
+#include "d2s_tls13core.h"
 
 typedef uint32_t fe[8];
 
@@ -115,7 +115,7 @@ static void fe_mul(fe r, const fe a, const fe b) {
 static void fe_sqr(fe r, const fe a) { fe_mul(r, a, a); }
 
 /* R^2 mod p и R mod p (R = 2^256) — константы, а не ленивый расчёт:
- * зонды идут из нескольких рабочих потоков d2kc сразу. */
+ * зонды идут из нескольких рабочих потоков d2sc сразу. */
 static const fe R2 = { 0x00000003u, 0x00000000u, 0xffffffffu, 0xfffffffbu,
                        0xfffffffeu, 0xffffffffu, 0xfffffffdu, 0x00000004u };
 static const fe ONE_M = { 0x00000001u, 0x00000000u, 0x00000000u, 0xffffffffu,
@@ -265,7 +265,7 @@ static int scalar_ok(const uint8_t k[32]) {
     return !is_zero(s) && !ge(s, N);
 }
 
-int d2k_p256_public(const uint8_t priv[32], uint8_t pub[65]) {
+int d2s_p256_public(const uint8_t priv[32], uint8_t pub[65]) {
     if (!priv || !pub || !scalar_ok(priv)) { return -1; }
     fe gx, gy, x, y;
     to_mont(gx, GX);
@@ -279,16 +279,16 @@ int d2k_p256_public(const uint8_t priv[32], uint8_t pub[65]) {
     return 0;
 }
 
-int d2k_p256_keypair(uint8_t priv[32], uint8_t pub[65]) {
+int d2s_p256_keypair(uint8_t priv[32], uint8_t pub[65]) {
     if (!priv || !pub) { return -1; }
     for (int tries = 0; tries < 16; tries++) {
-        if (d2k_t13_random(priv, 32) != 0) { return -1; }
-        if (scalar_ok(priv)) { return d2k_p256_public(priv, pub); }
+        if (d2s_t13_random(priv, 32) != 0) { return -1; }
+        if (scalar_ok(priv)) { return d2s_p256_public(priv, pub); }
     }
     return -1;
 }
 
-int d2k_p256_ecdh(const uint8_t priv[32], const uint8_t peer[65], uint8_t out_x[32]) {
+int d2s_p256_ecdh(const uint8_t priv[32], const uint8_t peer[65], uint8_t out_x[32]) {
     if (!priv || !peer || !out_x || !scalar_ok(priv) || peer[0] != 0x04) { return -1; }
     fe x, y;
     fe_from_be(x, peer + 1);

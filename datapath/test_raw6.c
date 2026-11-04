@@ -11,12 +11,12 @@
 #include <net/if.h>
 #include <linux/if_packet.h>
 #include <linux/if_ether.h>
-#include "d2k_raw.h"
-#include "d2k_wire.h"
-#include "d2k_ipfrag.h"
+#include "d2s_raw.h"
+#include "d2s_wire.h"
+#include "d2s_ipfrag.h"
 
 static int fail_option;
-int d2k_test_setsockopt(int fd, int level, int option, const void *value, socklen_t len) {
+int d2s_test_setsockopt(int fd, int level, int option, const void *value, socklen_t len) {
     if ((fail_option == 1 && level == IPPROTO_IPV6 && option == IPV6_HDRINCL) ||
         (fail_option == 2 && level == SOL_SOCKET && option == SO_MARK)) {
         errno = EPERM; return -1;
@@ -31,23 +31,23 @@ int main(void) {
     assert(bind(receive, (struct sockaddr *)&local, sizeof local) == 0);
     socklen_t sl = sizeof local;
     assert(getsockname(receive, (struct sockaddr *)&local, &sl) == 0);
-    d2k_conn c = {.family=6, .ttl=48, .src_port=htons(54322), .dst_port=local.sin6_port};
+    d2s_conn c = {.family=6, .ttl=48, .src_port=htons(54322), .dst_port=local.sin6_port};
     c.src_ip6[15] = c.dst_ip6[15] = 1;
     const uint8_t body[64] = "native IPv6 raw packet";
-    d2k_emit e = {.bytes=body, .len=sizeof body};
+    d2s_emit e = {.bytes=body, .len=sizeof body};
     uint8_t packet[256], got[256]; char err[256];
-    size_t len = d2k_wire_build_udp(&c, &e, packet, sizeof packet);
+    size_t len = d2s_wire_build_udp(&c, &e, packet, sizeof packet);
     assert(len == 48 + sizeof body);
-    d2k_raw *raw = d2k_raw_open(0xd200, "lo", err, sizeof err);
+    d2s_raw *raw = d2s_raw_open(0xd200, "lo", err, sizeof err);
     if (!raw) { fprintf(stderr, "%s\n", err); return 1; }
     for (fail_option = 1; fail_option <= 2; fail_option++) {
-        assert(d2k_raw_prepare(raw, packet, len, err, sizeof err) < 0);
-        assert(d2k_raw_sent(raw) == 0);
+        assert(d2s_raw_prepare(raw, packet, len, err, sizeof err) < 0);
+        assert(d2s_raw_sent(raw) == 0);
     }
     fail_option = 0;
-    assert(d2k_raw_route_maxlen_family(raw, c.dst_ip6, 6) >= 1280);
-    if (d2k_raw_prepare(raw, packet, len, err, sizeof err) ||
-        d2k_raw_send(raw, packet, len, err, sizeof err)) {
+    assert(d2s_raw_route_maxlen_family(raw, c.dst_ip6, 6) >= 1280);
+    if (d2s_raw_prepare(raw, packet, len, err, sizeof err) ||
+        d2s_raw_send(raw, packet, len, err, sizeof err)) {
         fprintf(stderr, "%s\n", err); return 1;
     }
     struct pollfd wait = {.fd=receive, .events=POLLIN};
@@ -56,24 +56,24 @@ int main(void) {
     assert(recvfrom(receive, got, sizeof got, 0, (struct sockaddr *)&peer, &sl) == sizeof body);
     assert(!memcmp(got, body, sizeof body) && peer.sin6_port == c.src_port);
     assert(!memcmp(&peer.sin6_addr, c.src_ip6, 16));
-    assert(d2k_raw_sent(raw) == 1);
-    assert(d2k_raw_send(raw, packet, 39, err, sizeof err) < 0);
+    assert(d2s_raw_sent(raw) == 1);
+    assert(d2s_raw_send(raw, packet, 39, err, sizeof err) < 0);
     int capture = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_ALL));
     assert(capture >= 0);
     struct sockaddr_ll link = {.sll_family=AF_PACKET, .sll_protocol=htons(ETH_P_ALL)};
     link.sll_ifindex = (int)if_nametoindex("lo");
     assert(bind(capture, (struct sockaddr *)&link, sizeof link) == 0);
     for (int shape = 1; shape <= 4; shape++) {
-        d2k_ipfrag_plan plan;
-        assert(d2k_ipfrag_shape(shape, &plan) == 0);
-        d2k_ipfrag_span spans[3];
-        size_t count = d2k_udpfrag6_build_ex(c.src_ip6, c.dst_ip6,
+        d2s_ipfrag_plan plan;
+        assert(d2s_ipfrag_shape(shape, &plan) == 0);
+        d2s_ipfrag_span spans[3];
+        size_t count = d2s_udpfrag6_build_ex(c.src_ip6, c.dst_ip6,
             ntohs(c.src_port), ntohs(c.dst_port), body, sizeof body, &plan,
             0x12345000u + (unsigned)shape, 48, 0, 0, packet, sizeof packet, spans);
         assert(count == (shape <= 2 ? 2u : 3u));
         for (size_t i = 0; i < count; i++) {
-            assert(d2k_raw_prepare(raw, packet + spans[i].off, spans[i].len, err, sizeof err) == 0);
-            assert(d2k_raw_send(raw, packet + spans[i].off, spans[i].len, err, sizeof err) == 0);
+            assert(d2s_raw_prepare(raw, packet + spans[i].off, spans[i].len, err, sizeof err) == 0);
+            assert(d2s_raw_send(raw, packet + spans[i].off, spans[i].len, err, sizeof err) == 0);
         }
         int seen = 0;
         for (int attempt = 0; attempt < 32 && (size_t)seen < count; attempt++) {
@@ -98,7 +98,7 @@ int main(void) {
         }
     }
     close(capture);
-    d2k_raw_close(raw); close(receive);
+    d2s_raw_close(raw); close(receive);
     puts("raw IPv6: marked native packet delivered with correct tuple/checksum");
     return 0;
 }

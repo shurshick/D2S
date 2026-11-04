@@ -1,5 +1,5 @@
-#ifndef D2K_TG_NET_H
-#define D2K_TG_NET_H
+#ifndef D2S_TG_NET_H
+#define D2S_TG_NET_H
 
 #include <stdint.h>
 

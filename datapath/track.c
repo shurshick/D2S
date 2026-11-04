@@ -13,9 +13,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "d2k_track.h"
+#include "d2s_track.h"
 
-int d2k_key_make(d2k_key *k, uint8_t proto, const uint8_t *src_ip4, const uint8_t *dst_ip4,
+int d2s_key_make(d2s_key *k, uint8_t proto, const uint8_t *src_ip4, const uint8_t *dst_ip4,
                  const uint8_t *src_port_be, const uint8_t *dst_port_be) {
     if (!k) {
         return 0;
@@ -36,7 +36,7 @@ int d2k_key_make(d2k_key *k, uint8_t proto, const uint8_t *src_ip4, const uint8_
     const uint8_t *hi = src_is_low ? b : a;
 
     /* memset зануляет ВЕСЬ экземпляр, включая байты выравнивания за proto —
-       см. большой комментарий у d2k_key в d2k_track.h про то, почему на эти
+       см. большой комментарий у d2s_key в d2s_track.h про то, почему на эти
        байты в принципе нельзя полагаться где-либо ЕЩЁ, кроме этого зануления
        здесь: правильность key_eq/key_hash в track.c (сравнение и хеш по
        sizeof *k целиком) держится именно на том, что ключ ВСЕГДА собран
@@ -52,13 +52,13 @@ int d2k_key_make(d2k_key *k, uint8_t proto, const uint8_t *src_ip4, const uint8_
 
 enum { SLOT_FREE = 0, SLOT_USED = 1 };
 
-int d2k_key_make_addr(d2k_key *k, uint8_t proto,
-                     const d2k_addr *src, const d2k_addr *dst,
+int d2s_key_make_addr(d2s_key *k, uint8_t proto,
+                     const d2s_addr *src, const d2s_addr *dst,
                      const uint8_t *sport_be, const uint8_t *dport_be) {
     if (!k || !src || !dst || !sport_be || !dport_be ||
         src->family != dst->family) return -1;
     if (src->family == 4)
-        return d2k_key_make(k, proto, src->bytes, dst->bytes, sport_be, dport_be);
+        return d2s_key_make(k, proto, src->bytes, dst->bytes, sport_be, dport_be);
     if (src->family != 6) return -1;
     int order = memcmp(src->bytes, dst->bytes, 16);
     if (!order) order = memcmp(sport_be, dport_be, 2);
@@ -73,8 +73,8 @@ int d2k_key_make_addr(d2k_key *k, uint8_t proto,
     return low;
 }
 
-struct d2k_table {
-    d2k_flow *slots;
+struct d2s_table {
+    d2s_flow *slots;
     uint8_t  *state;
     size_t    cap;  /* степень двойки */
     size_t    used;
@@ -89,14 +89,14 @@ static size_t round_pow2(size_t n) {
     return p;
 }
 
-static int key_eq(const d2k_key *a, const d2k_key *b) {
+static int key_eq(const d2s_key *a, const d2s_key *b) {
     /* Побайтово, а не полями: сравнение полями пришлось бы отдельно править
        при каждом изменении структуры, а этому — нет. Дырки выравнивания в
-       d2k_key ЕСТЬ (5 полей, 4+4+2+2+1 = 13 значащих байт при sizeof 16, см.
-       большой комментарий у d2k_key в d2k_track.h) — правильность memcmp тут
-       держится не на их отсутствии, а на том, что d2k_key_make ВСЕГДА
+       d2s_key ЕСТЬ (5 полей, 4+4+2+2+1 = 13 значащих байт при sizeof 16, см.
+       большой комментарий у d2s_key в d2s_track.h) — правильность memcmp тут
+       держится не на их отсутствии, а на том, что d2s_key_make ВСЕГДА
        зануляет их через memset ПЕРЕД заполнением полей, и других путей
-       построить d2k_key в этом датапате нет. Раньше, при четырёх полях без
+       построить d2s_key в этом датапате нет. Раньше, при четырёх полях без
        дыры, эти два довода совпадали и было легко перепутать один с другим —
        после добавления proto они разошлись, и неверный (уже не действующий)
        остался бы в комментарии, если бы отсюда не убрать. */
@@ -105,7 +105,7 @@ static int key_eq(const d2k_key *a, const d2k_key *b) {
 
 /* FNV-1a по байтам ключа. Ключ читается как байты, а не как числа: порядок
  * байт для хеша безразличен, а перекладывание уже стоило одной ошибки. */
-static size_t key_hash(const d2k_key *k) {
+static size_t key_hash(const d2s_key *k) {
     const uint8_t *b = (const uint8_t *)k;
     uint32_t h = 2166136261u;
     for (size_t i = 0; i < sizeof *k; i++) {
@@ -114,11 +114,11 @@ static size_t key_hash(const d2k_key *k) {
     return h;
 }
 
-d2k_table *d2k_track_new(size_t capacity) {
+d2s_table *d2s_track_new(size_t capacity) {
     if (capacity == 0) {
         return NULL;
     }
-    d2k_table *t = calloc(1, sizeof *t);
+    d2s_table *t = calloc(1, sizeof *t);
     if (!t) {
         return NULL;
     }
@@ -126,13 +126,13 @@ d2k_table *d2k_track_new(size_t capacity) {
     t->slots = calloc(t->cap, sizeof *t->slots);
     t->state = calloc(t->cap, sizeof *t->state);
     if (!t->slots || !t->state) {
-        d2k_track_free(t);
+        d2s_track_free(t);
         return NULL;
     }
     return t;
 }
 
-void d2k_track_free(d2k_table *t) {
+void d2s_track_free(d2s_table *t) {
     if (!t) {
         return;
     }
@@ -141,7 +141,7 @@ void d2k_track_free(d2k_table *t) {
     free(t);
 }
 
-d2k_flow *d2k_track_find(d2k_table *t, const d2k_key *k) {
+d2s_flow *d2s_track_find(d2s_table *t, const d2s_key *k) {
     if (!t || !k) {
         return NULL;
     }
@@ -162,7 +162,7 @@ d2k_flow *d2k_track_find(d2k_table *t, const d2k_key *k) {
 /* Удаление сдвигом назад: сдвигаем те записи кластера, которые после освобождения
  * ячейки перестали бы находиться. Инвариант линейного пробирования при этом
  * сохраняется без надгробий. */
-static void remove_at(d2k_table *t, size_t hole) {
+static void remove_at(d2s_table *t, size_t hole) {
     size_t mask = t->cap - 1;
     t->state[hole] = SLOT_FREE;
     t->slots[hole].in_use = 0;
@@ -190,7 +190,7 @@ static void remove_at(d2k_table *t, size_t hole) {
     }
 }
 
-d2k_flow *d2k_track_get(d2k_table *t, const d2k_key *k, uint64_t now_ns) {
+d2s_flow *d2s_track_get(d2s_table *t, const d2s_key *k, uint64_t now_ns) {
     if (!t || !k) {
         return NULL;
     }
@@ -228,11 +228,11 @@ d2k_flow *d2k_track_get(d2k_table *t, const d2k_key *k, uint64_t now_ns) {
     return NULL;
 }
 
-void d2k_track_new_connection(d2k_flow *f) {
+void d2s_track_new_connection(d2s_flow *f) {
     if (!f) {
         return;
     }
-    d2k_flow keep = *f;
+    d2s_flow keep = *f;
     memset(f, 0, sizeof *f);
     f->key = keep.key;
     f->in_use = keep.in_use;
@@ -256,17 +256,17 @@ void d2k_track_new_connection(d2k_flow *f) {
     memcpy(f->execution_trial_id, keep.execution_trial_id, sizeof f->execution_trial_id);
 }
 
-void d2k_track_remove(d2k_table *t, const d2k_key *k) {
+void d2s_track_remove(d2s_table *t, const d2s_key *k) {
     if (!t || !k) {
         return;
     }
-    d2k_flow *f = d2k_track_find(t, k);
+    d2s_flow *f = d2s_track_find(t, k);
     if (f) {
         remove_at(t, (size_t)(f - t->slots));
     }
 }
 
-void d2k_track_walk(d2k_table *t, void (*fn)(void *ctx, d2k_flow *f), void *ctx) {
+void d2s_track_walk(d2s_table *t, void (*fn)(void *ctx, d2s_flow *f), void *ctx) {
     if (!t || !fn) {
         return;
     }
@@ -277,8 +277,8 @@ void d2k_track_walk(d2k_table *t, void (*fn)(void *ctx, d2k_flow *f), void *ctx)
     }
 }
 
-size_t d2k_track_expire(d2k_table *t, uint64_t now_ns, uint64_t idle_ns,
-                        void (*on_expire)(void *ctx, const d2k_flow *f),
+size_t d2s_track_expire(d2s_table *t, uint64_t now_ns, uint64_t idle_ns,
+                        void (*on_expire)(void *ctx, const d2s_flow *f),
                         void *ctx) {
     if (!t) {
         return 0;
@@ -307,13 +307,13 @@ size_t d2k_track_expire(d2k_table *t, uint64_t now_ns, uint64_t idle_ns,
     return freed;
 }
 
-size_t d2k_track_remove_if(d2k_table *t, int (*gone)(void *ctx, const d2k_flow *f),
+size_t d2s_track_remove_if(d2s_table *t, int (*gone)(void *ctx, const d2s_flow *f),
                            void *ctx) {
     if (!t || !gone) {
         return 0;
     }
     size_t freed = 0;
-    /* Как в d2k_track_expire: remove_at двигает записи назад, ячейку после
+    /* Как в d2s_track_expire: remove_at двигает записи назад, ячейку после
        удаления надо перепроверить. */
     for (size_t s = 0; s < t->cap; s++) {
         while (t->state[s] == SLOT_USED && gone(ctx, &t->slots[s])) {
@@ -324,14 +324,14 @@ size_t d2k_track_remove_if(d2k_table *t, int (*gone)(void *ctx, const d2k_flow *
     return freed;
 }
 
-size_t d2k_track_count(const d2k_table *t) {
+size_t d2s_track_count(const d2s_table *t) {
     return t ? t->used : 0;
 }
 
-size_t d2k_track_capacity(const d2k_table *t) {
+size_t d2s_track_capacity(const d2s_table *t) {
     return t ? t->cap : 0;
 }
 
-uint64_t d2k_track_refusals(const d2k_table *t) {
+uint64_t d2s_track_refusals(const d2s_table *t) {
     return t ? t->refusals : 0;
 }

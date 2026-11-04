@@ -10,7 +10,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_nl.h"
+#include "d2s_nl.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -69,7 +69,7 @@ int main(void) {
     /* --- вердикт: длина, раскладка и сетевые поля ------------------------ */
     {
         uint8_t o[64];
-        size_t n = d2k_nl_verdict(o, sizeof o, 1, 7, 0x11223344u, D2K_NF_ACCEPT);
+        size_t n = d2s_nl_verdict(o, sizeof o, 1, 7, 0x11223344u, D2S_NF_ACCEPT);
         CHECK(n == 32, "длина вердикта не 32 байта");
 
         /* Эталон для little-endian. Обе целевые арки v1 (aarch64 и mipsel)
@@ -104,7 +104,7 @@ int main(void) {
         CHECK(o[24] == 0 && o[27] == 1, "вердикт не в сетевом порядке");
         CHECK(o[28] == 0x11 && o[31] == 0x44, "id пакета не в сетевом порядке");
 
-        CHECK(d2k_nl_verdict(o, 31, 1, 7, 1, D2K_NF_ACCEPT) == 0,
+        CHECK(d2s_nl_verdict(o, 31, 1, 7, 1, D2S_NF_ACCEPT) == 0,
               "вердикт слепился в буфер, куда не влезает");
     }
 
@@ -112,27 +112,27 @@ int main(void) {
     {
         uint8_t o[128];
         const uint8_t pay[5] = {0x45, 1, 2, 3, 4};
-        size_t n = d2k_nl_verdict_payload(o, sizeof o, 1, 7, 0x11223344u, D2K_NF_ACCEPT,
+        size_t n = d2s_nl_verdict_payload(o, sizeof o, 1, 7, 0x11223344u, D2S_NF_ACCEPT,
                                           pay, sizeof pay);
         CHECK(n == 32 + 12, "длина вердикта с заменой не 44 байта");
         if (little_endian()) {
             CHECK(o[0] == 44 && o[1] == 0, "nlmsg_len вердикта с заменой не тот");
         }
         /* Атрибут NFQA_PAYLOAD: длина 4+5, тип 10, хвост выравнивания нулевой. */
-        CHECK(n >= 44 && o[32] == 9 && o[33] == 0 && o[34] == D2K_NFQA_PAYLOAD && o[35] == 0,
+        CHECK(n >= 44 && o[32] == 9 && o[33] == 0 && o[34] == D2S_NFQA_PAYLOAD && o[35] == 0,
               "атрибут замены не NFQA_PAYLOAD");
         CHECK(n >= 44 && memcmp(o + 36, pay, sizeof pay) == 0 && o[41] == 0 && o[42] == 0 &&
               o[43] == 0, "байты замены или выравнивание не те");
-        CHECK(d2k_nl_verdict_payload(o, 43, 1, 7, 1, D2K_NF_ACCEPT, pay, sizeof pay) == 0,
+        CHECK(d2s_nl_verdict_payload(o, 43, 1, 7, 1, D2S_NF_ACCEPT, pay, sizeof pay) == 0,
               "вердикт с заменой слепился в буфер, куда не влезает");
-        CHECK(d2k_nl_verdict_payload(o, sizeof o, 1, 7, 1, D2K_NF_ACCEPT, NULL, 0) == 0,
+        CHECK(d2s_nl_verdict_payload(o, sizeof o, 1, 7, 1, D2S_NF_ACCEPT, NULL, 0) == 0,
               "вердикт с пустой заменой собрался");
     }
 
     /* --- команда настройки ------------------------------------------------ */
     {
         uint8_t o[64];
-        size_t n = d2k_nl_cfg_cmd(o, sizeof o, 1, 3, D2K_NFQNL_CFG_CMD_BIND, 2);
+        size_t n = d2s_nl_cfg_cmd(o, sizeof o, 1, 3, D2S_NFQNL_CFG_CMD_BIND, 2);
         CHECK(n == 28, "длина команды настройки не 28 байт");
         static const uint8_t want[28] = {
             0x1c, 0x00, 0x00, 0x00,
@@ -150,27 +150,27 @@ int main(void) {
             dump("ожидалось", want, 28);
             fails++;
         }
-        CHECK((o[6] & D2K_NLM_F_ACK) != 0,
+        CHECK((o[6] & D2S_NLM_F_ACK) != 0,
               "настройка идёт без NLM_F_ACK — отказ ядра будет неотличим от успеха");
     }
 
     /* --- параметры очереди: атрибут из 9 байт выравнивается до 12 --------- */
     {
         uint8_t o[128];
-        size_t n = d2k_nl_cfg_params(o, sizeof o, 1, 4, 0xFFFF,
-                                     D2K_NFQNL_COPY_PACKET, 1024,
-                                     D2K_NFQA_CFG_F_FAIL_OPEN,
-                                     D2K_NFQA_CFG_F_FAIL_OPEN | D2K_NFQA_CFG_F_GSO);
+        size_t n = d2s_nl_cfg_params(o, sizeof o, 1, 4, 0xFFFF,
+                                     D2S_NFQNL_COPY_PACKET, 1024,
+                                     D2S_NFQA_CFG_F_FAIL_OPEN,
+                                     D2S_NFQA_CFG_F_FAIL_OPEN | D2S_NFQA_CFG_F_GSO);
         CHECK(n == 16 + 4 + 12 + 8 + 8 + 8, "длина параметров очереди неверна");
         /* PARAMS начинается на 20-м байте: len=9, тип=2, copy_range, copy_mode */
         CHECK(o[20] == 9 && o[21] == 0, "nla_len параметров не 9");
         CHECK(o[24] == 0 && o[25] == 0 && o[26] == 0xFF && o[27] == 0xFF,
               "copy_range не в сетевом порядке");
-        CHECK(o[28] == D2K_NFQNL_COPY_PACKET, "copy_mode не на своём месте");
+        CHECK(o[28] == D2S_NFQNL_COPY_PACKET, "copy_mode не на своём месте");
         CHECK(o[29] == 0 && o[30] == 0 && o[31] == 0,
               "хвост выравнивания не обнулён: наружу уходит чужая память");
 
-        CHECK(d2k_nl_cfg_params(o, 40, 1, 4, 0xFFFF, D2K_NFQNL_COPY_PACKET,
+        CHECK(d2s_nl_cfg_params(o, 40, 1, 4, 0xFFFF, D2S_NFQNL_COPY_PACKET,
                                 1024, 1, 1) == 0,
               "параметры слепились в тесный буфер");
     }
@@ -191,42 +191,42 @@ int main(void) {
         wn32(ph, 0xDEADBEEFu);
         wn16(ph + 4, 0x0800);
         ph[6] = 3;                        /* NF_INET_FORWARD */
-        pos = put(buf, pos, D2K_NFQA_PACKET_HDR, ph, sizeof ph, 1);
+        pos = put(buf, pos, D2S_NFQA_PACKET_HDR, ph, sizeof ph, 1);
 
         uint8_t mark[4];
         wn32(mark, 0x1234);
-        pos = put(buf, pos, D2K_NFQA_MARK, mark, sizeof mark, 1);
+        pos = put(buf, pos, D2S_NFQA_MARK, mark, sizeof mark, 1);
 
         /* Выходной интерфейс (финальное ревью I-1): по нему видно, что поток
            уходит не туда, куда ушла бы сырая посылка. */
         uint8_t odev[4];
         wn32(odev, 7);
-        pos = put(buf, pos, D2K_NFQA_IFINDEX_OUTDEV, odev, sizeof odev, 1);
+        pos = put(buf, pos, D2S_NFQA_IFINDEX_OUTDEV, odev, sizeof odev, 1);
 
         /* Метка времени ядра (задача 51, ревью M1): sec и usec, be64. */
         uint8_t ts[16];
         memset(ts, 0, sizeof ts);
         wn32(ts + 4, 1700000000u);
         wn32(ts + 12, 123456u);
-        pos = put(buf, pos, D2K_NFQA_TIMESTAMP, ts, sizeof ts, 1);
+        pos = put(buf, pos, D2S_NFQA_TIMESTAMP, ts, sizeof ts, 1);
 
         uint8_t pay[40];
         for (size_t i = 0; i < sizeof pay; i++) {
             pay[i] = (uint8_t)i;
         }
-        pos = put(buf, pos, D2K_NFQA_PAYLOAD, pay, sizeof pay, 1);
+        pos = put(buf, pos, D2S_NFQA_PAYLOAD, pay, sizeof pay, 1);
 
         wh32(buf, (uint32_t)pos);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_iter_init(&it, buf, pos);
-        CHECK(d2k_nl_next(&it, &m) == 1, "сообщение не разобралось");
-        CHECK(m.type == D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET), "тип сообщения не тот");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_iter_init(&it, buf, pos);
+        CHECK(d2s_nl_next(&it, &m) == 1, "сообщение не разобралось");
+        CHECK(m.type == D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET), "тип сообщения не тот");
 
-        d2k_nl_pkt p;
-        CHECK(d2k_nl_packet(&m, &p) == 0, "пакет не разобрался");
+        d2s_nl_pkt p;
+        CHECK(d2s_nl_packet(&m, &p) == 0, "пакет не разобрался");
         CHECK(p.have_hdr && p.id == 0xDEADBEEFu, "id пакета потерян");
         CHECK(p.hw_protocol == 0x0800, "hw_protocol потерян");
         CHECK(p.hook == 3, "hook потерян");
@@ -238,7 +238,7 @@ int main(void) {
         CHECK(p.payload && p.payload[0] == 0 && p.payload[39] == 39,
               "содержимое нагрузки не то");
         CHECK(!p.truncated, "целый пакет объявлен обрезанным");
-        CHECK(d2k_nl_next(&it, &m) == 0, "итератор нашёл лишнее сообщение");
+        CHECK(d2s_nl_next(&it, &m) == 0, "итератор нашёл лишнее сообщение");
     }
 
     /* --- последний атрибут без выравнивающего хвоста ----------------------
@@ -255,25 +255,25 @@ int main(void) {
         wn32(ph, 42);
         wn16(ph + 4, 0x0800);
         ph[6] = 3;
-        pos = put(buf, pos, D2K_NFQA_PACKET_HDR, ph, sizeof ph, 1);
+        pos = put(buf, pos, D2S_NFQA_PACKET_HDR, ph, sizeof ph, 1);
 
         uint8_t pay[91];
         memset(pay, 0xA5, sizeof pay);
-        pos = put(buf, pos, D2K_NFQA_PAYLOAD, pay, sizeof pay, 0);  /* без хвоста */
+        pos = put(buf, pos, D2S_NFQA_PAYLOAD, pay, sizeof pay, 0);  /* без хвоста */
 
         wh32(buf, (uint32_t)pos);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_pkt p;
-        d2k_nl_iter_init(&it, buf, pos);   /* буфер РОВНО по длине сообщения */
-        CHECK(d2k_nl_next(&it, &m) == 1, "невыровненный хвост: сообщение не взято");
-        CHECK(d2k_nl_packet(&m, &p) == 0, "невыровненный хвост: разбор провалился");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_pkt p;
+        d2s_nl_iter_init(&it, buf, pos);   /* буфер РОВНО по длине сообщения */
+        CHECK(d2s_nl_next(&it, &m) == 1, "невыровненный хвост: сообщение не взято");
+        CHECK(d2s_nl_packet(&m, &p) == 0, "невыровненный хвост: разбор провалился");
         CHECK(p.have_payload && p.payload_len == 91,
               "невыровненный хвост: нагрузка потеряна");
         CHECK(p.payload && p.payload[90] == 0xA5, "невыровненный хвост: данные не те");
-        CHECK(d2k_nl_next(&it, &m) == 0, "невыровненный хвост: итератор пошёл дальше");
+        CHECK(d2s_nl_next(&it, &m) == 0, "невыровненный хвост: итератор пошёл дальше");
     }
 
     /* --- обрезанный пакет: cap_len больше нагрузки ------------------------ */
@@ -287,22 +287,22 @@ int main(void) {
         wn32(ph, 1);
         wn16(ph + 4, 0x0800);
         ph[6] = 3;
-        pos = put(buf, pos, D2K_NFQA_PACKET_HDR, ph, sizeof ph, 1);
+        pos = put(buf, pos, D2S_NFQA_PACKET_HDR, ph, sizeof ph, 1);
         uint8_t pay[64];
         memset(pay, 0, sizeof pay);
-        pos = put(buf, pos, D2K_NFQA_PAYLOAD, pay, sizeof pay, 1);
+        pos = put(buf, pos, D2S_NFQA_PAYLOAD, pay, sizeof pay, 1);
         uint8_t cl[4];
         wn32(cl, 1400);
-        pos = put(buf, pos, D2K_NFQA_CAP_LEN, cl, sizeof cl, 1);
+        pos = put(buf, pos, D2S_NFQA_CAP_LEN, cl, sizeof cl, 1);
         wh32(buf, (uint32_t)pos);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_pkt p;
-        d2k_nl_iter_init(&it, buf, pos);
-        CHECK(d2k_nl_next(&it, &m) == 1, "обрезанный: сообщение не взято");
-        CHECK(d2k_nl_packet(&m, &p) == 0, "обрезанный: разбор провалился");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_pkt p;
+        d2s_nl_iter_init(&it, buf, pos);
+        CHECK(d2s_nl_next(&it, &m) == 1, "обрезанный: сообщение не взято");
+        CHECK(d2s_nl_packet(&m, &p) == 0, "обрезанный: разбор провалился");
         CHECK(p.cap_len == 1400 && p.payload_len == 64, "обрезанный: длины не те");
         CHECK(p.truncated, "обрезанный пакет не помечен обрезанным");
     }
@@ -312,11 +312,11 @@ int main(void) {
         uint8_t buf[64];
         memset(buf, 0, sizeof buf);
         wh32(buf, 1000);                  /* объявляем больше, чем есть */
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_iter_init(&it, buf, sizeof buf);
-        CHECK(d2k_nl_next(&it, &m) == 0, "сообщение с врущей длиной принято");
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_iter_init(&it, buf, sizeof buf);
+        CHECK(d2s_nl_next(&it, &m) == 0, "сообщение с врущей длиной принято");
     }
 
     /* --- длина сообщения меньше заголовка --------------------------------- */
@@ -324,10 +324,10 @@ int main(void) {
         uint8_t buf[64];
         memset(buf, 0, sizeof buf);
         wh32(buf, 8);
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_iter_init(&it, buf, sizeof buf);
-        CHECK(d2k_nl_next(&it, &m) == 0, "сообщение короче заголовка принято");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_iter_init(&it, buf, sizeof buf);
+        CHECK(d2s_nl_next(&it, &m) == 0, "сообщение короче заголовка принято");
     }
 
     /* --- врущая длина атрибута -------------------------------------------- */
@@ -337,16 +337,16 @@ int main(void) {
         buf[16] = 2;
         wn16(buf + 18, 1);
         wh16(buf + 20, 500);              /* nla_len больше тела */
-        wh16(buf + 22, D2K_NFQA_PAYLOAD);
+        wh16(buf + 22, D2S_NFQA_PAYLOAD);
         wh32(buf, 40);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_pkt p;
-        d2k_nl_iter_init(&it, buf, 40);
-        CHECK(d2k_nl_next(&it, &m) == 1, "сообщение с кривым атрибутом не взято");
-        CHECK(d2k_nl_packet(&m, &p) == 0, "разбор упал на кривом атрибуте");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_pkt p;
+        d2s_nl_iter_init(&it, buf, 40);
+        CHECK(d2s_nl_next(&it, &m) == 1, "сообщение с кривым атрибутом не взято");
+        CHECK(d2s_nl_packet(&m, &p) == 0, "разбор упал на кривом атрибуте");
         CHECK(!p.have_payload, "нагрузка взята из атрибута с врущей длиной");
         CHECK(!p.have_hdr, "заголовок взялся из ниоткуда");
     }
@@ -358,15 +358,15 @@ int main(void) {
         buf[16] = 2;
         wn16(buf + 18, 1);
         wh16(buf + 20, 0);                /* nla_len = 0 — бесконечный цикл? */
-        wh16(buf + 22, D2K_NFQA_PAYLOAD);
+        wh16(buf + 22, D2S_NFQA_PAYLOAD);
         wh32(buf, 40);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_pkt p;
-        d2k_nl_iter_init(&it, buf, 40);
-        CHECK(d2k_nl_next(&it, &m) == 1, "сообщение с нулевым атрибутом не взято");
-        CHECK(d2k_nl_packet(&m, &p) == 0, "разбор нулевого атрибута провалился");
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_pkt p;
+        d2s_nl_iter_init(&it, buf, 40);
+        CHECK(d2s_nl_next(&it, &m) == 1, "сообщение с нулевым атрибутом не взято");
+        CHECK(d2s_nl_packet(&m, &p) == 0, "разбор нулевого атрибута провалился");
         CHECK(!p.have_payload, "из нулевого атрибута что-то извлеклось");
     }
 
@@ -375,13 +375,13 @@ int main(void) {
         uint8_t buf[32];
         memset(buf, 0, sizeof buf);
         wh32(buf, 18);                    /* 16 заголовка + 2 тела */
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_pkt p;
-        d2k_nl_iter_init(&it, buf, 18);
-        CHECK(d2k_nl_next(&it, &m) == 1, "короткое тело: сообщение не взято");
-        CHECK(d2k_nl_packet(&m, &p) == -1, "тело короче nfgenmsg принято за пакет");
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_pkt p;
+        d2s_nl_iter_init(&it, buf, 18);
+        CHECK(d2s_nl_next(&it, &m) == 1, "короткое тело: сообщение не взято");
+        CHECK(d2s_nl_packet(&m, &p) == -1, "тело короче nfgenmsg принято за пакет");
     }
 
     /* --- ошибка от ядра --------------------------------------------------- */
@@ -389,23 +389,23 @@ int main(void) {
         uint8_t buf[64];
         memset(buf, 0, sizeof buf);
         wh32(buf, 36);
-        wh16(buf + 4, D2K_NLMSG_ERROR);
+        wh16(buf + 4, D2S_NLMSG_ERROR);
         int32_t e = -22;                  /* -EINVAL */
         memcpy(buf + 16, &e, 4);
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
+        d2s_nl_iter it;
+        d2s_nl_msg m;
         int32_t got = 0;
-        d2k_nl_iter_init(&it, buf, 36);
-        CHECK(d2k_nl_next(&it, &m) == 1, "ошибка ядра не разобралась как сообщение");
-        CHECK(d2k_nl_errno(&m, &got) == 0, "NLMSG_ERROR не распознан");
+        d2s_nl_iter_init(&it, buf, 36);
+        CHECK(d2s_nl_next(&it, &m) == 1, "ошибка ядра не разобралась как сообщение");
+        CHECK(d2s_nl_errno(&m, &got) == 0, "NLMSG_ERROR не распознан");
         CHECK(got == -22, "код ошибки ядра потерян");
 
         /* Подтверждение на NLM_F_ACK приходит тем же типом с нулём. */
         memset(buf + 16, 0, 4);
-        d2k_nl_iter_init(&it, buf, 36);
-        d2k_nl_next(&it, &m);
-        CHECK(d2k_nl_errno(&m, &got) == 0 && got == 0,
+        d2s_nl_iter_init(&it, buf, 36);
+        d2s_nl_next(&it, &m);
+        CHECK(d2s_nl_errno(&m, &got) == 0 && got == 0,
               "подтверждение ACK не распознано");
     }
 
@@ -414,17 +414,17 @@ int main(void) {
         uint8_t buf[128];
         memset(buf, 0, sizeof buf);
         wh32(buf, 20);
-        wh16(buf + 4, D2K_NFQ_TYPE(D2K_NFQNL_MSG_PACKET));
+        wh16(buf + 4, D2S_NFQ_TYPE(D2S_NFQNL_MSG_PACKET));
         wh32(buf + 20, 24);
-        wh16(buf + 24, D2K_NLMSG_ERROR);
+        wh16(buf + 24, D2S_NLMSG_ERROR);
         int32_t e = -1;
         memcpy(buf + 36, &e, 4);
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
+        d2s_nl_iter it;
+        d2s_nl_msg m;
         int n = 0;
-        d2k_nl_iter_init(&it, buf, 44);
-        while (d2k_nl_next(&it, &m)) {
+        d2s_nl_iter_init(&it, buf, 44);
+        while (d2s_nl_next(&it, &m)) {
             n++;
         }
         CHECK(n == 2, "из буфера с двумя сообщениями взялось не два");
@@ -432,13 +432,13 @@ int main(void) {
 
     /* --- пустой и нулевой вход --------------------------------------------- */
     {
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_iter_init(&it, NULL, 100);
-        CHECK(d2k_nl_next(&it, &m) == 0, "из нулевого буфера что-то взялось");
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_iter_init(&it, NULL, 100);
+        CHECK(d2s_nl_next(&it, &m) == 0, "из нулевого буфера что-то взялось");
         uint8_t one = 0;
-        d2k_nl_iter_init(&it, &one, 0);
-        CHECK(d2k_nl_next(&it, &m) == 0, "из пустого буфера что-то взялось");
+        d2s_nl_iter_init(&it, &one, 0);
+        CHECK(d2s_nl_next(&it, &m) == 0, "из пустого буфера что-то взялось");
     }
 
     if (fails) {

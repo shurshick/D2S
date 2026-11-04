@@ -4,12 +4,12 @@
  * nf_conntrack загружен (CI, Docker), чтение настоящей таблицы не находит
  * тестовых потоков, и планы отказывались «поток не ведётся conntrack». На
  * macOS таблицы нет, и тесты проходили — поэтому поломка на Linux не была
- * видна. Тесты ставят D2K_TEST_NAT_NO_TABLE() первой строкой main; случаи,
+ * видна. Тесты ставят D2S_TEST_NAT_NO_TABLE() первой строкой main; случаи,
  * где NAT важен, ставят свой stub поверх. */
-#ifndef D2K_TEST_NAT_STUB_H
-#define D2K_TEST_NAT_STUB_H
+#ifndef D2S_TEST_NAT_STUB_H
+#define D2S_TEST_NAT_STUB_H
 
-#include "d2k_nat.h"
+#include "d2s_nat.h"
 
 static int test_nat_no_table(const char *path, uint8_t proto, uint32_t src_ip,
                              uint16_t src_port, uint32_t dst_ip, uint16_t dst_port,
@@ -25,8 +25,8 @@ static int test_nat_no_table_family(const char *path, uint8_t proto,
     (void)family; (void)out_src; (void)out_sport;
     return 1;
 }
-#define D2K_TEST_NAT_NO_TABLE() \
-    do { d2k_nat_hook = test_nat_no_table; \
-         d2k_nat_family_hook = test_nat_no_table_family; } while (0)
+#define D2S_TEST_NAT_NO_TABLE() \
+    do { d2s_nat_hook = test_nat_no_table; \
+         d2s_nat_family_hook = test_nat_no_table_family; } while (0)
 
 #endif

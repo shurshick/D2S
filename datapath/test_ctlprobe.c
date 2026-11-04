@@ -21,7 +21,7 @@ static int run(int with_quit) {
     int input[2], output[2];
     if (pipe(input) < 0 || pipe(output) < 0) { return 1; }
     char path[100];
-    snprintf(path, sizeof path, "/tmp/d2k-ctlprobe-batch-%ld-%d.sock", (long)getpid(), with_quit);
+    snprintf(path, sizeof path, "/tmp/d2s-ctlprobe-batch-%ld-%d.sock", (long)getpid(), with_quit);
     pid_t child = fork();
     if (child < 0) { return 1; }
     if (!child) {

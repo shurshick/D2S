@@ -4,7 +4,7 @@
 const assert=require("node:assert/strict"),fs=require("node:fs"),os=require("node:os"),path=require("node:path");
 const {spawn}=require("node:child_process");
 const base=process.argv[2]||"http://192.168.1.1:8090/";
-const profile=fs.mkdtempSync(path.join(os.tmpdir(),"d2k-router-view-"));
+const profile=fs.mkdtempSync(path.join(os.tmpdir(),"d2s-router-view-"));
 const chrome=spawn("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
  ["--headless","--no-first-run","--hide-scrollbars","--remote-debugging-port=0","--user-data-dir="+profile,"about:blank"],{stdio:"ignore"});
 let ws;

@@ -25,11 +25,11 @@ describes code and local evidence, not field acceptance.
 
 ## Implementation map
 
-- Datapath table/API: `datapath/include/d2k_plans.h`, `datapath/plans.c`.
-- Version 3 command and event contract: `datapath/include/d2k_ctl.h`,
-  `datapath/ctlsrv.c`, `core/include/d2k_link.h`, `core/link.c`.
-- Flow/journal evidence: `datapath/include/d2k_track.h`,
-  `datapath/include/d2k_journal.h`, `datapath/session.c`, `datapath/journal.c`.
+- Datapath table/API: `datapath/include/d2s_plans.h`, `datapath/plans.c`.
+- Version 3 command and event contract: `datapath/include/d2s_ctl.h`,
+  `datapath/ctlsrv.c`, `core/include/d2s_link.h`, `core/link.c`.
+- Flow/journal evidence: `datapath/include/d2s_track.h`,
+  `datapath/include/d2s_journal.h`, `datapath/session.c`, `datapath/journal.c`.
 - Reserved socket, exact evidence matching, promotion and cleanup:
   `core/sched.c`.
 
@@ -68,7 +68,7 @@ git diff --check
 
 All completed successfully. The first full core run exposed two synthetic test
 helpers still emitting the pre-v3 short `APPLIED` frame; after adding the
-required zero trial ID for TCP name probes, `test_compose`, `test_d2kask`, and
+required zero trial ID for TCP name probes, `test_compose`, `test_d2sask`, and
 the full sequential core suite passed.
 
 ## Explicitly not proven

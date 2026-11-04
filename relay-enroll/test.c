@@ -10,7 +10,7 @@
 #include <openssl/x509.h>
 
 static void test_proof(void) {
-    char directory[]="/tmp/d2k-enroll-server-XXXXXX",path[256];assert(mkdtemp(directory));
+    char directory[]="/tmp/d2s-enroll-server-XXXXXX",path[256];assert(mkdtemp(directory));
     snprintf(path,sizeof(path),"%s/identity",directory);
     tg_identity identity={0};assert(tg_identity_load_or_mint(path,&identity)==0);
     uint8_t body[PROOF_SIZE];assert(tg_enroll_proof(&identity,body)==0);
@@ -168,7 +168,7 @@ static void test_lock_recovery(void) {
 /* M5: the full request path (TLS, headers, route counter, body, reply). */
 static char cert_path[64];
 static void make_cert(void) {
-    strcpy(cert_path,"/tmp/d2k-enroll-cert-XXXXXX");int fd=mkstemp(cert_path);assert(fd>=0);
+    strcpy(cert_path,"/tmp/d2s-enroll-cert-XXXXXX");int fd=mkstemp(cert_path);assert(fd>=0);
     EVP_PKEY *key=EVP_EC_gen("P-256");assert(key);X509 *x=X509_new();assert(x);
     assert(X509_set_version(x,2)==1&&ASN1_INTEGER_set(X509_get_serialNumber(x),1)==1);
     assert(X509_gmtime_adj(X509_getm_notBefore(x),0)&&X509_gmtime_adj(X509_getm_notAfter(x),3600));

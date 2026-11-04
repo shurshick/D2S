@@ -1,5 +1,5 @@
 #!/bin/sh
-# lab-pair.sh — живая пара d2kd + d2kc на Linux, БЕЗ роутера и без трафика.
+# lab-pair.sh — живая пара d2sd + d2sc на Linux, БЕЗ роутера и без трафика.
 #
 # Зачем. Полевой прогон стоит дорого: на время опыта у автора дома выключается
 # z2k, то есть обхода нет у всех, кто пользуется роутером. Самый обидный способ
@@ -8,8 +8,8 @@
 # и подтверждений не появилось НИ ОДНОГО за весь прогон.
 #
 # Что проверяется здесь:
-#   1. d2kd поднимается на настоящем Linux и открывает управляющий сокет;
-#   2. d2kc подключается и НЕ ругается на версию протокола;
+#   1. d2sd поднимается на настоящем Linux и открывает управляющий сокет;
+#   2. d2sc подключается и НЕ ругается на версию протокола;
 #   3. каталог доезжает до датапата командами SET_NAME, и датапат их принимает;
 #   4. обе стороны живут заданное время и завершаются штатно.
 #
@@ -41,9 +41,9 @@ cd /w
 fail() { echo "ПРОВАЛ: $*" >&2; exit 1; }
 
 echo "== сборка =="
-make -s -C datapath d2kd >/dev/null
-cp datapath/d2kd /tmp/d2kd
-make -s -C core d2kc >/dev/null
+make -s -C datapath d2sd >/dev/null
+cp datapath/d2sd /tmp/d2sd
+make -s -C core d2sc >/dev/null
 
 SOCK=/tmp/lab-ctl.sock
 CAT=/tmp/lab-catalog.json
@@ -63,22 +63,22 @@ cat > "$CAT" <<'JSON'
  "fingerprint":{"method":2,"signals":[{"kind":"rst","ttl":64,"seen":3}]},
  "plans":[{"id":"plan-lab00001","proto":"tls","added":"2026-09-12T00:00:00Z",
    "successes":1,"enabled":true,
-   "text":"d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\norder forward\n"}],
+   "text":"d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\norder forward\n"}],
  "bindings":[{"kind":"name","target":"lab.example","plan_id":"plan-lab00001",
    "level":3,"confirmed":"2026-09-12T00:00:00Z","successes":1,"enabled":true}]}]}
 JSON
 
 echo "== запуск датапата (observe, без NFQUEUE) =="
-/tmp/d2kd --mode observe --control "$SOCK" --queue 9999 --duration 6 \
-    > /tmp/d2kd.log 2>&1 &
+/tmp/d2sd --mode observe --control "$SOCK" --queue 9999 --duration 6 \
+    > /tmp/d2sd.log 2>&1 &
 DPID=$!
 # Ждём появления сокета, а не спим «на авось».
 i=0
 while [ ! -S "$SOCK" ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
-[ -S "$SOCK" ] || { cat /tmp/d2kd.log; fail "датапат не открыл управляющий сокет"; }
+[ -S "$SOCK" ] || { cat /tmp/d2sd.log; fail "датапат не открыл управляющий сокет"; }
 
 echo "== запуск контроллера =="
-./core/d2kc --control "$SOCK" --catalog "$CAT" --live "$LIVE" > /tmp/d2kc.log 2>&1 &
+./core/d2sc --control "$SOCK" --catalog "$CAT" --live "$LIVE" > /tmp/d2sc.log 2>&1 &
 CPID=$!
 
 sleep 5
@@ -86,27 +86,27 @@ kill "$CPID" 2>/dev/null || true
 wait "$CPID" 2>/dev/null || true
 wait "$DPID" 2>/dev/null || true
 
-echo "--- d2kd ---"; cat /tmp/d2kd.log
-echo "--- d2kc ---"; cat /tmp/d2kc.log
+echo "--- d2sd ---"; cat /tmp/d2sd.log
+echo "--- d2sc ---"; cat /tmp/d2sc.log
 
-grep -q "версии протокола" /tmp/d2kc.log && \
+grep -q "версии протокола" /tmp/d2sc.log && \
     fail "контроллер отверг версию протокола — пара смешанная"
-grep -q "версию протокола не объявил" /tmp/d2kc.log && \
+grep -q "версию протокола не объявил" /tmp/d2sc.log && \
     fail "датапат версию протокола не объявил — пара не подтверждена"
-grep -qE "не принят|не активирован" /tmp/d2kd.log && \
+grep -qE "не принят|не активирован" /tmp/d2sd.log && \
     fail "датапат отверг план из каталога"
 
 # САМОЕ ВАЖНОЕ УТВЕРЖДЕНИЕ. Пара может «разговаривать» и при этом не доставить
 # ни одного плана: 12.09 именно так и было — события шли, подтверждений не
 # появилось ни одного за весь прогон. Считаем планы, а не разговоры.
-grep -q "планов по целям 0 из" /tmp/d2kd.log && \
+grep -q "планов по целям 0 из" /tmp/d2sd.log && \
     fail "каталог до датапата не доехал: планов по целям ноль"
 
 
-echo "ВСЁ ЗЕЛЕНО: пара d2kd+d2kc разговаривает, версия сошлась, каталог принят"
+echo "ВСЁ ЗЕЛЕНО: пара d2sd+d2sc разговаривает, версия сошлась, каталог принят"
 DRIVER
 
-# NET_ADMIN нужен ровно для одного: d2kd открывает очередь NFQUEUE при
+# NET_ADMIN нужен ровно для одного: d2sd открывает очередь NFQUEUE при
 # старте, даже в режиме наблюдения, и без права на неё до управляющего сокета
 # не доходит. Сеть контейнера своя и уничтожается вместе с ним.
 docker run --rm --cap-add=NET_ADMIN -v "$WORK:/w" -w /w gcc:14 sh /w/lab.sh

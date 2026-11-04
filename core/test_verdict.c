@@ -5,16 +5,16 @@
  * одну и ту же мишень: у обоих первый байт 0x16 (оба похожи на TLS-запись —
  * иначе проверка контроля молчащей коробкой в режиме 3 была бы не про
  * контроль, а про то, что ctl вообще не похож на протокол цели), но
- * четырёхбайтовая сигнатура d2k_test_sig есть только у trig — контроль
+ * четырёхбайтовая сигнатура d2s_test_sig есть только у trig — контроль
  * обязан быть ДРУГИМ именем, а не тем же самым.
  */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_hello.h"
-#include "d2k_meas.h"
-#include "d2k_verdict.h"
+#include "d2s_hello.h"
+#include "d2s_meas.h"
+#include "d2s_verdict.h"
 #include "test_stand.h"
 
 static int fails;
@@ -26,7 +26,7 @@ static int fails;
         }                                                  \
     } while (0)
 
-/* Подставные реализации d2k_mark_hook — тот же приём, что в test_meas.c,
+/* Подставные реализации d2s_mark_hook — тот же приём, что в test_meas.c,
  * и по той же причине: проверка политики «непомеченный clear не
  * принимается» обязана утверждать одно и то же от root и от обычного
  * пользователя, а не зависеть от того, есть ли у процесса CAP_NET_ADMIN. */
@@ -44,27 +44,27 @@ static int mark_never_ok(int fd, uint32_t mark) {
 int main(void) {
     uint8_t hello[64];
     memset(hello, 0xAA, sizeof hello);
-    memcpy(hello, d2k_test_sig, sizeof d2k_test_sig);
-    d2k_hello trig = { hello, sizeof hello , NULL, 0, 0, 0};
+    memcpy(hello, d2s_test_sig, sizeof d2s_test_sig);
+    d2s_hello trig = { hello, sizeof hello , NULL, 0, 0, 0};
 
     /* Контроль: другое имя на ту же цель. Начинается с того же 0x16, что и
-       любая TLS-запись, но дальше расходится с d2k_test_sig на третьем
+       любая TLS-запись, но дальше расходится с d2s_test_sig на третьем
        байте — четырёхбайтовая сигнатура триггера нигде в ctl не встречается
        ни целиком, ни со сдвигом (в буфере нет второго 0x16). */
     uint8_t ctl_bytes[64];
     memset(ctl_bytes, 0xBB, sizeof ctl_bytes);
     ctl_bytes[0] = 0x16;
     ctl_bytes[1] = 0x03;
-    ctl_bytes[2] = 0x03; /* d2k_test_sig[2] == 0x01 — здесь другое имя */
+    ctl_bytes[2] = 0x03; /* d2s_test_sig[2] == 0x01 — здесь другое имя */
     ctl_bytes[3] = 0x00;
-    d2k_hello ctl = { ctl_bytes, sizeof ctl_bytes , NULL, 0, 0, 0};
+    d2s_hello ctl = { ctl_bytes, sizeof ctl_bytes , NULL, 0, 0, 0};
 
     /* --- чистая линия: обходить нечего ------------------------------------ */
     {
         struct stand s;
         uint16_t p = stand_start(&s, 0);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_CLEAR, "чистая линия не опознана");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_CLEAR, "чистая линия не опознана");
         CHECK(r.reason[0] != 0, "clear без причины: человеку нечего читать");
     }
     /* --- clear требует ПОДТВЕРЖДЕНИЯ: «3 из 3» одной базы недостаточно -----
@@ -80,8 +80,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 6);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_FLAKY,
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_FLAKY,
               "clear вынесен без подтверждения — 4-й и 5-й дозвоны уже молчали");
         CHECK(r.reason[0] != 0, "вердикт без причины: человеку нечего читать");
     }
@@ -89,26 +89,26 @@ int main(void) {
     {
         struct stand s;
         uint16_t p = stand_start(&s, 1);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_PREFIX, "префиксный матчер не опознан");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_PREFIX, "префиксный матчер не опознан");
         CHECK(r.split_pos == 1, "для префиксного матчера предложен не разрез на 1");
     }
     /* --- пересборка: разрез не берёт, контроль проходит ------------------- */
     {
         struct stand s;
         uint16_t p = stand_start(&s, 2);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_OPAQUE, "пересобирающая коробка не опознана");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_OPAQUE, "пересобирающая коробка не опознана");
     }
     /* --- контроль молчит: утверждать нечего -------------------------------- */
     {
         /* Стенд молчит на всё, что начинается с 0x16 — и на триггер, и на
            контроль. Отличить «режут наши байты» от «молчит всё» нечем, и
-           d2k НЕ утверждает блокировку по адресу (§2.3). */
+           d2s НЕ утверждает блокировку по адресу (§2.3). */
         struct stand s;
         uint16_t p = stand_start(&s, 3);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE, "молчание контроля выдано за вердикт");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE, "молчание контроля выдано за вердикт");
         CHECK(r.reason[0] != 0, "вердикт без причины: человеку нечего читать");
     }
     /* --- частичный сбой транспорта — flaky, а не «решило содержимое» -------
@@ -128,8 +128,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 5);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_FLAKY, "частичный сбой транспорта не пойман как flaky");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_FLAKY, "частичный сбой транспорта не пойман как flaky");
         CHECK(strstr(r.reason, "разрез на 1") != NULL,
               "причина не называет шаг, на котором сбоил транспорт");
         CHECK(r.probes == 6,
@@ -150,12 +150,12 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 7);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict != D2K_V_CLEAR, "алерт засчитан за проход — вынесен ложный clear");
-        CHECK(r.verdict != D2K_V_OPAQUE,
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict != D2S_V_CLEAR, "алерт засчитан за проход — вынесен ложный clear");
+        CHECK(r.verdict != D2S_V_OPAQUE,
               "алерт на триггер выдан за «решает содержимое» — до сервера дошло, "
               "решение принимал не обязательно он");
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE,
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE,
               "ответ не-доказательством обязан давать «вердикта нет»");
         CHECK(strstr(r.reason, "не доказательством прохода") != NULL,
               "причина не называет, чем именно ответили вместо прохода");
@@ -172,10 +172,10 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 9);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict != D2K_V_PREFIX, "алерт на разрез засчитан за проход — ложный PREFIX");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict != D2S_V_PREFIX, "алерт на разрез засчитан за проход — ложный PREFIX");
         CHECK(r.split_pos == 0, "предложен разрез, доказанный алертом");
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE,
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE,
               "ответ не-доказательством на разрез обязан давать «вердикта нет»");
         CHECK(strstr(r.reason, "не доказательством прохода") != NULL,
               "причина не называет, чем ответили на разрез");
@@ -194,8 +194,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 8);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE, "блок-страница выдана за вердикт");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE, "блок-страница выдана за вердикт");
         CHECK(strstr(r.reason, "не записью TLS") != NULL,
               "причина не называет, чем ответил контроль");
         CHECK(strstr(r.reason, "молчит") == NULL,
@@ -209,24 +209,24 @@ int main(void) {
      * пропустить запрос, а убить ОТВЕТ (§6 спеки, шапка response.go донора):
      * ClientHello доходит, ServerHello возвращается, «проходит как есть» —
      * правда про запрос и неправда про жизнь. Зонда обратного направления в
-     * d2k нет, поэтому CLEAR обязан сказать, чего он не мерил.
+     * d2s нет, поэтому CLEAR обязан сказать, чего он не мерил.
      *
      * Приветствия берутся из СНЯТЫХ профилей (core/profiles, файлы .hex), а не
      * лепятся тут вручную: вид приветствия определяется разбором
-     * (d2k_hello_shape), и самодельные байты проверяли бы не то. */
+     * (d2s_hello_shape), и самодельные байты проверяли бы не то. */
     {
         uint8_t leg[2048];
         size_t leg_len = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "a.example", leg, sizeof leg,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "a.example", leg, sizeof leg,
                                      &leg_len) == 0,
               "профиль TLS 1.2 не собрался — проверять оговорку не на чем");
-        d2k_hello leg_trig = { leg, leg_len , NULL, 0, 0, 0};
+        d2s_hello leg_trig = { leg, leg_len , NULL, 0, 0, 0};
 
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 0);
-        d2k_vres r = d2k_classify("127.0.0.1", p, leg_trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_CLEAR, "чистая линия на приветствии 1.2 не опознана");
+        d2s_vres r = d2s_classify("127.0.0.1", p, leg_trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_CLEAR, "чистая линия на приветствии 1.2 не опознана");
         CHECK(strstr(r.reason, "обратное направление не проверено") != NULL,
               "clear на форме TLS 1.2 умалчивает, что обратное направление не мерили");
         CHECK(strlen(r.reason) < sizeof r.reason - 1,
@@ -237,12 +237,12 @@ int main(void) {
            блокировки не существует, и оговорка была бы шумом. */
         uint8_t mod[2048];
         size_t mod_len = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "a.example", mod, sizeof mod,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "a.example", mod, sizeof mod,
                                      &mod_len) == 0,
               "профиль TLS 1.3 не собрался");
-        d2k_hello mod_trig = { mod, mod_len , NULL, 0, 0, 0};
-        d2k_vres rm = d2k_classify("127.0.0.1", p, mod_trig, ctl, 0, 3, 5000, 700);
-        CHECK(rm.verdict == D2K_V_CLEAR, "чистая линия на приветствии 1.3 не опознана");
+        d2s_hello mod_trig = { mod, mod_len , NULL, 0, 0, 0};
+        d2s_vres rm = d2s_classify("127.0.0.1", p, mod_trig, ctl, 0, 3, 5000, 700);
+        CHECK(rm.verdict == D2S_V_CLEAR, "чистая линия на приветствии 1.3 не опознана");
         CHECK(strstr(rm.reason, "обратное направление") == NULL,
               "оговорка про обратное направление приклеена к форме 1.3, где этого класса нет");
     }
@@ -257,8 +257,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 1);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
-        CHECK(r.verdict == D2K_V_PREFIX, "префиксный матчер не опознан");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 5000, 700);
+        CHECK(r.verdict == D2S_V_PREFIX, "префиксный матчер не опознан");
         CHECK(strstr(r.reason, "с паузой 5000 мкс между кусками") != NULL,
               "PREFIX не называет паузу, на которой разрез замерен");
     }
@@ -271,8 +271,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 2);
-        d2k_vres r = d2k_classify("127.0.0.1", p, trig, ctl, 0, 3, 0, 700);
-        CHECK(r.verdict == D2K_V_OPAQUE, "пересобирающая коробка не опознана при нулевой паузе");
+        d2s_vres r = d2s_classify("127.0.0.1", p, trig, ctl, 0, 3, 0, 700);
+        CHECK(r.verdict == D2S_V_OPAQUE, "пересобирающая коробка не опознана при нулевой паузе");
         CHECK(strstr(r.reason, "без пауз между кусками") != NULL,
               "вывод о разрезе снят без пауз и молчит об этом");
     }
@@ -285,7 +285,7 @@ int main(void) {
      * выполнилось бы вовсе, и тест зеленел бы, ничего не утверждая. «Тесты,
      * которые ничего не утверждают» — отдельно названный дефект.
      *
-     * Проверяем ПОЛИТИКУ отдельно от ОКРУЖЕНИЯ: подменяем d2k_mark_hook так,
+     * Проверяем ПОЛИТИКУ отдельно от ОКРУЖЕНИЯ: подменяем d2s_mark_hook так,
      * чтобы метка либо гарантированно вставала, либо гарантированно нет, и
      * утверждаем результат в обоих случаях без всяких if — от root и от
      * обычного пользователя одинаково, потому что от привилегии здесь
@@ -293,27 +293,27 @@ int main(void) {
     {
         struct stand s;
         uint16_t p = stand_start(&s, 0); /* чистая линия — иначе не про clear вовсе */
-        d2k_mark_fn real_mark = d2k_mark_hook; /* вернуть после подмены */
+        d2s_mark_fn real_mark = d2s_mark_hook; /* вернуть после подмены */
 
         /* А. Метка запрошена (mark=0x2d), но гарантированно НЕ встаёт: зонд
            шёл бы СКВОЗЬ наш собственный обход, а не мимо него — «обходить
            нечего» отсюда не следует, это самоподтверждение. */
-        d2k_mark_hook = mark_never_ok;
-        d2k_vres r_bad = d2k_classify("127.0.0.1", p, trig, ctl, 0x2d, 3, 5000, 700);
+        d2s_mark_hook = mark_never_ok;
+        d2s_vres r_bad = d2s_classify("127.0.0.1", p, trig, ctl, 0x2d, 3, 5000, 700);
         CHECK(r_bad.marked == 0, "непомеченная серия объявлена помеченной");
-        CHECK(r_bad.verdict != D2K_V_CLEAR, "непомеченный clear принят");
-        CHECK(r_bad.verdict == D2K_V_INCONCLUSIVE,
+        CHECK(r_bad.verdict != D2S_V_CLEAR, "непомеченный clear принят");
+        CHECK(r_bad.verdict == D2S_V_INCONCLUSIVE,
               "непомеченный clear обязан стать «вердикта нет», а не тихо "
               "превратиться во что-то ещё");
         CHECK(r_bad.reason[0] != 0, "вердикт без причины: человеку нечего читать");
 
         /* Б. Метка встаёт на каждом дозвоне серии — clear остаётся clear. */
-        d2k_mark_hook = mark_always_ok;
-        d2k_vres r_ok = d2k_classify("127.0.0.1", p, trig, ctl, 0x2d, 3, 5000, 700);
+        d2s_mark_hook = mark_always_ok;
+        d2s_vres r_ok = d2s_classify("127.0.0.1", p, trig, ctl, 0x2d, 3, 5000, 700);
         CHECK(r_ok.marked == 1, "помеченная серия не признана помеченной");
-        CHECK(r_ok.verdict == D2K_V_CLEAR, "помеченный clear не остался clear");
+        CHECK(r_ok.verdict == D2S_V_CLEAR, "помеченный clear не остался clear");
 
-        d2k_mark_hook = real_mark;
+        d2s_mark_hook = real_mark;
     }
 
     if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }

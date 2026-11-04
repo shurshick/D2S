@@ -1,4 +1,4 @@
-/* stun.c — контракт и все обоснования в d2k_stun.h.
+/* stun.c — контракт и все обоснования в d2s_stun.h.
  *
  * Разбор идёт СТРОГО по объявленным длинам и с выравниванием атрибутов в
  * четыре байта (RFC 5389 §15). Гадать здесь нечего и нельзя: атрибут
@@ -8,8 +8,8 @@
  */
 #include <string.h>
 
-#include "d2k_stun.h"
-#include "d2k_tls13core.h"
+#include "d2s_stun.h"
+#include "d2s_tls13core.h"
 
 #define STUN_BINDING_REQUEST  0x0001u
 #define STUN_BINDING_RESPONSE 0x0101u
@@ -24,13 +24,13 @@ static uint32_t rd32(const uint8_t *p) {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
 }
 
-size_t d2k_stun_request(uint8_t *out, size_t cap, uint8_t txid[D2K_STUN_TXID_LEN]) {
-    if (!out || !txid || cap < D2K_STUN_HDR_LEN) { return 0; }
+size_t d2s_stun_request(uint8_t *out, size_t cap, uint8_t txid[D2S_STUN_TXID_LEN]) {
+    if (!out || !txid || cap < D2S_STUN_HDR_LEN) { return 0; }
     /* Идентификатор — СВОЙ на каждый вызов и из того же источника
-       случайности, что и всё остальное в проекте (d2k_t13_random): второй
+       случайности, что и всё остальное в проекте (d2s_t13_random): второй
        генератор завёл бы второе место, где «случайность» может оказаться
        предсказуемой, и разошёлся бы с первым незаметно. */
-    if (d2k_t13_random(txid, D2K_STUN_TXID_LEN) != 0) { return 0; }
+    if (d2s_t13_random(txid, D2S_STUN_TXID_LEN) != 0) { return 0; }
 
     out[0] = (uint8_t)(STUN_BINDING_REQUEST >> 8);
     out[1] = (uint8_t)(STUN_BINDING_REQUEST & 0xff);
@@ -40,8 +40,8 @@ size_t d2k_stun_request(uint8_t *out, size_t cap, uint8_t txid[D2K_STUN_TXID_LEN
     out[5] = (uint8_t)(STUN_MAGIC >> 16);
     out[6] = (uint8_t)(STUN_MAGIC >> 8);
     out[7] = (uint8_t)(STUN_MAGIC);
-    memcpy(out + 8, txid, D2K_STUN_TXID_LEN);
-    return D2K_STUN_HDR_LEN;
+    memcpy(out + 8, txid, D2S_STUN_TXID_LEN);
+    return D2S_STUN_HDR_LEN;
 }
 
 /* XOR-MAPPED-ADDRESS (RFC 5389 §15.2): адрес и порт поксорены с магической
@@ -50,7 +50,7 @@ size_t d2k_stun_request(uint8_t *out, size_t cap, uint8_t txid[D2K_STUN_TXID_LEN
    идентификатор транзакции (то есть 16 байт), и перепутать их с одной меткой
    значит получить осмысленно выглядящий, но неверный адрес. */
 static int parse_xor_mapped(const uint8_t *a, size_t len,
-                            const uint8_t txid[D2K_STUN_TXID_LEN],
+                            const uint8_t txid[D2S_STUN_TXID_LEN],
                             uint8_t *ip, int *family, uint16_t *port) {
     if (len < 8) { return -1; }
     uint16_t p = (uint16_t)(rd16(a + 2) ^ (uint16_t)(STUN_MAGIC >> 16));
@@ -71,7 +71,7 @@ static int parse_xor_mapped(const uint8_t *a, size_t len,
         key[1] = (uint8_t)(STUN_MAGIC >> 16);
         key[2] = (uint8_t)(STUN_MAGIC >> 8);
         key[3] = (uint8_t)STUN_MAGIC;
-        memcpy(key + 4, txid, D2K_STUN_TXID_LEN);
+        memcpy(key + 4, txid, D2S_STUN_TXID_LEN);
         for (size_t i = 0; i < 16; i++) {
             ip[i] = (uint8_t)(a[4 + i] ^ key[i]);
         }
@@ -82,23 +82,23 @@ static int parse_xor_mapped(const uint8_t *a, size_t len,
     return -1; /* неизвестное семейство — не выдумывать адрес */
 }
 
-int d2k_stun_parse_response(const uint8_t *p, size_t n,
-                            const uint8_t txid[D2K_STUN_TXID_LEN],
+int d2s_stun_parse_response(const uint8_t *p, size_t n,
+                            const uint8_t txid[D2S_STUN_TXID_LEN],
                             uint8_t *ip, int *family, uint16_t *port) {
     if (!p || !txid || !ip || !family || !port) { return -1; }
     *family = 0;
     *port = 0;
-    if (n < D2K_STUN_HDR_LEN) { return -1; }
+    if (n < D2S_STUN_HDR_LEN) { return -1; }
     if (rd16(p) != STUN_BINDING_RESPONSE) { return -1; }
     if (rd32(p + 4) != STUN_MAGIC) { return -1; }
-    /* СВЕРКА ИДЕНТИФИКАТОРА — см. d2k_stun.h: без неё за доказательство
+    /* СВЕРКА ИДЕНТИФИКАТОРА — см. d2s_stun.h: без неё за доказательство
        «путь жив» сойдёт любой пакет, прилетевший на порт. */
-    if (memcmp(p + 8, txid, D2K_STUN_TXID_LEN) != 0) { return -1; }
+    if (memcmp(p + 8, txid, D2S_STUN_TXID_LEN) != 0) { return -1; }
 
     size_t attrs = rd16(p + 2);
-    if (D2K_STUN_HDR_LEN + attrs > n) { return -1; }
+    if (D2S_STUN_HDR_LEN + attrs > n) { return -1; }
 
-    const uint8_t *b = p + D2K_STUN_HDR_LEN;
+    const uint8_t *b = p + D2S_STUN_HDR_LEN;
     size_t left = attrs;
     while (left >= 4) {
         uint16_t typ = rd16(b);

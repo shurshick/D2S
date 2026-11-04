@@ -111,7 +111,7 @@ static void remove_paths(const char *path) {
 }
 
 static void test_store_install_merge_and_last_known_good_recovery(void) {
-    char dir[] = "/tmp/d2k-dc-map-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-map-XXXXXX";
     char path[TG_DC_MAP_PATH_MAX];
     make_paths(dir, path);
     tg_dc_map_store store = {0};
@@ -155,7 +155,7 @@ static void test_store_install_merge_and_last_known_good_recovery(void) {
 }
 
 static void test_rejected_update_does_not_replace_active_snapshot(void) {
-    char dir[] = "/tmp/d2k-dc-map-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-map-XXXXXX";
     char path[TG_DC_MAP_PATH_MAX];
     make_paths(dir, path);
     tg_dc_map_store store = {0};
@@ -176,7 +176,7 @@ static void test_rejected_update_does_not_replace_active_snapshot(void) {
 
 static void test_refresh_keeps_complete_media_route_catalogue(void) {
     const int64_t now = INT64_C(1800000000);
-    char dir[] = "/tmp/d2k-dc-media-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-media-XXXXXX";
     char path[TG_DC_MAP_PATH_MAX];
     make_paths(dir, path);
     tg_dc_map_store store = {0};
@@ -201,7 +201,7 @@ static void test_refresh_keeps_complete_media_route_catalogue(void) {
 
 static void test_load_migrates_old_cache_with_builtin_media_routes(void) {
     const int64_t now = INT64_C(1800000000);
-    char dir[] = "/tmp/d2k-dc-load-media-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-load-media-XXXXXX";
     char path[TG_DC_MAP_PATH_MAX];
     make_paths(dir, path);
     tg_dc_endpoint endpoints[6];
@@ -234,7 +234,7 @@ static void test_load_migrates_old_cache_with_builtin_media_routes(void) {
 
 static void test_official_dc_option_overrides_builtin_alias_conflict(void) {
     const int64_t now = INT64_C(1800000000);
-    char dir[] = "/tmp/d2k-dc-alias-conflict-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-alias-conflict-XXXXXX";
     char path[TG_DC_MAP_PATH_MAX];
     make_paths(dir, path);
     tg_dc_map_store store = {0};
@@ -293,7 +293,7 @@ static void test_store_resolve_uses_fresh_exact_map_and_scoped_secrets(void) {
 }
 
 static void test_endpoint_manifest_uses_only_allowed_exact_pairs(void) {
-    char dir[] = "/tmp/d2k-dc-map-XXXXXX";
+    char dir[] = "/tmp/d2s-dc-map-XXXXXX";
     char cache_path[TG_DC_MAP_PATH_MAX], manifest[TG_DC_MAP_PATH_MAX];
     make_paths(dir, cache_path);
     char *slash = strrchr(cache_path, '/');

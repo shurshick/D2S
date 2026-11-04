@@ -4,8 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const helper = path.resolve(__dirname, '../files/d2k-log-maintenance.sh');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2k-log-process-test.'));
+const helper = path.resolve(__dirname, '../files/d2s-log-maintenance.sh');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2s-log-process-test.'));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   let worker;
@@ -14,7 +14,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     fs.mkdirSync(path.join(tmp, 'bin'));
     fs.writeFileSync(path.join(tmp, 'bin/sleep'), '#!/bin/sh\necho $$ > "$SLEEP_PID_FILE"\nexec /bin/sleep "$@"\n', { mode: 0o755 });
     worker = spawn('/bin/sh', [helper, 'run'], { env: {
-      ...process.env, D2K_DIR: tmp, D2K_RUNTIME_DIR: path.join(tmp, 'runtime'),
+      ...process.env, D2S_DIR: tmp, D2S_RUNTIME_DIR: path.join(tmp, 'runtime'),
       LOG_EVERY: '30', PATH: `${tmp}/bin:${process.env.PATH}`, SLEEP_PID_FILE: path.join(tmp, 'sleeper')
     }, stdio: 'ignore' });
     const exited = new Promise(resolve => worker.once('exit', resolve));

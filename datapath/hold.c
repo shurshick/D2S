@@ -1,28 +1,28 @@
 #include <stdlib.h>
 #include <string.h>
-#include "d2k_hold.h"
-#include "d2k_packet.h"
-#include "d2k_http80.h"
+#include "d2s_hold.h"
+#include "d2s_packet.h"
+#include "d2s_http80.h"
 
 typedef struct {
     size_t count;
     int kind;
     uint64_t deadline, revision;
-    d2k_hold_info head;
-    uint32_t ids[D2K_HOLD_IDS];
-    size_t len[D2K_HOLD_IDS];
-    uint8_t packets[D2K_HOLD_IDS][D2K_HOLD_PACKET];
+    d2s_hold_info head;
+    uint32_t ids[D2S_HOLD_IDS];
+    size_t len[D2S_HOLD_IDS];
+    uint8_t packets[D2S_HOLD_IDS][D2S_HOLD_PACKET];
 } held;
-struct d2k_hold { held slots[D2K_HOLD_SLOTS]; d2k_capture capture; d2k_hold_stats stats; };
+struct d2s_hold { held slots[D2S_HOLD_SLOTS]; d2s_capture capture; d2s_hold_stats stats; };
 static uint32_t r32(const uint8_t *p) { return (uint32_t)p[0]<<24 | (uint32_t)p[1]<<16 | (uint32_t)p[2]<<8 | p[3]; }
-static int same(const d2k_key *a, const d2k_key *b) {
-    return d2k_key_equal(a, b);
+static int same(const d2s_key *a, const d2s_key *b) {
+    return d2s_key_equal(a, b);
 }
-int d2k_hold_parse(const uint8_t *p, size_t n, d2k_hold_info *v) {
+int d2s_hold_parse(const uint8_t *p, size_t n, d2s_hold_info *v) {
     if (!v) { return 0; }
     memset(v, 0, sizeof *v);
-    d2k_packet_view ip;
-    if (!d2k_packet_parse(p, n, &ip) || ip.protocol != 6 || (ip.fragment & 0x3fff)) { return 0; }
+    d2s_packet_view ip;
+    if (!d2s_packet_parse(p, n, &ip) || ip.protocol != 6 || (ip.fragment & 0x3fff)) { return 0; }
     v->ihl = ip.l4;
     if (v->ihl < 20 || v->ihl + 20 > n) { return 0; }
     const uint8_t *t = p + v->ihl;
@@ -31,28 +31,28 @@ int d2k_hold_parse(const uint8_t *p, size_t n, d2k_hold_info *v) {
     v->total = ip.total;
     if (th < 20 || v->total > n || v->total < v->header) { return 0; }
     v->payload = v->total - v->header;
-    v->src_low = d2k_key_make_addr(&v->key, 6, &ip.src, &ip.dst, t, t+2);
+    v->src_low = d2s_key_make_addr(&v->key, 6, &ip.src, &ip.dst, t, t+2);
     v->seq = r32(t+4); v->ack = r32(t+8); v->flags = t[13];
     v->dst = ip.dst;
     if (ip.family == 4) { memcpy(&v->dst_be, ip.dst.bytes, 4); }
     memcpy(&v->sport_be, t, 2);
     return 1;
 }
-d2k_hold *d2k_hold_new(void) { return calloc(1, sizeof(d2k_hold)); }
-void d2k_hold_free(d2k_hold *h) { free(h); }
-static void release_slot(d2k_hold *h, held *s, d2k_hold_release release, void *ctx) {
+d2s_hold *d2s_hold_new(void) { return calloc(1, sizeof(d2s_hold)); }
+void d2s_hold_free(d2s_hold *h) { free(h); }
+static void release_slot(d2s_hold *h, held *s, d2s_hold_release release, void *ctx) {
     for (size_t j = 0; j < s->count; j++) {
         release(ctx, s->ids[j], s->packets[j], s->len[j]);
         h->stats.released++;
     }
-    d2k_capture_forget(&h->capture, &s->head.key);
+    d2s_capture_forget(&h->capture, &s->head.key);
     h->stats.pending -= s->count;
     s->count = 0;
 }
-void d2k_hold_flush(d2k_hold *h, uint64_t now, uint64_t revision, int all,
-                    d2k_hold_release release, void *ctx) {
+void d2s_hold_flush(d2s_hold *h, uint64_t now, uint64_t revision, int all,
+                    d2s_hold_release release, void *ctx) {
     if (!h) { return; }
-    for (size_t i = 0; i < D2K_HOLD_SLOTS; i++) {
+    for (size_t i = 0; i < D2S_HOLD_SLOTS; i++) {
         held *s = &h->slots[i];
         if (!s->count) { continue; }
         if (all || now >= s->deadline || revision != s->revision) {
@@ -70,19 +70,19 @@ void d2k_hold_flush(d2k_hold *h, uint64_t now, uint64_t revision, int all,
         }
     }
 }
-uint64_t d2k_hold_next(const d2k_hold *h) {
+uint64_t d2s_hold_next(const d2s_hold *h) {
     uint64_t next = 0;
-    if (h) for (size_t i = 0; i < D2K_HOLD_SLOTS; i++) {
+    if (h) for (size_t i = 0; i < D2S_HOLD_SLOTS; i++) {
         const held *s = &h->slots[i];
         if (s->count && (!next || s->deadline < next)) { next = s->deadline; }
     }
     return next;
 }
-void d2k_hold_get_stats(const d2k_hold *h, d2k_hold_stats *out) {
+void d2s_hold_get_stats(const d2s_hold *h, d2s_hold_stats *out) {
     memset(out, 0, sizeof *out);
     if (h) { *out = h->stats; }
 }
-size_t d2k_hold_verdicts(const uint32_t *ids, size_t count, uint32_t verdict,
+size_t d2s_hold_verdicts(const uint32_t *ids, size_t count, uint32_t verdict,
                         int (*send)(void *, uint32_t, uint32_t), void *ctx) {
     size_t failed = 0;
     for (size_t i = 0; i < count; i++) {
@@ -91,24 +91,24 @@ size_t d2k_hold_verdicts(const uint32_t *ids, size_t count, uint32_t verdict,
     return failed;
 }
 static int http_ready(const uint8_t *p,size_t n,size_t high) {
-    d2k_http_req req;
+    d2s_http_req req;
     if(n!=high)return 0;
-    if(d2k_http_request(p,n,&req))return 1;
+    if(d2s_http_request(p,n,&req))return 1;
     /* A complete header with no valid identity cannot become eligible. */
     for(size_t i=3;i<n;i++)if(!memcmp(p+i-3,"\r\n\r\n",4))return -1;
     return 0;
 }
-int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
+int d2s_hold_feed(d2s_hold *h, uint32_t id, const uint8_t *p, size_t n,
                   uint64_t now, uint64_t revision, int allow_start,
                   uint32_t anchor, int have_anchor,
-                  d2k_hold_release release, void *ctx, d2k_hold_batch *batch) {
+                  d2s_hold_release release, void *ctx, d2s_hold_batch *batch) {
     memset(batch, 0, sizeof *batch);
     if (!h) { return 0; }
-    d2k_hold_flush(h, now, revision, 0, release, ctx);
-    d2k_hold_info v;
-    if (!d2k_hold_parse(p, n, &v)) { return 0; }
+    d2s_hold_flush(h, now, revision, 0, release, ctx);
+    d2s_hold_info v;
+    if (!d2s_hold_parse(p, n, &v)) { return 0; }
     held *s = NULL, *vacant = NULL;
-    for (size_t i = 0; i < D2K_HOLD_SLOTS; i++) {
+    for (size_t i = 0; i < D2S_HOLD_SLOTS; i++) {
         held *q = &h->slots[i];
         if (q->count && same(&q->head.key, &v.key)) { s = q; }
         if (!q->count && !vacant) { vacant = q; }
@@ -125,7 +125,7 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
     if (!s) {
         /* ЧТО ЭТО ЗА СОДЕРЖИМОЕ — РЕШАЕТ ВЫЗЫВАЮЩИЙ, А НЕ ЗДЕСЬ.
            Проверки «начинается запись TLS» и «запись уже целиком» стояли и
-           тут, и в d2k_session_hold_candidate — две копии одного правила.
+           тут, и в d2s_session_hold_candidate — две копии одного правила.
            Разошлись они на первом же случае, который правило не покрывало:
            кусок приветствия, пришедший НЕ ПЕРВЫМ, записи не начинает, и
            сессия его удержать разрешала, а здесь он отвергался молча (поле
@@ -136,12 +136,12 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
         s->head = v;
         s->kind=allow_start;
         s->revision = revision;
-        s->deadline = now + D2K_HOLD_WAIT_NS;
+        s->deadline = now + D2S_HOLD_WAIT_NS;
         h->stats.started++;
     }
-    if (s->count == D2K_HOLD_IDS || v.total > D2K_HOLD_PACKET ||
+    if (s->count == D2S_HOLD_IDS || v.total > D2S_HOLD_PACKET ||
         (v.flags & ~0x18) || !(v.flags&0x10) || v.ack != s->head.ack) {
-        if (s->count == D2K_HOLD_IDS) { h->stats.full++; }
+        if (s->count == D2S_HOLD_IDS) { h->stats.full++; }
         h->stats.mismatched++;
         release_slot(h, s, release, ctx);
         release(ctx, id, p, v.total);
@@ -157,10 +157,10 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
     size_t hello_len;
     uint32_t hello_seq;
     int rc;
-    if(s->kind==D2K_HOLD_HTTP)
-        rc=d2k_capture_feed_ready(&h->capture,&v.key,s->deadline,now,v.seq,
+    if(s->kind==D2S_HOLD_HTTP)
+        rc=d2s_capture_feed_ready(&h->capture,&v.key,s->deadline,now,v.seq,
             anchor,have_anchor,p+v.header,v.payload,&hello,&hello_len,&hello_seq,http_ready);
-    else rc=d2k_capture_feed(&h->capture,&v.key,s->deadline,now,v.seq,
+    else rc=d2s_capture_feed(&h->capture,&v.key,s->deadline,now,v.seq,
             anchor,have_anchor,p+v.header,v.payload,&hello,&hello_len,&hello_seq);
     if (rc < 0) {
         release_slot(h, s, release, ctx);
@@ -175,8 +175,8 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
        сборщик. */
     size_t head_i = s->count;
     for (size_t i = 0; i < s->count; i++) {
-        d2k_hold_info hv;
-        if (d2k_hold_parse(s->packets[i], s->len[i], &hv) && hv.seq == hello_seq) {
+        d2s_hold_info hv;
+        if (d2s_hold_parse(s->packets[i], s->len[i], &hv) && hv.seq == hello_seq) {
             head_i = i;
             break;
         }
@@ -188,8 +188,8 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
         release_slot(h, s, release, ctx);
         return 1;
     }
-    d2k_hold_info hv;
-    (void)d2k_hold_parse(s->packets[head_i], s->len[head_i], &hv);
+    d2s_hold_info hv;
+    (void)d2s_hold_parse(s->packets[head_i], s->len[head_i], &hv);
     batch->count = s->count;
     memcpy(batch->ids, s->ids, s->count * sizeof s->ids[0]);
     /* ОРИГИНАЛЫ — ПО ПОРЯДКУ ПОТОКА, а не прихода: владелец вернёт их на
@@ -197,11 +197,11 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
        Смещение от головы, беззнаковое — перенос номера через ноль учтён;
        равные смещения (повтор того же куска) сохраняют порядок прихода. */
     {
-        size_t order[D2K_HOLD_IDS];
-        uint32_t off[D2K_HOLD_IDS];
+        size_t order[D2S_HOLD_IDS];
+        uint32_t off[D2S_HOLD_IDS];
         for (size_t i = 0; i < s->count; i++) {
-            d2k_hold_info pv;
-            off[i] = d2k_hold_parse(s->packets[i], s->len[i], &pv) ? pv.seq - hello_seq : 0;
+            d2s_hold_info pv;
+            off[i] = d2s_hold_parse(s->packets[i], s->len[i], &pv) ? pv.seq - hello_seq : 0;
             order[i] = i;
         }
         for (size_t i = 1; i < s->count; i++) {
@@ -230,7 +230,7 @@ int d2k_hold_feed(d2k_hold *h, uint32_t id, const uint8_t *p, size_t n,
        не для отправки. */
     h->stats.pending -= s->count;
     h->stats.ready++;
-    d2k_capture_forget(&h->capture, &v.key);
+    d2s_capture_forget(&h->capture, &v.key);
     s->count = 0;
     return 2;
 }

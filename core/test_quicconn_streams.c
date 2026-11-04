@@ -1,17 +1,17 @@
 /* test_quicconn_streams.c — ПРЕДЕЛ ПОТОКОВ, ОБЪЯВЛЕННЫЙ СЕРВЕРОМ, обязан
  * останавливать нас самих (задача 29).
  *
- * Воспроизведение обрыва по бюджету коробки (d2k_quic_data_stage) открывает
+ * Воспроизведение обрыва по бюджету коробки (d2s_quic_data_stage) открывает
  * по двунаправленному потоку на КАЖДЫЙ запрос: req_sid += 4. В поле 12.10 на
  * это уходило 17–18 запросов, то есть доходило до потока 68 — при полном
  * незнании того, сколько потоков разрешил сервер: свои транспортные параметры
- * d2k_qc объявлял, а его не читал ни разу, и кадр MAX_STREAMS пропускал по
+ * d2s_qc объявлял, а его не читал ни разу, и кадр MAX_STREAMS пропускал по
  * длине. Сервер с низким initial_max_streams_bidi обязан закрыть связь кодом
  * STREAM_LIMIT_ERROR (0x04) либо промолчать. Ложным ОБРЫВОМ это не станет
  * (оба исхода уже дают «не измерено»), но ЗАМЕР НА ТАКОМ СЕРВЕРЕ НЕ
  * СОСТОИТСЯ и будет выглядеть нехваткой времени. Дыра в измерении.
  *
- * Стенд на петле: связь d2k_qc с ключами из постоянного секрета (как
+ * Стенд на петле: связь d2s_qc с ключами из постоянного секрета (как
  * test_quicconn_fc), «сервер» — вторая такая же связь, посылающая готовые
  * кадры. Живого рукопожатия здесь нет и не нужно: предел приезжает двумя
  * путями — транспортными параметрами в EncryptedExtensions и кадром
@@ -27,11 +27,11 @@ static int fails;
 #define CHECK(x, m) do { if (!(x)) { printf("FAIL %s (строка %d)\n", m, __LINE__); fails++; } \
                          else { printf("ok   %s\n", m); } } while (0)
 
-static void keys(d2k_qc *c) {
+static void keys(d2s_qc *c) {
     uint8_t secret[32];
     memset(secret, 0x42, sizeof secret);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].tx) == 0);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].rx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].tx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].rx) == 0);
 }
 
 /* Приёмник для клиентов, которым нужно только УСПЕШНО ОТПРАВИТЬ. Привязан и
@@ -58,14 +58,14 @@ static int mk_sink(struct sockaddr_in *out) {
 
 /* Связь с прикладными ключами и сокетом на сервер: рукопожатия нет, а всё
    остальное — настоящее. */
-static d2k_qc *mk_client(const struct sockaddr_in *srv_addr) {
-    d2k_qc *c = calloc(1, sizeof *c);
+static d2s_qc *mk_client(const struct sockaddr_in *srv_addr) {
+    d2s_qc *c = calloc(1, sizeof *c);
     assert(c);
     c->fd = socket(AF_INET, SOCK_DGRAM, 0);
     assert(c->fd >= 0);
     assert(connect(c->fd, (const struct sockaddr *)srv_addr, sizeof *srv_addr) == 0);
     c->peer_name = -1;
-    c->version = D2K_QW_V1;
+    c->version = D2S_QW_V1;
     c->dcid_len = 8; memset(c->dcid, 0x5a, 8);
     c->scid_len = 8; memset(c->scid, 0x77, 8);
     keys(c);
@@ -73,34 +73,34 @@ static d2k_qc *mk_client(const struct sockaddr_in *srv_addr) {
 }
 
 /* Кадр MAX_STREAMS: сервер расширяет предел по мере закрытия потоков. */
-static void srv_max_streams(d2k_qc *srv, int uni, uint64_t limit) {
+static void srv_max_streams(d2s_qc *srv, int uni, uint64_t limit) {
     uint8_t fr[16];
     size_t o = 0;
     fr[o++] = (uint8_t)(uni ? FR_MAX_STREAMS_UNI : FR_MAX_STREAMS_BIDI);
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, limit);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, limit);
     char err[160];
-    assert(send_level(srv, D2K_QW_LEVEL_APP, fr, o, 0, err, sizeof err) == 0);
+    assert(send_level(srv, D2S_QW_LEVEL_APP, fr, o, 0, err, sizeof err) == 0);
 }
 
 /* Клиент разбирает то, что лежит на сокете. Данных потока здесь нет — важно
    только, что кадры сервера прошли через frames_in. */
-static void client_pump(d2k_qc *c) {
+static void client_pump(d2s_qc *c) {
     char err[200];
     uint8_t buf[2048];
     uint64_t sid = 0;
-    (void)d2k_qc_stream_recv(c, &sid, buf, sizeof buf, 30, err, sizeof err);
+    (void)d2s_qc_stream_recv(c, &sid, buf, sizeof buf, 30, err, sizeof err);
 }
 
 /* Запрос длиной n байт на потоке sid: 0 — ушёл, -1 — отказ с причиной. */
-static int ask_n(d2k_qc *c, uint64_t sid, size_t n, char *err, size_t errcap) {
+static int ask_n(d2s_qc *c, uint64_t sid, size_t n, char *err, size_t errcap) {
     static uint8_t req[1300];
     assert(n <= sizeof req);
     memset(req, 'x', n);
     err[0] = '\0';
-    return d2k_qc_stream_send(c, sid, req, n, 1, err, errcap);
+    return d2s_qc_stream_send(c, sid, req, n, 1, err, errcap);
 }
 
-static int ask(d2k_qc *c, uint64_t sid, char *err, size_t errcap) {
+static int ask(d2s_qc *c, uint64_t sid, char *err, size_t errcap) {
     return ask_n(c, sid, 5, err, errcap);
 }
 
@@ -138,17 +138,17 @@ int main(void) {
     socklen_t len = sizeof a;
     assert(getsockname(s, (struct sockaddr *)&a, &len) == 0);
 
-    d2k_qc *c = mk_client(&a);
+    d2s_qc *c = mk_client(&a);
     struct sockaddr_in ca;
     socklen_t cl = sizeof ca;
     assert(getsockname(c->fd, (struct sockaddr *)&ca, &cl) == 0);
     assert(connect(s, (struct sockaddr *)&ca, cl) == 0);
     assert(fcntl(s, F_SETFL, O_NONBLOCK) == 0);
 
-    d2k_qc *srv = calloc(1, sizeof *srv);
+    d2s_qc *srv = calloc(1, sizeof *srv);
     assert(srv);
     srv->fd = s;
-    srv->version = D2K_QW_V1;
+    srv->version = D2S_QW_V1;
     srv->dcid_len = 8; memset(srv->dcid, 0x77, 8);
     keys(srv);
 
@@ -210,12 +210,12 @@ int main(void) {
     size_t t = 0;
     t += tp_put_int(tp + t, sizeof tp - t, 0x01, 30000);   /* max_idle_timeout */
     /* ЧУЖОЙ параметр ПЕРЕД пределами: пропуск не по длине съел бы их. */
-    t += d2k_qw_varint_write(tp + t, sizeof tp - t, 0x2ab3);
-    t += d2k_qw_varint_write(tp + t, sizeof tp - t, 5);
+    t += d2s_qw_varint_write(tp + t, sizeof tp - t, 0x2ab3);
+    t += d2s_qw_varint_write(tp + t, sizeof tp - t, 5);
     memset(tp + t, 0xa5, 5); t += 5;
     /* initial_source_connection_id: значение не число и не varint. */
-    t += d2k_qw_varint_write(tp + t, sizeof tp - t, 0x0f);
-    t += d2k_qw_varint_write(tp + t, sizeof tp - t, 8);
+    t += d2s_qw_varint_write(tp + t, sizeof tp - t, 0x0f);
+    t += d2s_qw_varint_write(tp + t, sizeof tp - t, 8);
     memset(tp + t, 0x5a, 8); t += 8;
     t += tp_put_int(tp + t, sizeof tp - t, 0x04, 1000);    /* initial_max_data */
     t += tp_put_int(tp + t, sizeof tp - t, 0x06, 500);     /* bidi_remote */
@@ -225,7 +225,7 @@ int main(void) {
 
     struct sockaddr_in a_c2;
     int sink_c2 = mk_sink(&a_c2);
-    d2k_qc *c2 = mk_client(&a_c2);
+    d2s_qc *c2 = mk_client(&a_c2);
     tp_server_ee(c2, ee, ee_len);
     printf("     разобрано: потоки дву %llu уста %d, одно %llu, данные связи %llu, потока %llu\n",
            (unsigned long long)c2->peer_streams[0], c2->peer_streams_set[0],
@@ -271,7 +271,7 @@ int main(void) {
     ee_len = ee_build(ee, sizeof ee, tp, t2);
     struct sockaddr_in a_c3;
     int sink_c3 = mk_sink(&a_c3);
-    d2k_qc *c3 = mk_client(&a_c3);
+    d2s_qc *c3 = mk_client(&a_c3);
     tp_server_ee(c3, ee, ee_len);
     CHECK(ask_n(c3, 0, 900, err, sizeof err) == 0, "900 байт при пределе связи 1000 ушли");
     rc = ask_n(c3, 4, 1200, err, sizeof err);
@@ -283,7 +283,7 @@ int main(void) {
     ee_len = ee_build(ee, sizeof ee, NULL, 0);
     struct sockaddr_in a_c4;
     int sink_c4 = mk_sink(&a_c4);
-    d2k_qc *c4 = mk_client(&a_c4);
+    d2s_qc *c4 = mk_client(&a_c4);
     tp_server_ee(c4, ee, ee_len);
     CHECK(!c4->peer_streams_set[0] && !c4->peer_streams_set[1] &&
           !c4->peer_max_data_set && !c4->peer_sdata_set[0],
@@ -291,10 +291,10 @@ int main(void) {
     CHECK(ask(c4, 68, err, sizeof err) == 0,
           "без параметров поведение прежнее: поток 68 уходит");
 
-    d2k_qc_close(c);
-    d2k_qc_close(c2);
-    d2k_qc_close(c3);
-    d2k_qc_close(c4);
+    d2s_qc_close(c);
+    d2s_qc_close(c2);
+    d2s_qc_close(c3);
+    d2s_qc_close(c4);
     close(sink_c2);
     close(sink_c3);
     close(sink_c4);

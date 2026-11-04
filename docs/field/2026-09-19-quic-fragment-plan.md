@@ -18,7 +18,7 @@
 | Результат askArms → Plan | `core/compose.c`, `sched.c` | fragment-only, fake+fragment, точные bytes/copies/TTL; каталог сохраняет форму |
 | Текст → TLV → actions | `plantlv.c`, `plan_parse.c`, `plan_apply.c` | `ipfrag 1..4`, REC_IPFRAG=0x010c, minexec=7, транспорт UDP, отказ противоречивых операций |
 | Actions → IPv4 | `session.c` + общий `core/ipfrag.c` | один логический PAYLOAD → 2/3 настоящих IP-фрагмента, полная UDP checksum |
-| IPv4 → настоящий провод | `raw.c`, `d2kd.c` | отдельный NODEFRAG socket, предварительная проверка сокета до любых fake |
+| IPv4 → настоящий провод | `raw.c`, `d2sd.c` | отдельный NODEFRAG socket, предварительная проверка сокета до любых fake |
 
 Старая версия исполнителя откажет по minexec, а не исполнит fake-only.
 Один PAYLOAD остаётся целой UDP-датаграммой: запрет превращать куски QUIC в
@@ -106,7 +106,7 @@ make -C core -j4 check
 make -C detect check
 make -C datapath cross
 make -C core cross
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 D2K_QUIC_TESTS=TestD2KFragmentsParity sh scripts/check-quic-run-parity.sh
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 D2S_QUIC_TESTS=TestD2SFragmentsParity sh scripts/check-quic-run-parity.sh
 sh scripts/check-fragment-plan-linux.sh
 git diff --check
 ```
@@ -115,7 +115,7 @@ ARM64/MIPS cross — компиляция и полная линковка, не
 ASan/UBSan — весь portable datapath, не вся роутерная служба. Полная suite
 core/detect запускалась без sanitizer. Базовая Linux отправка/NAT проверена
 на настоящем Linux отдельно; оба режима нельзя называть одним «unit check».
-Логи: `/tmp/d2k-plan-frag-{core,datapath,cross,core-cross,san}-final.log`,
+Логи: `/tmp/d2s-plan-frag-{core,datapath,cross,core-cross,san}-final.log`,
 `detect.log`, `go-parity.log`, `pipeline-final.log`; первоначальные отказы —
 `parse-red.log`, `arm-red.log`, `session-red.log`, `wire-red.log` с тем же
 префиксом. Без чистого terminal exit нельзя объявлять повтор этих команд
@@ -130,7 +130,7 @@ core/detect запускалась без sanitizer. Базовая Linux отп
    «фрагменты не переживают линию».
 2. Реальный NFQUEUE опыт для fragment-only/fake+frag: отсутствие целого
    оригинала на проводе, MTU/PMTU до всех отправок, частичный send failure,
-   правильный ключ/поколение недоисполнения. Существующий MTU preflight в d2kd
+   правильный ключ/поколение недоисполнения. Существующий MTU preflight в d2sd
    сохранён, но специального полевого/сетевого fragment MTU-опыта здесь нет.
 3. Проверить доступность подтверждённой NAT-справки на целевом роутере и
    повтор после первого пропущенного пакета. Нельзя ради зелёной проверки

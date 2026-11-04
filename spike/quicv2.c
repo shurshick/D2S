@@ -6,12 +6,12 @@
  * v2, либо сервер на неизвестную ему версию молчит вовсе — и тогда «0/3» на
  * его адресах выдаёт отсутствие ответа за «нет». Развести можно только
  * контролем: тот же Initial v2 к тому же адресу с именем, которое коробка
- * не трогает. Только для опытов: в сборку d2k не входит.
+ * не трогает. Только для опытов: в сборку d2s не входит.
  *
  *   quicv2 <ip> <имя> [повторов]
  */
 #define _POSIX_C_SOURCE 200809L
-#include "d2k_quichello.h"
+#include "d2s_quichello.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -63,10 +63,10 @@ int main(int argc, char **argv) {
     int tries = argc > 3 ? atoi(argv[3]) : 3;
     uint8_t v1[1500], v2[1500];
     size_t n1 = 0, n2 = 0;
-    if (d2k_quic_probe_initial(argv[2], v1, sizeof v1, &n1) != 0) {
+    if (d2s_quic_probe_initial(argv[2], v1, sizeof v1, &n1) != 0) {
         fprintf(stderr, "Initial v1 не собрался\n"); return 1;
     }
-    if (d2k_quic_hello_ask(v1, n1, D2K_QASK_VERSION2, argv[2], v2, sizeof v2, &n2) != 0) {
+    if (d2s_quic_hello_ask(v1, n1, D2S_QASK_VERSION2, argv[2], v2, sizeof v2, &n2) != 0) {
         fprintf(stderr, "Initial v2 не собрался\n"); return 1;
     }
     /* Смазочная версия (RFC 9000 §15, вида 0x?a?a?a?a): сервер, получивший

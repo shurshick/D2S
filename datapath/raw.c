@@ -22,8 +22,8 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 
-#include "d2k_raw.h"
-#include "d2k_ip6frag_send.h"
+#include "d2s_raw.h"
+#include "d2s_ip6frag_send.h"
 
 /* Сколько маршрутов помним. Шестнадцать — не «разумное число», а следствие
  * того, что здесь кэшируется: предел ОДНОГО направления, и направлений у
@@ -38,11 +38,11 @@ typedef struct {
     size_t  mtu;    /* 0 — ячейка пуста */
 } route_entry;
 
-struct d2k_raw {
+struct d2s_raw {
     int      fd;
     int      fd6;
     int      fragment_fd;
-    d2k_ip6frag_sender fragments6;
+    d2s_ip6frag_sender fragments6;
     uint32_t limits;
     size_t   maxlen;
     uint64_t sent;
@@ -82,7 +82,7 @@ static unsigned if_mtu(const char *name) {
 
 /* Предел длины посылки: MTU названного интерфейса, а при NULL — НАИМЕНЬШИЙ
  * MTU среди поднятых, кроме loopback. Обоснование выбора и его цена — в
- * шапке d2k_raw_open (d2k_raw.h). Не узнали ничего — D2K_RAW_MTU_FALLBACK:
+ * шапке d2s_raw_open (d2s_raw.h). Не узнали ничего — D2S_RAW_MTU_FALLBACK:
  * отправлять вслепую нельзя, иначе вернётся ровно та картина, ради которой
  * предел и заведён.
  *
@@ -92,11 +92,11 @@ static unsigned if_mtu(const char *name) {
 static size_t pick_maxlen(const char *ifname) {
     if (ifname && *ifname) {
         unsigned m = if_mtu(ifname);
-        return m ? (size_t)m : (size_t)D2K_RAW_MTU_FALLBACK;
+        return m ? (size_t)m : (size_t)D2S_RAW_MTU_FALLBACK;
     }
     struct ifaddrs *list = NULL;
     if (getifaddrs(&list) != 0 || !list) {
-        return (size_t)D2K_RAW_MTU_FALLBACK;
+        return (size_t)D2S_RAW_MTU_FALLBACK;
     }
     unsigned best = 0;
     for (struct ifaddrs *a = list; a; a = a->ifa_next) {
@@ -112,7 +112,7 @@ static size_t pick_maxlen(const char *ifname) {
         }
     }
     freeifaddrs(list);
-    return best ? (size_t)best : (size_t)D2K_RAW_MTU_FALLBACK;
+    return best ? (size_t)best : (size_t)D2S_RAW_MTU_FALLBACK;
 }
 
 /* MTU МАРШРУТА к адресу, а не интерфейса. 0 — не узнали.
@@ -124,7 +124,7 @@ static size_t pick_maxlen(const char *ifname) {
  * упрётся в ядро уже на отправке (EMSGSIZE), то есть ПОСРЕДИ исполнения
  * плана.
  *
- * Почему это не противоречит прежнему решению (шапка d2k_raw.h). Там
+ * Почему это не противоречит прежнему решению (шапка d2s_raw.h). Там
  * отвергнут запрос маршрута НА ПАКЕТНОМ ПУТИ — ради числа, меняющегося раз в
  * жизни соединения. Здесь запрос идёт РАЗ НА НАПРАВЛЕНИЕ и кладётся в кольцо;
  * на пакетном пути остаётся сравнение чисел.
@@ -190,19 +190,19 @@ static void say(char *err, size_t cap, const char *fmt, ...) {
     errno = saved;
 }
 
-d2k_raw *d2k_raw_open(uint32_t mark, const char *ifname, char *err, size_t errcap) {
-    d2k_raw *r = calloc(1, sizeof *r);
+d2s_raw *d2s_raw_open(uint32_t mark, const char *ifname, char *err, size_t errcap) {
+    d2s_raw *r = calloc(1, sizeof *r);
     if (!r) {
         say(err, errcap, "нет памяти");
         return NULL;
     }
     /* Пределы объявляются сразу и не зависят от успеха настроек: их задаёт
        сам способ отправки, а не наша конфигурация. */
-    r->limits = D2K_RAW_CANT_IPID | D2K_RAW_CANT_IPSUM;
+    r->limits = D2S_RAW_CANT_IPID | D2S_RAW_CANT_IPSUM;
     r->fragment_fd = -1;
     r->fd6 = -1;
-    d2k_ip6frag_sender_init(&r->fragments6);
-    /* Один раз при старте — см. шапку в d2k_raw.h про цену этого выбора. */
+    d2s_ip6frag_sender_init(&r->fragments6);
+    /* Один раз при старте — см. шапку в d2s_raw.h про цену этого выбора. */
     r->maxlen = pick_maxlen(ifname);
     r->mark = mark;
     /* НАЗВАННЫЙ предел и УГАДАННЫЙ — разные вещи, и маршрут разрешено
@@ -255,7 +255,7 @@ d2k_raw *d2k_raw_open(uint32_t mark, const char *ifname, char *err, size_t errca
     return r;
 }
 
-void d2k_raw_close(d2k_raw *r) {
+void d2s_raw_close(d2s_raw *r) {
     if (!r) {
         return;
     }
@@ -263,22 +263,22 @@ void d2k_raw_close(d2k_raw *r) {
         close(r->fd);
     }
     if (r->fragment_fd >= 0) close(r->fragment_fd);
-    d2k_ip6frag_sender_close(&r->fragments6);
+    d2s_ip6frag_sender_close(&r->fragments6);
     if (r->fd6 >= 0) close(r->fd6);
     free(r);
 }
 
-uint32_t d2k_raw_limits(const d2k_raw *r) {
-    return r ? r->limits : (D2K_RAW_CANT_IPID | D2K_RAW_CANT_IPSUM);
+uint32_t d2s_raw_limits(const d2s_raw *r) {
+    return r ? r->limits : (D2S_RAW_CANT_IPID | D2S_RAW_CANT_IPSUM);
 }
 
-size_t d2k_raw_maxlen(const d2k_raw *r) {
+size_t d2s_raw_maxlen(const d2s_raw *r) {
     /* Никогда не ноль: ноль означал бы «предел не объявлен», и вызывающий
        перестал бы проверять длину вовсе. */
-    return (r && r->maxlen) ? r->maxlen : (size_t)D2K_RAW_MTU_FALLBACK;
+    return (r && r->maxlen) ? r->maxlen : (size_t)D2S_RAW_MTU_FALLBACK;
 }
 
-int d2k_raw_adopt_egress(d2k_raw *r, const uint32_t *oifs, size_t n,
+int d2s_raw_adopt_egress(d2s_raw *r, const uint32_t *oifs, size_t n,
                          char *names, size_t names_cap) {
     if (names && names_cap) { names[0] = 0; }
     if (!r || !oifs || !n || r->maxlen_declared) { return -1; }
@@ -291,7 +291,7 @@ int d2k_raw_adopt_egress(d2k_raw *r, const uint32_t *oifs, size_t n,
             int k = snprintf(names + w, names_cap - w, "%s%s %u", w ? ", " : "", name, m);
             if (k > 0) { w += (size_t)k < names_cap - w ? (size_t)k : names_cap - w - 1; }
         }
-        if (m < D2K_RAW_MTU_FLOOR) { continue; }
+        if (m < D2S_RAW_MTU_FLOOR) { continue; }
         if (!best || m < best) { best = m; }
     }
     if (!best) { return -1; }
@@ -303,17 +303,17 @@ int d2k_raw_adopt_egress(d2k_raw *r, const uint32_t *oifs, size_t n,
 }
 
 /* Ответ маршрута против общего предела: см. maxlen_declared выше. */
-static size_t blend(const d2k_raw *r, size_t route, size_t cap_all) {
+static size_t blend(const d2s_raw *r, size_t route, size_t cap_all) {
     if (r->maxlen_declared) { return route < cap_all ? route : cap_all; }
     return route;
 }
 
-size_t d2k_raw_route_maxlen(d2k_raw *r, const uint8_t dst[4]) {
-    return d2k_raw_route_maxlen_family(r, dst, 4);
+size_t d2s_raw_route_maxlen(d2s_raw *r, const uint8_t dst[4]) {
+    return d2s_raw_route_maxlen_family(r, dst, 4);
 }
 
-size_t d2k_raw_route_maxlen_family(d2k_raw *r, const uint8_t *dst, uint8_t family) {
-    size_t cap_all = d2k_raw_maxlen(r);
+size_t d2s_raw_route_maxlen_family(d2s_raw *r, const uint8_t *dst, uint8_t family) {
+    size_t cap_all = d2s_raw_maxlen(r);
     if (!r || !dst || (family != 4 && family != 6)) { return cap_all; }
     size_t alen = family == 6 ? 16 : 4;
     for (size_t i = 0; i < ROUTE_CACHE; i++) {
@@ -323,7 +323,7 @@ size_t d2k_raw_route_maxlen_family(d2k_raw *r, const uint8_t *dst, uint8_t famil
         }
     }
     size_t m = route_mtu(r->mark, dst, family);
-    if (m < (family == 6 ? 1280u : (size_t)D2K_RAW_MTU_FLOOR)) {
+    if (m < (family == 6 ? 1280u : (size_t)D2S_RAW_MTU_FLOOR)) {
         /* Ответа нет или он бессмысленно мал. Запоминать такое нельзя: пустая
            ячейка честнее выдуманного числа, а ниже минимума IPv4 маршрутов не
            бывает. Общий предел остаётся в силе. */
@@ -338,7 +338,7 @@ size_t d2k_raw_route_maxlen_family(d2k_raw *r, const uint8_t *dst, uint8_t famil
     return blend(r, m, cap_all);
 }
 
-int d2k_raw_prepare(d2k_raw *r, const uint8_t *pkt, size_t len,
+int d2s_raw_prepare(d2s_raw *r, const uint8_t *pkt, size_t len,
                     char *err, size_t errcap) {
     if (!r || !pkt || len<20) {errno=EINVAL;return -1;}
     if ((pkt[0] >> 4) == 6) {
@@ -346,7 +346,7 @@ int d2k_raw_prepare(d2k_raw *r, const uint8_t *pkt, size_t len,
             say(err, errcap, "invalid IPv6 packet length"); errno=EINVAL; return -1;
         }
         if (pkt[6] == 44) {
-            int rc = d2k_ip6frag_prepare(&r->fragments6, pkt, len, r->mark);
+            int rc = d2s_ip6frag_prepare(&r->fragments6, pkt, len, r->mark);
             if (rc) say(err, errcap, "IPv6 fragment route: %s", strerror(errno));
             return rc;
         }
@@ -403,7 +403,7 @@ bad: {
     }
 }
 
-int d2k_raw_send(d2k_raw *r, const uint8_t *pkt, size_t len,
+int d2s_raw_send(d2s_raw *r, const uint8_t *pkt, size_t len,
                  char *err, size_t errcap) {
     if (!r || !pkt || len < 20) {
         say(err, errcap, "нечего отправлять");
@@ -416,7 +416,7 @@ int d2k_raw_send(d2k_raw *r, const uint8_t *pkt, size_t len,
         errno = EAFNOSUPPORT;
         return -1;
     }
-    if(d2k_raw_prepare(r,pkt,len,err,errcap)<0) {r->errors++;return -1;}
+    if(d2s_raw_prepare(r,pkt,len,err,errcap)<0) {r->errors++;return -1;}
     if (family == 6 && pkt[6] == 44) {
         /* The AF_PACKET socket is opened by prepare; it must not block the
            packet loop either (final review M-3). */
@@ -426,7 +426,7 @@ int d2k_raw_send(d2k_raw *r, const uint8_t *pkt, size_t len,
                 (void)fcntl(r->fragments6.fd, F_SETFL, fl | O_NONBLOCK);
             }
         }
-        if (d2k_ip6frag_send(&r->fragments6, pkt, len, r->mark) < 0) {
+        if (d2s_ip6frag_send(&r->fragments6, pkt, len, r->mark) < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS) { r->busy++; }
             r->errors++;
             say(err, errcap, "IPv6 fragment send: %s", strerror(errno));
@@ -473,13 +473,13 @@ int d2k_raw_send(d2k_raw *r, const uint8_t *pkt, size_t len,
         int failure = errno;
         r->errors++;
         if (failure == EAGAIN || failure == EWOULDBLOCK || failure == ENOBUFS) { r->busy++; }
-        if (failure == EMSGSIZE && len > (family == 6 ? 1280u : D2K_RAW_MTU_FLOOR)) {
+        if (failure == EMSGSIZE && len > (family == 6 ? 1280u : D2S_RAW_MTU_FLOOR)) {
             /* ПРЕДЕЛ ПРИШЁЛ ЗАМЕРОМ, А НЕ ИЗ КОНФИГУРАЦИИ.
                Объявленный предел взят с интерфейса при старте, а настоящий
                принадлежит МАРШРУТУ и может быть меньше: туннель, PPPoE,
                PMTU по пути. Ядро только что сказало ровно одно достоверное
                число — эта длина не проходит. Опускаем предел под неё, чтобы
-               следующий такой план отвергался ЗАРАНЕЕ (d2k_plan_fits), а не
+               следующий такой план отвергался ЗАРАНЕЕ (d2s_plan_fits), а не
                упирался в ядро посреди исполнения.
                Пол нужен, чтобы единичный сбой не сделал предел бессмысленно
                маленьким и не отключил весь обход: ниже минимального MTU IPv4
@@ -511,14 +511,14 @@ int d2k_raw_send(d2k_raw *r, const uint8_t *pkt, size_t len,
     }
 }
 
-uint64_t d2k_raw_sent(const d2k_raw *r) {
+uint64_t d2s_raw_sent(const d2s_raw *r) {
     return r ? r->sent : 0;
 }
 
-uint64_t d2k_raw_errors(const d2k_raw *r) {
+uint64_t d2s_raw_errors(const d2s_raw *r) {
     return r ? r->errors : 0;
 }
 
-uint64_t d2k_raw_busy(const d2k_raw *r) {
+uint64_t d2s_raw_busy(const d2s_raw *r) {
     return r ? r->busy : 0;
 }

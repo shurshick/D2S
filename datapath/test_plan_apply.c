@@ -6,18 +6,18 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_plan.h"
-/* Полное определение потока живёт здесь: d2k_plan.h объявляет тип
+#include "d2s_plan.h"
+/* Полное определение потока живёт здесь: d2s_plan.h объявляет тип
    опережающе, и одного его для переменной по значению не хватает. */
-#include "d2k_track.h"
+#include "d2s_track.h"
 /* Потолок посылок в результате — проверяем, что самое длинное плечо донора
    в него помещается: число и плечо обязаны сходиться в одном месте. */
-#include "d2k_session.h"
+#include "d2s_session.h"
 /* UDP length/checksum of the lengthened datagram are checked on the real
    wire builder, not on the emit fields alone. */
-#include "d2k_wire.h"
+#include "d2s_wire.h"
 /* Task 40: the split executor is the core function the question used. */
-#include "d2k_quic.h"
+#include "d2s_quic.h"
 #include "../core/test_quic_vector.h"
 #include "../core/test_quic_pq.h"
 
@@ -51,7 +51,7 @@ static size_t tls_fake_plan(uint8_t *plan) {
     for (size_t i=0; i<32; i++) hello[44+i]=(uint8_t)(0x80+i);
     hello[76]=0; hello[77]=2; hello[78]=0x13; hello[79]=1;
     hello[80]=1; hello[81]=0; hello[82]=0; hello[83]=0;
-    memcpy(plan, "D2KP", 4); plan[4]=0; plan[5]=1; plan[6]=0; plan[7]=8;
+    memcpy(plan, "D2SP", 4); plan[4]=0; plan[5]=1; plan[6]=0; plan[7]=8;
     plan[8]=0; plan[9]=0; plan[10]=0; plan[11]=7; n=12;
     uint8_t id[16]={0}; putrec(plan,&n,0x0001,id,sizeof id);
     uint8_t proto[2]={6,1}; putrec(plan,&n,0x0002,proto,sizeof proto);
@@ -67,8 +67,8 @@ static size_t tls_fake_plan(uint8_t *plan) {
 static void test_tls_fake_modifiers(void) {
     uint8_t plan[256], client[87]={0};
     size_t plan_len=tls_fake_plan(plan);
-    d2k_plan *p=NULL; d2k_actions a={0}; d2k_pkt in={0};
-    d2k_flow flow={0}; char err[160];
+    d2s_plan *p=NULL; d2s_actions a={0}; d2s_pkt in={0};
+    d2s_flow flow={0}; char err[160];
     client[0]=0x16;client[1]=3;client[2]=1;client[3]=0;client[4]=82;
     client[5]=1;client[6]=0;client[7]=0;client[8]=78;client[9]=3;client[10]=3;
     for(size_t i=0;i<32;i++)client[11+i]=(uint8_t)(0x10+i);
@@ -76,13 +76,13 @@ static void test_tls_fake_modifiers(void) {
     for(size_t i=0;i<32;i++)client[44+i]=(uint8_t)(0xc0+i);
     client[76]=0;client[77]=2;client[78]=0x13;client[79]=1;
     client[80]=1;client[81]=0;client[82]=0;client[83]=0;
-    int load_rc=d2k_plan_load(plan,plan_len,&p,err,sizeof err);
+    int load_rc=d2s_plan_load(plan,plan_len,&p,err,sizeof err);
     if(load_rc!=0)printf("TLS modifier plan rejected: %s\n",err);
     CHECK(load_rc==0,"TLS modifiers plan should parse at exec 8");
     if(!p)return;
     in.payload=client;in.payload_len=sizeof client;in.seq=100;
     in.have_sni=1;in.sni_off=20;in.sni_len=8;in.is_tls13=1;
-    CHECK(d2k_plan_apply(p,&flow,&in,&a)==0,"TLS modifier plan should apply");
+    CHECK(d2s_plan_apply(p,&flow,&in,&a)==0,"TLS modifier plan should apply");
     CHECK(a.n==1,"TLS modifier plan should emit one fake");
     if(a.n==1) {
         CHECK(a.v[0].len==sizeof client,"modified fake keeps template length");
@@ -91,13 +91,13 @@ static void test_tls_fake_modifiers(void) {
         CHECK(memcmp(a.v[0].bytes+44,client+44,32)==0,
               "dupsid copies the live ClientHello session ID");
     }
-    d2k_actions_free(&a);
+    d2s_actions_free(&a);
     in.is_tls13=0;
-    CHECK(d2k_plan_apply(p,&flow,&in,&a)!=0,
+    CHECK(d2s_plan_apply(p,&flow,&in,&a)!=0,
           "TLS modifiers reject non-TLS-1.3 input");
     CHECK(a.refuse_why && strstr(a.refuse_why, "TLS 1.3"),
           "отказ по форме назван: правка просит TLS 1.3");
-    d2k_plan_free(p);
+    d2s_plan_free(p);
 }
 
 /* ПРИЧИНА ОТКАЗА — НЕ УКРАШЕНИЕ ЖУРНАЛА. Поле 13.10.2026,
@@ -110,8 +110,8 @@ static void test_tls_fake_modifiers(void) {
 static void test_refusal_names_reason(void) {
     uint8_t plan[256];
     size_t plan_len = tls_fake_plan(plan);
-    d2k_plan *p = NULL; char err[160];
-    if (d2k_plan_load(plan, plan_len, &p, err, sizeof err) != 0 || !p) {
+    d2s_plan *p = NULL; char err[160];
+    if (d2s_plan_load(plan, plan_len, &p, err, sizeof err) != 0 || !p) {
         CHECK(0, "план причин не разобран");
         return;
     }
@@ -126,22 +126,22 @@ static void test_refusal_names_reason(void) {
     uint8_t junk[64];
     memset(junk, 0xab, sizeof junk);
 
-    struct { const char *what; d2k_pkt in; } cases[] = {
+    struct { const char *what; d2s_pkt in; } cases[] = {
         /* нагрузки нет */
-        { "пустая нагрузка", (d2k_pkt){0} },
+        { "пустая нагрузка", (d2s_pkt){0} },
         /* не ClientHello: правка приветствия не соберётся */
-        { "не приветствие", (d2k_pkt){ .payload = junk, .payload_len = sizeof junk,
+        { "не приветствие", (d2s_pkt){ .payload = junk, .payload_len = sizeof junk,
                                        .is_tls13 = 1, .seq = 1 } },
         /* форма не та */
-        { "форма не TLS 1.3", (d2k_pkt){ .payload = hello, .payload_len = sizeof hello,
+        { "форма не TLS 1.3", (d2s_pkt){ .payload = hello, .payload_len = sizeof hello,
                                          .is_tls13 = 0, .seq = 1 } },
         /* план не для запроса HTTP */
-        { "запрос HTTP", (d2k_pkt){ .payload = hello, .payload_len = sizeof hello,
+        { "запрос HTTP", (d2s_pkt){ .payload = hello, .payload_len = sizeof hello,
                                     .is_tls13 = 1, .is_http = 1, .seq = 1 } },
     };
     for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
-        d2k_actions a = {0};
-        int rc = d2k_plan_apply(p, NULL, &cases[i].in, &a);
+        d2s_actions a = {0};
+        int rc = d2s_plan_apply(p, NULL, &cases[i].in, &a);
         CHECK(rc != 0, cases[i].what);
         CHECK(a.refuse_why != NULL && a.refuse_why[0] != '\0',
               "отказ исполнителя обязан называть причину");
@@ -149,9 +149,9 @@ static void test_refusal_names_reason(void) {
             printf("  молчащий отказ: %s\n", cases[i].what);
         }
         CHECK(a.n == 0, "при отказе посылок нет");
-        d2k_actions_free(&a);
+        d2s_actions_free(&a);
     }
-    d2k_plan_free(p);
+    d2s_plan_free(p);
 }
 
 /* Фальшивка перед всеми кусками, две копии с паузой 78 мс — ровно то, чем
@@ -341,7 +341,7 @@ static const uint8_t plan_between_two_splits[] = {
    (core/compose.c, g_fb_head: badsum=1, repeats=7, between=1). Составитель
    выдаёт для него два разреза и фальшивку «между кусками», то есть три
    куска и 2*7 фальшивок — семнадцать посылок. Ровно на нём датапат и падал,
-   и ровно оно упирается в потолок d2k_result.out[]. */
+   и ровно оно упирается в потолок d2s_result.out[]. */
 static const uint8_t plan_fakedsplit_x7[] = {
     'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
     0x00, 0x10, 0x00, 0x03, 0x00, 0x01, 0xAA,
@@ -381,7 +381,7 @@ static const uint8_t plan_reorder_by_name[] = {
 
 static uint8_t hello[64];
 
-static void init_pkt(d2k_pkt *in, int have_sni) {
+static void init_pkt(d2s_pkt *in, int have_sni) {
     memset(in, 0, sizeof *in);
     memset(hello, 0xCC, sizeof hello);
     in->payload = hello;
@@ -395,7 +395,7 @@ static void init_pkt(d2k_pkt *in, int have_sni) {
 /* Приветствие TLS заданной длины записи, от которого в пакете лежат первые
    have байт. record_total == have — запись пришла целиком. */
 static uint8_t frag[512];
-static void init_frag(d2k_pkt *in, size_t have, size_t record_total) {
+static void init_frag(d2s_pkt *in, size_t have, size_t record_total) {
     memset(in, 0, sizeof *in);
     memset(frag, 0xCC, sizeof frag);
     frag[0] = 0x16; frag[1] = 3; frag[2] = 1;
@@ -443,21 +443,21 @@ static void test_udplen(void) {
     char err[160];
     for (size_t i = 0; i < sizeof initial; i++) initial[i] = (uint8_t)(0xc0 ^ (i * 7));
     memcpy(before, initial, sizeof initial);
-    d2k_plan *p = NULL;
-    int rc = d2k_plan_load(plan, sizeof plan, &p, err, sizeof err);
+    d2s_plan *p = NULL;
+    int rc = d2s_plan_load(plan, sizeof plan, &p, err, sizeof err);
     if (rc) printf("udplen plan rejected: %s\n", err);
     CHECK(rc == 0, "udplen plan loads");
     if (!p) return;
-    CHECK(d2k_plan_max_emit(p) >= 20 + 8 + 1200 + 100,
+    CHECK(d2s_plan_max_emit(p) >= 20 + 8 + 1200 + 100,
           "max_emit must count the 100 bytes the plan adds to a >=1200-byte Initial");
-    d2k_pkt in = {0};
-    d2k_actions a = {0};
+    d2s_pkt in = {0};
+    d2s_actions a = {0};
     in.payload = initial; in.payload_len = sizeof initial;
-    CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "udplen applies to a 1250-byte Initial");
-    CHECK(a.fate == D2K_ORIG_DROP, "lengthened datagram replaces the original");
-    CHECK(a.n == 1 && a.v[0].kind == D2K_EMIT_PAYLOAD, "udplen emits exactly one payload");
+    CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "udplen applies to a 1250-byte Initial");
+    CHECK(a.fate == D2S_ORIG_DROP, "lengthened datagram replaces the original");
+    CHECK(a.n == 1 && a.v[0].kind == D2S_EMIT_PAYLOAD, "udplen emits exactly one payload");
     if (a.n == 1) {
-        const d2k_emit *e = &a.v[0];
+        const d2s_emit *e = &a.v[0];
         CHECK(e->len == 1350, "1250 + increment 100 = 1350");
         CHECK(e->bytes && memcmp(e->bytes, before, 1250) == 0, "original 1250 bytes unchanged");
         int zeros = 1;
@@ -465,13 +465,13 @@ static void test_udplen(void) {
         CHECK(zeros, "appended tail is zero bytes (zapret pattern default \\x00)");
         CHECK(memcmp(initial, before, sizeof before) == 0, "input packet not modified in place");
         CHECK(e->ipfrag == 0 && e->pre_len == 0 && e->delay_us == 0, "no other action attached");
-        d2k_conn c;
+        d2s_conn c;
         memset(&c, 0, sizeof c);
         uint8_t s4[4] = {192, 168, 1, 67}, d4[4] = {1, 2, 3, 4};
         memcpy(&c.src_ip, s4, 4); memcpy(&c.dst_ip, d4, 4);
         c.src_port = 0x3930; c.dst_port = 0xbb01; c.ttl = 64; c.family = 4;
         static uint8_t wire[2048];
-        size_t made = d2k_wire_build_udp(&c, e, wire, sizeof wire);
+        size_t made = d2s_wire_build_udp(&c, e, wire, sizeof wire);
         CHECK(made == 20 + 8 + 1350, "wire datagram carries 1350 payload bytes");
         if (made == 20 + 8 + 1350) {
             CHECK(((size_t)wire[24] << 8 | wire[25]) == 8 + 1350, "UDP length field 1358");
@@ -480,34 +480,34 @@ static void test_udplen(void) {
             CHECK(memcmp(wire + 28, before, 1250) == 0, "wire keeps original bytes first");
         }
     }
-    d2k_actions_free(&a);
+    d2s_actions_free(&a);
 
     /* Junk fake ahead + udplen: fakes untouched, then the lengthened truth. */
     {
         uint8_t combo[128];
         size_t n = 0;
-        memcpy(combo, "D2KP\0\1\0\x09\0\0\0\x06", 12); n = 12;
+        memcpy(combo, "D2SP\0\1\0\x09\0\0\0\x06", 12); n = 12;
         uint8_t proto[2] = {17, 2}; putrec(combo, &n, 0x0002, proto, 2);
         uint8_t pay[18] = {0, 1}; putrec(combo, &n, 0x0010, pay, sizeof pay);
         uint8_t poi[8] = {0, 1}; putrec(combo, &n, 0x0011, poi, 8);
         uint8_t fk[10] = {0, 1, 0, 1, 2, 0, 0, 0, 0, 0}; putrec(combo, &n, 0x0101, fk, 10);
         uint8_t ord = 0; putrec(combo, &n, 0x0103, &ord, 1);
         uint8_t inc[2] = {0, 100}; putrec(combo, &n, 0x010e, inc, 2);
-        d2k_plan *q = NULL;
-        CHECK(d2k_plan_load(combo, n, &q, err, sizeof err) == 0, "junk+udplen plan loads");
+        d2s_plan *q = NULL;
+        CHECK(d2s_plan_load(combo, n, &q, err, sizeof err) == 0, "junk+udplen plan loads");
         if (q) {
-            d2k_actions b = {0};
-            CHECK(d2k_plan_apply(q, NULL, &in, &b) == 0 && b.n == 3 &&
-                  b.v[0].kind == D2K_EMIT_FAKE && b.v[0].len == 16 &&
-                  b.v[1].kind == D2K_EMIT_FAKE && b.v[1].len == 16 &&
-                  b.v[2].kind == D2K_EMIT_PAYLOAD && b.v[2].len == 1350 &&
-                  b.fate == D2K_ORIG_DROP,
+            d2s_actions b = {0};
+            CHECK(d2s_plan_apply(q, NULL, &in, &b) == 0 && b.n == 3 &&
+                  b.v[0].kind == D2S_EMIT_FAKE && b.v[0].len == 16 &&
+                  b.v[1].kind == D2S_EMIT_FAKE && b.v[1].len == 16 &&
+                  b.v[2].kind == D2S_EMIT_PAYLOAD && b.v[2].len == 1350 &&
+                  b.fate == D2S_ORIG_DROP,
                   "junk x2 ahead, then the lengthened Initial");
-            d2k_actions_free(&b);
-            d2k_plan_free(q);
+            d2s_actions_free(&b);
+            d2s_plan_free(q);
         }
     }
-    d2k_plan_free(p);
+    d2s_plan_free(p);
 }
 
 /* ОРИГИНАЛ ПОСЛЕ ФАЛЬШИВОК — СВОЕЙ ПОСЫЛКОЙ, если вызывающий не может отдать
@@ -515,52 +515,52 @@ static void test_udplen(void) {
    фальшивки, затем оригинал целиком без собственной паузы; судьба — снять
    удерживаемую копию. Без фальшивок владеть нечем: оригинал проходит. */
 static void test_own_after_fakes(void) {
-    d2k_plan *p = NULL; char err[160]; d2k_flow f; d2k_actions a; d2k_pkt in;
+    d2s_plan *p = NULL; char err[160]; d2s_flow f; d2s_actions a; d2s_pkt in;
     memset(&f, 0, sizeof f);
-    CHECK(d2k_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
           "fake-before plan loads for owned original");
     if (!p) { return; }
     init_pkt(&in, 0);
     in.own_after_fakes = 1;
     memset(&a, 0, sizeof a);
-    CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "owned-original plan applies");
+    CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "owned-original plan applies");
     CHECK(a.n == 3, "two fakes and then the original itself");
-    CHECK(a.fate == D2K_ORIG_DROP, "the held copy is dropped: the original is ours");
+    CHECK(a.fate == D2S_ORIG_DROP, "the held copy is dropped: the original is ours");
     if (a.n == 3) {
-        CHECK(a.v[0].kind == D2K_EMIT_FAKE && a.v[1].kind == D2K_EMIT_FAKE,
+        CHECK(a.v[0].kind == D2S_EMIT_FAKE && a.v[1].kind == D2S_EMIT_FAKE,
               "fakes keep their place before the original");
         CHECK(a.v[1].delay_us == 78000, "gap between fake copies kept");
-        CHECK(a.v[2].kind == D2K_EMIT_PAYLOAD && a.v[2].len == in.payload_len &&
+        CHECK(a.v[2].kind == D2S_EMIT_PAYLOAD && a.v[2].len == in.payload_len &&
               a.v[2].bytes == in.payload && !a.v[2].pre_len,
               "original goes whole and unchanged");
         CHECK(a.v[2].delay_us == 0 && a.v[2].ttl == 0 && a.v[2].poison == 0,
               "original right after the last fake, without fooling");
     }
-    d2k_actions_free(&a);
+    d2s_actions_free(&a);
 
     /* Не просили — прежнее поведение: оригинал отпускает ядро. */
     init_pkt(&in, 0);
     memset(&a, 0, sizeof a);
-    CHECK(d2k_plan_apply(p, &f, &in, &a) == 0 && a.n == 2 && a.fate == D2K_ORIG_PASS,
+    CHECK(d2s_plan_apply(p, &f, &in, &a) == 0 && a.n == 2 && a.fate == D2S_ORIG_PASS,
           "without the request fakes-only plans still pass the original");
-    d2k_actions_free(&a);
-    d2k_plan_free(p);
+    d2s_actions_free(&a);
+    d2s_plan_free(p);
 
     /* План без фальшивок (только разрез) владеет нагрузкой по своей причине;
        просьба ничего к нему не добавляет. План вообще без посылок — пропуск. */
     p = NULL;
     static const uint8_t empty_plan[] = {'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
                                          0x01, 0x03, 0x00, 0x01, 0x00};
-    CHECK(d2k_plan_load(empty_plan, sizeof empty_plan, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(empty_plan, sizeof empty_plan, &p, err, sizeof err) == 0,
           "order-only plan loads");
     if (p) {
         init_pkt(&in, 0);
         in.own_after_fakes = 1;
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0 && a.n == 0 && a.fate == D2K_ORIG_PASS,
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0 && a.n == 0 && a.fate == D2S_ORIG_PASS,
               "no fakes: nothing races the original, the kernel releases it");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
     }
 }
 
@@ -572,53 +572,53 @@ static void test_quicsplit(void) {
     static const uint8_t plan[] = {'D','2','K','P',0,1,0,10,0,0,0,3,
         0,2,0,2,17,2, 1,3,0,1,0, 1,15,0,1,1};
     char err[160];
-    d2k_plan *p = NULL;
-    int rc = d2k_plan_load(plan, sizeof plan, &p, err, sizeof err);
+    d2s_plan *p = NULL;
+    int rc = d2s_plan_load(plan, sizeof plan, &p, err, sizeof err);
     if (rc) printf("quicsplit plan rejected: %s\n", err);
     CHECK(rc == 0, "quicsplit plan loads");
     if (!p) return;
     static uint8_t initial[1200], want[1500];
-    memcpy(initial, d2k_test_v1_initial, sizeof initial);
+    memcpy(initial, d2s_test_v1_initial, sizeof initial);
     size_t want_len = 0;
-    CHECK(d2k_quic_initial_split_crypto(initial, sizeof initial, want, sizeof want, &want_len) == 0,
+    CHECK(d2s_quic_initial_split_crypto(initial, sizeof initial, want, sizeof want, &want_len) == 0,
           "core split builds");
-    d2k_pkt in = {0};
-    d2k_actions a = {0};
+    d2s_pkt in = {0};
+    d2s_actions a = {0};
     in.payload = initial; in.payload_len = sizeof initial;
-    CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "quicsplit applies to a real Initial");
-    CHECK(a.fate == D2K_ORIG_DROP, "split Initial replaces the original");
-    CHECK(a.n == 1 && a.v[0].kind == D2K_EMIT_PAYLOAD, "quicsplit emits exactly one payload");
+    CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "quicsplit applies to a real Initial");
+    CHECK(a.fate == D2S_ORIG_DROP, "split Initial replaces the original");
+    CHECK(a.n == 1 && a.v[0].kind == D2S_EMIT_PAYLOAD, "quicsplit emits exactly one payload");
     if (a.n == 1) {
-        const d2k_emit *e = &a.v[0];
+        const d2s_emit *e = &a.v[0];
         CHECK(e->len == sizeof initial && e->bytes && memcmp(e->bytes, want, want_len) == 0,
               "emitted bytes are the core split, same length");
-        CHECK(memcmp(initial, d2k_test_v1_initial, sizeof initial) == 0,
+        CHECK(memcmp(initial, d2s_test_v1_initial, sizeof initial) == 0,
               "input packet not modified in place");
         CHECK(e->ipfrag == 0 && e->pre_len == 0 && e->delay_us == 0, "no other action attached");
         char name[64];
-        CHECK(e->bytes && d2k_quic_sni(e->bytes, e->len, name, sizeof name) == 0 &&
+        CHECK(e->bytes && d2s_quic_sni(e->bytes, e->len, name, sizeof name) == 0 &&
               strcmp(name, "example.com") == 0, "server still assembles the same name");
     }
-    d2k_actions_free(&a);
+    d2s_actions_free(&a);
     static uint8_t junk[1200];
     memset(junk, 0xab, sizeof junk);
     in.payload = junk; in.payload_len = sizeof junk;
-    d2k_actions b = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &b) != 0, "not an Initial: refused, original passes as is");
-    d2k_actions_free(&b);
+    d2s_actions b = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &b) != 0, "not an Initial: refused, original passes as is");
+    d2s_actions_free(&b);
     /* Task 40 round 1 (I1): Chrome ML-KEM ClientHello, name in datagram 2.
        Datagram 1 is never resealed with an unmeasured cut: explicit refusal. */
     static uint8_t d1[1500], d2[1500];
     size_t l1 = 0, l2 = 0;
-    CHECK(d2k_test_pq_initials("example.com", d1, &l1, d2, &l2) == 0, "PQ fixture builds");
+    CHECK(d2s_test_pq_initials("example.com", d1, &l1, d2, &l2) == 0, "PQ fixture builds");
     in.payload = d1; in.payload_len = l1;
-    d2k_actions c = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &c) != 0 && c.n == 0,
+    d2s_actions c = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &c) != 0 && c.n == 0,
           "name not in the first datagram: split refused, nothing emitted");
     CHECK(c.refuse_why && strstr(c.refuse_why, "имени нет"),
           "refusal names its reason (name not in this datagram)");
-    d2k_actions_free(&c);
-    d2k_plan_free(p);
+    d2s_actions_free(&c);
+    d2s_plan_free(p);
 }
 
 /* ИЗМЕРЕННЫЙ ВХОД И СЕГМЕНТ ПРОВОДА. Поле 13.10.2026, forum.ru-board.com:
@@ -665,32 +665,32 @@ static void test_pinned_input_prefix(void) {
 
     /* Разрез 770 (n/2 у замера) лежит внутри первого сегмента. */
     size_t pl = pinned_plan(plan, (unsigned)sizeof hello, SNI_OFF, SNI_LEN, 770);
-    d2k_plan *p = NULL;
-    CHECK(d2k_plan_load(plan, pl, &p, err, sizeof err) == 0 && p,
+    d2s_plan *p = NULL;
+    CHECK(d2s_plan_load(plan, pl, &p, err, sizeof err) == 0 && p,
           "пришпиленный план не разобран");
     if (!p) { return; }
-    d2k_pkt in; memset(&in, 0, sizeof in);
+    d2s_pkt in; memset(&in, 0, sizeof in);
     in.payload = hello; in.payload_len = SEG; in.seq = 1;
     in.have_sni = 1; in.sni_off = SNI_OFF; in.sni_len = SNI_LEN; in.is_tls13 = 1;
-    d2k_actions a = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0,
+    d2s_actions a = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0,
           "приставка того же приветствия отвергнута — приём недоступен проводу");
     if (a.n) { CHECK(a.n >= 2, "разрез внутри приставки не исполнен"); }
-    d2k_actions_free(&a);
+    d2s_actions_free(&a);
 
     /* Целое приветствие — как прежде. */
     in.payload_len = sizeof hello;
-    d2k_actions whole = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &whole) == 0, "целый вход отвергнут");
-    d2k_actions_free(&whole);
+    d2s_actions whole = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &whole) == 0, "целый вход отвергнут");
+    d2s_actions_free(&whole);
 
     /* КОНТРОЛЬ: имя не на том месте — это другой вход, отказ с причиной. */
     in.payload_len = SEG; in.sni_off = SNI_OFF + 1;
-    d2k_actions moved = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &moved) != 0 &&
+    d2s_actions moved = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &moved) != 0 &&
           moved.refuse_why && strstr(moved.refuse_why, "другой вход"),
           "сдвинутое имя принято за измеренный вход");
-    d2k_actions_free(&moved);
+    d2s_actions_free(&moved);
     in.sni_off = SNI_OFF;
 
     /* КОНТРОЛЬ: чужая длина записи — другое приветствие. */
@@ -699,35 +699,35 @@ static void test_pinned_input_prefix(void) {
     other[3] = (uint8_t)((1400 - 5) >> 8); other[4] = (uint8_t)(1400 - 5);
     other[6] = 0; other[7] = (uint8_t)((1400 - 9) >> 8); other[8] = (uint8_t)(1400 - 9);
     in.payload = other;
-    d2k_actions diff = {0};
-    CHECK(d2k_plan_apply(p, NULL, &in, &diff) != 0 &&
+    d2s_actions diff = {0};
+    CHECK(d2s_plan_apply(p, NULL, &in, &diff) != 0 &&
           diff.refuse_why && strstr(diff.refuse_why, "другой вход"),
           "другое приветствие принято за измеренный вход");
-    d2k_actions_free(&diff);
+    d2s_actions_free(&diff);
     in.payload = hello;
-    d2k_plan_free(p);
+    d2s_plan_free(p);
 
     /* КОНТРОЛЬ: разрез ЗА приставкой — программа была бы другой. */
     pl = pinned_plan(plan, (unsigned)sizeof hello, SNI_OFF, SNI_LEN, 1500);
-    d2k_plan *q = NULL;
-    CHECK(d2k_plan_load(plan, pl, &q, err, sizeof err) == 0 && q, "план с поздним разрезом");
+    d2s_plan *q = NULL;
+    CHECK(d2s_plan_load(plan, pl, &q, err, sizeof err) == 0 && q, "план с поздним разрезом");
     if (q) {
-        d2k_actions late = {0};
-        CHECK(d2k_plan_apply(q, NULL, &in, &late) != 0 &&
+        d2s_actions late = {0};
+        CHECK(d2s_plan_apply(q, NULL, &in, &late) != 0 &&
               late.refuse_why && strstr(late.refuse_why, "разрез") != NULL,
               "разрез за пришедшими байтами исполнен молча другой программой");
-        d2k_actions_free(&late);
-        d2k_plan_free(q);
+        d2s_actions_free(&late);
+        d2s_plan_free(q);
     }
 }
 
 int main(void) {
-    d2k_plan *p = NULL;
+    d2s_plan *p = NULL;
     char err[160];
-    d2k_flow f;
+    d2s_flow f;
     memset(&f, 0, sizeof f);
-    d2k_actions a;
-    d2k_pkt in;
+    d2s_actions a;
+    d2s_pkt in;
 
     test_tls_fake_modifiers();
     test_refusal_names_reason();
@@ -743,16 +743,16 @@ int main(void) {
         size_t n=sizeof plan_delay;
         putrec(plan,&n,0x0002,proto,sizeof proto);
         plan[11]=2;
-        d2k_plan *udp=NULL; d2k_pkt pkt={0}; d2k_actions actions={0};
-        CHECK(d2k_plan_load(plan,n,&udp,err,sizeof err)==0,
+        d2s_plan *udp=NULL; d2s_pkt pkt={0}; d2s_actions actions={0};
+        CHECK(d2s_plan_load(plan,n,&udp,err,sizeof err)==0,
               "UDP delay plan loads for TCP-cap isolation");
         if(udp) {
             pkt.payload=body; pkt.payload_len=sizeof body; pkt.segment_cap=32;
-            CHECK(d2k_plan_apply(udp,NULL,&pkt,&actions)==0,
+            CHECK(d2s_plan_apply(udp,NULL,&pkt,&actions)==0,
                   "UDP plan still applies with foreign TCP route hint");
             CHECK(actions.n==1 && actions.v[0].len==64,
                   "TCP route hint never segments a QUIC datagram");
-            d2k_actions_free(&actions); d2k_plan_free(udp);
+            d2s_actions_free(&actions); d2s_plan_free(udp);
         }
     }
 
@@ -769,23 +769,23 @@ int main(void) {
         client[5]=1; client[7]=6; client[8]=0xd7;
         client[43]=32;
         for (size_t i=44; i<sizeof client; i++) client[i]=(uint8_t)i;
-        d2k_plan *paced=NULL;
-        CHECK(d2k_plan_load(plan,n,&paced,err,sizeof err)==0,
+        d2s_plan *paced=NULL;
+        CHECK(d2s_plan_load(plan,n,&paced,err,sizeof err)==0,
               "paced fake plan loads for route-MTU regression");
         if (paced) {
-            d2k_pkt pkt={0}; d2k_actions actions={0};
+            d2s_pkt pkt={0}; d2s_actions actions={0};
             pkt.payload=client; pkt.payload_len=sizeof client; pkt.seq=1000;
             pkt.have_sni=1; pkt.is_tls13=1; pkt.sni_off=20; pkt.sni_len=8;
             pkt.segment_cap=1440;
-            CHECK(d2k_plan_apply(paced,NULL,&pkt,&actions)==0,
+            CHECK(d2s_plan_apply(paced,NULL,&pkt,&actions)==0,
                   "paced long ClientHello applies");
             CHECK(actions.n==3,
                   "paced ClientHello without overlap splits below route MTU");
-            CHECK(actions.fate==D2K_ORIG_DROP,"paced plan still owns original");
+            CHECK(actions.fate==D2S_ORIG_DROP,"paced plan still owns original");
             size_t offset=0;
             for(size_t i=0;i<actions.n;i++) {
-                const d2k_emit *e=&actions.v[i];
-                if(e->kind==D2K_EMIT_FAKE) {
+                const d2s_emit *e=&actions.v[i];
+                if(e->kind==D2S_EMIT_FAKE) {
                     CHECK(i==0 && e->len==87,"fake remains first and unsplit");
                     continue;
                 }
@@ -800,48 +800,48 @@ int main(void) {
                 offset+=e->len;
             }
             CHECK(offset==sizeof client,"whole ClientHello emitted exactly once");
-            d2k_actions_free(&actions);
+            d2s_actions_free(&actions);
             pkt.segment_cap=32;
-            CHECK(d2k_plan_apply(paced,NULL,&pkt,&actions)==0,
+            CHECK(d2s_plan_apply(paced,NULL,&pkt,&actions)==0,
                   "small route cap applies to real stream");
-            CHECK(actions.n && actions.v[0].kind==D2K_EMIT_FAKE &&
+            CHECK(actions.n && actions.v[0].kind==D2S_EMIT_FAKE &&
                   actions.v[0].len==87,"route cap never splits a fake packet");
-            d2k_actions_free(&actions);
-            d2k_plan_free(paced);
+            d2s_actions_free(&actions);
+            d2s_plan_free(paced);
         }
     }
 
     /* --- фальшивка перед кусками ------------------------------------- */
-    CHECK(d2k_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
           "план с фальшивкой не загрузился");
     if (p) {
         init_pkt(&in, 1);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "применение не удалось");
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "применение не удалось");
         CHECK(a.n == 2, "ожидались ровно две копии фальшивки");
         if (a.n == 2) {
             CHECK(a.v[0].delay_us == 0, "первая копия не должна ждать");
             CHECK(a.v[1].delay_us == 78000, "пауза между копиями потеряна");
             CHECK(a.v[0].seq == in.seq, "фальшивка обязана занимать место начала потока");
             CHECK(a.v[0].ttl == 3, "ttl порчи не доехал");
-            CHECK(a.v[0].poison == D2K_POISON_BADSUM, "флаг порчи не доехал");
+            CHECK(a.v[0].poison == D2S_POISON_BADSUM, "флаг порчи не доехал");
             CHECK(a.v[0].len == 3, "длина приманки не совпала");
         }
         /* Оригинал мы не трогали — его обязан выпустить вызывающий. */
-        CHECK(a.fate == D2K_ORIG_PASS, "судьба оригинала должна быть «пропустить»");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        CHECK(a.fate == D2S_ORIG_PASS, "судьба оригинала должна быть «пропустить»");
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- OOB/URG: вставка не удаляет байт оригинального TLS ---------------- */
-    CHECK(d2k_plan_load(plan_oob_sni, sizeof plan_oob_sni, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_oob_sni, sizeof plan_oob_sni, &p, err, sizeof err) == 0,
           "план TCP URG по середине SNI не загрузился");
     if (p) {
         init_frag(&in, 64, 64);
         for (size_t i = 20; i < 28; i++) { frag[i] = (uint8_t)('a' + i - 20); }
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "план TCP URG не применился");
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "план TCP URG не применился");
         CHECK(a.n == 3, "OOB должен дать префикс, срочный байт и суффикс");
         if (a.n == 3) {
             CHECK(a.v[0].seq == 1000 && a.v[0].len == 24,
@@ -852,19 +852,19 @@ int main(void) {
             CHECK(a.v[2].seq == 1025 && a.v[2].len == 40 && a.v[2].bytes == frag + 24,
                   "суффикс OOB потерял байт исходного ClientHello");
         }
-        CHECK(a.fate == D2K_ORIG_DROP, "исходный ClientHello не снят при OOB-вставке");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        CHECK(a.fate == D2S_ORIG_DROP, "исходный ClientHello не снят при OOB-вставке");
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- разрез по SNI ------------------------------------------------ */
-    CHECK(d2k_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
           "план с разрезом не загрузился");
     if (p) {
         init_pkt(&in, 1);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "применение разреза не удалось");
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "применение разреза не удалось");
         CHECK(a.n == 2, "разрез обязан дать два куска");
         if (a.n == 2) {
             CHECK(a.v[0].seq == 1000 && a.v[0].len == 10, "первый кусок не по якорю");
@@ -872,31 +872,31 @@ int main(void) {
         }
         /* Нагрузку выпустили мы сами — оригинал обязан быть снят, иначе
            байты уйдут дважды. */
-        CHECK(a.fate == D2K_ORIG_DROP, "при своём выпуске нагрузки оригинал обязан сниматься");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        CHECK(a.fate == D2S_ORIG_DROP, "при своём выпуске нагрузки оригинал обязан сниматься");
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- ВЫДЕРЖКА ПЕРЕД ЕДИНСТВЕННОЙ ПОСЫЛКОЙ -------------------------- */
-    CHECK(d2k_plan_load(plan_delay, sizeof plan_delay, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_delay, sizeof plan_delay, &p, err, sizeof err) == 0,
           "план с выдержкой не загрузился");
     if (p) {
         init_pkt(&in, 1);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "план с выдержкой не применился");
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "план с выдержкой не применился");
         CHECK(a.n == 1, "выдержка обязана дать РОВНО одну посылку — саму нагрузку");
         if (a.n == 1) {
-            CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD, "посылка не нагрузка");
+            CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD, "посылка не нагрузка");
             CHECK(a.v[0].delay_us == 15000, "выдержка не доехала до посылки");
             CHECK(a.v[0].len == in.payload_len, "нагрузка урезана");
         }
         /* Выдержать паузу можно только тогда, когда правду выпускаем мы сами:
            оригинал, отпущенный ядром, уходит когда ему угодно. */
-        CHECK(a.fate == D2K_ORIG_DROP,
+        CHECK(a.fate == D2S_ORIG_DROP,
               "оригинал не снят — ядро выпустит его без всякой выдержки");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
@@ -908,74 +908,74 @@ int main(void) {
        (замерено там же — «добавлено к голове=0» при двух удержаниях).
        Имя в сегменте есть, разрез считается от него — этого достаточно;
        остаток уйдёт за нашими кусками сам. */
-    CHECK(d2k_plan_load(plan_split_sni_tls, sizeof plan_split_sni_tls, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_split_sni_tls, sizeof plan_split_sni_tls, &p, err, sizeof err) == 0,
           "план со входом-приветствием не загрузился");
     if (p) {
         init_frag(&in, 64, 64);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0, "целая запись не принята входом");
-        d2k_actions_free(&a);
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0, "целая запись не принята входом");
+        d2s_actions_free(&a);
         init_frag(&in, 64, 200);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) == 0,
+        CHECK(d2s_plan_apply(p, &f, &in, &a) == 0,
               "первый сегмент составного приветствия отвергнут как вход");
         CHECK(a.n == 2 && a.v[0].len == 20 && a.v[1].len == 44,
               "куски посчитаны не по сегменту");
-        d2k_actions_free(&a);
+        d2s_actions_free(&a);
         /* А вот обрывок БЕЗ имени входом не считается: разрез от него не
            вычислить, и гадать не из чего. */
         init_frag(&in, 64, 200);
         in.have_sni = 0;
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) != 0,
+        CHECK(d2s_plan_apply(p, &f, &in, &a) != 0,
               "обрывок без имени принят входом");
-        d2k_actions_free(&a);
+        d2s_actions_free(&a);
         /* Обрывок, который длиннее объявленной записи, — не начало
            приветствия, а мусор. */
         init_frag(&in, 64, 32);
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) != 0,
+        CHECK(d2s_plan_apply(p, &f, &in, &a) != 0,
               "кусок длиннее объявленной записи принят входом");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- невычислимый якорь ------------------------------------------- */
-    CHECK(d2k_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
           "план не загрузился повторно");
     if (p) {
         init_pkt(&in, 0); /* SNI в пакете нет */
         memset(&a, 0, sizeof a);
-        CHECK(d2k_plan_apply(p, &f, &in, &a) != 0,
+        CHECK(d2s_plan_apply(p, &f, &in, &a) != 0,
               "невычислимый якорь обязан давать отказ, а не нулевое смещение");
         CHECK(a.n == 0, "при отказе действий быть не должно");
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- фальшивка между кусками без разрезов -------------------------- */
-    CHECK(d2k_plan_load(plan_between_no_split, sizeof plan_between_no_split, &p, err, sizeof err) != 0,
+    CHECK(d2s_plan_load(plan_between_no_split, sizeof plan_between_no_split, &p, err, sizeof err) != 0,
           "фальшивка «между кусками» без разрезов принята: класть её некуда");
     if (p) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- отмена исполнения на середине -------------------------------- */
-    CHECK(d2k_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_fake_before, sizeof plan_fake_before, &p, err, sizeof err) == 0,
           "план с фальшивкой не загрузился для проверки отмены");
     if (p) {
         init_pkt(&in, 1);
         memset(&a, 0, sizeof a);
-        d2k_plan_apply(p, &f, &in, &a);
-        d2k_cancel c;
+        d2s_plan_apply(p, &f, &in, &a);
+        d2s_cancel c;
 
         /* Ничего не ушло: отмена совершенно чистая. */
         memset(&c, 0, sizeof c);
-        d2k_actions_cancel(&a, 0, &c);
-        CHECK(c.fate == D2K_ORIG_PASS, "до первой посылки оригинал обязан пройти");
+        d2s_actions_cancel(&a, 0, &c);
+        CHECK(c.fate == D2S_ORIG_PASS, "до первой посылки оригинал обязан пройти");
         /* partial означает «полного исполнения не было», а не «оборвалось на
            середине». Потребитель решает по нему единственный вопрос — можно ли
            записывать измерение, — и ответ «нельзя» одинаков и для оборванного
@@ -988,60 +988,60 @@ int main(void) {
 
         /* Ушла одна копия фальшивки из двух: нагрузку не трогали. */
         memset(&c, 0, sizeof c);
-        d2k_actions_cancel(&a, 1, &c);
-        CHECK(c.fate == D2K_ORIG_PASS, "после фальшивки оригинал обязан пройти");
+        d2s_actions_cancel(&a, 1, &c);
+        CHECK(c.fate == D2S_ORIG_PASS, "после фальшивки оригинал обязан пройти");
         CHECK(c.partial == 1, "исполнение неполное — измерение по нему недействительно");
         CHECK(c.stream_damaged == 0, "фальшивка нагрузку не портит");
 
         /* Ушло всё: это не отмена. */
         memset(&c, 0, sizeof c);
-        d2k_actions_cancel(&a, a.n, &c);
+        d2s_actions_cancel(&a, a.n, &c);
         CHECK(c.partial == 0, "полностью исполненный план не является частичным");
 
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* Отмена посреди НАГРУЗКИ: чистого выхода нет. */
-    CHECK(d2k_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_split_sni, sizeof plan_split_sni, &p, err, sizeof err) == 0,
           "план с разрезом не загрузился для проверки отмены");
     if (p) {
         init_pkt(&in, 1);
         memset(&a, 0, sizeof a);
-        d2k_plan_apply(p, &f, &in, &a);
-        d2k_cancel c;
+        d2s_plan_apply(p, &f, &in, &a);
+        d2s_cancel c;
 
         /* Первый кусок уже на проводе. Отпустить оригинал — послать те же
            байты дважды; не отпустить — потерять остаток. */
         memset(&c, 0, sizeof c);
-        d2k_actions_cancel(&a, 1, &c);
+        d2s_actions_cancel(&a, 1, &c);
         CHECK(c.stream_damaged == 1, "отмена посреди нагрузки обязана помечать поток испорченным");
-        CHECK(c.fate == D2K_ORIG_DROP, "оригинал нельзя отпускать: его байты уже частично ушли");
+        CHECK(c.fate == D2S_ORIG_DROP, "оригинал нельзя отпускать: его байты уже частично ушли");
         CHECK(c.partial == 1, "исполнение неполное");
 
         /* До первого куска — ещё чисто. */
         memset(&c, 0, sizeof c);
-        d2k_actions_cancel(&a, 0, &c);
+        d2s_actions_cancel(&a, 0, &c);
         CHECK(c.stream_damaged == 0, "до первого куска поток цел");
-        CHECK(c.fate == D2K_ORIG_PASS, "нагрузку не трогали — оригинал обязан пройти");
+        CHECK(c.fate == D2S_ORIG_PASS, "нагрузку не трогали — оригинал обязан пройти");
 
-        d2k_actions_free(&a);
-        d2k_plan_free(p);
+        d2s_actions_free(&a);
+        d2s_plan_free(p);
         p = NULL;
     }
 
     /* --- перекрытие без разреза ----------------------------------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_seqovl, sizeof plan_seqovl, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_seqovl, sizeof plan_seqovl, &p, err, sizeof err) == 0,
               "план с перекрытием не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "перекрытие не применилось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "перекрытие не применилось");
             CHECK(a.n == 1, "перекрытие без разреза даёт один кусок");
             if (a.n == 1) {
                 CHECK(a.v[0].pre_len == 2, "приставка не поставлена");
@@ -1051,9 +1051,9 @@ int main(void) {
                    как уже полученное, коробка — положит в поток. */
                 CHECK(a.v[0].seq == in.seq - 2, "номер не сдвинут назад на длину приставки");
                 CHECK(a.v[0].len == in.payload_len, "нагрузка урезана");
-                CHECK(a.fate == D2K_ORIG_DROP, "оригинал обязан быть подавлен: мы шлём его сами");
+                CHECK(a.fate == D2S_ORIG_DROP, "оригинал обязан быть подавлен: мы шлём его сами");
             }
-            d2k_actions_free(&a);
+            d2s_actions_free(&a);
 
             /* MTU-предел — только дополнительная граница TCP-сегментации:
                prefix + исходное тело режутся вместе, без потери/дублирования
@@ -1065,7 +1065,7 @@ int main(void) {
             in.payload_len = sizeof large_payload;
             in.seq = 1000;
             in.segment_cap = 1400;
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0,
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0,
                   "перекрытие с пределом MTU не применилось");
             CHECK(a.n == 2, "перекрытие выше MTU автоматически делится на два сегмента");
             size_t total = 0;
@@ -1079,22 +1079,22 @@ int main(void) {
             }
             CHECK(total == sizeof large_payload + 2,
                   "деление сохраняет приставку перекрытия и все исходные байты");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- перекрытие вместе с разрезом ------------------------------------ */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_seqovl_split, sizeof plan_seqovl_split, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_seqovl_split, sizeof plan_seqovl_split, &p, err, sizeof err) == 0,
               "план с перекрытием и разрезом не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "не применилось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "не применилось");
             CHECK(a.n == 2, "разрез даёт два куска");
             if (a.n == 2) {
                 CHECK(a.v[0].pre_len == 2, "приставка только у первого куска");
@@ -1104,103 +1104,103 @@ int main(void) {
                 CHECK(a.v[1].seq == in.seq + (uint32_t)in.sni_off,
                       "второй кусок с неверным номером");
             }
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- обратный порядок: разрез, без фальшивок ------------------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_split_reverse, sizeof plan_split_reverse, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_split_reverse, sizeof plan_split_reverse, &p, err, sizeof err) == 0,
               "план с обратным порядком и разрезом не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "обратный порядок не применился");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "обратный порядок не применился");
             CHECK(a.n == 2, "разрез обязан дать два куска и при обратном порядке");
             if (a.n == 2) {
                 /* Хвост уходит ПЕРВЫМ, а номер последовательности остаётся при
                    своём содержимом: переставляется порядок ОТПРАВКИ, а не
                    сами байты и не их номера. */
-                CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD && a.v[0].seq == 1010 && a.v[0].len == 54,
+                CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD && a.v[0].seq == 1010 && a.v[0].len == 54,
                       "первым обязан уйти хвост, а не голова");
-                CHECK(a.v[1].kind == D2K_EMIT_PAYLOAD && a.v[1].seq == 1000 && a.v[1].len == 10,
+                CHECK(a.v[1].kind == D2S_EMIT_PAYLOAD && a.v[1].seq == 1000 && a.v[1].len == 10,
                       "голова обязана уйти второй");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- обратный порядок: фальшивка ПЕРЕД нагрузкой --------------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_fake_before_reverse, sizeof plan_fake_before_reverse, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_fake_before_reverse, sizeof plan_fake_before_reverse, &p, err, sizeof err) == 0,
               "план с фальшивкой перед нагрузкой и обратным порядком не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 3, "ожидались фальшивка и два куска");
             if (a.n == 3) {
-                CHECK(a.v[0].kind == D2K_EMIT_FAKE && a.v[0].seq == 1000,
+                CHECK(a.v[0].kind == D2S_EMIT_FAKE && a.v[0].seq == 1000,
                       "фальшивка обязана остаться первой — переворот её не касается");
                 /* За фальшивкой куски идут хвостом вперёд, как и без неё. */
-                CHECK(a.v[1].kind == D2K_EMIT_PAYLOAD && a.v[1].seq == 1010 && a.v[1].len == 54,
+                CHECK(a.v[1].kind == D2S_EMIT_PAYLOAD && a.v[1].seq == 1010 && a.v[1].len == 54,
                       "после фальшивки первым обязан идти хвост");
-                CHECK(a.v[2].kind == D2K_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 10,
+                CHECK(a.v[2].kind == D2S_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 10,
                       "голова обязана идти последней");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- обратный порядок: фальшивка МЕЖДУ кусками ------------------------ */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_between_reverse, sizeof plan_between_reverse, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_between_reverse, sizeof plan_between_reverse, &p, err, sizeof err) == 0,
               "план с фальшивкой между кусками и обратным порядком не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 3, "ожидались кусок, фальшивка и ещё кусок");
             if (a.n == 3) {
                 /* Фальшивка стоит ВНУТРИ диапазона нагрузки: диапазонный
                    переворот утащил бы её вместе с кусками. Она обязана
                    остаться на своей позиции, а куски — обменяться местами
                    вокруг неё. */
-                CHECK(a.v[1].kind == D2K_EMIT_FAKE, "фальшивка обязана остаться на своём месте — посередине");
-                CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD && a.v[0].seq == 1010 && a.v[0].len == 54,
+                CHECK(a.v[1].kind == D2S_EMIT_FAKE, "фальшивка обязана остаться на своём месте — посередине");
+                CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD && a.v[0].seq == 1010 && a.v[0].len == 54,
                       "первым обязан уйти хвост");
-                CHECK(a.v[2].kind == D2K_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 10,
+                CHECK(a.v[2].kind == D2S_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 10,
                       "голова обязана уйти последней");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- обратный порядок: без разрезов вовсе ----------------------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_seqovl_reverse, sizeof plan_seqovl_reverse, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_seqovl_reverse, sizeof plan_seqovl_reverse, &p, err, sizeof err) == 0,
               "план с перекрытием и обратным порядком не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
             /* Кусок один, переворачивать нечего. У старого цикла `j - 1`
                считался ДО проверки `j >= 1`, и на пустом диапазоне это
@@ -1208,37 +1208,37 @@ int main(void) {
                ровно тот класс входа (один кусок и меньше), для которого
                защиты не было вовсе. Новый цикл обязан пройти его без единой
                итерации сам по себе, не полагаясь на раскладку кучи. */
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 1, "перекрытие без разреза даёт один кусок и при обратном порядке");
             if (a.n == 1) {
-                CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD, "единственная посылка обязана остаться куском нагрузки");
+                CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD, "единственная посылка обязана остаться куском нагрузки");
                 CHECK(a.v[0].seq == in.seq - 2, "перевернуть один кусок значит не менять его вовсе");
                 CHECK(a.v[0].len == in.payload_len, "длина куска не должна была измениться");
                 CHECK(a.v[0].pre_len == 2, "приставка перекрытия обязана остаться на месте");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- обратный порядок: полная связка (everythingPlan) ----------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_everything_reverse, sizeof plan_everything_reverse, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_everything_reverse, sizeof plan_everything_reverse, &p, err, sizeof err) == 0,
               "план полной связки не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение полной связки не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение полной связки не удалось");
             /* sni_off=10, sni_len=8 (init_pkt) → середина имени = 14. Резы в
                1 и 14 дают три куска [0,1), [1,14), [14,64) — фальшивка и три
                куска. */
             CHECK(a.n == 4, "ожидались фальшивка и три куска (два разреза после reorder-cut)");
             if (a.n == 4) {
-                CHECK(a.v[0].kind == D2K_EMIT_FAKE && a.v[0].seq == 1000,
+                CHECK(a.v[0].kind == D2S_EMIT_FAKE && a.v[0].seq == 1000,
                       "фальшивка обязана остаться первой и при перекрытии, и при разрезах");
                 /* Переворот меняет местами только КРАЙНИЕ куски нагрузки —
                    хвост [mid,n) первым, голова [0,1) последней, — средний
@@ -1246,13 +1246,13 @@ int main(void) {
                    последовательности не пересчитаны заново: обмен местами
                    переносит содержимое целиком, включая уже вычисленный
                    seq. */
-                CHECK(a.v[1].kind == D2K_EMIT_PAYLOAD && a.v[1].seq == 1014 && a.v[1].len == 50,
+                CHECK(a.v[1].kind == D2S_EMIT_PAYLOAD && a.v[1].seq == 1014 && a.v[1].len == 50,
                       "первым среди кусков обязан идти хвост [mid,n), с тем же номером, что и до перестановки");
                 CHECK(a.v[1].pre_len == 0, "приставка не должна была попасть на хвост");
-                CHECK(a.v[2].kind == D2K_EMIT_PAYLOAD && a.v[2].seq == 1001 && a.v[2].len == 13,
+                CHECK(a.v[2].kind == D2S_EMIT_PAYLOAD && a.v[2].seq == 1001 && a.v[2].len == 13,
                       "средним обязан остаться кусок [1,mid) — переворот его не касается");
                 CHECK(a.v[2].pre_len == 0, "приставка не должна была попасть на средний кусок");
-                CHECK(a.v[3].kind == D2K_EMIT_PAYLOAD && a.v[3].len == 1,
+                CHECK(a.v[3].kind == D2S_EMIT_PAYLOAD && a.v[3].len == 1,
                       "голова [0,1) обязана идти последней и в полной связке");
                 /* Приставка перекрытия остаётся только у головы (куска,
                    покрывающего начало нагрузки) — независимо от того, на
@@ -1263,62 +1263,62 @@ int main(void) {
                 CHECK(a.v[3].seq == in.seq - 2,
                       "номер головы обязан остаться сдвинутым назад на длину приставки");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- разрез по середине ИМЕНИ, а не середине пакета (reorder-cut) ----- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
               "план с разрезом по середине имени не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             /* sni_off=10, sni_len=8 (init_pkt) → середина имени = 10+8/2 = 14. */
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "разрез по середине имени не применился");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "разрез по середине имени не применился");
             CHECK(a.n == 2, "разрез по середине имени обязан дать два куска");
             if (a.n == 2) {
                 CHECK(a.v[0].seq == 1000 && a.v[0].len == 14, "первый кусок не по середине ИМЕНИ");
                 CHECK(a.v[1].seq == 1014 && a.v[1].len == 50, "второй кусок не по середине ИМЕНИ");
             }
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- та же середина имени: без SNI якорь ОТКАЗЫВАЕТ, а не подменяется
        серединой ПАКЕТА молча — §2.5, тот же довод, что у ANCHOR_SNI_START. */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
               "план не загрузился повторно (середина имени без SNI)");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 0); /* SNI в пакете нет */
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) != 0,
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) != 0,
                   "середина имени без SNI обязана давать отказ, а не середину пакета");
             CHECK(a.n == 0, "при отказе действий быть не должно");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- зажим снизу: короткое имя не даёт вырожденный кусок --------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
               "план не загрузился повторно (зажим снизу)");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             memset(&in, 0, sizeof in);
             in.payload = hello; /* содержимое не важно — проверяем смещения */
             in.payload_len = 20;
@@ -1326,26 +1326,26 @@ int main(void) {
             in.have_sni = 1;
             in.sni_off = 0;
             in.sni_len = 2; /* сырая середина = 0+2/2 = 1; донор зажимает в 2 */
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "зажатый снизу разрез не применился");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "зажатый снизу разрез не применился");
             CHECK(a.n == 2, "зажатый снизу разрез обязан дать два куска");
             if (a.n == 2) {
                 CHECK(a.v[0].len == 2, "зажим снизу не сработал: рез обязан быть в 2, а не в 1");
                 CHECK(a.v[1].seq == 5002 && a.v[1].len == 18, "второй кусок не от зажатой позиции");
             }
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- зажим сверху: середина не уходит в конец нагрузки или дальше ------ */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_split_sni_middle, sizeof plan_split_sni_middle, &p, err, sizeof err) == 0,
               "план не загрузился повторно (зажим сверху)");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             memset(&in, 0, sizeof in);
             in.payload = hello;
             in.payload_len = 10;
@@ -1353,26 +1353,26 @@ int main(void) {
             in.have_sni = 1;
             in.sni_off = 8;
             in.sni_len = 4; /* сырая середина = 8+4/2 = 10, не меньше длины нагрузки (10) */
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "зажатый сверху разрез не применился");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "зажатый сверху разрез не применился");
             CHECK(a.n == 2, "зажатый сверху разрез обязан дать два куска");
             if (a.n == 2) {
                 CHECK(a.v[0].len == 9, "зажим сверху не сработал: рез обязан быть в payload_len-1=9");
                 CHECK(a.v[1].seq == 6009 && a.v[1].len == 1, "второй кусок не от зажатой позиции");
             }
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- порядок: резы в 1 и на середине имени дают донорские три куска ---- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_reorder_by_name, sizeof plan_reorder_by_name, &p, err, sizeof err) == 0,
+        CHECK(d2s_plan_load(plan_reorder_by_name, sizeof plan_reorder_by_name, &p, err, sizeof err) == 0,
               "план разреза по имени с обратным порядком не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             /* sni_off=10, sni_len=8 (init_pkt) → середина имени = 14. Резы в 1
                и 14 дают [0,1), [1,14), [14,64); обратный порядок кладёт их на
                провод как [14,64), [1,14), [0,1) — ровно донорская
@@ -1381,82 +1381,82 @@ int main(void) {
                Проверяем СМЕЩЕНИЯМИ и ПОРЯДКОМ, а не числом кусков: порядок
                здесь и есть предмет проверки. */
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 3, "два реза обязаны дать три куска");
             if (a.n == 3) {
-                CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD && a.v[0].seq == 1014 && a.v[0].len == 50,
+                CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD && a.v[0].seq == 1014 && a.v[0].len == 50,
                       "первым обязан идти хвост [mid,n)");
-                CHECK(a.v[1].kind == D2K_EMIT_PAYLOAD && a.v[1].seq == 1001 && a.v[1].len == 13,
+                CHECK(a.v[1].kind == D2S_EMIT_PAYLOAD && a.v[1].seq == 1001 && a.v[1].len == 13,
                       "вторым обязана идти середина [1,mid)");
-                CHECK(a.v[2].kind == D2K_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 1,
+                CHECK(a.v[2].kind == D2S_EMIT_PAYLOAD && a.v[2].seq == 1000 && a.v[2].len == 1,
                       "последним обязан идти одинокий первый байт [0,1)");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- два реза и фальшивка между кусками: счёт посылок ----------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_between_two_splits, sizeof plan_between_two_splits,
+        CHECK(d2s_plan_load(plan_between_two_splits, sizeof plan_between_two_splits,
                             &p, err, sizeof err) == 0,
               "план с двумя резами и фальшивкой между кусками не загрузился");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             /* sni_off=10, sni_len=8 → середина имени 14; резы в 1 и 14 дают
                куски [0,1), [1,14), [14,64) и два места для фальшивки. */
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 7, "три куска и четыре фальшивки — семь посылок");
             if (a.n == 7) {
-                CHECK(a.v[0].kind == D2K_EMIT_PAYLOAD && a.v[0].len == 1,
+                CHECK(a.v[0].kind == D2S_EMIT_PAYLOAD && a.v[0].len == 1,
                       "первым обязан идти кусок [0,1)");
-                CHECK(a.v[1].kind == D2K_EMIT_FAKE && a.v[2].kind == D2K_EMIT_FAKE,
+                CHECK(a.v[1].kind == D2S_EMIT_FAKE && a.v[2].kind == D2S_EMIT_FAKE,
                       "за первым куском обязаны идти две копии фальшивки");
-                CHECK(a.v[3].kind == D2K_EMIT_PAYLOAD && a.v[3].len == 13,
+                CHECK(a.v[3].kind == D2S_EMIT_PAYLOAD && a.v[3].len == 13,
                       "третьим обязан идти кусок [1,14)");
-                CHECK(a.v[4].kind == D2K_EMIT_FAKE && a.v[5].kind == D2K_EMIT_FAKE,
+                CHECK(a.v[4].kind == D2S_EMIT_FAKE && a.v[5].kind == D2S_EMIT_FAKE,
                       "во втором разрезе фальшивка обязана быть выпущена снова");
-                CHECK(a.v[6].kind == D2K_EMIT_PAYLOAD && a.v[6].len == 50,
+                CHECK(a.v[6].kind == D2S_EMIT_PAYLOAD && a.v[6].len == 50,
                       "последним обязан идти хвост [14,64)");
             }
-            CHECK(a.fate == D2K_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            CHECK(a.fate == D2S_ORIG_DROP, "нагрузку выпустили сами — оригинал обязан сниматься");
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 
     /* --- плечо донора fakedsplit-x7 целиком ------------------------------- */
     {
-        d2k_plan *p = NULL;
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_fakedsplit_x7, sizeof plan_fakedsplit_x7,
+        CHECK(d2s_plan_load(plan_fakedsplit_x7, sizeof plan_fakedsplit_x7,
                             &p, err, sizeof err) == 0,
               "плечо fakedsplit-x7 не загрузилось");
         if (p) {
-            d2k_pkt in;
-            d2k_actions a;
+            d2s_pkt in;
+            d2s_actions a;
             init_pkt(&in, 1);
-            CHECK(d2k_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
+            CHECK(d2s_plan_apply(p, NULL, &in, &a) == 0, "применение не удалось");
             CHECK(a.n == 17, "три куска и дважды по семь фальшивок — семнадцать посылок");
-            CHECK(a.n <= D2K_RESULT_MAX,
+            CHECK(a.n <= D2S_RESULT_MAX,
                   "самое длинное плечо донора обязано помещаться в результат: "
                   "иначе оно отвергается на каждой цели и не проверяется вовсе");
             if (a.n == 17) {
                 size_t fakes = 0, chunks = 0;
                 for (size_t i = 0; i < a.n; i++) {
-                    if (a.v[i].kind == D2K_EMIT_FAKE) { fakes++; }
-                    if (a.v[i].kind == D2K_EMIT_PAYLOAD) { chunks++; }
+                    if (a.v[i].kind == D2S_EMIT_FAKE) { fakes++; }
+                    if (a.v[i].kind == D2S_EMIT_PAYLOAD) { chunks++; }
                 }
                 CHECK(fakes == 14, "фальшивок обязано быть четырнадцать");
                 CHECK(chunks == 3, "кусков нагрузки обязано быть три");
             }
-            d2k_actions_free(&a);
-            d2k_plan_free(p);
+            d2s_actions_free(&a);
+            d2s_plan_free(p);
         }
     }
 

@@ -3,7 +3,7 @@
 Run from the repository root:
 
 ```sh
-docker build -t d2k-fragment-test -f tests/fragment-plan/Dockerfile tests/fragment-plan
+docker build -t d2s-fragment-test -f tests/fragment-plan/Dockerfile tests/fragment-plan
 sh scripts/check-fragment-plan-linux.sh
 ```
 
@@ -28,7 +28,7 @@ Unsupported overlap reassembly on the
 server is reported, not converted into an application success.
 
 The runner then executes `nfq.sh`: an ordinary UDP client sends a real QUIC
-Initial through NFQUEUE and the actual `d2kd` loop. All eight combinations must
+Initial through NFQUEUE and the actual `d2sd` loop. All eight combinations must
 match the expected wire, remove the queued original and record execution DONE.
 The server is still a UDP echo, not an HTTP/3 implementation; DONE is deliberately
 allowed with no echo for unsupported overlap reassembly.

@@ -1,5 +1,5 @@
-#ifndef D2K_TG_STATS_SOCKET_H
-#define D2K_TG_STATS_SOCKET_H
+#ifndef D2S_TG_STATS_SOCKET_H
+#define D2S_TG_STATS_SOCKET_H
 
 #include "tg_epoll_proxy.h"
 

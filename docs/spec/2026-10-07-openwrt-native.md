@@ -2,14 +2,14 @@
 
 ## Зачем
 
-Пользователь: D2K на OpenWrt работает, но приходится ставить Entware. Владелец:
+Пользователь: D2S на OpenWrt работает, но приходится ставить Entware. Владелец:
 нативная поддержка OpenWrt принципиальна. Сейчас «поддержка OpenWrt» — только
 мост автозапуска procd и установка модулей ядра; всё остальное ждёт Entware.
 
 ## Что измерено
 
 Индексы пакетов downloads.openwrt.org и чистые образы armsr/armv8 в QEMU
-(`~/d2k-openwrt-lab/native/vm.sh`), 07.10.2026:
+(`~/d2s-openwrt-lab/native/vm.sh`), 07.10.2026:
 
 | | 24.10.8 | 25.12.5 (текущая стабильная) |
 |---|---|---|
@@ -22,7 +22,7 @@
 
 Следствия:
 
-1. На 25.12 правила D2K на iptables поставить нечем, кроме Entware. Нативная
+1. На 25.12 правила D2S на iptables поставить нечем, кроме Entware. Нативная
    поддержка — это правила на nftables.
 2. Установщик ставит модули только `/bin/opkg`; на 25.12 (apk) молча не ставит.
 3. `architecture.sh` не знает имён архитектур OpenWrt (`aarch64_generic`,
@@ -39,19 +39,19 @@
 
 ### Правила — nftables на OpenWrt, iptables на Keenetic
 
-`FW_BACKEND` в S99d2k: `auto` (умолчание) → `nft`, если есть `/etc/openwrt_release`
+`FW_BACKEND` в S99d2s: `auto` (умолчание) → `nft`, если есть `/etc/openwrt_release`
 и `nft`; иначе `iptables`. Конфигурация может задать явно. Keenetic не меняется.
 
 Существующие установки OpenWrt с Entware при обновлении тоже переходят на nft:
 один путь проще проверять, а legacy-iptables рядом с fw4 — смесь двух подсистем.
-`fw_down` снимает свои правила **обоих** видов (iptables-цепочки D2K, если есть
+`fw_down` снимает свои правила **обоих** видов (iptables-цепочки D2S, если есть
 iptables; таблицы nft, если есть nft) — миграция без остатков.
 
-Таблица `inet d2k` — всё, что сейчас ставит `fw_family_up` для обоих семейств:
+Таблица `inet d2s` — всё, что сейчас ставит `fw_family_up` для обоих семейств:
 
 - `out` — `hook postrouting priority mangle` (как mangle POSTROUTING);
 - `fwd`/`inp` — `hook forward|input priority mangle`, оба `jump in_rules`
-  (как D2K_IN из FORWARD и INPUT);
+  (как D2S_IN из FORWARD и INPUT);
 - `nat_post` — `hook postrouting priority srcnat - 1`: MASQUERADE своих UDP по `MARK`
   (только IPv4, как сейчас);
 - правила по порядку и смыслу совпадают с iptables-версией; `multiport` →
@@ -67,9 +67,9 @@ iptables; таблицы nft, если есть nft) — миграция без
 IPv6 в nft отдельно не отключается: таблица `inet`. Метка `fw-ipv4-only` в nft не
 ставится.
 
-### Подавление RST зондами — `inet d2k_rst`
+### Подавление RST зондами — `inet d2s_rst`
 
-Отдельная таблица, чтобы пересборка `inet d2k` (heal/reapply) не снимала
+Отдельная таблица, чтобы пересборка `inet d2s` (heal/reapply) не снимала
 подавление у идущего зонда. Множества `rst4`/`rst6` (`inet_service`, `flags
 timeout`) с ключом-кортежем зонда `inet_service . адрес . inet_service`,
 цепочка `hook output priority filter - 1`:
@@ -78,8 +78,8 @@ timeout`) с ключом-кортежем зонда `inet_service . адрес
 снимать подавление у зонда другого процесса (у iptables — правило на владельца).
 Создаётся в `fw_up`, только если её нет; снимается `stop`/удалением.
 
-`detect/raw.c` при `D2K_FW=nft` (S99d2k экспортирует его для d2kc): вставка
-`nft add element inet d2k_rst rst4 { P . ЦЕЛЬ . DPORT timeout 300s }`, снятие `delete element`,
+`detect/raw.c` при `D2S_FW=nft` (S99d2s экспортирует его для d2sc): вставка
+`nft add element inet d2s_rst rst4 { P . ЦЕЛЬ . DPORT timeout 300s }`, снятие `delete element`,
 проверка `get element`. Таймаут — страховка после `kill -9`: элемент исчезает
 сам (зонд живёт секунды, `timeout_ms` на шаг). Уборка `-S OUTPUT` в nft не нужна.
 
@@ -87,13 +87,13 @@ timeout`) с ключом-кортежем зонда `inet_service . адрес
 
 С `firewall.@defaults[0].flow_offloading=1` поток после рукопожатия уходит в
 flowtable мимо цепочек (замер 07.10: в очередь 4–5 пакетов вместо 17–18). Как
-ускоритель NAT Keenetic (`fastnat_off`): S99d2k выключает его на время работы
+ускоритель NAT Keenetic (`fastnat_off`): S99d2s выключает его на время работы
 движка, значение владельца хранит в `run/flow-offloading.saved` и возвращает
 при остановке; удаление без init тоже возвращает.
 
 ### Telegram — множества nft вместо ipset
 
-`d2k-tg-firewall.sh` на nft: таблица `inet d2k_tg` — множества `tg4`/`tg6`
+`d2s-tg-firewall.sh` на nft: таблица `inet d2s_tg` — множества `tg4`/`tg6`
 (`flags interval`), `nat` prerouting/output `priority dstnat - 1` с отдельными
 REDIRECT для TCP/443 и TCP/5222, filter forward/output
 `ip6 daddr @tg6 meta l4proto tcp reject with tcp reset`. Отдельная таблица:
@@ -117,22 +117,22 @@ REDIRECT для TCP/443 и TCP/5222, filter forward/output
   `/proc/net/ip_tables_*` (NFQUEUE, connbytes) — только для iptables.
 - Свободное место: до установки пакетов проверяется место под `/opt` и в корне;
   при нехватке — отказ до остановки прежней версии.
-- Раскладка прежняя: `/opt/d2k`, `/opt/sbin`, `/opt/etc/init.d/S99d2k`. Без
-  Entware `/opt` — обычный каталог корневой ФС; мост `/etc/init.d/d2k` видит
-  `S99d2k` сразу. С Entware на USB — как сейчас, ждёт монтирования.
+- Раскладка прежняя: `/opt/d2s`, `/opt/sbin`, `/opt/etc/init.d/S99d2s`. Без
+  Entware `/opt` — обычный каталог корневой ФС; мост `/etc/init.d/d2s` видит
+  `S99d2s` сразу. С Entware на USB — как сейчас, ждёт монтирования.
 - Команда в README для OpenWrt — через `wget` (uclient-fetch есть в образе);
   `curl` ставит сам установщик.
 
 ### Удаление
 
-Снимает `inet d2k`, `inet d2k_rst`, `inet d2k_tg` (если есть `nft`) и, как
+Снимает `inet d2s`, `inet d2s_rst`, `inet d2s_tg` (если есть `nft`) и, как
 сейчас, iptables-остатки. Чужие таблицы не трогает.
 
 ## Не делается
 
 - DNS Instagram/WhatsApp через NDM и разгрузка PPE — функции KeeneticOS, на
   OpenWrt по-прежнему пропускаются.
-- Журналы остаются в `/opt/d2k/log` (на флеше, если нет USB). Объём ограничен
+- Журналы остаются в `/opt/d2s/log` (на флеше, если нет USB). Объём ограничен
   ротацией 2 МиБ/файл; перенос в RAM — отдельное решение по полю.
 - Замена `openssl` в обновляторе своим кодом — нет: пакет есть в обеих ветках.
 
@@ -144,7 +144,7 @@ REDIRECT для TCP/443 и TCP/5222, filter forward/output
   удаление снимает таблицы.
 - Лаборатория (QEMU, armsr/armv8): чистые 25.12.5 и 24.10.8 без Entware —
   установка командой из README, очередь привязана, правила стоят, трафик клиента
-  LAN идёт через NFQUEUE (счётчики `nft list table inet d2k`), `firewall restart`
-  не сносит правила, перезагрузка поднимает службу, обновление `D2K_LOCAL`,
+  LAN идёт через NFQUEUE (счётчики `nft list table inet d2s`), `firewall restart`
+  не сносит правила, перезагрузка поднимает службу, обновление `D2S_LOCAL`,
   удаление без остатков. Затем прежний стенд с Entware — миграция iptables→nft.
 - Полевой проверки на настоящем роутере OpenWrt нет; README говорит об этом прямо.

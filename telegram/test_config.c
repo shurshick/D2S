@@ -8,32 +8,32 @@
 #include <unistd.h>
 
 static void test_config_values_and_legacy_fields(void) {
-    char path[]="/tmp/d2k-tg-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
+    char path[]="/tmp/d2s-tg-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
     FILE *f=fdopen(fd,"w");assert(f);
     fputs("MODE=apply\nTG_ENABLED=1\nTG_MODE=local\n"
           "TG_RELAY_URL='wss://192.0.2.44.nip.io/ws'\n"
-          "TG_RELAY_SECRET='old-secret'\nTG_IDENTITY=/opt/d2k/state/tg.identity\n"
-          "TG_CA_BUNDLE=/opt/d2k/files/tg-roots.pem\n"
-          "TG_STATUS=/opt/d2k/state/telegram.status\nTG_PORT=1443\n"
+          "TG_RELAY_SECRET='old-secret'\nTG_IDENTITY=/opt/d2s/state/tg.identity\n"
+          "TG_CA_BUNDLE=/opt/d2s/files/tg-roots.pem\n"
+          "TG_STATUS=/opt/d2s/state/telegram.status\nTG_PORT=1443\n"
           "TG_ENROLL_PORT=9443\n",f);assert(fclose(f)==0);
     tg_config cfg;assert(tg_config_read(path,&cfg)==0);unlink(path);
     assert(cfg.enabled==1&&cfg.local_mode&&cfg.listen_port==1443);
     assert(!cfg.diagnostic_direct_tcp);
-    assert(strcmp(cfg.ca_bundle,"/opt/d2k/files/tg-roots.pem")==0);
-    assert(strcmp(cfg.status_path,"/opt/d2k/state/telegram.status")==0);
-    assert(strcmp(cfg.stats_socket_path,"/opt/d2k/state/telegram.stats.sock")==0);
+    assert(strcmp(cfg.ca_bundle,"/opt/d2s/files/tg-roots.pem")==0);
+    assert(strcmp(cfg.status_path,"/opt/d2s/state/telegram.status")==0);
+    assert(strcmp(cfg.stats_socket_path,"/opt/d2s/state/telegram.stats.sock")==0);
     tg_config_clean(&cfg);
 }
 
 static void test_duplicate_and_incomplete_keys_rejected(void) {
-    char path[]="/tmp/d2k-tg-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
+    char path[]="/tmp/d2s-tg-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
     FILE *f=fdopen(fd,"w");assert(f);fputs("TG_ENABLED=1\nTG_ENABLED=0\n",f);assert(fclose(f)==0);
     tg_config cfg;assert(tg_config_read(path,&cfg)!=0);unlink(path);
     assert(tg_config_read("/path/that/does/not/exist",&cfg)!=0);
 }
 
 static void test_local_mode_needs_no_relay_url_or_secret(void) {
-    char path[]="/tmp/d2k-tg-local-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
+    char path[]="/tmp/d2s-tg-local-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);
     FILE *f=fdopen(fd,"w");assert(f);
     fputs("TG_ENABLED=1\nTG_MODE=local\nTG_DC_MAP_PATH=/tmp/tg-dc.json\nTG_STATS_SOCKET=/tmp/tg-stats.sock\n",f);
     assert(fclose(f)==0);
@@ -54,7 +54,7 @@ static void test_local_mode_needs_no_relay_url_or_secret(void) {
 }
 
 static void test_relay_mode_is_rejected(void) {
-    char path[] = "/tmp/d2k-tg-relay-mode-XXXXXX";
+    char path[] = "/tmp/d2s-tg-relay-mode-XXXXXX";
     int fd = mkstemp(path);
     assert(fd >= 0);
     FILE *file = fdopen(fd, "w");
@@ -70,7 +70,7 @@ static void test_relay_mode_is_rejected(void) {
 }
 
 static void test_local_route_options_are_bounded_and_normalized(void) {
-    char path[] = "/tmp/d2k-tg-routes-XXXXXX";
+    char path[] = "/tmp/d2s-tg-routes-XXXXXX";
     int fd = mkstemp(path);
     assert(fd >= 0);
     FILE *file = fdopen(fd, "w");
@@ -117,12 +117,12 @@ static void test_local_route_options_are_bounded_and_normalized(void) {
 }
 
 static void test_managed_resource_root(void) {
-    char path[]="/tmp/d2k-managed-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);close(fd);
-    assert(!setenv("D2K_TG_CA_BUNDLE","/tmp/release/files/tg-roots.pem",1));
+    char path[]="/tmp/d2s-managed-config-XXXXXX";int fd=mkstemp(path);assert(fd>=0);close(fd);
+    assert(!setenv("D2S_TG_CA_BUNDLE","/tmp/release/files/tg-roots.pem",1));
     tg_config cfg;assert(!tg_config_read(path,&cfg));assert(!strcmp(cfg.ca_bundle,"/tmp/release/files/tg-roots.pem"));
     FILE *f=fopen(path,"w");assert(f);fputs("TG_CA_BUNDLE=/tmp/personal-ca.pem\n",f);fclose(f);
     assert(!tg_config_read(path,&cfg));assert(!strcmp(cfg.ca_bundle,"/tmp/personal-ca.pem"));
-    unsetenv("D2K_TG_CA_BUNDLE");unlink(path);
+    unsetenv("D2S_TG_CA_BUNDLE");unlink(path);
 }
 int main(void) {
     test_managed_resource_root();

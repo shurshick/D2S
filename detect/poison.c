@@ -6,22 +6,22 @@
  * отвечает мгновенно и обрывает перебор, поэтому первыми идут гипотезы,
  * которые уже брали живые коробки.
  */
-#include "d2k_detect.h"
-#include "d2k_arm.h"
+#include "d2s_detect.h"
+#include "d2s_arm.h"
 
 #include <stdarg.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
-int d2k_poison_supports_family(const d2k_poison *p, uint8_t family)
+int d2s_poison_supports_family(const d2s_poison *p, uint8_t family)
 {
     /* IPv6 has no IPv4 Identification field. Do not measure an impossible
        wire hypothesis and record its local construction error as a block. */
     return p && (family == 4 || (family == 6 && !p->ip_id_zero));
 }
 
-int d2k_poison_has_fake(const d2k_poison *p)
+int d2s_poison_has_fake(const d2s_poison *p)
 {
     /* synData и oob фальшивки не несут вовсе, fakeBetween ставит её сам и в
      * другом месте — общий путь отправки для них не годится. */
@@ -40,14 +40,14 @@ int d2k_poison_has_fake(const d2k_poison *p)
 }
 
 #define POISON_CAP 128
-static d2k_poison g_poisons[POISON_CAP];
+static d2s_poison g_poisons[POISON_CAP];
 static int g_npoisons;
 static pthread_once_t g_poisons_once = PTHREAD_ONCE_INIT;
 
-static d2k_poison *add(const char *fmt, ...)
+static d2s_poison *add(const char *fmt, ...)
 {
     va_list ap;
-    d2k_poison *p;
+    d2s_poison *p;
     if (g_npoisons >= POISON_CAP) {
         return &g_poisons[POISON_CAP - 1];
     }
@@ -59,9 +59,9 @@ static d2k_poison *add(const char *fmt, ...)
     return p;
 }
 
-int d2k_poison_same(const d2k_poison *x, const d2k_poison *y)
+int d2s_poison_same(const d2s_poison *x, const d2s_poison *y)
 {
-    d2k_poison a = *x, b = *y;
+    d2s_poison a = *x, b = *y;
     memset(a.name, 0, sizeof a.name);
     memset(b.name, 0, sizeof b.name);
     if (a.repeats <= 1) { a.repeats = 1; }
@@ -70,13 +70,13 @@ int d2k_poison_same(const d2k_poison *x, const d2k_poison *y)
 }
 
 /* Та же гипотеза по всем параметрам, кроме имени, уже есть в списке. */
-static int already_listed(const d2k_poison *p)
+static int already_listed(const d2s_poison *p)
 {
     int k;
     for (k = 0; k < g_npoisons; k++) {
-        const d2k_poison *q = &g_poisons[k];
+        const d2s_poison *q = &g_poisons[k];
         if (q == p) { continue; }
-        if (d2k_poison_same(q, p)) { return 1; }
+        if (d2s_poison_same(q, p)) { return 1; }
     }
     return 0;
 }
@@ -90,7 +90,7 @@ static void init_poisons(void)
     static const int reps[4] = {2, 3, 4, 7};
     static const int ttls[8] = {62, 60, 58, 55, 50, 40, 20, 8};
     static const int dttls[3] = {62, 58, 50};
-    d2k_poison *p;
+    d2s_poison *p;
     int i, j;
 
     /* ПОРЯДОК — ЭТО СТОИМОСТЬ. Перекрытие в один байт (facebook), разнесённые
@@ -179,7 +179,7 @@ static void init_poisons(void)
 
 }
 
-const d2k_poison *d2k_poisons(int *n)
+const d2s_poison *d2s_poisons(int *n)
 {
     /* Publish only a complete immutable list. An in-progress count is not
      * an initialization flag when several scheduler workers enter here. */
@@ -191,19 +191,19 @@ const d2k_poison *d2k_poisons(int *n)
 /* notePropsHit/notePropsMiss переводят исход зонда в свойство коробки.
  * Именно здесь перебор перестаёт быть перебором: каждая попытка что-то
  * РАССКАЗЫВАЕТ о коробке, даже когда не срабатывает. */
-void d2k_note_props_hit(d2k_dprops *pr, const d2k_poison *p)
+void d2s_note_props_hit(d2s_dprops *pr, const d2s_poison *p)
 {
     if (p->badsum) {
-        pr->validates_checksum = D2K_TRI_FALSE; /* съела битую сумму */
+        pr->validates_checksum = D2S_TRI_FALSE; /* съела битую сумму */
     } else if (p->ttl > 0) {
         pr->hop_ttl = p->ttl;
     } else if (p->disorder) {
-        pr->tolerates_reorder = D2K_TRI_FALSE;
+        pr->tolerates_reorder = D2S_TRI_FALSE;
     } else if (p->seqovl > 0) {
-        pr->tolerates_left_overlap = D2K_TRI_FALSE;
+        pr->tolerates_left_overlap = D2S_TRI_FALSE;
     }
     if (p->decoy_hello) {
-        pr->parses_l7 = D2K_TRI_TRUE; /* набивку не взяла, приветствие взяла */
+        pr->parses_l7 = D2S_TRI_TRUE; /* набивку не взяла, приветствие взяла */
     }
 }
 
@@ -213,17 +213,17 @@ void d2k_note_props_hit(d2k_dprops *pr, const d2k_poison *p)
  * ЧЕГО ЗДЕСЬ НЕТ: промах badsum-зонда НЕ пишет ValidatesChecksum = true. Это
  * вывод из тишины, запрещённый нормой пакета, и тот же исход в hit даёт
  * false — один прогон мог выдать оба вывода. */
-void d2k_note_props_miss(d2k_dprops *pr, const d2k_poison *p)
+void d2s_note_props_miss(d2s_dprops *pr, const d2s_poison *p)
 {
     if (p->disorder) {
-        pr->tolerates_reorder = D2K_TRI_TRUE;
+        pr->tolerates_reorder = D2S_TRI_TRUE;
     } else if (p->seqovl > 0 && !p->decoy_hello) {
-        pr->tolerates_left_overlap = D2K_TRI_TRUE;
+        pr->tolerates_left_overlap = D2S_TRI_TRUE;
     }
 }
 
 /* strategyForPoison переводит найденную разницу в термины nfqws2. */
-void d2k_strategy_for_poison(const d2k_poison *p, char *out, size_t cap)
+void d2s_strategy_for_poison(const d2s_poison *p, char *out, size_t cap)
 {
     char head[512];
     char f[512];
@@ -253,7 +253,7 @@ void d2k_strategy_for_poison(const d2k_poison *p, char *out, size_t cap)
         snprintf(out, cap, "%s", st);
         return;
     }
-    if (d2k_poison_has_fake(p) && (p->seqovl > 0 || p->seqovl_exact)) {
+    if (d2s_poison_has_fake(p) && (p->seqovl > 0 || p->seqovl_exact)) {
         char t[64];
         snprintf(f, sizeof(f),
                  "--lua-desync=fake:payload=tls_client_hello:dir=out:blob=fake_default_tls"
@@ -324,7 +324,7 @@ void d2k_strategy_for_poison(const d2k_poison *p, char *out, size_t cap)
     if (p->disorder) {
         snprintf(st, sizeof(st),
                  "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=1,midsld");
-        if (d2k_poison_has_fake(p)) {
+        if (d2s_poison_has_fake(p)) {
             char t[64];
             /* Связка: сперва фальшивка, следом настоящие сегменты вразнобой. */
             snprintf(f, sizeof(f),
@@ -398,7 +398,7 @@ void d2k_strategy_for_poison(const d2k_poison *p, char *out, size_t cap)
 }
 
 /* strategyFor — как записать найденное в термины nfqws2. */
-void d2k_strategy_for(int pos, char *out, size_t cap)
+void d2s_strategy_for(int pos, char *out, size_t cap)
 {
     snprintf(out, cap, "--lua-desync=multisplit:payload=unknown:dir=out:pos=%d", pos);
 }
@@ -410,7 +410,7 @@ void d2k_strategy_for(int pos, char *out, size_t cap)
  * найдено и на замере сработало, просто поставить его мы сегодня не умеем.
  * Подставлять «похожее» нельзя — это был бы план, отличающийся от того, что
  * прошло проверку. */
-int d2k_arm_from_poison(const d2k_poison *p, d2k_arm *a, char *why, size_t whycap)
+int d2s_arm_from_poison(const d2s_poison *p, d2s_arm *a, char *why, size_t whycap)
 {
     memset(a, 0, sizeof(*a));
     if (p->syn_data) {
@@ -419,9 +419,9 @@ int d2k_arm_from_poison(const d2k_poison *p, d2k_arm *a, char *why, size_t whyca
     }
     a->oob = p->oob; /* срочный байт выражается планом «oob sni_middle 0f»
                         и исполняется датапатом (поле 10.10.2026, снят отказ);
-                        место байта — середина имени, см. d2k_arm_plan_measured. */
+                        место байта — середина имени, см. d2s_arm_plan_measured. */
     /* The result crosses worker threads by value. Keep its display name
-     * in d2k_vres.arm_name, not as a pointer into res.hit/the bridge stack. */
+     * in d2s_vres.arm_name, not as a pointer into res.hit/the bridge stack. */
     a->name         = NULL;
     if (p->seq_shift != 0 && p->seq_shift != -66000) {
         snprintf(why, whycap, "сдвиг TCP seq %d не выражается флагом seq_out",
@@ -433,7 +433,7 @@ int d2k_arm_from_poison(const d2k_poison *p, d2k_arm *a, char *why, size_t whyca
     a->repeats      = p->repeats > 0 ? (unsigned)p->repeats : 0u;
     /* In the original, TTL/seq-shift alone also send a fake (one by
      * default). The Plan builder needs this explicitly to emit its body. */
-    if (a->repeats == 0 && d2k_poison_has_fake(p)) { a->repeats = 1; }
+    if (a->repeats == 0 && d2s_poison_has_fake(p)) { a->repeats = 1; }
     a->gap_ms       = p->gap_ms > 0 ? (unsigned)p->gap_ms : 0u;
     a->disorder     = p->disorder;
     a->disorder_pos = p->disorder_pos > 0 ? (unsigned)p->disorder_pos : 0u;
@@ -454,14 +454,14 @@ int d2k_arm_from_poison(const d2k_poison *p, d2k_arm *a, char *why, size_t whyca
      * первой всегда. Соблазн включить его всем tcpts-планам есть, и он
      * отвергнут: это молча изменило бы КАЖДЫЙ существующий план и разошлось
      * бы с замороженным описанием отправителя замера (test_measured сверяет
-     * флаги посылки плана с d2k_poison_sends — 12 расхождений). Инвариант
+     * флаги посылки плана с d2s_poison_sends — 12 расхождений). Инвариант
      * «мерили и ставим одно и то же» дороже догадки: ось включается только
      * там, где её ИЗМЕРИЛИ. */
     a->tcpts_up     = p->tcp_ts_up;
     a->ipidzero     = p->ip_id_zero;
     /* Прямой разрез настоящей нагрузки (семейство C: split payload_start +2).
        Отличен от disorder_pos (обратный порядок) — едет своим полем, его
-       исполняет d2k_arm_plan_measured через «split … + order forward». */
+       исполняет d2s_arm_plan_measured через «split … + order forward». */
     a->split_pos    = p->split_pos > 0 ? (unsigned)p->split_pos : 0u;
     if (p->seqovl_exact) {
         /* «Длиной в целое приветствие» — не число, а правило: сборщик кладёт

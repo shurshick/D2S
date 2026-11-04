@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_h3.h"
+#include "d2s_h3.h"
 
 static int fails;
 #define CHECK(cond, msg)                                                      \
@@ -19,13 +19,13 @@ int main(void) {
 
     /* Управляющий поток: тип потока, пустой SETTINGS. Без него сервер вправе
        не отвечать вовсе, и молчание записалось бы блокировкой. */
-    size_t n = d2k_h3_control(buf, sizeof buf);
+    size_t n = d2s_h3_control(buf, sizeof buf);
     CHECK(n == 3 && buf[0] == 0x00 && buf[1] == 0x04 && buf[2] == 0x00,
           "управляющий поток собран не по RFC 9114");
 
     /* Запрос: кадр HEADERS, префикс секции из двух нулей, три индексных поля
        статической таблицы (GET, https, /) и :authority литералом. */
-    n = d2k_h3_request("example.com", "/", buf, sizeof buf);
+    n = d2s_h3_request("example.com", "/", buf, sizeof buf);
     CHECK(n > 0, "запрос не собрался");
     CHECK(buf[0] == 0x01, "кадр не HEADERS");
     size_t hdr = 2;   /* тип и длина (длина здесь однобайтная) */
@@ -41,7 +41,7 @@ int main(void) {
        рядом с ним давало ДВА :path, и сервер (Cloudflare, Google) честно
        отвечал 400 целиком — а правило этапа данных засчитывало полный 400 как
        прошедшее плечо (поле 04.10, задача 50, раунд 2). */
-    n = d2k_h3_request("example.com", "/big.css", buf, sizeof buf);
+    n = d2s_h3_request("example.com", "/big.css", buf, sizeof buf);
     CHECK(n > 0, "запрос с путём не собрался");
     {
         int indexed_root = 0, literal_path = 0;
@@ -60,7 +60,7 @@ int main(void) {
     {
         uint8_t rsp[] = { 0x01, 0x03, 0x00, 0x00, 0xd9 };
         int st = 0;
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
               "статус 200 индексным полем не разобран");
     }
     /* И все прочие статусы таблицы. */
@@ -84,7 +84,7 @@ int main(void) {
             }
             rsp[len_at] = (uint8_t)(o - 2);
             int st = 0;
-            CHECK(d2k_h3_status(rsp, o, &st) == 0 && st == c[i].st,
+            CHECK(d2s_h3_status(rsp, o, &st) == 0 && st == c[i].st,
                   "статус из статической таблицы разобран неверно");
         }
     }
@@ -98,28 +98,28 @@ int main(void) {
            цифры 4,0,4 это 011010 00000 011010, добитые единицами до трёх
            байт — 0x68 0x0d 0x7f. */
         uint8_t rsp[] = { 0x01, 0x08, 0x00, 0x00, 0x5f, 0x0c, 0x83, 0x68, 0x0d, 0x7f };
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 404,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 404,
               "статус Хаффманом не разобран");
     }
     /* Значение без Хаффмана — тремя цифрами как есть. */
     {
         int st = 0;
         uint8_t rsp[] = { 0x01, 0x08, 0x00, 0x00, 0x5f, 0x0c, 0x03, '2', '0', '1' };
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 201,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 201,
               "статус текстом не разобран");
     }
     /* Неизвестный кадр пропускается по длине, а не валит разбор. */
     {
         int st = 0;
         uint8_t rsp[] = { 0x21, 0x02, 0xaa, 0xbb, 0x01, 0x03, 0x00, 0x00, 0xd9 };
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
               "неизвестный кадр не пропущен по длине");
     }
     /* Оборванный кадр — это НЕ «ответа нет»: честный отказ разбора. */
     {
         int st = 0;
         uint8_t rsp[] = { 0x01, 0x10, 0x00, 0x00 };
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) != 0,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) != 0,
               "оборванный кадр разобран как полный");
     }
 
@@ -141,7 +141,7 @@ int main(void) {
             memcpy(rsp + o, c[i].v, c[i].n); o += c[i].n;
             rsp[len_at] = (uint8_t)(o - 2);
             int st = 0;
-            CHECK(d2k_h3_status(rsp, o, &st) == 0 && st == c[i].st,
+            CHECK(d2s_h3_status(rsp, o, &st) == 0 && st == c[i].st,
                   "статус Хаффманом (6-битные цифры) не разобран");
         }
     }
@@ -151,7 +151,7 @@ int main(void) {
         int st = 0;
         uint8_t rsp[] = { 0x01, 0x09, 0x00, 0x00, 0x23, 'x', '-', 'a', 0x01, '1', 0xd9 };
         rsp[1] = sizeof rsp - 2;
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
               "литерал с литеральным именем не пропущен");
     }
     /* Post-base формы (0001xxxx, 0000Nxxx) не принимаются за литерал. */
@@ -159,7 +159,7 @@ int main(void) {
         int st = 0;
         uint8_t rsp[] = { 0x01, 0x00, 0x00, 0x00, 0x11, 0x02, 0x01, '1', 0xd9 };
         rsp[1] = sizeof rsp - 2;
-        CHECK(d2k_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
+        CHECK(d2s_h3_status(rsp, sizeof rsp, &st) == 0 && st == 200,
               "post-base поле не пропущено");
     }
 

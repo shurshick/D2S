@@ -1,5 +1,5 @@
-#ifndef D2K_TG_EPOLL_PROXY_H
-#define D2K_TG_EPOLL_PROXY_H
+#ifndef D2S_TG_EPOLL_PROXY_H
+#define D2S_TG_EPOLL_PROXY_H
 
 #include "tg_listener.h"
 #include "tg_mtproto.h"

@@ -2,10 +2,10 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname "$0")/.." && pwd)
-WATCHDOG=$ROOT/files/d2k-tg-watchdog.sh
+WATCHDOG=$ROOT/files/d2s-tg-watchdog.sh
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
-mkdir -p "$TMP/d2k/state"
+mkdir -p "$TMP/d2s/state"
 
 fail() {
     printf 'watchdog test: %s\n' "$1" >&2
@@ -25,8 +25,8 @@ cat > "$TMP/init" <<'SH'
 printf '%s\n' "$*" >> "$WATCHDOG_INIT_CALLS"
 SH
 chmod +x "$TMP/firewall" "$TMP/init"
-cp "$TMP/firewall" "$TMP/d2k/d2k-tg-firewall.sh"
-chmod +x "$TMP/d2k/d2k-tg-firewall.sh"
+cp "$TMP/firewall" "$TMP/d2s/d2s-tg-firewall.sh"
+chmod +x "$TMP/d2s/d2s-tg-firewall.sh"
 export WATCHDOG_FIREWALL_CALLS="$TMP/firewall-calls"
 export WATCHDOG_INIT_CALLS="$TMP/init-calls"
 
@@ -34,12 +34,12 @@ pid=$$
 start_ticks=$(awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$pid/stat")
 heartbeat_ms=$(awk '{ printf "%.0f", $1 * 1000 }' /proc/uptime)
 boot_id=$(cat /proc/sys/kernel/random/boot_id)
-printf 'D2KH1 %s %s %s %s test 20 - 0 1 1\n' \
+printf 'D2SH1 %s %s %s %s test 20 - 0 1 1\n' \
     "$pid" "$start_ticks" "$heartbeat_ms" "$boot_id" > "$TMP/health"
 
 set +e
 timeout 2 env \
-    TG_WATCHDOG_DIR="$TMP/d2k" \
+    TG_WATCHDOG_DIR="$TMP/d2s" \
     TG_WATCHDOG_INIT="$TMP/init" \
     TG_WATCHDOG_HEALTH="$TMP/health" \
     TG_WATCHDOG_INTERVAL=1 \

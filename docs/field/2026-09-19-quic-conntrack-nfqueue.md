@@ -30,7 +30,7 @@ reverse отправляется прямым порядком, оба overlap �
 ## Исполнение через ядро
 
 В `tests/fragment-plan` теперь есть второй проход: обычный UDP socket →
-NFQUEUE → настоящий d2kd → raw/veth → отдельное серверное пространство → клиент.
+NFQUEUE → настоящий d2sd → raw/veth → отдельное серверное пространство → клиент.
 Это fixture измеренного результата, не запуск всего поиска. QUIC Initial
 настоящий, но сервер отвечает UDP echo, а не HTTP/3.
 
@@ -63,19 +63,19 @@ NAT сначала подтверждён коротким seed-пакетом; 
 Команды от корня репозитория; все перечисленные прогоны завершились кодом 0,
 кроме явно указанного красного воспроизведения.
 
-- `make -C core -j4 check` — `/tmp/d2k-probe-nodefrag-core.log`.
-- `make -C core cross` — `/tmp/d2k-probe-nodefrag-cross.log`, ARM64 musl/MIPS glibc
+- `make -C core -j4 check` — `/tmp/d2s-probe-nodefrag-core.log`.
+- `make -C core cross` — `/tmp/d2s-probe-nodefrag-cross.log`, ARM64 musl/MIPS glibc
   compile/link, не исполнение MIPS.
-- `D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux-raw-conntrack`:
-  до правки exit 1 (`/tmp/d2k-probe-conntrack-red.log`), после exit 0
-  (`/tmp/d2k-probe-conntrack-green.log`).
-- Та же команда с `--linux-raw` — `/tmp/d2k-probe-nodefrag-raw.log`.
+- `D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux-raw-conntrack`:
+  до правки exit 1 (`/tmp/d2s-probe-conntrack-red.log`), после exit 0
+  (`/tmp/d2s-probe-conntrack-green.log`).
+- Та же команда с `--linux-raw` — `/tmp/d2s-probe-nodefrag-raw.log`.
 - Та же команда без параметров и с `--linux` —
-  `/tmp/d2k-probe-nodefrag-host.log`, `/tmp/d2k-probe-nodefrag-linux.log`;
+  `/tmp/d2s-probe-nodefrag-host.log`, `/tmp/d2s-probe-nodefrag-linux.log`;
   все исходные Run/arms/blob/residual и 96 fragment-builder сравнений.
-- `make -C datapath -j4 check` — `/tmp/d2k-probe-nodefrag-datapath.log`.
-- `make -C detect -j4 check` — `/tmp/d2k-probe-nodefrag-detect.log`.
-- `sh scripts/check-fragment-plan-linux.sh` — `/tmp/d2k-fragment-nfq.log`,
+- `make -C datapath -j4 check` — `/tmp/d2s-probe-nodefrag-datapath.log`.
+- `make -C detect -j4 check` — `/tmp/d2s-probe-nodefrag-detect.log`.
+- `sh scripts/check-fragment-plan-linux.sh` — `/tmp/d2s-fragment-nfq.log`,
   8 session/raw случаев плюс 8 NFQUEUE случаев и 3 отказа.
 
 ## Дальше, не объявляя MVP

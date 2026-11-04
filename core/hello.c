@@ -24,8 +24,8 @@
  * core/Makefile вырезает из текстового файла комментарии и пробелы и
  * оставляет чистую шестнадцатеричную строку в core/hello_profiles.inc (в
  * git не идёт, см. .gitignore: это вывод сборки, а не источник). Причина —
- * не эстетика: сигнатура d2k_hello_from_profile не принимает путь к файлу
- * (см. d2k_hello.h), а бинарники этого проекта — статические под musl без
+ * не эстетика: сигнатура d2s_hello_from_profile не принимает путь к файлу
+ * (см. d2s_hello.h), а бинарники этого проекта — статические под musl без
  * гарантированной файловой системы конкретной раскладки (MIPS/ARM роутер).
  * Декодируются они лениво и один раз в статический буфер фиксированного
  * размера — тот же приём, что у выведенной приманки в props.c, и по той же
@@ -34,7 +34,7 @@
  */
 #include <string.h>
 
-#include "d2k_hello.h"
+#include "d2s_hello.h"
 
 #define REC_HDR         5
 #define HS_HDR          4
@@ -95,7 +95,7 @@ typedef struct {
     int parsed;   /* дошли до конца обязательных полей ClientHello (по
                      client_version..compression_methods включительно).
                      Без этого ничего ниже не имеет смысла — см.
-                     D2K_SHAPE_UNKNOWN в d2k_hello.h. */
+                     D2S_SHAPE_UNKNOWN в d2s_hello.h. */
     int complete; /* рукопожатие ПО ЕГО ЖЕ длине из заголовка целиком
                      поместилось в n. Нужно только сборке (splice_sni):
                      разбору вида и поиску имени, как в tls.c, достаточно
@@ -108,7 +108,7 @@ typedef struct {
     size_t exts_len_off; /* смещение 2-байтной длины блока расширений */
 
     /* Блок расширений ОБОРВАН: объявленная длина не поместилась в пришедшие
-       байты. Тот же признак, что exts_truncated в datapath/d2k_tls.h, и та же
+       байты. Тот же признак, что exts_truncated в datapath/d2s_tls.h, и та же
        цена ошибки: supported_versions у браузера приезжает вторым сегментом
        вслед за server_name из первого, и «признака не нашли» тогда значит
        «ещё не всё пришло». */
@@ -185,7 +185,7 @@ static void parse_hello(const uint8_t *b, size_t n, hello_layout *L) {
 
     /* Обязательные поля кончились — дальше ClientHello подтверждён
        независимо от того, есть ли расширения вообще (см. LEGACY без
-       supported_versions в d2k_hello.h). */
+       supported_versions в d2s_hello.h). */
     L->parsed = 1;
 
     if (off + 2 > hs_end) {
@@ -271,7 +271,7 @@ static void parse_hello(const uint8_t *b, size_t n, hello_layout *L) {
     }
 }
 
-int d2k_hello_complete(const uint8_t *b, size_t n) {
+int d2s_hello_complete(const uint8_t *b, size_t n) {
     if (!b || n < REC_HDR + HS_HDR ||
         REC_HDR + (size_t)rd16(b + 3) != n ||
         REC_HDR + HS_HDR + (size_t)rd24(b + 6) != n) { return 0; }
@@ -280,11 +280,11 @@ int d2k_hello_complete(const uint8_t *b, size_t n) {
     return L.parsed && L.complete && !L.exts_truncated;
 }
 
-d2k_shape d2k_hello_shape(const uint8_t *b, size_t n) {
+d2s_shape d2s_hello_shape(const uint8_t *b, size_t n) {
     hello_layout L;
     parse_hello(b, n, &L);
     if (!L.parsed) {
-        return D2K_SHAPE_UNKNOWN;
+        return D2S_SHAPE_UNKNOWN;
     }
     if (L.exts_truncated && !L.have_tls13) {
         /* Тот же разбор, что в datapath/tls.c: НАЙДЕННЫЙ признак достоверен и
@@ -296,16 +296,16 @@ d2k_shape d2k_hello_shape(const uint8_t *b, size_t n) {
            ровно первый сегмент, а пересборки потока у нас нет по проекту.
            Уверенный LEGACY здесь был бы выдуманным замером: он уезжает в
            каталог и в ограничение применения плана (§2.4, и прямая оговорка
-           «UNKNOWN ≠ LEGACY» в d2k_hello.h).
+           «UNKNOWN ≠ LEGACY» в d2s_hello.h).
 
            Найденный признак при обрыве, наоборот, достоверен: расширение
            прочитано целиком, дальше искать нечего. */
-        return D2K_SHAPE_UNKNOWN;
+        return D2S_SHAPE_UNKNOWN;
     }
-    return L.have_tls13 ? D2K_SHAPE_MODERN : D2K_SHAPE_LEGACY;
+    return L.have_tls13 ? D2S_SHAPE_MODERN : D2S_SHAPE_LEGACY;
 }
 
-int d2k_hello_sni(const uint8_t *b, size_t n, size_t *off, size_t *len) {
+int d2s_hello_sni(const uint8_t *b, size_t n, size_t *off, size_t *len) {
     if (!off || !len) {
         return -1;
     }
@@ -319,8 +319,8 @@ int d2k_hello_sni(const uint8_t *b, size_t n, size_t *off, size_t *len) {
     return 0;
 }
 
-int d2k_hello_ech_offer(const uint8_t *b, size_t n, uint8_t *config_id) {
-    if (!d2k_hello_complete(b, n)) return -1;
+int d2s_hello_ech_offer(const uint8_t *b, size_t n, uint8_t *config_id) {
+    if (!d2s_hello_complete(b, n)) return -1;
     hello_layout L;
     parse_hello(b, n, &L);
     if (!L.have_exts) return 0;
@@ -346,8 +346,8 @@ int d2k_hello_ech_offer(const uint8_t *b, size_t n, uint8_t *config_id) {
     return found;
 }
 
-int d2k_hello_alpn(const uint8_t *b, size_t n, uint8_t *list, size_t cap, size_t *len) {
-    if (!len || !d2k_hello_complete(b, n)) return -1;
+int d2s_hello_alpn(const uint8_t *b, size_t n, uint8_t *list, size_t cap, size_t *len) {
+    if (!len || !d2s_hello_complete(b, n)) return -1;
     *len = 0;
     hello_layout L;
     parse_hello(b, n, &L);
@@ -374,7 +374,7 @@ int d2k_hello_alpn(const uint8_t *b, size_t n, uint8_t *list, size_t cap, size_t
     return 0;
 }
 
-int d2k_alpn_is_http(const uint8_t *list, size_t len) {
+int d2s_alpn_is_http(const uint8_t *list, size_t len) {
     static const char *http[] = { "http/1.1", "http/1.0", "h2" };
     for (size_t q = 0; list && q < len; ) {
         size_t l = list[q];
@@ -453,7 +453,7 @@ static int splice_sni(const uint8_t *tmpl, size_t tmpl_len,
 
 /* core/hello_profiles.inc — сгенерирован из profiles/ (*.hex) Makefile'ом (см.
  * шапку файла и правило hello_profiles.inc в core/Makefile). Объявляет
- * d2k_profile_modern_hex[] / d2k_profile_legacy_hex[] — NUL-терминированные
+ * d2s_profile_modern_hex[] / d2s_profile_legacy_hex[] — NUL-терминированные
  * строки из ЧИСТЫХ шестнадцатеричных цифр (комментарии и пробелы уже
  * вырезаны на сборке). Лежит в той же директории, что и этот файл, поэтому
  * находится через "" без дополнительного -I. */
@@ -497,7 +497,7 @@ static int hex_decode(const char *hex, size_t hexlen, uint8_t *out, size_t cap, 
     return 0;
 }
 
-int d2k_hello_rename(const uint8_t *ch, size_t n, const char *sni,
+int d2s_hello_rename(const uint8_t *ch, size_t n, const char *sni,
                      uint8_t *out, size_t cap, size_t *out_len) {
     if (!ch || !sni || !out || !out_len) {
         return -1;
@@ -534,7 +534,7 @@ int d2k_hello_rename(const uint8_t *ch, size_t n, const char *sni,
     return 0;
 }
 
-int d2k_hello_without_sni(const uint8_t *ch, size_t n,
+int d2s_hello_without_sni(const uint8_t *ch, size_t n,
                           uint8_t *out, size_t cap, size_t *out_len) {
     if (!ch || !out || !out_len || n > 0xFFFF || n + 5 > TEMPLATE_MAX) {
         return -1;
@@ -575,7 +575,7 @@ int d2k_hello_without_sni(const uint8_t *ch, size_t n,
     return 0;
 }
 
-int d2k_hello_from_profile(d2k_shape s, const char *sni, uint8_t *out, size_t cap, size_t *out_len) {
+int d2s_hello_from_profile(d2s_shape s, const char *sni, uint8_t *out, size_t cap, size_t *out_len) {
     if (!sni || !out || !out_len) {
         return -1;
     }
@@ -588,13 +588,13 @@ int d2k_hello_from_profile(d2k_shape s, const char *sni, uint8_t *out, size_t ca
        статический буфер гонялся бы между рабочими потоками. */
     uint8_t tmpl[TEMPLATE_MAX];
     size_t tmpl_len = 0;
-    if (s == D2K_SHAPE_MODERN) {
-        if (hex_decode(d2k_profile_modern_hex, sizeof(d2k_profile_modern_hex) - 1,
+    if (s == D2S_SHAPE_MODERN) {
+        if (hex_decode(d2s_profile_modern_hex, sizeof(d2s_profile_modern_hex) - 1,
                        tmpl, sizeof tmpl, &tmpl_len) != 0) {
             return -1;
         }
-    } else if (s == D2K_SHAPE_LEGACY) {
-        if (hex_decode(d2k_profile_legacy_hex, sizeof(d2k_profile_legacy_hex) - 1,
+    } else if (s == D2S_SHAPE_LEGACY) {
+        if (hex_decode(d2s_profile_legacy_hex, sizeof(d2s_profile_legacy_hex) - 1,
                        tmpl, sizeof tmpl, &tmpl_len) != 0) {
             return -1;
         }

@@ -15,7 +15,7 @@ static void save_live(const char *path, int wins, int counter, const char *suffi
     fprintf(f, "\"}],\"groups\":[{\"suffix\":\"%s\"}],\"searches\":[],\"probes_used\":%d}", suffix, counter);
     assert(fclose(f) == 0);
 }
-static char *get_status(const d2k_panel_config *cfg, const char *query) {
+static char *get_status(const d2s_panel_config *cfg, const char *query) {
     captured_len = 0;
     int sv[2];
     assert(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0);
@@ -37,10 +37,10 @@ static char *get_status(const d2k_panel_config *cfg, const char *query) {
     assert(json_valid_object(body, body + strlen(body))); return body;
 }
 int main(void) {
-    char dir[] = "/tmp/d2k-cache-XXXXXX", live[256], pid[256], revision[17], query[64];
+    char dir[] = "/tmp/d2s-cache-XXXXXX", live[256], pid[256], revision[17], query[64];
     assert(mkdtemp(dir)); snprintf(live, sizeof live, "%s/live", dir); snprintf(pid, sizeof pid, "%s/pid", dir);
     FILE *f = fopen(pid, "w"); assert(f); fprintf(f, "%ld\n", (long)getpid()); fclose(f);
-    d2k_panel_config cfg = { .mode = "apply", .live_path = live, .engine_pid_path = pid, .controller_pid_path = pid,
+    d2s_panel_config cfg = { .mode = "apply", .live_path = live, .engine_pid_path = pid, .controller_pid_path = pid,
                             .telegram_pid_path = pid, .config_path = live, .state_dir = dir };
     save_live(live, 1, 10, "example.test");
     char *body = get_status(&cfg, NULL); const char *value; size_t len;

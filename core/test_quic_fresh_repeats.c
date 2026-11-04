@@ -8,11 +8,11 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-#include "d2k_quicprobe.h"
-#include "d2k_quic.h"
-#include "d2k_quichello.h"
-#include "d2k_quic_arms.h"
-#include "d2k_quicwire.h"
+#include "d2s_quicprobe.h"
+#include "d2s_quic.h"
+#include "d2s_quichello.h"
+#include "d2s_quic_arms.h"
+#include "d2s_quicwire.h"
 #include "test_quic_vector.h"
 
 #define REPEATS 3
@@ -40,7 +40,7 @@ static void *receive_control_packets(void *arg) {
 }
 
 static size_t resolve_no_extra_addrs(const char *sni,
-    char out[][D2K_QUIC_ADDR_LEN], size_t cap) {
+    char out[][D2S_QUIC_ADDR_LEN], size_t cap) {
     (void)sni; (void)out; (void)cap;
     return 0;
 }
@@ -100,17 +100,17 @@ static int check_neutral_repeats(const char *what, neutral_send_fn send_question
         return 1;
     }
 
-    int old_allow_local = d2k_quic_allow_local;
-    uint32_t old_wait_ms = d2k_quic_wait_ms;
-    d2k_quic_resolve_fn old_resolve = d2k_quic_resolve_hook;
-    d2k_quic_allow_local = 1;
-    d2k_quic_wait_ms = 30;
-    d2k_quic_resolve_hook = resolve_no_extra_addrs;
+    int old_allow_local = d2s_quic_allow_local;
+    uint32_t old_wait_ms = d2s_quic_wait_ms;
+    d2s_quic_resolve_fn old_resolve = d2s_quic_resolve_hook;
+    d2s_quic_allow_local = 1;
+    d2s_quic_wait_ms = 30;
+    d2s_quic_resolve_hook = resolve_no_extra_addrs;
     int sent = 0;
     int built = send_question(ntohs(addr.sin_port), &sent);
-    d2k_quic_resolve_hook = old_resolve;
-    d2k_quic_wait_ms = old_wait_ms;
-    d2k_quic_allow_local = old_allow_local;
+    d2s_quic_resolve_hook = old_resolve;
+    d2s_quic_wait_ms = old_wait_ms;
+    d2s_quic_allow_local = old_allow_local;
 
     (void)pthread_join(thread, NULL);
     close(fd);
@@ -126,14 +126,14 @@ static int check_neutral_repeats(const char *what, neutral_send_fn send_question
     for (int i = 0; i < REPEATS; i++) {
         uint8_t hello[1024];
         size_t hello_len = 0;
-        d2k_qw_hdr hdr;
-        if (d2k_quic_sni(r.packets[i], r.lengths[i], seen_sni[i], sizeof seen_sni[i]) != 0 ||
+        d2s_qw_hdr hdr;
+        if (d2s_quic_sni(r.packets[i], r.lengths[i], seen_sni[i], sizeof seen_sni[i]) != 0 ||
             !donor_neutral_sni(seen_sni[i])) {
             printf("FAIL control repeat %d lacks donor neutral SNI\n", i);
             fails++;
             continue;
         }
-        if (d2k_qw_hdr_parse(r.packets[i], r.lengths[i], 0, &hdr) != 0 ||
+        if (d2s_qw_hdr_parse(r.packets[i], r.lengths[i], 0, &hdr) != 0 ||
             hdr.dcid_len > sizeof seen_dcid[i]) {
             printf("FAIL control repeat %d QUIC header\n", i);
             fails++;
@@ -141,7 +141,7 @@ static int check_neutral_repeats(const char *what, neutral_send_fn send_question
         }
         memcpy(seen_dcid[i], r.packets[i] + hdr.dcid_off, hdr.dcid_len);
         seen_dcid_len[i] = hdr.dcid_len;
-        if (d2k_quic_client_hello(r.packets[i], r.lengths[i], hello,
+        if (d2s_quic_client_hello(r.packets[i], r.lengths[i], hello,
                                   sizeof hello, &hello_len) != 0 || hello_len == 0) {
             printf("FAIL control repeat %d ClientHello\n", i);
             fails++;
@@ -179,13 +179,13 @@ static int send_control_hook(uint16_t port, int *sent) {
     static const char profile_sni[] = "c0000000000.example.com";
     uint8_t control_bytes[MAX_PACKET];
     size_t control_len = 0;
-    if (d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+    if (d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                               profile_sni, control_bytes, sizeof control_bytes,
                               &control_len) != 0) {
         return -1;
     }
-    d2k_hello control = {control_bytes, control_len, NULL, 0, 0, 0};
-    (void)d2k_quic_ask_control_hook("127.0.0.1", port, NULL, 0, control, 30, 0,
+    d2s_hello control = {control_bytes, control_len, NULL, 0, 0, 0};
+    (void)d2s_quic_ask_control_hook("127.0.0.1", port, NULL, 0, control, 30, 0,
                                     REPEATS, NULL, NULL, sent, NULL);
     return 0;
 }
@@ -198,8 +198,8 @@ static int send_control_hook(uint16_t port, int *sent) {
    CAP_NET_RAW/Linux, so this loopback case asks the same control question
    unfragmented: the name is chosen before the send path is. */
 static int send_survival_control(uint16_t port, int *sent) {
-    d2k_quic_arm_question q = {.addr = "127.0.0.1", .control = 1};
-    (void)d2k_quic_ask_arm_hook(&q, NULL, port, 30, 0, sent);
+    d2s_quic_arm_question q = {.addr = "127.0.0.1", .control = 1};
+    (void)d2s_quic_ask_arm_hook(&q, NULL, port, 30, 0, sent);
     return 0;
 }
 
@@ -262,14 +262,14 @@ int main(void) {
         return 1;
     }
 
-    d2k_quic_allow_local = 1;
+    d2s_quic_allow_local = 1;
     static const uint8_t decoy[] = {0xFA, 0xCE};
-    d2k_quic_arm_question question = {
+    d2s_quic_arm_question question = {
         .addr = "127.0.0.1", .blob = decoy, .blob_len = sizeof decoy,
         .copies = PREFIX_COPIES
     };
     int sent = 0;
-    d2k_tally tally = d2k_quic_ask_arm_hook(&question, "fresh.example",
+    d2s_tally tally = d2s_quic_ask_arm_hook(&question, "fresh.example",
         ntohs(addr.sin_port), 50, 0, &sent);
 
     (void)pthread_join(thread, NULL);
@@ -294,9 +294,9 @@ int main(void) {
             }
         }
         int initial = base + PREFIX_COPIES;
-        if (d2k_quic_client_hello(r.packets[initial], r.lengths[initial],
+        if (d2s_quic_client_hello(r.packets[initial], r.lengths[initial],
                                   hellos[attempt], sizeof hellos[attempt], &hello_lens[attempt]) != 0 ||
-            d2k_quic_sni(r.packets[initial], r.lengths[initial], sni, sizeof sni) != 0 ||
+            d2s_quic_sni(r.packets[initial], r.lengths[initial], sni, sizeof sni) != 0 ||
             strcmp(sni, "fresh.example") != 0) {
             printf("FAIL repeat %d did not carry a valid fresh.example Initial\n", attempt);
             fails++;

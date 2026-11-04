@@ -1,7 +1,7 @@
 /* test_http_hello.c — открытый HTTP как «приветствие» (задача 51, шаг 4).
  *
  * Запрос GET/HEAD с Host — вход плана обхода HTTP: имя = Host, форма
- * D2K_PLAN_SHAPE_HTTP, план объявляет протокол http (minexec 11). Главное
+ * D2S_PLAN_SHAPE_HTTP, план объявляет протокол http (minexec 11). Главное
  * здесь — разделение: HTTP-план не достаётся TLS, TLS-план не достаётся
  * HTTP, и запись имени HTTP не заслоняет TLS-приветствию адресный план.
  * Всё непонятое проходит как есть.
@@ -9,12 +9,12 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_http80.h"
-#include "d2k_plan.h"
-#include "d2k_plans.h"
-#include "d2k_session.h"
-#include "d2k_journal.h"
-#include "d2k_wire.h"
+#include "d2s_http80.h"
+#include "d2s_plan.h"
+#include "d2s_plans.h"
+#include "d2s_session.h"
+#include "d2s_journal.h"
+#include "d2s_wire.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -37,7 +37,7 @@ static uint32_t rd32(const uint8_t *p) {
 typedef struct { uint8_t b[512]; size_t n; unsigned recs; } tlv;
 static void tlv_begin(tlv *t, unsigned minexec) {
     memset(t, 0, sizeof *t);
-    memcpy(t->b, "D2KP", 4); wr16(t->b + 4, 1); wr16(t->b + 6, minexec);
+    memcpy(t->b, "D2SP", 4); wr16(t->b + 4, 1); wr16(t->b + 6, minexec);
     t->n = 12;
 }
 static void tlv_rec(tlv *t, unsigned type, const uint8_t *v, size_t len) {
@@ -56,19 +56,19 @@ static void rec_split(tlv *t, unsigned anchor, int off) {
 static void rec_id(tlv *t, uint8_t fill) {
     uint8_t v[16]; memset(v, fill, sizeof v); tlv_rec(t, 0x0001, v, 16);
 }
-static d2k_plan *load(const tlv *t) {
-    d2k_plan *p = NULL;
+static d2s_plan *load(const tlv *t) {
+    d2s_plan *p = NULL;
     char err[200];
-    if (d2k_plan_load(t->b, t->n, &p, err, sizeof err) != 0) { printf("  план: %s\n", err); return NULL; }
+    if (d2s_plan_load(t->b, t->n, &p, err, sizeof err) != 0) { printf("  план: %s\n", err); return NULL; }
     return p;
 }
 /* HTTP-план: разрез посреди Host. */
-static d2k_plan *http_split_plan(uint8_t id) {
+static d2s_plan *http_split_plan(uint8_t id) {
     tlv t; tlv_begin(&t, 11); rec_id(&t, id); rec_proto(&t, 6, 4); rec_split(&t, 5, 0);
     return load(&t);
 }
 /* TLS-план того же вида. */
-static d2k_plan *tls_split_plan(uint8_t id) {
+static d2s_plan *tls_split_plan(uint8_t id) {
     tlv t; tlv_begin(&t, 1); rec_id(&t, id); rec_proto(&t, 6, 1); rec_split(&t, 5, 0);
     return load(&t);
 }
@@ -77,23 +77,23 @@ static d2k_plan *tls_split_plan(uint8_t id) {
 static void test_parse(void) {
     static const char get[] = "GET /forum/ HTTP/1.1\r\nHost: RuTracker.org\r\nAccept: */*\r\n\r\n";
     size_t off = 0, len = 0;
-    CHECK(d2k_http_hello((const uint8_t *)get, sizeof get - 1, &off, &len) &&
+    CHECK(d2s_http_hello((const uint8_t *)get, sizeof get - 1, &off, &len) &&
           off == 28 && len == 13 && !memcmp(get + off, "RuTracker.org", 13),
           "обычный GET не узнан или Host не там");
     static const char port[] = "HEAD / HTTP/1.0\r\nhost:   example.com:80\r\n\r\n";
-    CHECK(d2k_http_hello((const uint8_t *)port, sizeof port - 1, &off, &len) &&
+    CHECK(d2s_http_hello((const uint8_t *)port, sizeof port - 1, &off, &len) &&
           len == 11 && !memcmp(port + off, "example.com", 11), "Host с :80 и пробелами не узнан");
     static const char dot[] = "GET / HTTP/1.1\r\nHost: example.com.\r\n\r\n";
-    CHECK(d2k_http_hello((const uint8_t *)dot, sizeof dot - 1, &off, &len) && len == 11,
+    CHECK(d2s_http_hello((const uint8_t *)dot, sizeof dot - 1, &off, &len) && len == 11,
           "точка в конце Host не снята");
     /* Неполный заголовок (остаток в следующем сегменте) — разбирать можно,
        если строка Host целиком здесь. */
     static const char part[] = "GET / HTTP/1.1\r\nHost: example.com\r\nUser-Ag";
-    CHECK(d2k_http_hello((const uint8_t *)part, sizeof part - 1, &off, &len) && len == 11,
+    CHECK(d2s_http_hello((const uint8_t *)part, sizeof part - 1, &off, &len) && len == 11,
           "первый сегмент с целой строкой Host не узнан");
     /* Любой метод запроса (keep-alive, поле 04.10): у POST тот же Host. */
     static const char post[] = "POST /login HTTP/1.1\r\nHost: example.com\r\nContent-Length: 3\r\n\r\nabc";
-    CHECK(d2k_http_hello((const uint8_t *)post, sizeof post - 1, &off, &len) && off == 28 && len == 11,
+    CHECK(d2s_http_hello((const uint8_t *)post, sizeof post - 1, &off, &len) && off == 28 && len == 11,
           "POST не узнан");
     static const char *bad[] = {
         "post / HTTP/1.1\r\nHost: example.com\r\n\r\n",
@@ -114,19 +114,19 @@ static void test_parse(void) {
         "GET / HTTP/1.1\r\nHost: 37.221.67.160\r\n\r\n",
     };
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
-        CHECK(!d2k_http_hello((const uint8_t *)bad[i], strlen(bad[i]), &off, &len),
+        CHECK(!d2s_http_hello((const uint8_t *)bad[i], strlen(bad[i]), &off, &len),
               "негодный запрос принят за вход плана");
     }
     for (size_t cut = 0; cut < sizeof get - 1; cut++) {
-        (void)d2k_http_hello((const uint8_t *)get, cut, &off, &len);
+        (void)d2s_http_hello((const uint8_t *)get, cut, &off, &len);
     }
 }
 
 /* --- план: протокол http требует своего исполнителя ------------------------ */
 static void test_plan(void) {
-    d2k_plan *p = http_split_plan(1);
+    d2s_plan *p = http_split_plan(1);
     CHECK(p != NULL, "HTTP-план не принят");
-    d2k_plan_free(p);
+    d2s_plan_free(p);
     tlv t; tlv_begin(&t, 10); rec_proto(&t, 6, 4); rec_split(&t, 5, 0);
     CHECK(load(&t) == NULL, "HTTP-план с minexec 10 принят: старый исполнитель применил бы его к TLS");
     tlv_begin(&t, 11); rec_proto(&t, 17, 4);
@@ -135,118 +135,118 @@ static void test_plan(void) {
 
 /* --- таблица планов: HTTP и TLS не смешиваются ------------------------------ */
 static void test_table(void) {
-    d2k_plantab *tab = d2k_plantab_new(16);
+    d2s_plantab *tab = d2s_plantab_new(16);
     const uint8_t name[] = "rutracker.org";
     const size_t nl = sizeof name - 1;
-    CHECK(d2k_plantab_set_name_family(tab, name, nl, 1, tls_split_plan(2),
-                                      D2K_PLAN_SHAPE_HTTP, 0, 4) == -2,
+    CHECK(d2s_plantab_set_name_family(tab, name, nl, 1, tls_split_plan(2),
+                                      D2S_PLAN_SHAPE_HTTP, 0, 4) == -2,
           "TLS-план встал под формой HTTP");
-    CHECK(d2k_plantab_set_name_family(tab, name, nl, 1, http_split_plan(3),
-                                      D2K_PLAN_SHAPE_MODERN, 0, 4) == -2,
+    CHECK(d2s_plantab_set_name_family(tab, name, nl, 1, http_split_plan(3),
+                                      D2S_PLAN_SHAPE_MODERN, 0, 4) == -2,
           "HTTP-план встал под формой TLS");
-    CHECK(d2k_plantab_set_name_family(tab, name, nl, 1, http_split_plan(4),
-                                      D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == -2,
+    CHECK(d2s_plantab_set_name_family(tab, name, nl, 1, http_split_plan(4),
+                                      D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == -2,
           "HTTP-план встал под дедушкиным правом");
-    CHECK(d2k_plantab_set_name_family(tab, name, nl, 1, http_split_plan(5),
-                                      D2K_PLAN_SHAPE_HTTP, 0, 4) == 0, "HTTP-план не встал");
+    CHECK(d2s_plantab_set_name_family(tab, name, nl, 1, http_split_plan(5),
+                                      D2S_PLAN_SHAPE_HTTP, 0, 4) == 0, "HTTP-план не встал");
     const uint8_t ip[4] = {195, 82, 146, 214};
-    CHECK(d2k_plantab_set_addr_shaped(tab, ip, 4, 1, tls_split_plan(6), D2K_PLAN_SHAPE_MODERN) == 0,
+    CHECK(d2s_plantab_set_addr_shaped(tab, ip, 4, 1, tls_split_plan(6), D2S_PLAN_SHAPE_MODERN) == 0,
           "адресный TLS-план не встал");
-    const d2k_plan *h = d2k_plantab_find_http(tab, name, nl, 4, 0, 2);
-    CHECK(h && d2k_plan_id(h)[0] == 5, "HTTP-план имени не найден");
-    const d2k_plan *t = d2k_plantab_find_target(tab, name, nl, ip, 4, 2, D2K_PLAN_SHAPE_MODERN, 0);
-    CHECK(t && d2k_plan_id(t)[0] == 6,
+    const d2s_plan *h = d2s_plantab_find_http(tab, name, nl, 4, 0, 2);
+    CHECK(h && d2s_plan_id(h)[0] == 5, "HTTP-план имени не найден");
+    const d2s_plan *t = d2s_plantab_find_target(tab, name, nl, ip, 4, 2, D2S_PLAN_SHAPE_MODERN, 0);
+    CHECK(t && d2s_plan_id(t)[0] == 6,
           "HTTP-запись имени заслонила TLS-приветствию адресный план или выдала себя");
-    CHECK(!d2k_plantab_find_target(tab, name, nl, NULL, 4, 2, D2K_PLAN_SHAPE_ANY, 0),
+    CHECK(!d2s_plantab_find_target(tab, name, nl, NULL, 4, 2, D2S_PLAN_SHAPE_ANY, 0),
           "HTTP-план достался TLS-приветствию неизвестной формы");
     /* Дедушкина TLS-запись имени HTTP-запросу не достаётся. */
     const uint8_t other[] = "example.org";
-    CHECK(d2k_plantab_set_name_family(tab, other, sizeof other - 1, 1, tls_split_plan(7),
-                                      D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0, "дедушкина запись не встала");
-    CHECK(!d2k_plantab_find_http(tab, other, sizeof other - 1, 4, 0, 3),
+    CHECK(d2s_plantab_set_name_family(tab, other, sizeof other - 1, 1, tls_split_plan(7),
+                                      D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0, "дедушкина запись не встала");
+    CHECK(!d2s_plantab_find_http(tab, other, sizeof other - 1, 4, 0, 3),
           "дедушкина TLS-запись досталась HTTP");
     /* Проба — только своему порту. */
-    CHECK(d2k_plantab_set_name_family(tab, other, sizeof other - 1, 1, http_split_plan(8),
-                                      D2K_PLAN_SHAPE_HTTP, 0x1234, 4) == 0, "HTTP-проба не встала");
-    CHECK(!d2k_plantab_find_http(tab, other, sizeof other - 1, 4, 0, 3),
+    CHECK(d2s_plantab_set_name_family(tab, other, sizeof other - 1, 1, http_split_plan(8),
+                                      D2S_PLAN_SHAPE_HTTP, 0x1234, 4) == 0, "HTTP-проба не встала");
+    CHECK(!d2s_plantab_find_http(tab, other, sizeof other - 1, 4, 0, 3),
           "HTTP-проба досталась чужому потоку");
-    const d2k_plan *pr = d2k_plantab_find_http(tab, other, sizeof other - 1, 4, 0x1234, 3);
-    CHECK(pr && d2k_plan_id(pr)[0] == 8, "HTTP-проба не досталась своему порту");
-    const d2k_plan *tp = d2k_plantab_find_target(tab, other, sizeof other - 1, NULL, 4, 3,
-                                                 D2K_PLAN_SHAPE_ANY, 0x1234);
-    CHECK(!tp || d2k_plan_proto(tp) != D2K_PLAN_PROTO_HTTP,
+    const d2s_plan *pr = d2s_plantab_find_http(tab, other, sizeof other - 1, 4, 0x1234, 3);
+    CHECK(pr && d2s_plan_id(pr)[0] == 8, "HTTP-проба не досталась своему порту");
+    const d2s_plan *tp = d2s_plantab_find_target(tab, other, sizeof other - 1, NULL, 4, 3,
+                                                 D2S_PLAN_SHAPE_ANY, 0x1234);
+    CHECK(!tp || d2s_plan_proto(tp) != D2S_PLAN_PROTO_HTTP,
           "HTTP-проба досталась TLS-приветствию того же порта");
-    tp = d2k_plantab_find_target(tab, other, sizeof other - 1, NULL, 4, 3,
-                                 D2K_PLAN_SHAPE_MODERN, 0x1234);
-    CHECK(!tp || d2k_plan_proto(tp) != D2K_PLAN_PROTO_HTTP,
+    tp = d2s_plantab_find_target(tab, other, sizeof other - 1, NULL, 4, 3,
+                                 D2S_PLAN_SHAPE_MODERN, 0x1234);
+    CHECK(!tp || d2s_plan_proto(tp) != D2S_PLAN_PROTO_HTTP,
           "HTTP-проба досталась TLS 1.3-приветствию того же порта");
-    CHECK(!d2k_plantab_find_http(tab, name, nl, 6, 0, 3), "IPv4-план достался IPv6");
-    d2k_plantab_free(tab);
+    CHECK(!d2s_plantab_find_http(tab, name, nl, 6, 0, 3), "IPv4-план достался IPv6");
+    d2s_plantab_free(tab);
 }
 
 /* ЗАПИСИ HTTP И TLS ОДНОГО ИМЕНИ СОСУЩЕСТВУЮТ (ревью I-1, воспроизведение
    rv51/gf.c): дедушкина TLS-запись имени затирала HTTP-запись, и пропадали
    оба плана. В любом порядке, и после синхронизации каталога, идущей вслед
    за загрузкой http-plans.txt. */
-static int has_http(d2k_plantab *t, const uint8_t *n, size_t l, uint8_t id) {
-    const d2k_plan *p = d2k_plantab_find_http(t, n, l, 4, 0, 9);
-    return p && d2k_plan_id(p)[0] == id;
+static int has_http(d2s_plantab *t, const uint8_t *n, size_t l, uint8_t id) {
+    const d2s_plan *p = d2s_plantab_find_http(t, n, l, 4, 0, 9);
+    return p && d2s_plan_id(p)[0] == id;
 }
-static int has_tls(d2k_plantab *t, const uint8_t *n, size_t l, uint8_t shape, uint8_t id) {
-    const d2k_plan *p = d2k_plantab_find_target(t, n, l, NULL, 4, 9, shape, 0);
-    return p && d2k_plan_id(p)[0] == id;
+static int has_tls(d2s_plantab *t, const uint8_t *n, size_t l, uint8_t shape, uint8_t id) {
+    const d2s_plan *p = d2s_plantab_find_target(t, n, l, NULL, 4, 9, shape, 0);
+    return p && d2s_plan_id(p)[0] == id;
 }
 static void test_coexist(void) {
     static const uint8_t name[] = "fast-torrent.ru";
     const size_t nl = sizeof name - 1;
-    static const uint8_t tls_shapes[] = {D2K_PLAN_SHAPE_GRANDFATHER, D2K_PLAN_SHAPE_MODERN,
-                                         D2K_PLAN_SHAPE_LEGACY};
+    static const uint8_t tls_shapes[] = {D2S_PLAN_SHAPE_GRANDFATHER, D2S_PLAN_SHAPE_MODERN,
+                                         D2S_PLAN_SHAPE_LEGACY};
     for (size_t k = 0; k < sizeof tls_shapes; k++) {
         uint8_t sh = tls_shapes[k];
-        uint8_t seen = sh == D2K_PLAN_SHAPE_GRANDFATHER ? D2K_PLAN_SHAPE_MODERN : sh;
+        uint8_t seen = sh == D2S_PLAN_SHAPE_GRANDFATHER ? D2S_PLAN_SHAPE_MODERN : sh;
         /* HTTP, затем TLS. */
-        d2k_plantab *t = d2k_plantab_new(16);
-        CHECK(d2k_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
-              d2k_plantab_set_name_family(t, name, nl, 1, tls_split_plan(2), sh, 0, 4) == 0,
+        d2s_plantab *t = d2s_plantab_new(16);
+        CHECK(d2s_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
+              d2s_plantab_set_name_family(t, name, nl, 1, tls_split_plan(2), sh, 0, 4) == 0,
               "HTTP, затем TLS: установка отказала");
         CHECK(has_http(t, name, nl, 3), "TLS-запись затёрла HTTP-запись имени");
         CHECK(has_tls(t, name, nl, seen, 2), "TLS-план имени пропал рядом с HTTP-записью");
-        d2k_plantab_free(t);
+        d2s_plantab_free(t);
         /* TLS, затем HTTP. */
-        t = d2k_plantab_new(16);
-        CHECK(d2k_plantab_set_name_family(t, name, nl, 1, tls_split_plan(2), sh, 0, 4) == 0 &&
-              d2k_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+        t = d2s_plantab_new(16);
+        CHECK(d2s_plantab_set_name_family(t, name, nl, 1, tls_split_plan(2), sh, 0, 4) == 0 &&
+              d2s_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
               "TLS, затем HTTP: установка отказала");
         CHECK(has_http(t, name, nl, 3) && has_tls(t, name, nl, seen, 2),
               "HTTP-запись затёрла TLS-запись имени или пропала сама");
-        d2k_plantab_free(t);
+        d2s_plantab_free(t);
     }
-    /* Запуск d2kc: http-plans.txt, затем синхронизация каталога (TLS 1.3 и
+    /* Запуск d2sc: http-plans.txt, затем синхронизация каталога (TLS 1.3 и
        дедушкина — по существующему правилу дедушкина обновляет план
        измеренной TLS-записи, своей не заводит), затем повторная постановка
        HTTP-планов. */
-    d2k_plantab *t = d2k_plantab_new(16);
-    CHECK(d2k_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
-          d2k_plantab_set_name_family(t, name, nl, 2, tls_split_plan(4), D2K_PLAN_SHAPE_MODERN, 0, 4) == 0 &&
-          d2k_plantab_set_name_family(t, name, nl, 3, tls_split_plan(5), D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0 &&
-          d2k_plantab_set_name_family(t, name, nl, 4, http_split_plan(6), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    d2s_plantab *t = d2s_plantab_new(16);
+    CHECK(d2s_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
+          d2s_plantab_set_name_family(t, name, nl, 2, tls_split_plan(4), D2S_PLAN_SHAPE_MODERN, 0, 4) == 0 &&
+          d2s_plantab_set_name_family(t, name, nl, 3, tls_split_plan(5), D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0 &&
+          d2s_plantab_set_name_family(t, name, nl, 4, http_split_plan(6), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "запуск: установка отказала");
     CHECK(has_http(t, name, nl, 6), "после синхронизации каталога HTTP-план не тот");
-    CHECK(has_tls(t, name, nl, D2K_PLAN_SHAPE_MODERN, 5), "после синхронизации TLS-план не тот");
-    d2k_plantab_free(t);
+    CHECK(has_tls(t, name, nl, D2S_PLAN_SHAPE_MODERN, 5), "после синхронизации TLS-план не тот");
+    d2s_plantab_free(t);
     /* Снятие одного не трогает другое. */
-    t = d2k_plantab_new(16);
-    CHECK(d2k_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
-          d2k_plantab_set_name_family(t, name, nl, 2, tls_split_plan(5), D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
+    t = d2s_plantab_new(16);
+    CHECK(d2s_plantab_set_name_family(t, name, nl, 1, http_split_plan(3), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0 &&
+          d2s_plantab_set_name_family(t, name, nl, 2, tls_split_plan(5), D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
           "установка отказала");
-    CHECK(d2k_plantab_del_name_shaped(t, name, nl, 6, D2K_PLAN_SHAPE_GRANDFATHER, 4) == 1 &&
-          has_http(t, name, nl, 3) && !has_tls(t, name, nl, D2K_PLAN_SHAPE_LEGACY, 5),
+    CHECK(d2s_plantab_del_name_shaped(t, name, nl, 6, D2S_PLAN_SHAPE_GRANDFATHER, 4) == 1 &&
+          has_http(t, name, nl, 3) && !has_tls(t, name, nl, D2S_PLAN_SHAPE_LEGACY, 5),
           "снятие дедушкиной TLS-записи тронуло HTTP-запись");
-    CHECK(d2k_plantab_set_name_family(t, name, nl, 3, tls_split_plan(7), D2K_PLAN_SHAPE_MODERN, 0, 4) == 0 &&
-          d2k_plantab_del_name_shaped(t, name, nl, 6, D2K_PLAN_SHAPE_HTTP, 4) == 1 &&
-          has_tls(t, name, nl, D2K_PLAN_SHAPE_MODERN, 7) && !has_http(t, name, nl, 3),
+    CHECK(d2s_plantab_set_name_family(t, name, nl, 3, tls_split_plan(7), D2S_PLAN_SHAPE_MODERN, 0, 4) == 0 &&
+          d2s_plantab_del_name_shaped(t, name, nl, 6, D2S_PLAN_SHAPE_HTTP, 4) == 1 &&
+          has_tls(t, name, nl, D2S_PLAN_SHAPE_MODERN, 7) && !has_http(t, name, nl, 3),
           "снятие HTTP-записи тронуло TLS-запись");
-    d2k_plantab_free(t);
+    d2s_plantab_free(t);
 }
 
 /* --- сессия: разрез запроса на проводе -------------------------------------- */
@@ -266,36 +266,36 @@ static size_t pkt4(uint8_t *o, int to_server, uint8_t flags, uint32_t seq, uint3
 
 static const char GET[] = "GET /forum/ HTTP/1.1\r\nHost: rutracker.org\r\nAccept: */*\r\n\r\n";
 
-static void run_flow(d2k_session *s, const char *req, d2k_result *res) {
+static void run_flow(d2s_session *s, const char *req, d2s_result *res) {
     static uint8_t p[2048], out[16384];
-    d2k_result r;
+    d2s_result r;
     size_t n = pkt4(p, 1, 0x02, 1000, 0, NULL);
-    d2k_session_packet(s, p, n, 10, out, sizeof out, &r);
+    d2s_session_packet(s, p, n, 10, out, sizeof out, &r);
     n = pkt4(p, 0, 0x12, 5000, 1001, NULL);
-    d2k_session_packet(s, p, n, 20, out, sizeof out, &r);
+    d2s_session_packet(s, p, n, 20, out, sizeof out, &r);
     n = pkt4(p, 1, 0x18, 1001, 5001, req);
-    d2k_session_packet(s, p, n, 30, out, sizeof out, res);
+    d2s_session_packet(s, p, n, 30, out, sizeof out, res);
 }
 
-static size_t count_kind(const d2k_session *s, uint8_t kind) {
-    const d2k_journal *j = d2k_session_journal(s);
+static size_t count_kind(const d2s_session *s, uint8_t kind) {
+    const d2s_journal *j = d2s_session_journal(s);
     size_t c = 0;
-    for (size_t i = 0; i < d2k_journal_count(j); i++) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i);
+    for (size_t i = 0; i < d2s_journal_count(j); i++) {
+        const d2s_jrn_entry *e = d2s_journal_at(j, i);
         if (e && e->kind == kind) { c++; }
     }
     return c;
 }
 
 static void test_session(void) {
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     const uint8_t name[] = "rutracker.org";
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      http_split_plan(9), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      http_split_plan(9), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал в сессию");
-    d2k_result r;
+    d2s_result r;
     run_flow(s, GET, &r);
-    CHECK(r.applied && r.n_out == 2 && r.verdict == D2K_VERDICT_DROP,
+    CHECK(r.applied && r.n_out == 2 && r.verdict == D2S_VERDICT_DROP,
           "HTTP-план не исполнен разрезом запроса");
     if (r.n_out == 2) {
         size_t host = (size_t)(strstr(GET, "rutracker.org") - GET);
@@ -305,51 +305,51 @@ static void test_session(void) {
         CHECK(r.out[0].len == 40 + mid && r.out[1].len == 40 + strlen(GET) - mid,
               "разрез не посреди Host");
     }
-    CHECK(count_kind(s, D2K_JRN_PLAN_APPLIED) == 1, "исполнение HTTP-плана не сообщено");
-    CHECK(count_kind(s, D2K_JRN_HELLO_SNI) == 0 && count_kind(s, D2K_JRN_SUSPECT) == 0,
+    CHECK(count_kind(s, D2S_JRN_PLAN_APPLIED) == 1, "исполнение HTTP-плана не сообщено");
+    CHECK(count_kind(s, D2S_JRN_HELLO_SNI) == 0 && count_kind(s, D2S_JRN_SUSPECT) == 0,
           "HTTP-поток породил TLS-события");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* У имени только TLS-план: HTTP-запрос идёт как есть. */
-    s = d2k_session_new(64, 64);
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      tls_split_plan(10), D2K_PLAN_SHAPE_MODERN, 0, 4) == 0,
+    s = d2s_session_new(64, 64);
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      tls_split_plan(10), D2S_PLAN_SHAPE_MODERN, 0, 4) == 0,
           "TLS-план не встал");
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      tls_split_plan(11), D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      tls_split_plan(11), D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
           "дедушкин TLS-план не встал");
     run_flow(s, GET, &r);
-    CHECK(!r.applied && r.n_out == 0 && r.verdict == D2K_VERDICT_ACCEPT,
+    CHECK(!r.applied && r.n_out == 0 && r.verdict == D2S_VERDICT_ACCEPT,
           "TLS-план применён к HTTP-запросу");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Запрос без Host — как есть, даже при HTTP-плане имени. POST с Host —
        тот же вход, что GET (keep-alive, поле 04.10: коробка смотрит каждый
        запрос, не только GET). */
-    s = d2k_session_new(64, 64);
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      http_split_plan(12), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    s = d2s_session_new(64, 64);
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      http_split_plan(12), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал");
     run_flow(s, "POST /x HTTP/1.1\r\nHost: rutracker.org\r\nContent-Length: 0\r\n\r\n", &r);
     CHECK(r.applied && r.n_out == 2, "POST с Host не получил HTTP-план");
-    d2k_session_free(s);
-    s = d2k_session_new(64, 64);
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      http_split_plan(12), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    d2s_session_free(s);
+    s = d2s_session_new(64, 64);
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      http_split_plan(12), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал");
     run_flow(s, "POST /x HTTP/1.1\r\nContent-Length: 0\r\n\r\n", &r);
-    CHECK(!r.applied && r.verdict == D2K_VERDICT_ACCEPT, "запрос без Host изменён HTTP-планом");
+    CHECK(!r.applied && r.verdict == D2S_VERDICT_ACCEPT, "запрос без Host изменён HTTP-планом");
     /* Не порт 80 (ревью M-1): Host без порта означает 80, а поток идёт не
        туда — не наш вход. */
     g_sport = 8080;
     run_flow(s, GET, &r);
-    CHECK(!r.applied && r.verdict == D2K_VERDICT_ACCEPT, "запрос не на порт 80 изменён HTTP-планом");
+    CHECK(!r.applied && r.verdict == D2S_VERDICT_ACCEPT, "запрос не на порт 80 изменён HTTP-планом");
     g_sport = 80;
-    d2k_session_free(s);
+    d2s_session_free(s);
     (void)rd32;
 
     /* Приманка-запрос с испорченной суммой перед разрезом. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     {
         static const char fake[] = "GET / HTTP/1.1\r\nHost: disk.rzd.ru\r\n\r\n";
         tlv t; tlv_begin(&t, 11); rec_id(&t, 13); rec_proto(&t, 6, 4);
@@ -360,54 +360,54 @@ static void test_session(void) {
         uint8_t fk[10] = {0, 1, 0, 1, 1, 0, 0, 0, 0, 0}; /* payload 1, poison 1, x1, before */
         tlv_rec(&t, 0x0101, fk, 10);
         rec_split(&t, 5, 0);
-        d2k_plan *fp = load(&t);
-        CHECK(fp && d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                                fp, D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+        d2s_plan *fp = load(&t);
+        CHECK(fp && d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                                fp, D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
               "HTTP-план с приманкой не встал");
         static uint8_t p[2048], out[16384];
-        d2k_result rr;
+        d2s_result rr;
         size_t n = pkt4(p, 1, 0x02, 1000, 0, NULL);
-        d2k_session_packet(s, p, n, 10, out, sizeof out, &rr);
+        d2s_session_packet(s, p, n, 10, out, sizeof out, &rr);
         n = pkt4(p, 0, 0x12, 5000, 1001, NULL);
-        d2k_session_packet(s, p, n, 20, out, sizeof out, &rr);
+        d2s_session_packet(s, p, n, 20, out, sizeof out, &rr);
         n = pkt4(p, 1, 0x18, 1001, 5001, GET);
-        d2k_session_packet(s, p, n, 30, out, sizeof out, &rr);
+        d2s_session_packet(s, p, n, 30, out, sizeof out, &rr);
         CHECK(rr.applied && rr.n_out == 3, "приманка + разрез не исполнены");
         if (rr.n_out == 3) {
             CHECK(rr.out[0].len == 40 + sizeof fake - 1 &&
                   !memcmp(out + rr.out[0].off + 40, fake, sizeof fake - 1) &&
-                  !d2k_wire_tcp_checksum_ok(out + rr.out[0].off, rr.out[0].len),
+                  !d2s_wire_tcp_checksum_ok(out + rr.out[0].off, rr.out[0].len),
                   "приманка не первой или сумма у неё не испорчена");
-            CHECK(d2k_wire_tcp_checksum_ok(out + rr.out[1].off, rr.out[1].len) &&
-                  d2k_wire_tcp_checksum_ok(out + rr.out[2].off, rr.out[2].len),
+            CHECK(d2s_wire_tcp_checksum_ok(out + rr.out[1].off, rr.out[1].len) &&
+                  d2s_wire_tcp_checksum_ok(out + rr.out[2].off, rr.out[2].len),
                   "куски запроса с испорченной суммой");
         }
     }
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Пробный план — только зонду своего порта. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     {
         uint8_t port_be[2] = {51000 >> 8, 51000 & 255};
         uint16_t sport;
         memcpy(&sport, port_be, 2);
-        CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                          http_split_plan(14), D2K_PLAN_SHAPE_HTTP, sport, 4) == 0,
+        CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                          http_split_plan(14), D2S_PLAN_SHAPE_HTTP, sport, 4) == 0,
               "HTTP-проба не встала");
         run_flow(s, GET, &r);
         CHECK(!r.applied, "пробный HTTP-план достался обычному потоку");
         static uint8_t p[2048], out[16384];
-        d2k_result rr;
+        d2s_result rr;
         size_t n = pkt4(p, 1, 0x02, 7000, 0, NULL);
-        d2k_session_packet_probe(s, p, n, 40, out, sizeof out, &rr);
+        d2s_session_packet_probe(s, p, n, 40, out, sizeof out, &rr);
         n = pkt4(p, 0, 0x12, 9000, 7001, NULL);
-        d2k_session_packet(s, p, n, 50, out, sizeof out, &rr);
+        d2s_session_packet(s, p, n, 50, out, sizeof out, &rr);
         n = pkt4(p, 1, 0x18, 7001, 9001, GET);
-        d2k_session_packet_probe(s, p, n, 60, out, sizeof out, &rr);
-        CHECK(rr.applied && rr.n_out == 2 && d2k_plan_id(NULL) == NULL && rr.plan_id[0] == 14,
+        d2s_session_packet_probe(s, p, n, 60, out, sizeof out, &rr);
+        CHECK(rr.applied && rr.n_out == 2 && d2s_plan_id(NULL) == NULL && rr.plan_id[0] == 14,
               "пробный HTTP-план не исполнен на зонде своего порта");
     }
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* --- KEEP-ALIVE: КАЖДЫЙ ЗАПРОС СОЕДИНЕНИЯ (поле 04.10.2026) -----------------
@@ -433,40 +433,40 @@ static size_t pkt_ka(uint8_t *o, int to_server, uint8_t flags, uint32_t seq, uin
 }
 
 typedef struct {
-    d2k_session *s;
+    d2s_session *s;
     uint32_t cseq, sseq;      /* следующий байт клиента и сервера */
     unsigned sport;
     uint64_t now;
     uint8_t out[16384];
-    d2k_result r;
+    d2s_result r;
 } ka_flow;
 
 static void ka_open(ka_flow *k, uint32_t cisn, uint32_t sisn, unsigned sport) {
     uint8_t p[256];
     k->cseq = cisn + 1; k->sseq = sisn + 1; k->sport = sport; k->now = 10;
     size_t n = pkt_ka(p, 1, 0x02, cisn, 0, NULL, 0, sport);
-    d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+    d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
     n = pkt_ka(p, 0, 0x12, sisn, k->cseq, NULL, 0, sport);
-    d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+    d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
     n = pkt_ka(p, 1, 0x10, k->cseq, k->sseq, NULL, 0, sport);
-    d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+    d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
 }
 
 /* Нагрузка клиента с текущего номера (или с данного), номер двигается. */
-static d2k_result *ka_send_at(ka_flow *k, uint32_t seq, const char *pay, size_t pl) {
+static d2s_result *ka_send_at(ka_flow *k, uint32_t seq, const char *pay, size_t pl) {
     static uint8_t p[4096];
     size_t n = pkt_ka(p, 1, 0x18, seq, k->sseq, pay, pl, k->sport);
-    d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+    d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
     if (k->r.applied) {
-        /* Как d2kd: отчёт о каждой посылке и о вердикте оригинала. */
+        /* Как d2sd: отчёт о каждой посылке и о вердикте оригинала. */
         for (size_t i = 0; i <= k->r.n_out; i++) {
-            d2k_session_sent(k->s, k->now, &k->r.key, k->r.execution_id);
+            d2s_session_sent(k->s, k->now, &k->r.key, k->r.execution_id);
         }
     }
     if ((int32_t)(seq + (uint32_t)pl - k->cseq) > 0) { k->cseq = seq + (uint32_t)pl; }
     return &k->r;
 }
-static d2k_result *ka_send(ka_flow *k, const char *pay) {
+static d2s_result *ka_send(ka_flow *k, const char *pay) {
     return ka_send_at(k, k->cseq, pay, strlen(pay));
 }
 
@@ -479,12 +479,12 @@ static void ka_answer(ka_flow *k, size_t len) {
     while (len) {
         size_t c = len > sizeof body ? sizeof body : len;
         size_t n = pkt_ka(p, 0, 0x18, k->sseq, k->cseq, body, c, k->sport);
-        d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
-        CHECK(!k->r.applied && k->r.verdict == D2K_VERDICT_ACCEPT, "ответ сервера тронут");
+        d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+        CHECK(!k->r.applied && k->r.verdict == D2S_VERDICT_ACCEPT, "ответ сервера тронут");
         k->sseq += (uint32_t)c; len -= c;
     }
     size_t n = pkt_ka(p, 1, 0x10, k->cseq, k->sseq, NULL, 0, k->sport);
-    d2k_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
+    d2s_session_packet(k->s, p, n, k->now++, k->out, sizeof k->out, &k->r);
 }
 
 /* Посылка i результата: номер, подтверждение, нагрузка, сумма. */
@@ -493,7 +493,7 @@ static uint32_t o_ack(const ka_flow *k, size_t i) { return rd32(k->out + k->r.ou
 static const uint8_t *o_pay(const ka_flow *k, size_t i) { return k->out + k->r.out[i].off + 40; }
 static size_t o_len(const ka_flow *k, size_t i) { return k->r.out[i].len - 40; }
 static int o_sum(const ka_flow *k, size_t i) {
-    return d2k_wire_tcp_checksum_ok(k->out + k->r.out[i].off, k->r.out[i].len);
+    return d2s_wire_tcp_checksum_ok(k->out + k->r.out[i].off, k->r.out[i].len);
 }
 
 /* Разрез посреди Host: два куска, номера от начала ЭТОГО запроса, оба с
@@ -501,7 +501,7 @@ static int o_sum(const ka_flow *k, size_t i) {
 static int ka_split_ok(const ka_flow *k, uint32_t seq, const char *req) {
     size_t rl = strlen(req);
     const char *h = strstr(req, "\r\nHost: ");
-    if (!h || k->r.n_out != 2 || !k->r.applied || k->r.verdict != D2K_VERDICT_DROP) { return 0; }
+    if (!h || k->r.n_out != 2 || !k->r.applied || k->r.verdict != D2S_VERDICT_DROP) { return 0; }
     size_t host = (size_t)(h - req) + 8, hl = strcspn(req + host, "\r");
     size_t mid = host + hl / 2;
     return o_seq(k, 0) == seq && o_len(k, 0) == mid && !memcmp(o_pay(k, 0), req, mid) &&
@@ -510,17 +510,17 @@ static int ka_split_ok(const ka_flow *k, uint32_t seq, const char *req) {
            o_ack(k, 0) == k->sseq && o_ack(k, 1) == k->sseq && o_sum(k, 0) && o_sum(k, 1);
 }
 
-static d2k_session *ka_session(d2k_plan *p, const char *name) {
-    d2k_session *s = d2k_session_new(64, 64);
-    CHECK(p && d2k_plantab_set_name_family(d2k_session_plans(s), (const uint8_t *)name,
-                                           strlen(name), 1, p, D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+static d2s_session *ka_session(d2s_plan *p, const char *name) {
+    d2s_session *s = d2s_session_new(64, 64);
+    CHECK(p && d2s_plantab_set_name_family(d2s_session_plans(s), (const uint8_t *)name,
+                                           strlen(name), 1, p, D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал");
     return s;
 }
 
-static d2k_payload_stats ka_stats(const d2k_session *s) {
-    d2k_payload_stats ps;
-    d2k_session_payload_stats(s, &ps);
+static d2s_payload_stats ka_stats(const d2s_session *s) {
+    d2s_payload_stats ps;
+    d2s_session_payload_stats(s, &ps);
     return ps;
 }
 
@@ -546,10 +546,10 @@ static void test_keepalive_split(void) {
     ka_send(&k, REQ3);
     CHECK(ka_split_ok(&k, at, REQ3), "третий запрос соединения не получил план");
     CHECK(k.r.execution_id != 0, "исполнение третьего запроса без номера");
-    CHECK(count_kind(k.s, D2K_JRN_PLAN_APPLIED) == 3, "исполнение каждого запроса не сообщено");
-    CHECK(count_kind(k.s, D2K_JRN_HELLO_SNI) == 0 && count_kind(k.s, D2K_JRN_SUSPECT) == 0,
+    CHECK(count_kind(k.s, D2S_JRN_PLAN_APPLIED) == 3, "исполнение каждого запроса не сообщено");
+    CHECK(count_kind(k.s, D2S_JRN_HELLO_SNI) == 0 && count_kind(k.s, D2S_JRN_SUSPECT) == 0,
           "keep-alive HTTP породил TLS-события");
-    d2k_payload_stats ps = ka_stats(k.s);
+    d2s_payload_stats ps = ka_stats(k.s);
     CHECK(ps.http_later == 2 && ps.http_unaligned == 0 && ps.http_open_end == 0,
           "счётчики следующих запросов не те");
     /* Посылки прошлого запроса не отчитались — следующий как есть. */
@@ -560,20 +560,20 @@ static void test_keepalive_split(void) {
         ka_open(&q, 1000, 5000, 80);
         static uint8_t p[512];
         size_t n = pkt_ka(p, 1, 0x18, q.cseq, q.sseq, REQ1, strlen(REQ1), 80);
-        d2k_session_packet(q.s, p, n, q.now++, q.out, sizeof q.out, &q.r);
+        d2s_session_packet(q.s, p, n, q.now++, q.out, sizeof q.out, &q.r);
         CHECK(q.r.applied, "первый запрос не исполнен");
         q.cseq += (uint32_t)strlen(REQ1);
         ka_answer(&q, 100);
         ka_send(&q, REQ2);
-        CHECK(!q.r.applied && q.r.verdict == D2K_VERDICT_ACCEPT,
+        CHECK(!q.r.applied && q.r.verdict == D2S_VERDICT_ACCEPT,
               "второй запрос исполнен поверх неотчитавшегося первого");
-        d2k_session_free(q.s);
+        d2s_session_free(q.s);
     }
     /* Повтор уже обработанного запроса — не граница: как есть, без счёта. */
     ka_send_at(&k, at, REQ3, strlen(REQ3));
-    CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT, "повтор запроса обработан вторично");
+    CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT, "повтор запроса обработан вторично");
     CHECK(ka_stats(k.s).http_unaligned == 0, "повтор запроса посчитан как сбой границы");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 }
 
 /* Номер переходит через 2^32 между запросами. */
@@ -589,11 +589,11 @@ static void test_keepalive_wrap(void) {
     CHECK(at < 0x1000u, "проверка не переходит через 2^32");
     ka_send(&k, REQ2);
     CHECK(ka_split_ok(&k, at, REQ2), "второй запрос за переходом номеров через ноль не разрезан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 }
 
 /* План с приманкой: свой яд у каждой. */
-static d2k_plan *http_fake_plan(uint8_t id, uint8_t flags, int32_t shift) {
+static d2s_plan *http_fake_plan(uint8_t id, uint8_t flags, int32_t shift) {
     static const char fake[] = "GET / HTTP/1.1\r\nHost: disk.rzd.ru\r\n\r\n";
     tlv t; tlv_begin(&t, 11); rec_id(&t, id); rec_proto(&t, 6, 4);
     uint8_t pv[64]; wr16(pv, 1); memcpy(pv + 2, fake, sizeof fake - 1);
@@ -629,7 +629,7 @@ static void test_keepalive_fakes(void) {
               o_ack(&k, 1) == k.sseq && o_ack(&k, 2) == k.sseq,
               "куски второго запроса не там");
     }
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* seqshift −66000: приманка за окном назад от ТЕКУЩЕГО номера, а не от
        начала потока; поток уже дальше 66000 байт клиента. */
@@ -654,7 +654,7 @@ static void test_keepalive_fakes(void) {
     while (left) {
         size_t c = left > sizeof chunk ? sizeof chunk : left;
         ka_send_at(&k, k.cseq, chunk, c);
-        CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT, "тело POST тронуто планом");
+        CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT, "тело POST тронуто планом");
         left -= c;
     }
     ka_answer(&k, 200);
@@ -667,9 +667,9 @@ static void test_keepalive_fakes(void) {
         CHECK(o_seq(&k, 1) == at2 && o_seq(&k, 2) == at2 + (uint32_t)o_len(&k, 1),
               "куски запроса после тела POST не на его номерах");
     }
-    d2k_payload_stats ps = ka_stats(k.s);
+    d2s_payload_stats ps = ka_stats(k.s);
     CHECK(ps.http_later == 2 && ps.http_unaligned == 0, "счётчики после POST с телом не те");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 }
 
 /* Запрос не с начала сегмента и потерянная граница — как есть, со счётом. */
@@ -688,10 +688,10 @@ static void test_keepalive_doubt(void) {
     CHECK(k.r.applied && o_seq(&k, 0) == at, "первый запрос конвейера не получил план");
     ka_answer(&k, 300);
     ka_send(&k, REQ2);
-    CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT && k.r.n_out == 0,
+    CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT && k.r.n_out == 0,
           "запрос после неразобранного конвейера изменён");
     CHECK(ka_stats(k.s).http_unaligned == 1, "конвейер не посчитан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* Пропущенный сегмент: следующий виденный запрос дальше границы. */
     memset(&k, 0, sizeof k);
@@ -701,12 +701,12 @@ static void test_keepalive_doubt(void) {
     ka_answer(&k, 300);
     k.cseq += 50;            /* 50 байт клиента очередь не видела */
     ka_send(&k, REQ2);
-    CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT, "запрос за потерянной границей изменён");
+    CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT, "запрос за потерянной границей изменён");
     ka_answer(&k, 300);
     ka_send(&k, REQ3);
     CHECK(!k.r.applied, "после потери границы следующий запрос изменён");
     CHECK(ka_stats(k.s).http_unaligned == 1, "потерянная граница не посчитана (или посчитана дважды)");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* Сегмент через границу: хвост тела и следующий запрос в одном сегменте. */
     memset(&k, 0, sizeof k);
@@ -717,9 +717,9 @@ static void test_keepalive_doubt(void) {
     static char tail[256];
     snprintf(tail, sizeof tail, "abcde%s", REQ3);
     ka_send(&k, tail);
-    CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT, "запрос не с начала сегмента изменён");
+    CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT, "запрос не с начала сегмента изменён");
     CHECK(ka_stats(k.s).http_unaligned == 1, "запрос не с начала сегмента не посчитан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* На границе не запрос (например, протокол после Upgrade без заголовка). */
     memset(&k, 0, sizeof k);
@@ -732,7 +732,7 @@ static void test_keepalive_doubt(void) {
     ka_send(&k, REQ3);
     CHECK(!k.r.applied, "запрос после не-запроса на границе изменён");
     CHECK(ka_stats(k.s).http_unaligned == 1, "не-запрос на границе не посчитан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* Конец запроса неизвестен: chunked — дальше как есть, счёт отдельный. */
     memset(&k, 0, sizeof k);
@@ -744,9 +744,9 @@ static void test_keepalive_doubt(void) {
     ka_answer(&k, 100);
     ka_send(&k, REQ3);
     CHECK(!k.r.applied, "запрос после chunked изменён: граница выдумана");
-    d2k_payload_stats ps = ka_stats(k.s);
+    d2s_payload_stats ps = ka_stats(k.s);
     CHECK(ps.http_open_end == 1 && ps.http_unaligned == 0, "неизвестный конец запроса не посчитан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 
     /* Граница становится известна после последовательного окончания заголовков. */
     memset(&k, 0, sizeof k);
@@ -760,16 +760,16 @@ static void test_keepalive_doubt(void) {
     ka_send(&k, REQ3);
     CHECK(k.r.applied, "запрос после доказанного окончания заголовков остался без плана");
     CHECK(ka_stats(k.s).http_open_end == 1, "заголовок в двух сегментах не посчитан");
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 }
 
 /* TLS не затронут: ни поток TLS с запросоподобными байтами позже, ни
    открытый текст на 443; HTTP-план имени им не достаётся. */
 static void test_keepalive_tls(void) {
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     const uint8_t name[] = "rutracker.org";
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      http_split_plan(30), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      http_split_plan(30), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал");
     ka_flow k;
     memset(&k, 0, sizeof k);
@@ -781,13 +781,13 @@ static void test_keepalive_tls(void) {
     ka_answer(&k, 100);
     ka_send(&k, REQ2);
     CHECK(!k.r.applied, "второй запрос на 443 изменён HTTP-планом");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* TLS-приветствие на 80 (TLS на нестандартном порту): поток TLS, байты
        позже, похожие на запрос, не трогаются. */
-    s = d2k_session_new(64, 64);
-    CHECK(d2k_plantab_set_name_family(d2k_session_plans(s), name, sizeof name - 1, 1,
-                                      http_split_plan(31), D2K_PLAN_SHAPE_HTTP, 0, 4) == 0,
+    s = d2s_session_new(64, 64);
+    CHECK(d2s_plantab_set_name_family(d2s_session_plans(s), name, sizeof name - 1, 1,
+                                      http_split_plan(31), D2S_PLAN_SHAPE_HTTP, 0, 4) == 0,
           "HTTP-план не встал");
     memset(&k, 0, sizeof k);
     k.s = s;
@@ -797,11 +797,11 @@ static void test_keepalive_tls(void) {
     CHECK(!k.r.applied, "TLS-начало на 80 изменено HTTP-планом");
     ka_answer(&k, 100);
     ka_send(&k, REQ2);
-    CHECK(!k.r.applied && k.r.verdict == D2K_VERDICT_ACCEPT,
+    CHECK(!k.r.applied && k.r.verdict == D2S_VERDICT_ACCEPT,
           "запросоподобные байты не-HTTP потока изменены HTTP-планом");
-    d2k_payload_stats ps = ka_stats(s);
+    d2s_payload_stats ps = ka_stats(s);
     CHECK(ps.http_later == 0 && ps.http_unaligned == 0, "не-HTTP поток посчитан как HTTP");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* Захват 04.10.2026 (s2-fasttorrent.pcap, Safari): номера и запросы как на
@@ -845,7 +845,7 @@ static void test_keepalive_capture(void) {
               !memcmp(o_pay(&k, 1), CAP2, 37) && !memcmp(o_pay(&k, 2), CAP2 + 37, 516 - 37),
               "куски GET /False/ не посреди Host или не на номерах захвата");
     }
-    d2k_session_free(k.s);
+    d2s_session_free(k.s);
 }
 
 int main(void) {

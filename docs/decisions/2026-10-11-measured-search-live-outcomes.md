@@ -12,8 +12,8 @@
    отдельного опыта. Равенство packet runtime необходимо, но не устраняет
    различий входа, состояния соединения, запроса и маршрута.
 2. В QUIC вопросник существует, но `quicprobe.c:classify_run` сначала зовёт
-   `d2k_quic_strategy_measure`, внутри которого после двух вопросов и проверки
-   фрагментов идёт `d2k_quic_original_arms`. Остальные свойства
+   `d2s_quic_strategy_measure`, внутри которого после двух вопросов и проверки
+   фрагментов идёт `d2s_quic_original_arms`. Остальные свойства
    `qp_questions_step` спрашиваются после этого. Их нельзя считать причиной
    уже выбранного плана. Перенос всех семи вопросов вверх без разбора их
    применимости добавил бы стоимость, но не гарантировал решение.
@@ -40,7 +40,7 @@
   Initial расшифровывается наблюдателем; исследованы первая датаграмма потока,
   соотношение портов, остаточное состояние и сборка CRYPTO. Это основания
   для различающих опытов, не установленные свойства ТСПУ владельца. В работе
-  фрагментация CRYPTO обходила изученный фильтр; D2K обязан проверить тот же
+  фрагментация CRYPTO обходила изученный фильтр; D2S обязан проверить тот же
   эффект на своей линии и на полном опыте.
 - [GFW, полностью зашифрованный трафик, 2023](https://gfw.report/publications/usenixsecurity23/en/):
   эвристики битовой плотности, печатных символов и первых байтов изучены на
@@ -284,16 +284,16 @@ voice attribution — 2 ошибки до соответствующих исп�
 
 
 Окончательная локальная проверка этого слоя: `make -C core check` — exit 0
-(`/tmp/d2k-outcome-final-core-check.log`), включая `test_sched_summary`, все
+(`/tmp/d2s-outcome-final-core-check.log`), включая `test_sched_summary`, все
 режимы scheduler и release arm64/mipsel в отдельном временном каталоге.
-`make -C detect check` — exit 0 (`/tmp/d2k-outcome-detect-check.log`);
+`make -C detect check` — exit 0 (`/tmp/d2s-outcome-detect-check.log`);
 `make -C datapath check cross` — exit 0
-(`/tmp/d2k-outcome-datapath-check.log`). `git diff --check` чист.
+(`/tmp/d2s-outcome-datapath-check.log`). `git diff --check` чист.
 Первый core check тоже завершился с exit 0 и не прерывался; после review-правок
 полный набор выполнен заново. HTTP live runtime IPv4/IPv6, общий UDP executor
 и QUIC first-send gates прошли. Поля/роутера/публикации не было.
 
-Dirty-файлы владельца `builds/d2kc-linux-arm64` и `builds/d2kd-linux-arm64`
+Dirty-файлы владельца `builds/d2sc-linux-arm64` и `builds/d2sd-linux-arm64`
 сохранены и в коммит не включаются. Следующий кодовый шаг: эпизод цели через
 повторы/cooldown и полный учёт опытов, затем структурированный транспортный
 отказ вместо десятиминутного наказания за несостоявшийся raw-замер.
@@ -309,9 +309,9 @@ Dirty-файлы владельца `builds/d2kc-linux-arm64` и `builds/d2kd-li
   поколение установленной привязки. Успешный SET передаёт владение `p`
   таблице; поколение можно получать только при успешной установке, не
   разыменовывая освобождённый при ошибке Plan.
-- `datapath/d2kd.c:http80_event` переносит execution, plan/trial id,
+- `datapath/d2sd.c:http80_event` переносит execution, plan/trial id,
   request_ms/path; binding generation в HTTP_PORTAL отсутствует.
-  `core/d2kc.c` передаёт в `d2k_httpsearch_bound_failure` только plan id,
+  `core/d2sc.c` передаёт в `d2s_httpsearch_bound_failure` только plan id,
   время и контекст запроса. Сам `live_execution` служит лишь проверкой
   ненулевого значения. Повторная установка того же plan id требует
   поколений, а не переноса доказательства по одному hash.

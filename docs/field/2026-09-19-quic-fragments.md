@@ -12,11 +12,11 @@
 
 | Оригинал | C | Свидетельство |
 | --- | --- | --- |
-| `frag.go:planCuts` | `core/ipfrag.c:d2k_ipfrag_cuts` | исходные позиции, округления, clamp перекрытий, короткие входы |
-| `buildFragments`, `ipPacket`, `udpChecksum` | `d2k_udpfrag_build` | 96 сравнений точных байтов неизменённым Go |
+| `frag.go:planCuts` | `core/ipfrag.c:d2s_ipfrag_cuts` | исходные позиции, округления, clamp перекрытий, короткие входы |
+| `buildFragments`, `ipPacket`, `udpChecksum` | `d2s_udpfrag_build` | 96 сравнений точных байтов неизменённым Go |
 | `frag_linux.go:exchangeFragmented` | `quicprobe.c:qp_send_fragmented` + общий цикл проверки AEAD | настоящие сокеты/AF_PACKET в Linux-лаборатории |
 | `nextIPID` | `fragment_id` | случайное начало, счётчик под mutex, ненулевые разные ID повторов |
-| `arms.go` четыре формы и нейтральный контроль | `props.c:original_probe` → `d2k_quic_fragment_hook` | красная регрессия подключения, затем зелёная |
+| `arms.go` четыре формы и нейтральный контроль | `props.c:original_probe` → `d2s_quic_fragment_hook` | красная регрессия подключения, затем зелёная |
 
 Позиции считаются от **UDP-заголовка**, не QUIC payload. Исходные формы:
 pos8; pos8 reverse; три фрагмента 8/32 с overlap8/8 reverse; три 16/48 с
@@ -29,7 +29,7 @@ overlap8/8 reverse. Clamp оригинала сохранён: у tiny перв�
 выхода. Дополнительный отказ при ID=0 защищает от описанной самим оригиналом
 перенумерации фрагментов ядром, не меняет ни одной допустимой исходной формы.
 
-Старый `d2k_quic_build_frag2`/midpoint/raw-повторы остаются в legacy-тестах,
+Старый `d2s_quic_build_frag2`/midpoint/raw-повторы остаются в legacy-тестах,
 НЕ являются runtime и НЕ должны снова подключаться как «готовый аналог».
 
 ## Владение опытом и ограничения
@@ -46,9 +46,9 @@ Raw socket закрывается после отправки; receive sockets �
 «не собрано/не измерено». Нет попыток угадать BSD raw-header semantics.
 
 Осознанное отступление по SPEC §7: при отказе mark на receive **или raw**
-сокете D2K не отправляет вообще, возвращает `marked=0` и `err`, а не измеряет
+сокете D2S не отправляет вообще, возвращает `marked=0` и `err`, а не измеряет
 собственный обход. В оригинале EPERM/ENOPROTOOPT могут допускать непомеченную
-отправку; для автоматического D2K-кандидата это недостоверно. Два теста отказа
+отправку; для автоматического D2S-кандидата это недостоверно. Два теста отказа
 подтверждают отсутствие фрагментов на настоящем проводе.
 
 ## Проверки
@@ -61,9 +61,9 @@ datapath/detect в этом этапе отдельно не перезапус�
 ```sh
 make -C core -j4 check
 make -C core cross
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux-raw
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux-raw
 ```
 
 Raw-режим — отдельный контейнер `--network none --read-only --cap-drop ALL
@@ -80,7 +80,7 @@ Raw-режим — отдельный контейнер `--network none --read-
 
 `test_ipfrag` прошёл ASan/UBSan. Это не sanitizer всей службы и не приёмка
 HTTP/3: сервер отвечает аутентифицированным синтетическим Initial/CRYPTO.
-Логи `/tmp/d2k-fragments-*-20260919.log`: `hook-red`, `hook-green`, `bytes`,
+Логи `/tmp/d2s-fragments-*-20260919.log`: `hook-red`, `hook-green`, `bytes`,
 `raw-final`, `unprivileged`, `core-check`, `cross`. Первичная red-заглушка
 сборщика дала 10 провалов до переноса арифметики; red подключения — один.
 Финальная общая Go/C сверка — `host-final` и `linux-final`.

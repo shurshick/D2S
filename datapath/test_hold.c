@@ -1,13 +1,13 @@
 #include <stdio.h>
 #include <string.h>
-#include "d2k_hold.h"
+#include "d2s_hold.h"
 static int fails;
 #define CHECK(x) do { if (!(x)) { printf("hold:%d: %s\n", __LINE__, #x); fails++; } } while (0)
 static uint32_t released[256];
 static size_t nreleased;
 static void release(void *ctx, uint32_t id, const uint8_t *p, size_t n) {
     (void)ctx;
-    CHECK(n >= 40 && n <= D2K_HOLD_PACKET && p[0] == 0x45);
+    CHECK(n >= 40 && n <= D2S_HOLD_PACKET && p[0] == 0x45);
     CHECK(nreleased < 256);
     if (nreleased < 256) { released[nreleased++] = id; }
 }
@@ -32,26 +32,26 @@ int main(void) {
         pkt6[8]=pkt6[24]=0x20; pkt6[23]=1; pkt6[39]=2;
         w16(pkt6+40, 2000); w16(pkt6+42, 443);
         w32(pkt6+44, 1000); pkt6[52]=0x50; pkt6[53]=0x18;
-        d2k_hold_info info;
-        CHECK(d2k_hold_parse(pkt6, sizeof pkt6, &info) == 1);
+        d2s_hold_info info;
+        CHECK(d2s_hold_parse(pkt6, sizeof pkt6, &info) == 1);
         CHECK(info.key.family == 6 && info.ihl == 40 && info.header == 60 && info.payload == 4);
         CHECK(info.dst.family == 6 && info.dst.bytes[15] == 2);
         pkt6[6]=44;
-        CHECK(d2k_hold_parse(pkt6, sizeof pkt6, &info) == 0);
+        CHECK(d2s_hold_parse(pkt6, sizeof pkt6, &info) == 0);
     }
     uint8_t hello[1544], p[1600], old[1600];
     memset(hello, 0x42, sizeof hello);
     hello[0]=22; hello[1]=3; hello[2]=1; w16(hello+3, sizeof hello-5);
     hello[5]=1; hello[6]=0; w16(hello+7, sizeof hello-9);
-    d2k_hold *h = d2k_hold_new(); CHECK(h != NULL); if (!h) { return 1; }
-    d2k_hold_batch batch;
+    d2s_hold *h = d2s_hold_new(); CHECK(h != NULL); if (!h) { return 1; }
+    d2s_hold_batch batch;
     size_t n = packet(p, 2000, 1000, hello, 1448); memcpy(old,p,n);
-    CHECK(d2k_hold_feed(h, 1, p, n, 1, 1, 0, 0, 0, release, NULL, &batch)==0);
-    CHECK(d2k_hold_feed(h, 1, p, n, 1, 1, 1, 0, 0, release, NULL, &batch)==1);
+    CHECK(d2s_hold_feed(h, 1, p, n, 1, 1, 0, 0, 0, release, NULL, &batch)==0);
+    CHECK(d2s_hold_feed(h, 1, p, n, 1, 1, 1, 0, 0, release, NULL, &batch)==1);
     CHECK(!memcmp(p,old,n) && nreleased==0);
-    CHECK(d2k_hold_next(h)==1+D2K_HOLD_WAIT_NS);
+    CHECK(d2s_hold_next(h)==1+D2S_HOLD_WAIT_NS);
     n = packet(p, 2000, 2448, hello+1448, sizeof hello-1448);
-    CHECK(d2k_hold_feed(h, 2, p, n, 2, 1, 0, 0, 0, release, NULL, &batch)==2);
+    CHECK(d2s_hold_feed(h, 2, p, n, 2, 1, 0, 0, 0, release, NULL, &batch)==2);
     CHECK(batch.count==2 && batch.ids[0]==1 && batch.ids[1]==2);
     CHECK(batch.len==40+sizeof hello && !memcmp(batch.packet+40,hello,sizeof hello));
     /* Оригиналы — байт в байт и по порядку потока: голова, затем хвост. */
@@ -59,16 +59,16 @@ int main(void) {
     CHECK(batch.orig[0] && !memcmp(batch.orig[0], old, 1448+40));
     CHECK(batch.orig[1] && !memcmp(batch.orig[1], p, n));
     CHECK(!memcmp(batch.packet+24, old+24, 12)); /* seq/ACK/window from head */
-    CHECK(d2k_hold_next(h)==0 && nreleased==0);
+    CHECK(d2s_hold_next(h)==0 && nreleased==0);
     /* Matching retransmit, reordering after head, wrap, tiny initial piece. */
     uint32_t seq = UINT32_MAX-40;
     n=packet(p,2001,seq,hello,1);
-    CHECK(d2k_hold_feed(h,3,p,n,3,1,1, 0, 0,release,NULL,&batch)==1);
-    CHECK(d2k_hold_feed(h,4,p,n,4,1,0, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,3,p,n,3,1,1, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,4,p,n,4,1,0, 0, 0,release,NULL,&batch)==1);
     n=packet(p,2001,seq+100,hello+100,sizeof hello-100);
-    CHECK(d2k_hold_feed(h,5,p,n,5,1,0, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,5,p,n,5,1,0, 0, 0,release,NULL,&batch)==1);
     n=packet(p,2001,seq+1,hello+1,99);
-    CHECK(d2k_hold_feed(h,6,p,n,6,1,0, 0, 0,release,NULL,&batch)==2);
+    CHECK(d2s_hold_feed(h,6,p,n,6,1,0, 0, 0,release,NULL,&batch)==2);
     CHECK(batch.count==4 && !memcmp(batch.packet+40,hello,sizeof hello));
     /* Пришли: голова, её повтор, большой хвост (seq+100), кусок seq+1. Порядок
        потока: голова, повтор (равное смещение — порядок прихода), seq+1, seq+100.
@@ -79,44 +79,44 @@ int main(void) {
     CHECK(batch.orig[3] && !memcmp(batch.orig[3]+40, hello+100, sizeof hello-100));
     /* Timeout releases exact originals, not reconstructed bytes. */
     n=packet(p,2002,1000,hello,100);
-    CHECK(d2k_hold_feed(h,7,p,n,7,1,1, 0, 0,release,NULL,&batch)==1);
-    d2k_hold_flush(h,7+D2K_HOLD_WAIT_NS,1,0,release,NULL);
+    CHECK(d2s_hold_feed(h,7,p,n,7,1,1, 0, 0,release,NULL,&batch)==1);
+    d2s_hold_flush(h,7+D2S_HOLD_WAIT_NS,1,0,release,NULL);
     CHECK(nreleased==1 && released[0]==7);
     /* Revision invalidation, reset, conflict and incompatible ACK. */
-    CHECK(d2k_hold_feed(h,8,p,n,8,1,1, 0, 0,release,NULL,&batch)==1);
-    d2k_hold_flush(h,9,2,0,release,NULL);
+    CHECK(d2s_hold_feed(h,8,p,n,8,1,1, 0, 0,release,NULL,&batch)==1);
+    d2s_hold_flush(h,9,2,0,release,NULL);
     CHECK(nreleased==2 && released[1]==8);
-    CHECK(d2k_hold_feed(h,9,p,n,10,2,1, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,9,p,n,10,2,1, 0, 0,release,NULL,&batch)==1);
     p[33]=0x14;
-    CHECK(d2k_hold_feed(h,10,p,n,11,2,0, 0, 0,release,NULL,&batch)==0);
+    CHECK(d2s_hold_feed(h,10,p,n,11,2,0, 0, 0,release,NULL,&batch)==0);
     CHECK(nreleased==3 && released[2]==9); /* caller owns RST */
     p[33]=0x18;
-    CHECK(d2k_hold_feed(h,11,p,n,12,2,1, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,11,p,n,12,2,1, 0, 0,release,NULL,&batch)==1);
     p[60]^=1;
-    CHECK(d2k_hold_feed(h,12,p,n,13,2,0, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,12,p,n,13,2,0, 0, 0,release,NULL,&batch)==1);
     CHECK(nreleased==5 && released[3]==11 && released[4]==12);
     p[60]^=1;
-    CHECK(d2k_hold_feed(h,13,p,n,14,2,1, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,13,p,n,14,2,1, 0, 0,release,NULL,&batch)==1);
     p[31]^=1;
-    CHECK(d2k_hold_feed(h,14,p,n,15,2,0, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,14,p,n,15,2,0, 0, 0,release,NULL,&batch)==1);
     CHECK(nreleased==7 && released[5]==13 && released[6]==14);
     /* Per-group capacity: ninth ID released along with eight originals. */
     n=packet(p,2003,1000,hello,100);
-    for (uint32_t i=0; i<D2K_HOLD_IDS; i++) {
-        CHECK(d2k_hold_feed(h,20+i,p,n,20+i,2,1, 0, 0,release,NULL,&batch)==1);
+    for (uint32_t i=0; i<D2S_HOLD_IDS; i++) {
+        CHECK(d2s_hold_feed(h,20+i,p,n,20+i,2,1, 0, 0,release,NULL,&batch)==1);
     }
-    CHECK(d2k_hold_feed(h,28,p,n,29,2,0, 0, 0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,28,p,n,29,2,0, 0, 0,release,NULL,&batch)==1);
     CHECK(nreleased==16 && released[15]==28);
     /* Slot pressure refuses only the new head; shutdown releases all slots. */
-    for (unsigned i=0; i<D2K_HOLD_SLOTS; i++) {
+    for (unsigned i=0; i<D2S_HOLD_SLOTS; i++) {
         n=packet(p,3000+i,1000,hello,100);
-        CHECK(d2k_hold_feed(h,40+i,p,n,40,2,1, 0, 0,release,NULL,&batch)==1);
+        CHECK(d2s_hold_feed(h,40+i,p,n,40,2,1, 0, 0,release,NULL,&batch)==1);
     }
     n=packet(p,4000,1000,hello,100);
-    CHECK(d2k_hold_feed(h,60,p,n,41,2,1, 0, 0,release,NULL,&batch)==0);
-    d2k_hold_flush(h,42,2,1,release,NULL);
-    CHECK(nreleased==32 && d2k_hold_next(h)==0);
-    d2k_hold_stats stats; d2k_hold_get_stats(h,&stats);
+    CHECK(d2s_hold_feed(h,60,p,n,41,2,1, 0, 0,release,NULL,&batch)==0);
+    d2s_hold_flush(h,42,2,1,release,NULL);
+    CHECK(nreleased==32 && d2s_hold_next(h)==0);
+    d2s_hold_stats stats; d2s_hold_get_stats(h,&stats);
     CHECK(stats.pending==0 && stats.ready==2 && stats.full==2 && stats.timed_out==1);
     /* ПРИЧИНА ОТПУСКАНИЯ НАЗЫВАЕТСЯ, А НЕ УГАДЫВАЕТСЯ. Общее «отпущено» не
        отличает истёкший срок от смены плана и от сброса очереди, а на живой
@@ -126,12 +126,12 @@ int main(void) {
     CHECK(stats.joined==12);     /* все куски, попавшие к УЖЕ открытой группе */
     CHECK(stats.mismatched==2);  /* несовместимый ack и девятый сверх ёмкости */
     CHECK(stats.sided==0);       /* обратной стороны в этом наборе нет */
-    CHECK(stats.plan_changed==1);   /* d2k_hold_flush(h,9,2,...) */
-    CHECK(stats.dropped_all==D2K_HOLD_SLOTS); /* завершающий flush all=1 */
+    CHECK(stats.plan_changed==1);   /* d2s_hold_flush(h,9,2,...) */
+    CHECK(stats.dropped_all==D2S_HOLD_SLOTS); /* завершающий flush all=1 */
     /* One failed verdict cannot stop remaining releases or become success. */
     uint32_t ids[]={1,2,3};
-    CHECK(d2k_hold_verdicts(ids,3,0,verdict,NULL)==1);
+    CHECK(d2s_hold_verdicts(ids,3,0,verdict,NULL)==1);
     CHECK(nsent==3 && sent[2]==3 && verdicts[0]==0 && verdicts[2]==0);
-    d2k_hold_free(h);
+    d2s_hold_free(h);
     if (fails) { return 1; } puts("hold: ownership, bounds and release checks passed"); return 0;
 }

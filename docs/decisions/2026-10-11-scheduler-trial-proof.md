@@ -22,7 +22,7 @@ flow/plan, включая адресные цели. Поэтому совпав
 Новые отправители, воздействия или критерии ответа приложения не вводятся.
 Обработка REFUSED и диагностических property-вопросов не меняется: эта
 правка относится к приёмке кандидата, а не ко всем видам control-событий.
-Нужен d2kd как минимум b15618b: прежний именной путь терял trial ID.
+Нужен d2sd как минимум b15618b: прежний именной путь терял trial ID.
 
 ## Регресс
 
@@ -33,8 +33,8 @@ APPLIED до/после verifier × trial нулевой/чужой/свой. С
 
 Свежая компиляция старого `sched.c` b15618b в отдельном временном каталоге
 с новой матрицей даёт exit 1 и 20 CHECK; корректные адресные ранние события
-и положительные контроли не падают. Лог `/tmp/d2k-sched-trial-baseline.log`.
-После правки матрица даёт exit 0, `/tmp/d2k-sched-trial-matrix.log`.
+и положительные контроли не падают. Лог `/tmp/d2s-sched-trial-baseline.log`.
+После правки матрица даёт exit 0, `/tmp/d2s-sched-trial-matrix.log`.
 Старые тесты теперь получают trial вместе с plan ID из фактической команды
 установки своего harness, а не генерируют идентичность из plan hash.
 Отрицательный voice-тест явно обнуляет trial: общий helper теперь возвращает
@@ -67,8 +67,8 @@ Cookie и CRLFCRLF во втором сегменте → следующий с�
 окончание заголовков уже не восстанавливает `http_next`.
 
 Обе семьи дают exit 1 (два CHECK), лог
-`/tmp/d2k-http-header-boundary-red.log`; путь к приватному исходнику/бинарнику
-в `/tmp/d2k-http-header-boundary-repro-path.txt`. Это новое воспроизведение,
+`/tmp/d2s-http-header-boundary-red.log`; путь к приватному исходнику/бинарнику
+в `/tmp/d2s-http-header-boundary-repro-path.txt`. Это новое воспроизведение,
 ещё не исправление и не включённый в check регресс. Следующим шагом перенести
 его в штатный тест и восстановить учёт границы запроса по последовательному
 потоку, без второго сборщика пакетов. Связь именно с полевым fast-torrent
@@ -86,7 +86,7 @@ Transfer-Encoding/Upgrade и последовательность TCP. Повт�
 данный repro их не покрывает и не доказывает их исправления.
 
 У наблюдателя есть ещё более ранняя граница: `http80.c` вызывает
-`d2k_httpup_request_target`, а его `parse_request` в `core/httpup_logic.c`
+`d2s_httpup_request_target`, а его `parse_request` в `core/httpup_logic.c`
 требует целый GET/HEAD без тела в одном сегменте (`p + 2 == end`). При
 разрезанном Cookie наблюдатель становится ST_DONE уже на первом сегменте.
 Нельзя ослаблять безопасный разбор для HTTPS-перенаправления ради telemetry:
@@ -96,23 +96,23 @@ Transfer-Encoding/Upgrade и последовательность TCP. Повт�
 останется слепой.
 
 Отдельный приватный repro наблюдателя также воспроизведён:
-`/tmp/d2k-http-observer-boundary-red.log`, exit 1, четыре CHECK (IPv4/IPv6:
+`/tmp/d2s-http-observer-boundary-red.log`, exit 1, четыре CHECK (IPv4/IPv6:
 не замечен полный первый ответ и не замечена вставка на втором запросе).
 Тот же поток с заголовком целиком в одном сегменте — exit 0. Исходники и
 контрольный вариант находятся по пути из
-`/tmp/d2k-http-observer-boundary-repro-path.txt`. Это локальные синтетические
-пакеты через production `d2k_http80_packet`, не полевой захват.
+`/tmp/d2s-http-observer-boundary-repro-path.txt`. Это локальные синтетические
+пакеты через production `d2s_http80_packet`, не полевой захват.
 
 ## Итоговая локальная проверка
 
 - `make -C core check` — exit 0 после явного обнуления trial в старом
-  отрицательном voice-тесте; `/tmp/d2k-sched-trial-core-check-r2.log`.
+  отрицательном voice-тесте; `/tmp/d2s-sched-trial-core-check-r2.log`.
   Включены новая матрица (36 случаев, 0 failures), release arm64/mipsel,
   test_probe_plan и общие HTTP/QUIC runtime gates.
 - `make -C detect check` — exit 0,
-  `/tmp/d2k-sched-trial-detect-check.log`.
+  `/tmp/d2s-sched-trial-detect-check.log`.
 - `make -C datapath check` — exit 0,
-  `/tmp/d2k-sched-trial-datapath-check.log`.
+  `/tmp/d2s-sched-trial-datapath-check.log`.
 - `git diff --check` — чисто. Read-only review scheduler diff:
   blocker/important замечаний нет.
 - Dirty владельца: только два прежних arm64-бинарника вне данного коммита;

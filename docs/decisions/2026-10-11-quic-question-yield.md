@@ -37,7 +37,7 @@ started_ms/lifetime. Полное время эпизода не скрывае�
 ## Доказательства
 
 - Новый `test_sched_quic_yield` до правки: 2 CHECK, make exit 2,
-  `/tmp/d2k-quic-yield-red.log`. Следующий QUIC-вопрос начинался до допуска
+  `/tmp/d2s-quic-yield-red.log`. Следующий QUIC-вопрос начинался до допуска
   ожидающего TCP, свободного слота TCP не получал.
 - После: занятые слоты, неделимость filter/data-stage, удержание TCP-слота,
   возобновление без повторных вопросов, долгий parked, очередь новых TCP,
@@ -46,17 +46,17 @@ started_ms/lifetime. Полное время эпизода не скрывае�
   проверки сетевого бюджета и отмену без посылок.
 - Возврат старой внешней lifetime-проверки в отдельной временной сборке:
   compile exit 0, test exit 1, четыре CHECK;
-  `/tmp/d2k-quic-yield-lifetime-red.log`. Рабочее дерево не откатывалось.
+  `/tmp/d2s-quic-yield-lifetime-red.log`. Рабочее дерево не откатывалось.
 - Waiting до регистрации parked проверяется до общего deadline. Новый
   пограничный регресс сначала дал 1 CHECK, make exit 2:
-  `/tmp/d2k-quic-yield-waiting-red.log`. Время входа в ожидание берётся
+  `/tmp/d2s-quic-yield-waiting-red.log`. Время входа в ожидание берётся
   из последнего model-clock snapshot под mutex, а не из времени поздней
   регистрации. Отдельная проверка компенсации started_ms также упала:
-  `/tmp/d2k-quic-yield-clock-red.log`; финальный вариант проходит оба.
+  `/tmp/d2s-quic-yield-clock-red.log`; финальный вариант проходит оба.
 - `san-sched-quic-yield` (ASan/UBSan) — exit 0:
-  `/tmp/d2k-quic-yield-final-san.log`. Отдельная сборка того же теста и
+  `/tmp/d2s-quic-yield-final-san.log`. Отдельная сборка того же теста и
   runtime с ThreadSanitizer — compile/test exit 0, без сообщений о гонках:
-  `/tmp/d2k-quic-yield-tsan.log`. Это проверенные сценарии, не доказательство
+  `/tmp/d2s-quic-yield-tsan.log`. Это проверенные сценарии, не доказательство
   всех возможных interleaving или нагрузки роутера.
 - Статическое read-only ревью выявило lifetime/starvation; замечания
   исправлены, повторный просмотр не нашёл important/blocker.
@@ -68,7 +68,7 @@ diff + новый тест). Все шесть изменённых файлов
 выполнявшейся первой проверкой; первый набор не прерывался.
 
 Результаты (Astra, до паузы): оба `core check` — exit 0
-(`/tmp/d2k-quic-yield-final-core-check.log`), release arm64+mipsel слинкованы
+(`/tmp/d2s-quic-yield-final-core-check.log`), release arm64+mipsel слинкованы
 внутри него; `detect check` и `datapath check` — exit 0; ASan/UBSan и TSan
 нового теста — exit 0; `test_probe_plan` — 0 mismatches; UDP runtime —
 136 cases / 20 questions / 0 failures; `git diff --check` чист.

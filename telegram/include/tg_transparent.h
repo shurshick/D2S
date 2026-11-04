@@ -1,5 +1,5 @@
-#ifndef D2K_TG_TRANSPARENT_H
-#define D2K_TG_TRANSPARENT_H
+#ifndef D2S_TG_TRANSPARENT_H
+#define D2S_TG_TRANSPARENT_H
 
 #include "tg_dc_map.h"
 #include "tg_epoll_proxy.h"

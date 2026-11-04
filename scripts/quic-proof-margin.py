@@ -5,7 +5,7 @@
 КОРОТКОМУ заголовку от сервера (datapath/session.c, quic_app_proof: старший
 бит 0, фиксированный 1, RFC 9000 §17.3). Видит он только начальное окно
 очереди — `--connbytes 0:8 --connbytes-dir reply --connbytes-mode packets`
-(files/S99d2k:386), то есть первые ВОСЕМЬ обратных датаграмм. Замер 12.10
+(files/S99d2s:386), то есть первые ВОСЕМЬ обратных датаграмм. Замер 12.10
 дал первый короткий заголовок обратной датаграммой НОМЕР 7, пять рукопожатий
 из пяти, — запас в ОДИН пакет. Но все пять были Google и Apple. Сервер с
 длинной цепочкой сертификатов, другой стек или переупорядочивание выталкивают
@@ -53,7 +53,7 @@ import urllib.request
 
 CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 PORT = 9334
-WINDOW = 8  # --connbytes 0:8, files/S99d2k:386
+WINDOW = 8  # --connbytes 0:8, files/S99d2s:386
 
 # Полевые имена, по которым прогоны j/n видели h3, плюс нарочно ДРУГИЕ стеки
 # QUIC и тяжёлые цепочки: окно проверяется не на одном производителе (замер
@@ -89,7 +89,7 @@ def chrome_put(path):
 def visit(hosts, netlog, dwell=7.0, passes=2):
     """Два прохода: alt-svc Chrome узнаёт ТОЛЬКО из ответа, поэтому по QUIC он
     идёт со второго посещения (та же причина, что в live-protocol.mjs)."""
-    profile = tempfile.mkdtemp(prefix="d2k-quic-margin-")
+    profile = tempfile.mkdtemp(prefix="d2s-quic-margin-")
     proc = subprocess.Popen(
         [CHROME, f"--user-data-dir={profile}", "--no-first-run",
          "--no-default-browser-check", f"--remote-debugging-port={PORT}",
@@ -240,7 +240,7 @@ def main():
     hosts = args or HOSTS
     seconds, loads = 0.0, 0
     if netlog is None:
-        netlog = os.path.join(tempfile.mkdtemp(prefix="d2k-netlog-"), "n.json")
+        netlog = os.path.join(tempfile.mkdtemp(prefix="d2s-netlog-"), "n.json")
         print(f"netlog: {netlog}", file=sys.stderr)
         seconds = visit(hosts, netlog)
         loads = len(hosts) * 2

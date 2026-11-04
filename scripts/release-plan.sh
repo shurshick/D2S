@@ -66,8 +66,8 @@ fi
     echo "sha=$sha"
     echo "id=$id"
     echo "version=$version"
-    echo "notes<<D2K_NOTES_EOF"
+    echo "notes<<D2S_NOTES_EOF"
     printf '%s\n' "$notes"
-    echo "D2K_NOTES_EOF"
+    echo "D2S_NOTES_EOF"
 } >> "$OUTPUT"
 echo "release-plan: release=$release ($why)" >&2

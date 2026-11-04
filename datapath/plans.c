@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_plans.h"
+#include "d2s_plans.h"
 #include "plan_internal.h"
 
 enum { KEY_FREE = 0, KEY_NAME = 1, KEY_ADDR = 2 };
@@ -12,14 +12,14 @@ typedef struct {
     uint8_t  kind;
     uint8_t  family;
     uint8_t  name_len;
-    uint8_t  name[D2K_TARGET_NAME_MAX];
+    uint8_t  name[D2S_TARGET_NAME_MAX];
     uint8_t addr[16];
     /* Давность последнего обращения — единственное, что нужно вытеснению по
        LRU. Не индекс и не список: список давности стоил бы указателей на
        каждую запись ради таблицы, которую и так обходят целиком раз на
-       установку плана (см. d2k_plans.h). */
+       установку плана (см. d2s_plans.h). */
     uint64_t last_used_ns;
-    /* ФОРМА ПРИВЕТСТВИЯ, на которой план подтверждён (D2K_PLAN_SHAPE_*).
+    /* ФОРМА ПРИВЕТСТВИЯ, на которой план подтверждён (D2S_PLAN_SHAPE_*).
        0 — не объявлена: старая запись, совместимая с любой формой. Ненулевая
        означает, что к приветствию ДРУГОЙ формы этот план не применяется:
        успех собственного зонда на TLS 1.3 ничего не говорит про браузер с
@@ -28,23 +28,23 @@ typedef struct {
     /* Местный порт потока, которому одному эта запись и предназначена
        (сетевой порядок). Ноль — «любому»: так стоят подтверждённые планы.
        Ненулевой ставит только испытание кандидата (см.
-       d2k_plantab_set_name_probe в d2k_plans.h). */
+       d2s_plantab_set_name_probe в d2s_plans.h). */
     uint16_t only_sport;
-    d2k_plan *plan;
+    d2s_plan *plan;
 } entry;
 
 typedef struct {
     uint8_t used;
-    d2k_addr_probe_flow flow;
-    uint8_t trial_id[D2K_TRIAL_ID_LEN];
+    d2s_addr_probe_flow flow;
+    uint8_t trial_id[D2S_TRIAL_ID_LEN];
     uint64_t expires_ns;
-    d2k_plan *plan;
+    d2s_plan *plan;
 } probe_entry;
 
 typedef struct {
-    uint8_t name[D2K_TARGET_NAME_MAX];
+    uint8_t name[D2S_TARGET_NAME_MAX];
     uint8_t len, transport, shape, family;
-    d2k_plan *plan;
+    d2s_plan *plan;
 } area_entry;
 
 /* ИНВАРИАНТ УПЛОТНЕНИЯ, общий для всего файла: занятые записи всегда лежат
@@ -53,11 +53,11 @@ typedef struct {
  * меняет used. По отдельности эти пять функций не трогать: инвариант общий,
  * а не свойство какой-то одной из них.
  *
- * Из него прямо следует то, что требовал замер (см. d2k_plans.h): поиск —
+ * Из него прямо следует то, что требовал замер (см. d2s_plans.h): поиск —
  * и на пакетном пути, и при вытеснении — идёт не больше used шагов, СОВСЕМ
  * не заглядывая в v[used..cap). До уплотнения find_name/find_addr шли до
  * cap, пропуская свободные слоты проверкой kind, и цена промаха росла вместе
- * с cap, а не с used (см. d2k_plans.h про то, во сколько это обошлось после
+ * с cap, а не с used (см. d2s_plans.h про то, во сколько это обошлось после
  * роста вместимости 256->2048).
  *
  * Поддержание инварианта:
@@ -71,9 +71,9 @@ typedef struct {
  *    последней занятой на его место, затем used--.
  * Ни один перенос не идёт через memcpy структуры поверх чужого буфера — это
  * присваивание entry в entry, тот же типизированный объект с обеих сторон, а
- * не наложение структуры на чужую память (см. d2k_track.h про то, где такое
+ * не наложение структуры на чужую память (см. d2s_track.h про то, где такое
  * наложение запрещено и почему). */
-struct d2k_plantab {
+struct d2s_plantab {
     uint64_t revision;
     uint64_t next_binding;
     uint8_t epoch[16];
@@ -84,14 +84,14 @@ struct d2k_plantab {
     size_t used;
     probe_entry *probes;
     size_t probe_used;
-    area_entry suffixes[D2K_PLAN_SUFFIX_MAX];
-    area_entry bypasses[D2K_PLAN_BYPASS_MAX];
+    area_entry suffixes[D2S_PLAN_SUFFIX_MAX];
+    area_entry bypasses[D2S_PLAN_BYPASS_MAX];
     size_t suffix_used, bypass_used;
 };
 
 /* One counter per table; its random epoch namespaces it across restarts.
  * Exhaustion leaves identity unknown rather than reusing an old generation. */
-static void bind_context(d2k_plantab *t, d2k_plan *p, uint8_t kind,
+static void bind_context(d2s_plantab *t, d2s_plan *p, uint8_t kind,
                          uint8_t family, uint8_t shape, int temporary) {
     if (!p) return;
     p->binding_owner = t;
@@ -101,11 +101,11 @@ static void bind_context(d2k_plantab *t, d2k_plan *p, uint8_t kind,
     memset(p->binding_trial_id,0,sizeof p->binding_trial_id);
 }
 
-d2k_plantab *d2k_plantab_new(size_t cap) {
+d2s_plantab *d2s_plantab_new(size_t cap) {
     if (cap == 0) {
         return NULL;
     }
-    d2k_plantab *t = calloc(1, sizeof *t);
+    d2s_plantab *t = calloc(1, sizeof *t);
     if (!t) {
         return NULL;
     }
@@ -129,20 +129,20 @@ d2k_plantab *d2k_plantab_new(size_t cap) {
     return t;
 }
 
-void d2k_plantab_free(d2k_plantab *t) {
+void d2s_plantab_free(d2s_plantab *t) {
     if (!t) {
         return;
     }
     /* Полная вместимость, а не used: свободный хвост v[used..cap) всегда
-       занулён (см. инвариант выше), и d2k_plan_free(NULL) там — безопасный
+       занулён (см. инвариант выше), и d2s_plan_free(NULL) там — безопасный
        no-op. Так безопаснее пережить нарушение инварианта, если оно всё же
        случится, — деструктору можно позволить лишнюю страховку, которую
        нельзя позволить поиску на пакетном пути. */
     for (size_t i = 0; i < t->cap; i++) {
-        d2k_plan_free(t->v[i].plan);
-        d2k_plan_free(t->probes[i].plan);
+        d2s_plan_free(t->v[i].plan);
+        d2s_plan_free(t->probes[i].plan);
     }
-    for (size_t i = 0; i < t->suffix_used; i++) d2k_plan_free(t->suffixes[i].plan);
+    for (size_t i = 0; i < t->suffix_used; i++) d2s_plan_free(t->suffixes[i].plan);
     free(t->probes);
     free(t->v);
     free(t);
@@ -167,9 +167,9 @@ static int name_eq(const uint8_t *a, size_t alen, const uint8_t *b, size_t blen)
 }
 
 static uint8_t shape_transport(uint8_t shape) {
-    if (shape == D2K_PLAN_SHAPE_QUIC) return 17;
-    if (shape == D2K_PLAN_SHAPE_MODERN || shape == D2K_PLAN_SHAPE_LEGACY ||
-        shape == D2K_PLAN_SHAPE_ECH_TCP) return 6;
+    if (shape == D2S_PLAN_SHAPE_QUIC) return 17;
+    if (shape == D2S_PLAN_SHAPE_MODERN || shape == D2S_PLAN_SHAPE_LEGACY ||
+        shape == D2S_PLAN_SHAPE_ECH_TCP) return 6;
     return 0;
 }
 
@@ -205,63 +205,63 @@ static area_entry *area_exact(area_entry *v, size_t used, const uint8_t *name,
     return NULL;
 }
 
-static int area_set(d2k_plantab *t, area_entry *v, size_t *used, size_t cap,
+static int area_set(d2s_plantab *t, area_entry *v, size_t *used, size_t cap,
     const uint8_t *name, size_t len, uint8_t transport, uint8_t shape,
-    uint8_t family, d2k_plan *p) {
+    uint8_t family, d2s_plan *p) {
     if (!area_name_valid(name, len) || transport != shape_transport(shape) ||
         !transport || (family != 4 && family != 6)) {
-        d2k_plan_free(p); return -2;
+        d2s_plan_free(p); return -2;
     }
     area_entry *e = area_exact(v, *used, name, len, transport, shape, family);
     if (!e) {
-        if (*used == cap) { d2k_plan_free(p); return -1; }
+        if (*used == cap) { d2s_plan_free(p); return -1; }
         e = &v[(*used)++];
         memcpy(e->name, name, len); e->len = (uint8_t)len;
         e->transport = transport; e->shape = shape; e->family = family;
     }
-    d2k_plan_free(e->plan); e->plan = p; t->revision++;
-    bind_context(t, p, D2K_BIND_SUFFIX, family, shape, 0);
+    d2s_plan_free(e->plan); e->plan = p; t->revision++;
+    bind_context(t, p, D2S_BIND_SUFFIX, family, shape, 0);
     return 0;
 }
 
-int d2k_plantab_set_suffix_family(d2k_plantab *t, const uint8_t *name, size_t len,
-    uint64_t now_ns, d2k_plan *p, uint8_t shape, uint8_t family) {
+int d2s_plantab_set_suffix_family(d2s_plantab *t, const uint8_t *name, size_t len,
+    uint64_t now_ns, d2s_plan *p, uint8_t shape, uint8_t family) {
     (void)now_ns;
-    if (!t || !p || (d2k_plan_transport(p) && d2k_plan_transport(p) != shape_transport(shape)) ||
-        shape == D2K_PLAN_SHAPE_HTTP || d2k_plan_proto(p) == D2K_PLAN_PROTO_HTTP) {
-        d2k_plan_free(p); return -2;   /* HTTP — только точное имя */
+    if (!t || !p || (d2s_plan_transport(p) && d2s_plan_transport(p) != shape_transport(shape)) ||
+        shape == D2S_PLAN_SHAPE_HTTP || d2s_plan_proto(p) == D2S_PLAN_PROTO_HTTP) {
+        d2s_plan_free(p); return -2;   /* HTTP — только точное имя */
     }
-    return area_set(t, t->suffixes, &t->suffix_used, D2K_PLAN_SUFFIX_MAX,
+    return area_set(t, t->suffixes, &t->suffix_used, D2S_PLAN_SUFFIX_MAX,
         name, len, shape_transport(shape), shape, family, p);
 }
 
-int d2k_plantab_set_bypass_family(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_set_bypass_family(d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t transport, uint8_t shape, uint8_t family) {
     if (!t) return -2;
-    return area_set(t, t->bypasses, &t->bypass_used, D2K_PLAN_BYPASS_MAX,
+    return area_set(t, t->bypasses, &t->bypass_used, D2S_PLAN_BYPASS_MAX,
         name, len, transport, shape, family, NULL);
 }
 
-static int area_del(d2k_plantab *t, area_entry *v, size_t *used,
+static int area_del(d2s_plantab *t, area_entry *v, size_t *used,
     const uint8_t *name, size_t len, uint8_t transport, uint8_t shape, uint8_t family) {
     if (!t || !name || !len) return 0;
     area_entry *e = area_exact(v, *used, name, len, transport, shape, family);
     if (!e) return 0;
-    d2k_plan_free(e->plan); *e = v[--*used]; memset(&v[*used], 0, sizeof *v);
+    d2s_plan_free(e->plan); *e = v[--*used]; memset(&v[*used], 0, sizeof *v);
     t->revision++; return 1;
 }
 
-int d2k_plantab_del_suffix_family(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_del_suffix_family(d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t transport, uint8_t shape, uint8_t family) {
     return t ? area_del(t, t->suffixes, &t->suffix_used, name, len, transport, shape, family) : 0;
 }
 
-int d2k_plantab_del_bypass_family(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_del_bypass_family(d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t transport, uint8_t shape, uint8_t family) {
     return t ? area_del(t, t->bypasses, &t->bypass_used, name, len, transport, shape, family) : 0;
 }
 
-static int area_bypassed(const d2k_plantab *t, const uint8_t *name, size_t len,
+static int area_bypassed(const d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t shape, uint8_t family) {
     for (size_t i = 0; i < t->bypass_used; i++) {
         const area_entry *e = &t->bypasses[i];
@@ -271,7 +271,7 @@ static int area_bypassed(const d2k_plantab *t, const uint8_t *name, size_t len,
     return 0;
 }
 
-static const area_entry *area_match(const d2k_plantab *t, const uint8_t *name,
+static const area_entry *area_match(const d2s_plantab *t, const uint8_t *name,
     size_t len, uint8_t shape, uint8_t family) {
     const area_entry *best = NULL;
     for (size_t i = 0; i < t->suffix_used; i++) {
@@ -282,14 +282,14 @@ static const area_entry *area_match(const d2k_plantab *t, const uint8_t *name,
     return best;
 }
 
-uint64_t d2k_plantab_revision(const d2k_plantab *t) { return t ? t->revision : 0; }
+uint64_t d2s_plantab_revision(const d2s_plantab *t) { return t ? t->revision : 0; }
 
-int d2k_plantab_has_ech_target(const d2k_plantab *t, const uint8_t *name,
+int d2s_plantab_has_ech_target(const d2s_plantab *t, const uint8_t *name,
     size_t len, const uint8_t *addr, uint8_t family, uint16_t sport_be) {
     if (!t) return 0;
     for (size_t i = 0; i < t->used; i++) {
         const entry *e = &t->v[i];
-        if (e->family != family || e->shape != D2K_PLAN_SHAPE_ECH_TCP ||
+        if (e->family != family || e->shape != D2S_PLAN_SHAPE_ECH_TCP ||
             (e->only_sport && e->only_sport != sport_be)) continue;
         /* Своя точная запись имени исключением семейства не гасится. */
         if (!e->only_sport && e->kind != KEY_NAME &&
@@ -299,22 +299,22 @@ int d2k_plantab_has_ech_target(const d2k_plantab *t, const uint8_t *name,
         if (e->kind == KEY_ADDR && addr &&
             !memcmp(e->addr, addr, family == 6 ? 16 : 4)) return 1;
     }
-    if (area_bypassed(t, name, len, D2K_PLAN_SHAPE_ECH_TCP, family)) return 0;
-    return area_match(t, name, len, D2K_PLAN_SHAPE_ECH_TCP, family) != NULL;
+    if (area_bypassed(t, name, len, D2S_PLAN_SHAPE_ECH_TCP, family)) return 0;
+    return area_match(t, name, len, D2S_PLAN_SHAPE_ECH_TCP, family) != NULL;
 }
 
-int d2k_plantab_stream_candidate(const d2k_plantab *t, const uint8_t *name,
+int d2s_plantab_stream_candidate(const d2s_plantab *t, const uint8_t *name,
                                 size_t len, uint32_t addr_be, uint16_t sport_be) {
-    return d2k_plantab_stream_candidate_family(t, name, len, addr_be, sport_be, 4);
+    return d2s_plantab_stream_candidate_family(t, name, len, addr_be, sport_be, 4);
 }
 
-int d2k_plantab_stream_candidate_family(const d2k_plantab *t, const uint8_t *name,
+int d2s_plantab_stream_candidate_family(const d2s_plantab *t, const uint8_t *name,
     size_t len, uint32_t addr_be, uint16_t sport_be, uint8_t family) {
-    return d2k_plantab_stream_candidate_target(t, name, len,
+    return d2s_plantab_stream_candidate_target(t, name, len,
         family == 4 ? (const uint8_t *)&addr_be : NULL, sport_be, family);
 }
 
-int d2k_plantab_stream_candidate_target(const d2k_plantab *t, const uint8_t *name,
+int d2s_plantab_stream_candidate_target(const d2s_plantab *t, const uint8_t *name,
     size_t len, const uint8_t *addr, uint16_t sport_be, uint8_t family) {
     if (!t || (family != 4 && family != 6)) { return 0; }
     for (size_t i = 0; i < t->used; i++) {
@@ -322,7 +322,7 @@ int d2k_plantab_stream_candidate_target(const d2k_plantab *t, const uint8_t *nam
         if (e->family != family) { continue; }
         if (!e->only_sport && e->kind != KEY_NAME &&
             area_bypassed(t, name, len, e->shape, family)) continue;
-        if (!d2k_plan_stream_input(e->plan) ||
+        if (!d2s_plan_stream_input(e->plan) ||
             (e->only_sport && e->only_sport != sport_be)) { continue; }
         if (e->kind == KEY_ADDR && addr &&
             memcmp(e->addr, addr, family == 6 ? 16 : 4) == 0) { return 1; }
@@ -332,7 +332,7 @@ int d2k_plantab_stream_candidate_target(const d2k_plantab *t, const uint8_t *nam
     for (size_t i = 0; i < t->suffix_used; i++) {
         const area_entry *e = &t->suffixes[i];
         if (e->family == family && e->transport == 6 &&
-            d2k_plan_stream_input(e->plan) &&
+            d2s_plan_stream_input(e->plan) &&
             (!name || !len || suffix_member(e, name, len)) &&
             !area_bypassed(t, name, len, e->shape, family)) return 1;
     }
@@ -344,11 +344,11 @@ int d2k_plantab_stream_candidate_target(const d2k_plantab *t, const uint8_t *nam
    не попадают намеренно: они существуют только для одного местного порта, и
    для всех прочих вопросов их как будто нет. Пропусти это — и пробный план
    утёк бы к пользователю через ветку «имя знаем, формы такой нет». */
-static entry *find_name_skip(d2k_plantab *t, const uint8_t *name, size_t len, uint8_t family,
+static entry *find_name_skip(d2s_plantab *t, const uint8_t *name, size_t len, uint8_t family,
                              int skip_http) {
     for (size_t i = 0; i < t->used; i++) {
         if (t->v[i].kind == KEY_NAME && t->v[i].family == family && t->v[i].only_sport == 0 &&
-            !(skip_http && t->v[i].shape == D2K_PLAN_SHAPE_HTTP) &&
+            !(skip_http && t->v[i].shape == D2S_PLAN_SHAPE_HTTP) &&
             name_eq(t->v[i].name, t->v[i].name_len, name, len)) {
             return &t->v[i];
         }
@@ -356,7 +356,7 @@ static entry *find_name_skip(d2k_plantab *t, const uint8_t *name, size_t len, ui
     return NULL;
 }
 
-static entry *find_name(d2k_plantab *t, const uint8_t *name, size_t len, uint8_t family) {
+static entry *find_name(d2s_plantab *t, const uint8_t *name, size_t len, uint8_t family) {
     return find_name_skip(t, name, len, family, 0);
 }
 
@@ -372,7 +372,7 @@ static entry *find_name(d2k_plantab *t, const uint8_t *name, size_t len, uint8_t
  * TCP-план, и QUIC-план; после синхронизации в таблице оставался последний, и
  * клиент за роутером не проходил ни по одному транспорту — при том, что
  * собственный зонд на обоих отвечал 200. */
-static entry *find_name_shape_port(d2k_plantab *t, const uint8_t *name, size_t len,
+static entry *find_name_shape_port(d2s_plantab *t, const uint8_t *name, size_t len,
                                    uint8_t shape, uint16_t sport_be, uint8_t family) {
     for (size_t i = 0; i < t->used; i++) {
         if (t->v[i].kind == KEY_NAME && t->v[i].family == family && t->v[i].shape == shape &&
@@ -388,12 +388,12 @@ static entry *find_name_shape_port(d2k_plantab *t, const uint8_t *name, size_t l
    ClientHello-сегмент ещё не позволяет классифицировать форму. Это не
    ослабляет постоянные записи: только запись, закреплённая за ненулевым
    локальным портом, может быть найдена этим путём. */
-static entry *find_name_port(d2k_plantab *t, const uint8_t *name, size_t len,
+static entry *find_name_port(d2s_plantab *t, const uint8_t *name, size_t len,
                              uint16_t sport_be, uint8_t family) {
     if (!sport_be) { return NULL; }
     for (size_t i = 0; i < t->used; i++) {
         if (t->v[i].kind == KEY_NAME && t->v[i].family == family && t->v[i].only_sport == sport_be &&
-            t->v[i].shape != D2K_PLAN_SHAPE_HTTP &&
+            t->v[i].shape != D2S_PLAN_SHAPE_HTTP &&
             name_eq(t->v[i].name, t->v[i].name_len, name, len)) {
             return &t->v[i];
         }
@@ -401,32 +401,32 @@ static entry *find_name_port(d2k_plantab *t, const uint8_t *name, size_t len,
     return NULL;
 }
 
-int d2k_plantab_http_candidate(const d2k_plantab *t,uint8_t family,uint16_t sport) {
+int d2s_plantab_http_candidate(const d2s_plantab *t,uint8_t family,uint16_t sport) {
     if(!t)return 0;
     for(size_t i=0;i<t->used;i++) {
         const entry *e=&t->v[i];
-        if(e->kind==KEY_NAME && e->family==family && e->shape==D2K_PLAN_SHAPE_HTTP &&
-           e->only_sport==sport && d2k_plan_proto(e->plan)==D2K_PLAN_PROTO_HTTP)return 1;
+        if(e->kind==KEY_NAME && e->family==family && e->shape==D2S_PLAN_SHAPE_HTTP &&
+           e->only_sport==sport && d2s_plan_proto(e->plan)==D2S_PLAN_PROTO_HTTP)return 1;
     }
     return 0;
 }
 
-const d2k_plan *d2k_plantab_find_http(d2k_plantab *t, const uint8_t *name, size_t len,
+const d2s_plan *d2s_plantab_find_http(d2s_plantab *t, const uint8_t *name, size_t len,
                                       uint8_t family, uint16_t sport_be, uint64_t now_ns) {
     if (!t || !name || !len) { return NULL; }
-    entry *e = find_name_shape_port(t, name, len, D2K_PLAN_SHAPE_HTTP, sport_be, family);
-    if (!e || d2k_plan_proto(e->plan) != D2K_PLAN_PROTO_HTTP) { return NULL; }
+    entry *e = find_name_shape_port(t, name, len, D2S_PLAN_SHAPE_HTTP, sport_be, family);
+    if (!e || d2s_plan_proto(e->plan) != D2S_PLAN_PROTO_HTTP) { return NULL; }
     e->last_used_ns = now_ns;
     return e->plan;
 }
 
 /* Адресная запись — КЛЮЧ (адрес, семейство, форма протокола). Один IP может
    нести и QUIC, и STUN/голос, и TLS: подтверждённое на одном протоколе к
-   другому отношения не имеет (D2K_SPEC §5), и одна запись на адрес давала
+   другому отношения не имеет (D2S_SPEC §5), и одна запись на адрес давала
    голосовому плану затирать QUIC-привязку того же IP и применяться ко всем
    его Initial. find_addr — любая форма (снятие адреса целиком, учёт промаха),
    find_addr_shape — ровно одна. */
-static entry *find_addr_shape(d2k_plantab *t, const uint8_t *addr, uint8_t family,
+static entry *find_addr_shape(d2s_plantab *t, const uint8_t *addr, uint8_t family,
                               int any_shape, uint8_t shape) {
     if (!addr || (family != 4 && family != 6)) { return NULL; }
     for (size_t i = 0; i < t->used; i++) {
@@ -439,7 +439,7 @@ static entry *find_addr_shape(d2k_plantab *t, const uint8_t *addr, uint8_t famil
     return NULL;
 }
 
-static entry *find_addr(d2k_plantab *t, const uint8_t *addr, uint8_t family) {
+static entry *find_addr(d2s_plantab *t, const uint8_t *addr, uint8_t family) {
     return find_addr_shape(t, addr, family, 1, 0);
 }
 
@@ -452,7 +452,7 @@ static entry *find_addr(d2k_plantab *t, const uint8_t *addr, uint8_t family) {
 typedef struct { entry *shaped, *modern, *grandfather, *any; } name_hits;
 typedef struct { entry *shaped, *modern, *grandfather, *any; } addr_hits;
 
-static void scan_name(d2k_plantab *t, const uint8_t *name, size_t len,
+static void scan_name(d2s_plantab *t, const uint8_t *name, size_t len,
                       uint8_t seen_shape, uint8_t family, name_hits *h) {
     memset(h, 0, sizeof *h);
     for (size_t i = 0; i < t->used; i++) {
@@ -461,15 +461,15 @@ static void scan_name(d2k_plantab *t, const uint8_t *name, size_t len,
             !name_eq(e->name, e->name_len, name, len)) continue;
         /* Запись HTTP — не знание о TLS этого имени: «имя знаем, формы нет»
            из-за неё заслонило бы приветствию адресный план. */
-        if (e->shape == D2K_PLAN_SHAPE_HTTP) continue;
+        if (e->shape == D2S_PLAN_SHAPE_HTTP) continue;
         if (!h->any) h->any = e;
         if (!h->shaped && e->shape == seen_shape) h->shaped = e;
-        if (!h->modern && e->shape == D2K_PLAN_SHAPE_MODERN) h->modern = e;
-        if (!h->grandfather && e->shape == D2K_PLAN_SHAPE_GRANDFATHER) h->grandfather = e;
+        if (!h->modern && e->shape == D2S_PLAN_SHAPE_MODERN) h->modern = e;
+        if (!h->grandfather && e->shape == D2S_PLAN_SHAPE_GRANDFATHER) h->grandfather = e;
     }
 }
 
-static void scan_addr(d2k_plantab *t, const uint8_t *addr, uint8_t family,
+static void scan_addr(d2s_plantab *t, const uint8_t *addr, uint8_t family,
                       uint8_t seen_shape, addr_hits *h) {
     memset(h, 0, sizeof *h);
     if (!addr || (family != 4 && family != 6)) return;
@@ -478,16 +478,16 @@ static void scan_addr(d2k_plantab *t, const uint8_t *addr, uint8_t family,
         if (e->kind != KEY_ADDR || e->family != family ||
             memcmp(e->addr, addr, family == 6 ? 16 : 4) != 0) continue;
         if (!h->any) h->any = e;
-        if (!h->shaped && seen_shape != D2K_PLAN_SHAPE_ANY && e->shape == seen_shape)
+        if (!h->shaped && seen_shape != D2S_PLAN_SHAPE_ANY && e->shape == seen_shape)
             h->shaped = e;
-        if (!h->modern && e->shape == D2K_PLAN_SHAPE_MODERN) h->modern = e;
-        if (!h->grandfather && e->shape == D2K_PLAN_SHAPE_GRANDFATHER) h->grandfather = e;
+        if (!h->modern && e->shape == D2S_PLAN_SHAPE_MODERN) h->modern = e;
+        if (!h->grandfather && e->shape == D2S_PLAN_SHAPE_GRANDFATHER) h->grandfather = e;
     }
 }
 
 /* Кандидат на вытеснение — запись с самой старой отметкой обращения.
    Линейный перебор до used (см. инвариант уплотнения выше и обоснование
-   размера/частоты вызова в d2k_plans.h) — свободные слоты в v[used..cap)
+   размера/частоты вызова в d2s_plans.h) — свободные слоты в v[used..cap)
    заведомо не заняты и в переборе не участвуют вовсе, проверять kind не
    нужно. Строгое "меньше", а не "меньше или равно" — при равных отметках
    (например, таблицу только что залили одной пачкой команд с одним и тем же
@@ -497,9 +497,9 @@ static void scan_addr(d2k_plantab *t, const uint8_t *addr, uint8_t family,
 
    used == 0 недостижимо оттуда, откуда эта функция реально зовётся (только
    из take_free_or_evict, и только когда used == cap, а cap == 0 таблицу
-   d2k_plantab_new не создаёт) — проверка ниже не бумажный тигр, а страховка
+   d2s_plantab_new не создаёт) — проверка ниже не бумажный тигр, а страховка
    от разыменования NULL, если этот инвариант всё-таки нарушится. */
-static entry *oldest(d2k_plantab *t) {
+static entry *oldest(d2s_plantab *t) {
     if (t->used == 0) {
         return NULL;
     }
@@ -513,16 +513,16 @@ static entry *oldest(d2k_plantab *t) {
 }
 
 /* Свободная запись для новой цели — своя, если она есть, иначе вытесненная.
- * Отказа здесь больше нет: см. большой комментарий у d2k_plans.h про то,
+ * Отказа здесь больше нет: см. большой комментарий у d2s_plans.h про то,
  * почему любой объявленный предел когда-нибудь заполнится и почему навсегда
  * отказывать новой цели неверно.
  *
- * Возвращает указатель на слот, который вызывающий (d2k_plantab_set_name/
+ * Возвращает указатель на слот, который вызывающий (d2s_plantab_set_name/
  * set_addr) заполнит и учтёт в used САМ — как и раньше, эта функция used не
  * трогает НИ В КАКОЙ ветке насовсем: свободный слот в v[used] отдаётся ДО
  * увеличения used вызывающим; вытесненный — после временного уменьшения,
  * которое тот же вызывающий сразу отменяет своим "used++". */
-static entry *take_free_or_evict(d2k_plantab *t) {
+static entry *take_free_or_evict(d2s_plantab *t) {
     if (t->used < t->cap) {
         /* Инвариант уплотнения: следующий свободный слот — ВСЕГДА v[used],
            искать нечего. Он уже занулён — либо calloc'ом при создании
@@ -537,7 +537,7 @@ static entry *take_free_or_evict(d2k_plantab *t) {
            от разыменования NULL ниже, а не ожидаемый исход. */
         return NULL;
     }
-    d2k_plan_free(victim->plan);
+    d2s_plan_free(victim->plan);
     /* Уплотнение: вытесненный слот освобождается переносом ПОСЛЕДНЕЙ занятой
        записи на его место — иначе внутри v[0..used) осталась бы дыра, и
        следующий поиск снова зависел бы не только от used, ради чего всё это
@@ -552,36 +552,36 @@ static entry *take_free_or_evict(d2k_plantab *t) {
     return last;
 }
 
-int d2k_plantab_set_name_shaped(d2k_plantab *t, const uint8_t *name, size_t len,
-                                uint64_t now_ns, d2k_plan *p, uint8_t shape) {
-    return d2k_plantab_set_name_probe(t, name, len, now_ns, p, shape, 0);
+int d2s_plantab_set_name_shaped(d2s_plantab *t, const uint8_t *name, size_t len,
+                                uint64_t now_ns, d2s_plan *p, uint8_t shape) {
+    return d2s_plantab_set_name_probe(t, name, len, now_ns, p, shape, 0);
 }
 
-int d2k_plantab_set_name_probe(d2k_plantab *t, const uint8_t *name, size_t len,
-                               uint64_t now_ns, d2k_plan *p, uint8_t shape,
+int d2s_plantab_set_name_probe(d2s_plantab *t, const uint8_t *name, size_t len,
+                               uint64_t now_ns, d2s_plan *p, uint8_t shape,
                                uint16_t sport_be) {
-    return d2k_plantab_set_name_family(t, name, len, now_ns, p, shape, sport_be, 4);
+    return d2s_plantab_set_name_family(t, name, len, now_ns, p, shape, sport_be, 4);
 }
 
-static int drop(d2k_plantab *t, entry *e);
+static int drop(d2s_plantab *t, entry *e);
 
-static uint8_t probe_transport(const d2k_plan *p, uint8_t shape) {
-    uint8_t transport = d2k_plan_transport(p);
+static uint8_t probe_transport(const d2s_plan *p, uint8_t shape) {
+    uint8_t transport = d2s_plan_transport(p);
     if (transport) return transport;
-    return shape == D2K_PLAN_SHAPE_QUIC || shape == D2K_PLAN_SHAPE_VOICE ? 17 : 6;
+    return shape == D2S_PLAN_SHAPE_QUIC || shape == D2S_PLAN_SHAPE_VOICE ? 17 : 6;
 }
 
-int d2k_plantab_set_name_family(d2k_plantab *t, const uint8_t *name, size_t len,
-    uint64_t now_ns, d2k_plan *p, uint8_t shape, uint16_t sport_be, uint8_t family) {
-    if (!t || !name || len == 0 || len > D2K_TARGET_NAME_MAX ||
+int d2s_plantab_set_name_family(d2s_plantab *t, const uint8_t *name, size_t len,
+    uint64_t now_ns, d2s_plan *p, uint8_t shape, uint16_t sport_be, uint8_t family) {
+    if (!t || !name || len == 0 || len > D2S_TARGET_NAME_MAX ||
         (family != 4 && family != 6)) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         return -2;
     }
     /* Форма HTTP и протокол http — только вместе (шаг 4 задачи 51). */
-    if ((shape == D2K_PLAN_SHAPE_HTTP) != (d2k_plan_proto(p) == D2K_PLAN_PROTO_HTTP) ||
-        (shape == D2K_PLAN_SHAPE_HTTP && d2k_plan_transport(p) != 6)) {
-        d2k_plan_free(p);
+    if ((shape == D2S_PLAN_SHAPE_HTTP) != (d2s_plan_proto(p) == D2S_PLAN_PROTO_HTTP) ||
+        (shape == D2S_PLAN_SHAPE_HTTP && d2s_plan_transport(p) != 6)) {
+        d2s_plan_free(p);
         return -2;
     }
     t->revision++;
@@ -611,16 +611,16 @@ int d2k_plantab_set_name_family(d2k_plantab *t, const uint8_t *name, size_t len,
        его никто не подтверждал. Вместо этого обновляется план у измеренной
        записи — ровно прежнее поведение «форму не понижаем». */
     entry *e = NULL;
-    if (shape == D2K_PLAN_SHAPE_GRANDFATHER && sport_be == 0) {
+    if (shape == D2S_PLAN_SHAPE_GRANDFATHER && sport_be == 0) {
         /* Запись HTTP — другой протокол того же имени, не «измеренная форма
            TLS»: дедушкин TLS-план её не заменяет (ревью I-1 шага 4 — иначе
            пропадали и HTTP-, и TLS-план имени). */
         e = find_name_skip(t, name, len, family, 1);
-        if (e && e->only_sport == 0 && e->shape != D2K_PLAN_SHAPE_GRANDFATHER) {
+        if (e && e->only_sport == 0 && e->shape != D2S_PLAN_SHAPE_GRANDFATHER) {
             e->last_used_ns = now_ns;
-            d2k_plan_free(e->plan);
+            d2s_plan_free(e->plan);
             e->plan = p;
-            bind_context(t, p, D2K_BIND_NAME, family, e->shape, 0);
+            bind_context(t, p, D2S_BIND_NAME, family, e->shape, 0);
             return 0;
         }
     }
@@ -630,7 +630,7 @@ int d2k_plantab_set_name_family(d2k_plantab *t, const uint8_t *name, size_t len,
     if (!e) {
         e = take_free_or_evict(t);
         if (!e) {
-            d2k_plan_free(p);
+            d2s_plan_free(p);
             return -1;
         }
         t->used++;
@@ -644,40 +644,40 @@ int d2k_plantab_set_name_family(d2k_plantab *t, const uint8_t *name, size_t len,
     e->last_used_ns = now_ns;
     /* Прежний план освобождается здесь, а не у вызывающего: иначе замена
        плана цели молча текла бы. */
-    d2k_plan_free(e->plan);
+    d2s_plan_free(e->plan);
     e->plan = p;
-    bind_context(t, p, D2K_BIND_NAME, family, e->shape, sport_be != 0);
+    bind_context(t, p, D2S_BIND_NAME, family, e->shape, sport_be != 0);
     return 0;
 }
 
 /* Прежняя форма вызова — «форма приветствия не записывалась», то есть
    дедушкино право. Ноль сюда класть нельзя: он означает «сказать нечего» и
    совместимости больше не даёт, а такой план молча перестал бы применяться. */
-int d2k_plantab_set_name(d2k_plantab *t, const uint8_t *name, size_t len,
-                         uint64_t now_ns, d2k_plan *p) {
-    return d2k_plantab_set_name_shaped(t, name, len, now_ns, p,
-                                       D2K_PLAN_SHAPE_GRANDFATHER);
+int d2s_plantab_set_name(d2s_plantab *t, const uint8_t *name, size_t len,
+                         uint64_t now_ns, d2s_plan *p) {
+    return d2s_plantab_set_name_shaped(t, name, len, now_ns, p,
+                                       D2S_PLAN_SHAPE_GRANDFATHER);
 }
 
-int d2k_plantab_set_addr(d2k_plantab *t, uint32_t addr_be, uint64_t now_ns,
-                         d2k_plan *p) {
-    return d2k_plantab_set_addr_family(t, (const uint8_t *)&addr_be, 4, now_ns, p);
+int d2s_plantab_set_addr(d2s_plantab *t, uint32_t addr_be, uint64_t now_ns,
+                         d2s_plan *p) {
+    return d2s_plantab_set_addr_family(t, (const uint8_t *)&addr_be, 4, now_ns, p);
 }
 
 /* Без формы — дедушкино право: отдельная запись того же адреса, подходящая
    любой форме. С управляющего сокета так не ставится (SET_ADDR v7 требует
    форму, ctlsrv.c) — это вход для внутренних тестов датапата. */
-int d2k_plantab_set_addr_family(d2k_plantab *t, const uint8_t *addr, uint8_t family,
-                                uint64_t now_ns, d2k_plan *p) {
-    return d2k_plantab_set_addr_shaped(t, addr, family, now_ns, p,
-                                       D2K_PLAN_SHAPE_GRANDFATHER);
+int d2s_plantab_set_addr_family(d2s_plantab *t, const uint8_t *addr, uint8_t family,
+                                uint64_t now_ns, d2s_plan *p) {
+    return d2s_plantab_set_addr_shaped(t, addr, family, now_ns, p,
+                                       D2S_PLAN_SHAPE_GRANDFATHER);
 }
 
-int d2k_plantab_set_addr_shaped(d2k_plantab *t, const uint8_t *addr, uint8_t family,
-                                uint64_t now_ns, d2k_plan *p, uint8_t shape) {
-    if (!t || !addr || (family != 4 && family != 6) || shape == D2K_PLAN_SHAPE_ANY ||
-        shape == D2K_PLAN_SHAPE_HTTP || d2k_plan_proto(p) == D2K_PLAN_PROTO_HTTP) {
-        d2k_plan_free(p);   /* HTTP — только точное имя, не адрес */
+int d2s_plantab_set_addr_shaped(d2s_plantab *t, const uint8_t *addr, uint8_t family,
+                                uint64_t now_ns, d2s_plan *p, uint8_t shape) {
+    if (!t || !addr || (family != 4 && family != 6) || shape == D2S_PLAN_SHAPE_ANY ||
+        shape == D2S_PLAN_SHAPE_HTTP || d2s_plan_proto(p) == D2S_PLAN_PROTO_HTTP) {
+        d2s_plan_free(p);   /* HTTP — только точное имя, не адрес */
         return -2;
     }
     t->revision++;
@@ -687,7 +687,7 @@ int d2k_plantab_set_addr_shaped(d2k_plantab *t, const uint8_t *addr, uint8_t fam
     if (!e) {
         e = take_free_or_evict(t);
         if (!e) {
-            d2k_plan_free(p);
+            d2s_plan_free(p);
             return -1;
         }
         t->used++;
@@ -698,9 +698,9 @@ int d2k_plantab_set_addr_shaped(d2k_plantab *t, const uint8_t *addr, uint8_t fam
         e->shape = shape;
     }
     e->last_used_ns = now_ns;
-    d2k_plan_free(e->plan);
+    d2s_plan_free(e->plan);
     e->plan = p;
-    bind_context(t, p, D2K_BIND_ADDR, family, shape, 0);
+    bind_context(t, p, D2S_BIND_ADDR, family, shape, 0);
     return 0;
 }
 
@@ -709,12 +709,12 @@ int d2k_plantab_set_addr_shaped(d2k_plantab *t, const uint8_t *addr, uint8_t fam
    место, затем used--. Без этого удаление прогрызало бы дыру в v[0..used), и
    find_name/find_addr снова были бы обязаны обходить весь cap, чтобы её не
    пропустить, — то есть в точности регресс, который чинит эта задача. */
-static int drop(d2k_plantab *t, entry *e) {
+static int drop(d2s_plantab *t, entry *e) {
     if (!e) {
         return 0;
     }
     t->revision++;
-    d2k_plan_free(e->plan);
+    d2s_plan_free(e->plan);
     entry *last = &t->v[t->used - 1];
     if (e != last) {
         *e = *last;
@@ -724,11 +724,11 @@ static int drop(d2k_plantab *t, entry *e) {
     return 1;
 }
 
-int d2k_plantab_del_name(d2k_plantab *t, const uint8_t *name, size_t len) {
-    return d2k_plantab_del_name_family(t, name, len, 4);
+int d2s_plantab_del_name(d2s_plantab *t, const uint8_t *name, size_t len) {
+    return d2s_plantab_del_name_family(t, name, len, 4);
 }
 
-int d2k_plantab_del_name_family(d2k_plantab *t, const uint8_t *name, size_t len, uint8_t family) {
+int d2s_plantab_del_name_family(d2s_plantab *t, const uint8_t *name, size_t len, uint8_t family) {
     if (!t || !name || len == 0) {
         return 0;
     }
@@ -754,9 +754,9 @@ int d2k_plantab_del_name_family(d2k_plantab *t, const uint8_t *name, size_t len,
    только DEL_NAME_PROBE своим портом. Прежнее «все записи имени» уносило
    пробу параллельной задачи другого транспорта и подтверждённое знание
    других форм (§7). Форма ANY — не шаблон: снимать нечего. */
-int d2k_plantab_del_name_shaped(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_del_name_shaped(d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t transport, uint8_t shape, uint8_t family) {
-    if (!t || !name || len == 0 || shape == D2K_PLAN_SHAPE_ANY ||
+    if (!t || !name || len == 0 || shape == D2S_PLAN_SHAPE_ANY ||
         (transport != 6 && transport != 17)) { return 0; }
     int n = 0;
     for (size_t i = 0; i < t->used;) {
@@ -773,28 +773,28 @@ int d2k_plantab_del_name_shaped(d2k_plantab *t, const uint8_t *name, size_t len,
     return n > 0;
 }
 
-int d2k_plantab_del_name_bound(d2k_plantab *t, const uint8_t *name, size_t len,
-    uint8_t transport, const d2k_binding_context *expected) {
-    if (!t || !name || !len || !d2k_binding_known(expected) ||
-        expected->kind!=D2K_BIND_NAME || expected->temporary ||
+int d2s_plantab_del_name_bound(d2s_plantab *t, const uint8_t *name, size_t len,
+    uint8_t transport, const d2s_binding_context *expected) {
+    if (!t || !name || !len || !d2s_binding_known(expected) ||
+        expected->kind!=D2S_BIND_NAME || expected->temporary ||
         (transport!=6 && transport!=17)) return 0;
     for (size_t i=0;i<t->used;i++) {
-        entry *e=&t->v[i]; d2k_binding_context current;
+        entry *e=&t->v[i]; d2s_binding_context current;
         if(e->kind==KEY_NAME && !e->only_sport && name_eq(e->name,e->name_len,name,len) &&
            probe_transport(e->plan,e->shape)==transport &&
-           d2k_plantab_binding(t,e->plan,&current) && d2k_binding_equal(&current,expected)) {
+           d2s_plantab_binding(t,e->plan,&current) && d2s_binding_equal(&current,expected)) {
             (void)drop(t,e); return 1;
         }
     }
     return 0;
 }
 
-int d2k_plantab_del_name_probe(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_del_name_probe(d2s_plantab *t, const uint8_t *name, size_t len,
                                uint8_t shape, uint16_t sport_be) {
-    return d2k_plantab_del_name_probe_family(t, name, len, shape, sport_be, 4);
+    return d2s_plantab_del_name_probe_family(t, name, len, shape, sport_be, 4);
 }
 
-int d2k_plantab_del_name_probe_family(d2k_plantab *t, const uint8_t *name, size_t len,
+int d2s_plantab_del_name_probe_family(d2s_plantab *t, const uint8_t *name, size_t len,
     uint8_t shape, uint16_t sport_be, uint8_t family) {
     if (!t || !name || len == 0 || sport_be == 0) { return 0; }
     int n = 0;
@@ -811,37 +811,37 @@ int d2k_plantab_del_name_probe_family(d2k_plantab *t, const uint8_t *name, size_
     return n > 0;
 }
 
-int d2k_plantab_del_addr(d2k_plantab *t, uint32_t addr_be) {
-    return d2k_plantab_del_addr_family(t, (const uint8_t *)&addr_be, 4);
+int d2s_plantab_del_addr(d2s_plantab *t, uint32_t addr_be) {
+    return d2s_plantab_del_addr_family(t, (const uint8_t *)&addr_be, 4);
 }
 
 /* Без формы — снять адрес целиком, все формы (как del_name снимает все
    формы имени). С управляющего сокета этот путь недоступен: DEL_ADDR v7
-   несёт форму и снимает ровно её (d2k_plantab_del_addr_shaped). */
-int d2k_plantab_del_addr_family(d2k_plantab *t, const uint8_t *addr, uint8_t family) {
+   несёт форму и снимает ровно её (d2s_plantab_del_addr_shaped). */
+int d2s_plantab_del_addr_family(d2s_plantab *t, const uint8_t *addr, uint8_t family) {
     if (!t) { return 0; }
     int n = 0;
     while (drop(t, find_addr(t, addr, family))) { n++; }
     return n > 0;
 }
 
-int d2k_plantab_del_addr_shaped(d2k_plantab *t, const uint8_t *addr, uint8_t family,
+int d2s_plantab_del_addr_shaped(d2s_plantab *t, const uint8_t *addr, uint8_t family,
                                 uint8_t shape) {
-    if (!t || shape == D2K_PLAN_SHAPE_ANY) { return 0; }
+    if (!t || shape == D2S_PLAN_SHAPE_ANY) { return 0; }
     return drop(t, find_addr_shape(t, addr, family, 0, shape));
 }
 
-static int trial_id_valid(const uint8_t id[D2K_TRIAL_ID_LEN]) {
+static int trial_id_valid(const uint8_t id[D2S_TRIAL_ID_LEN]) {
     if (!id) { return 0; }
     uint8_t any = 0;
-    for (size_t i = 0; i < D2K_TRIAL_ID_LEN; i++) { any |= id[i]; }
+    for (size_t i = 0; i < D2S_TRIAL_ID_LEN; i++) { any |= id[i]; }
     return any != 0;
 }
 
 /* src_port_be == 0 is the voice wildcard: same LAN client, same server
    endpoint, ANY client port (the next call/rejoin socket). Only
-   d2k_plantab_find_voice_probe consults such entries. */
-static int probe_flow_valid(const d2k_addr_probe_flow *f) {
+   d2s_plantab_find_voice_probe consults such entries. */
+static int probe_flow_valid(const d2s_addr_probe_flow *f) {
     if (!f || f->transport != 17 || f->dst_port_be == 0) {
         return 0;
     }
@@ -857,8 +857,8 @@ static int probe_flow_valid(const d2k_addr_probe_flow *f) {
     return src != 0 && dst != 0;
 }
 
-static int probe_flow_equal(const d2k_addr_probe_flow *a,
-                            const d2k_addr_probe_flow *b) {
+static int probe_flow_equal(const d2s_addr_probe_flow *a,
+                            const d2s_addr_probe_flow *b) {
     if ((a->family == 6) != (b->family == 6)) return 0;
     size_t n = a->family == 6 ? 16 : 4;
     const uint8_t *as = a->family == 6 ? a->src_ip6 : a->src_ip4;
@@ -870,21 +870,21 @@ static int probe_flow_equal(const d2k_addr_probe_flow *a,
            memcmp(as, bs, n) == 0 && memcmp(ad, bd, n) == 0;
 }
 
-static void probe_drop(d2k_plantab *t, probe_entry *e) {
+static void probe_drop(d2s_plantab *t, probe_entry *e) {
     if (!t || !e || !e->used) { return; }
-    d2k_plan_free(e->plan);
+    d2s_plan_free(e->plan);
     memset(e, 0, sizeof *e);
     t->probe_used--;
     t->revision++;
 }
 
-void d2k_plantab_clear_probes(d2k_plantab *t) {
+void d2s_plantab_clear_probes(d2s_plantab *t) {
     if (!t) return;
     for (size_t i = 0; i < t->used;) {
         /* Опыты контроллера и запрет QUIC (задача 50, раунд 4): ни то, ни
            другое не знание каталога; без контроллера снимать их некому. */
         if (t->v[i].kind == KEY_NAME &&
-            (t->v[i].only_sport || d2k_plan_quic_deny(t->v[i].plan))) {
+            (t->v[i].only_sport || d2s_plan_quic_deny(t->v[i].plan))) {
             (void)drop(t, &t->v[i]);
         } else {
             i++;
@@ -893,18 +893,18 @@ void d2k_plantab_clear_probes(d2k_plantab *t) {
     for (size_t i = 0; i < t->cap; i++) probe_drop(t, &t->probes[i]);
 }
 
-int d2k_plantab_set_addr_probe(d2k_plantab *t,
-                               const d2k_addr_probe_flow *flow,
-                               const uint8_t trial_id[D2K_TRIAL_ID_LEN],
+int d2s_plantab_set_addr_probe(d2s_plantab *t,
+                               const d2s_addr_probe_flow *flow,
+                               const uint8_t trial_id[D2S_TRIAL_ID_LEN],
                                uint64_t now_ns, uint64_t expires_ns,
-                               d2k_plan *p) {
+                               d2s_plan *p) {
     if (!t || !probe_flow_valid(flow) || !trial_id_valid(trial_id) || !p ||
         expires_ns <= now_ns) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         return -2;
     }
-    uint8_t shape = d2k_plan_proto(p) == 2 ? D2K_PLAN_SHAPE_QUIC :
-                    d2k_plan_proto(p) == 3 ? D2K_PLAN_SHAPE_VOICE : D2K_PLAN_SHAPE_ANY;
+    uint8_t shape = d2s_plan_proto(p) == 2 ? D2S_PLAN_SHAPE_QUIC :
+                    d2s_plan_proto(p) == 3 ? D2S_PLAN_SHAPE_VOICE : D2S_PLAN_SHAPE_ANY;
     probe_entry *free_slot = NULL;
     for (size_t i = 0; i < t->cap; i++) {
         probe_entry *e = &t->probes[i];
@@ -918,40 +918,40 @@ int d2k_plantab_set_addr_probe(d2k_plantab *t,
             continue;
         }
         if (!probe_flow_equal(&e->flow, flow)) { continue; }
-        if (memcmp(e->trial_id, trial_id, D2K_TRIAL_ID_LEN) != 0) {
-            d2k_plan_free(p);
+        if (memcmp(e->trial_id, trial_id, D2S_TRIAL_ID_LEN) != 0) {
+            d2s_plan_free(p);
             return -3;
         }
-        d2k_plan_free(e->plan);
+        d2s_plan_free(e->plan);
         e->plan = p;
-        bind_context(t, p, D2K_BIND_FLOW, flow->family ? flow->family : 4, shape, 1);
+        bind_context(t, p, D2S_BIND_FLOW, flow->family ? flow->family : 4, shape, 1);
         e->expires_ns = expires_ns;
         t->revision++;
         return 0;
     }
     if (!free_slot) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         return -1;
     }
     free_slot->used = 1;
     free_slot->flow = *flow;
-    memcpy(free_slot->trial_id, trial_id, D2K_TRIAL_ID_LEN);
+    memcpy(free_slot->trial_id, trial_id, D2S_TRIAL_ID_LEN);
     free_slot->expires_ns = expires_ns;
     free_slot->plan = p;
-    bind_context(t, p, D2K_BIND_FLOW, flow->family ? flow->family : 4, shape, 1);
+    bind_context(t, p, D2S_BIND_FLOW, flow->family ? flow->family : 4, shape, 1);
     t->probe_used++;
     t->revision++;
     return 0;
 }
 
-int d2k_plantab_del_addr_probe(d2k_plantab *t,
-                               const d2k_addr_probe_flow *flow,
-                               const uint8_t trial_id[D2K_TRIAL_ID_LEN]) {
+int d2s_plantab_del_addr_probe(d2s_plantab *t,
+                               const d2s_addr_probe_flow *flow,
+                               const uint8_t trial_id[D2S_TRIAL_ID_LEN]) {
     if (!t || !probe_flow_valid(flow) || !trial_id_valid(trial_id)) { return 0; }
     for (size_t i = 0; i < t->cap; i++) {
         probe_entry *e = &t->probes[i];
         if (e->used && probe_flow_equal(&e->flow, flow) &&
-            memcmp(e->trial_id, trial_id, D2K_TRIAL_ID_LEN) == 0) {
+            memcmp(e->trial_id, trial_id, D2S_TRIAL_ID_LEN) == 0) {
             probe_drop(t, e);
             return 1;
         }
@@ -959,8 +959,8 @@ int d2k_plantab_del_addr_probe(d2k_plantab *t,
     return 0;
 }
 
-static const d2k_plan *find_probe(d2k_plantab *t, const d2k_addr_probe_flow *flow,
-                                  uint64_t now_ns, uint8_t trial_id_out[D2K_TRIAL_ID_LEN],
+static const d2s_plan *find_probe(d2s_plantab *t, const d2s_addr_probe_flow *flow,
+                                  uint64_t now_ns, uint8_t trial_id_out[D2S_TRIAL_ID_LEN],
                                   int voice) {
     if (!t || !probe_flow_valid(flow) || flow->src_port_be == 0) { return NULL; }
     for (size_t i = 0; i < t->cap; i++) {
@@ -973,7 +973,7 @@ static const d2k_plan *find_probe(d2k_plantab *t, const d2k_addr_probe_flow *flo
         int match;
         if (e->flow.src_port_be == 0) {
             /* Wildcard client port: voice only, every other field exact. */
-            d2k_addr_probe_flow q = *flow;
+            d2s_addr_probe_flow q = *flow;
             q.src_port_be = 0;
             match = voice && probe_flow_equal(&e->flow, &q);
         } else {
@@ -981,7 +981,7 @@ static const d2k_plan *find_probe(d2k_plantab *t, const d2k_addr_probe_flow *flo
         }
         if (match) {
             if (trial_id_out) {
-                memcpy(trial_id_out, e->trial_id, D2K_TRIAL_ID_LEN);
+                memcpy(trial_id_out, e->trial_id, D2S_TRIAL_ID_LEN);
             }
             return e->plan;
         }
@@ -989,19 +989,19 @@ static const d2k_plan *find_probe(d2k_plantab *t, const d2k_addr_probe_flow *flo
     return NULL;
 }
 
-const d2k_plan *d2k_plantab_find_addr_probe(
-    d2k_plantab *t, const d2k_addr_probe_flow *flow, uint64_t now_ns,
-    uint8_t trial_id_out[D2K_TRIAL_ID_LEN]) {
+const d2s_plan *d2s_plantab_find_addr_probe(
+    d2s_plantab *t, const d2s_addr_probe_flow *flow, uint64_t now_ns,
+    uint8_t trial_id_out[D2S_TRIAL_ID_LEN]) {
     return find_probe(t, flow, now_ns, trial_id_out, 0);
 }
 
-const d2k_plan *d2k_plantab_find_voice_probe(
-    d2k_plantab *t, const d2k_addr_probe_flow *flow, uint64_t now_ns,
-    uint8_t trial_id_out[D2K_TRIAL_ID_LEN]) {
+const d2s_plan *d2s_plantab_find_voice_probe(
+    d2s_plantab *t, const d2s_addr_probe_flow *flow, uint64_t now_ns,
+    uint8_t trial_id_out[D2S_TRIAL_ID_LEN]) {
     return find_probe(t, flow, now_ns, trial_id_out, 1);
 }
 
-size_t d2k_plantab_probe_count(const d2k_plantab *t) {
+size_t d2s_plantab_probe_count(const d2s_plantab *t) {
     return t ? t->probe_used : 0;
 }
 
@@ -1026,41 +1026,41 @@ size_t d2k_plantab_probe_count(const d2k_plantab *t) {
  * старая запись всё равно не может подтвердить. Ограничение туда придёт
  * вместе с миграцией каталога, где у записи есть транспорт. */
 static int shape_fits(uint8_t entry_shape, uint8_t seen_shape) {
-    if (entry_shape == D2K_PLAN_SHAPE_GRANDFATHER) { return 1; }
+    if (entry_shape == D2S_PLAN_SHAPE_GRANDFATHER) { return 1; }
     /* ECH offer is also used by GREASE. Preserve the old TLS-1.3 binding
      * when no dedicated ECH binding exists; never use ECH proof for non-ECH. */
-    if (entry_shape == D2K_PLAN_SHAPE_MODERN && seen_shape == D2K_PLAN_SHAPE_ECH_TCP) return 1;
+    if (entry_shape == D2S_PLAN_SHAPE_MODERN && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) return 1;
     return entry_shape != 0 && entry_shape == seen_shape;
 }
 
 static inline int shape_is_udp(uint8_t shape) {
-    return shape == D2K_PLAN_SHAPE_QUIC || shape == D2K_PLAN_SHAPE_VOICE;
+    return shape == D2S_PLAN_SHAPE_QUIC || shape == D2S_PLAN_SHAPE_VOICE;
 }
 
-size_t d2k_plantab_shape_misses(const d2k_plantab *t) {
+size_t d2s_plantab_shape_misses(const d2s_plantab *t) {
     return t ? t->shape_misses : 0;
 }
 
-const d2k_plan *d2k_plantab_find(d2k_plantab *t, const uint8_t *name,
+const d2s_plan *d2s_plantab_find(d2s_plantab *t, const uint8_t *name,
                                  size_t len, uint32_t addr_be, uint64_t now_ns,
                                  uint8_t seen_shape) {
-    return d2k_plantab_find_sport(t, name, len, addr_be, now_ns, seen_shape, 0);
+    return d2s_plantab_find_sport(t, name, len, addr_be, now_ns, seen_shape, 0);
 }
 
-const d2k_plan *d2k_plantab_find_sport(d2k_plantab *t, const uint8_t *name,
+const d2s_plan *d2s_plantab_find_sport(d2s_plantab *t, const uint8_t *name,
                                        size_t len, uint32_t addr_be, uint64_t now_ns,
                                        uint8_t seen_shape, uint16_t sport_be) {
-    return d2k_plantab_find_family(t, name, len, addr_be, now_ns, seen_shape, sport_be, 4);
+    return d2s_plantab_find_family(t, name, len, addr_be, now_ns, seen_shape, sport_be, 4);
 }
 
-const d2k_plan *d2k_plantab_find_family(d2k_plantab *t, const uint8_t *name,
+const d2s_plan *d2s_plantab_find_family(d2s_plantab *t, const uint8_t *name,
     size_t len, uint32_t addr_be, uint64_t now_ns, uint8_t seen_shape,
     uint16_t sport_be, uint8_t family) {
-    return d2k_plantab_find_target(t, name, len,
+    return d2s_plantab_find_target(t, name, len,
         family == 4 ? (const uint8_t *)&addr_be : NULL, family, now_ns, seen_shape, sport_be);
 }
 
-const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, size_t len,
+const d2s_plan *d2s_plantab_find_target(d2s_plantab *t, const uint8_t *name, size_t len,
     const uint8_t *addr, uint8_t family, uint64_t now_ns, uint8_t seen_shape, uint16_t sport_be) {
     if (!t || (family != 4 && family != 6)) {
         return NULL;
@@ -1100,20 +1100,20 @@ const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, siz
         entry *e = NULL;
         if (sport_be != 0) {
             e = find_name_shape_port(t, name, len, seen_shape, sport_be, family);
-            if (!e && seen_shape == D2K_PLAN_SHAPE_ECH_TCP)
-                e = find_name_shape_port(t, name, len, D2K_PLAN_SHAPE_MODERN, sport_be, family);
-            if (!e && seen_shape == D2K_PLAN_SHAPE_ANY) {
+            if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP)
+                e = find_name_shape_port(t, name, len, D2S_PLAN_SHAPE_MODERN, sport_be, family);
+            if (!e && seen_shape == D2S_PLAN_SHAPE_ANY) {
                 /* Probe-specific SET_NAME carries the verifier's known shape;
                    a segmented ClientHello may not reveal it in its first
                    packet. Exact name+ephemeral-port identity is sufficient. */
                 e = find_name_port(t, name, len, sport_be, family);
             }
             if (!e) {
-                e = find_name_shape_port(t, name, len, D2K_PLAN_SHAPE_GRANDFATHER, sport_be, family);
+                e = find_name_shape_port(t, name, len, D2S_PLAN_SHAPE_GRANDFATHER, sport_be, family);
             }
             if (e) {
                 e->last_used_ns = now_ns;
-                if (seen_shape == D2K_PLAN_SHAPE_ANY && e->only_sport == sport_be) {
+                if (seen_shape == D2S_PLAN_SHAPE_ANY && e->only_sport == sport_be) {
                     return e->plan;
                 }
                 if (shape_fits(e->shape, seen_shape)) {
@@ -1134,7 +1134,7 @@ const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, siz
         name_hits h;
         scan_name(t, name, len, seen_shape, family, &h);
         e = h.shaped;
-        if (!e && seen_shape == D2K_PLAN_SHAPE_ECH_TCP) e = h.modern;
+        if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) e = h.modern;
         if (!e && shape_transport(seen_shape) == 6) e = h.grandfather;
         if (!e && area_bypassed(t, name, len, seen_shape, family)) return NULL;
         if (!e) {
@@ -1148,9 +1148,9 @@ const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, siz
                suffix fallback, just like exact-name/address lookup. A
                dedicated ECH family wins; neither family's exception may
                be bypassed by inheriting the ordinary family instead. */
-            if (!area && seen_shape == D2K_PLAN_SHAPE_ECH_TCP) {
-                if (area_bypassed(t, name, len, D2K_PLAN_SHAPE_MODERN, family)) return NULL;
-                area = area_match(t, name, len, D2K_PLAN_SHAPE_MODERN, family);
+            if (!area && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) {
+                if (area_bypassed(t, name, len, D2S_PLAN_SHAPE_MODERN, family)) return NULL;
+                area = area_match(t, name, len, D2S_PLAN_SHAPE_MODERN, family);
             }
             if (area) return area->plan;
             /* Имя знаем, а формы такой у него нет — это отдельный факт, см.
@@ -1158,7 +1158,7 @@ const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, siz
             e = h.any;
         }
         if (e) {
-            /* Обращение продлевает жизнь записи — см. d2k_plans.h про то,
+            /* Обращение продлевает жизнь записи — см. d2s_plans.h про то,
                почему рабочая цель не должна вытесняться наравне с забытой.
                Отметку ставим и тогда, когда форма не подошла: обращение к
                цели было, и забывать запись раньше времени незачем. */
@@ -1166,10 +1166,10 @@ const d2k_plan *d2k_plantab_find_target(d2k_plantab *t, const uint8_t *name, siz
             if (shape_fits(e->shape, seen_shape)) {
                 return e->plan;
             }
-            if (e->shape != D2K_PLAN_SHAPE_ANY &&
-                e->shape != D2K_PLAN_SHAPE_GRANDFATHER &&
-                seen_shape != D2K_PLAN_SHAPE_ANY &&
-                seen_shape != D2K_PLAN_SHAPE_GRANDFATHER &&
+            if (e->shape != D2S_PLAN_SHAPE_ANY &&
+                e->shape != D2S_PLAN_SHAPE_GRANDFATHER &&
+                seen_shape != D2S_PLAN_SHAPE_ANY &&
+                seen_shape != D2S_PLAN_SHAPE_GRANDFATHER &&
                 shape_is_udp(seen_shape) && !shape_is_udp(e->shape)) {
                 /* Запись другого транспорта (TCP TLS у имени при запросе QUIC)
                    не должна блокировать поиск адресного обхода для своего транспорта:
@@ -1200,7 +1200,7 @@ check_addr:;
     addr_hits a;
     scan_addr(t, addr, family, seen_shape, &a);
     entry *e = a.shaped;
-    if (!e && seen_shape == D2K_PLAN_SHAPE_ECH_TCP) e = a.modern;
+    if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) e = a.modern;
     if (!e) e = a.grandfather;
     if (e) {
         e->last_used_ns = now_ns;
@@ -1214,15 +1214,15 @@ check_addr:;
     return NULL;
 }
 
-size_t d2k_plantab_count(const d2k_plantab *t) {
+size_t d2s_plantab_count(const d2s_plantab *t) {
     return t ? t->used : 0;
 }
 
-size_t d2k_plantab_capacity(const d2k_plantab *t) {
+size_t d2s_plantab_capacity(const d2s_plantab *t) {
     return t ? t->cap : 0;
 }
 
-int d2k_plantab_binding(const d2k_plantab *t, const d2k_plan *p, d2k_binding_context *out) {
+int d2s_plantab_binding(const d2s_plantab *t, const d2s_plan *p, d2s_binding_context *out) {
     if (!out) return 0;
     memset(out, 0, sizeof *out);
     if (!t || !p || p->binding_owner != t || !p->binding_generation) return 0;
@@ -1235,18 +1235,18 @@ int d2k_plantab_binding(const d2k_plantab *t, const d2k_plan *p, d2k_binding_con
     return 1;
 }
 
-int d2k_plantab_set_name_trial(d2k_plantab *t, const uint8_t *name, size_t len,
-    uint64_t now_ns, d2k_plan *p, uint8_t shape, uint16_t sport_be, uint8_t family,
-    const uint8_t trial_id[D2K_TRIAL_ID_LEN]) {
+int d2s_plantab_set_name_trial(d2s_plantab *t, const uint8_t *name, size_t len,
+    uint64_t now_ns, d2s_plan *p, uint8_t shape, uint16_t sport_be, uint8_t family,
+    const uint8_t trial_id[D2S_TRIAL_ID_LEN]) {
     /* Legacy callers carry an all-zero token: install, but never invent proof. */
-    if (!sport_be || !trial_id) { d2k_plan_free(p); return -2; }
-    int rc = d2k_plantab_set_name_family(t,name,len,now_ns,p,shape,sport_be,family);
-    if (!rc) memcpy(p->binding_trial_id,trial_id,D2K_TRIAL_ID_LEN);
+    if (!sport_be || !trial_id) { d2s_plan_free(p); return -2; }
+    int rc = d2s_plantab_set_name_family(t,name,len,now_ns,p,shape,sport_be,family);
+    if (!rc) memcpy(p->binding_trial_id,trial_id,D2S_TRIAL_ID_LEN);
     return rc;
 }
-void d2k_plantab_trial(const d2k_plantab *t, const d2k_plan *p,
-                     uint8_t out[D2K_TRIAL_ID_LEN]) {
-    memset(out,0,D2K_TRIAL_ID_LEN);
+void d2s_plantab_trial(const d2s_plantab *t, const d2s_plan *p,
+                     uint8_t out[D2S_TRIAL_ID_LEN]) {
+    memset(out,0,D2S_TRIAL_ID_LEN);
     if (t && p && p->binding_owner==t && p->binding_temporary)
-        memcpy(out,p->binding_trial_id,D2K_TRIAL_ID_LEN);
+        memcpy(out,p->binding_trial_id,D2S_TRIAL_ID_LEN);
 }

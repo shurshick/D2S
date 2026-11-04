@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "include/d2k_diagnostics.h"
+#include "include/d2s_diagnostics.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -7,21 +7,21 @@
 #include <limits.h>
 #include <dirent.h>
 #include <errno.h>
-#ifndef D2K_RELEASE_ID
-#define D2K_RELEASE_ID "dev"
+#ifndef D2S_RELEASE_ID
+#define D2S_RELEASE_ID "dev"
 #endif
 #define EVENTS 64
 #define SAMPLES 120
 #define PROCESS_COUNT 3
-static const char *const names[PROCESS_COUNT]={"d2kc","d2kd","d2kpanel"};
-static const char *const pidfiles[PROCESS_COUNT]={"d2k.pid","d2kd.pid","d2k-panel.pid"};
+static const char *const names[PROCESS_COUNT]={"d2sc","d2sd","d2spanel"};
+static const char *const pidfiles[PROCESS_COUNT]={"d2s.pid","d2sd.pid","d2s-panel.pid"};
 typedef struct {long pid;int64_t rss,hwm,anon,threads;} proc_mem;
 typedef struct {
     uint64_t id; int64_t at,elapsed,queued,units;unsigned family,trigger,shape;
     char target[256],protocol[16],outcome[32],reason[256],ip[48],path[16],kind[8];
 } event;
 typedef struct {
-    int64_t at,mono,total,available,conntrack;d2k_diag_counts counts;proc_mem procs[PROCESS_COUNT];
+    int64_t at,mono,total,available,conntrack;d2s_diag_counts counts;proc_mem procs[PROCESS_COUNT];
 } sample;
 /* Два снимка на процесс; сырые карты и имена файлов не сохраняются.
  * Группы следуют меткам ядра, а не владельцам аллокатора: безымянные стеки
@@ -30,12 +30,12 @@ typedef struct {
     long pid; int64_t at,mono,rss,start_ticks,vm[4],fds;
     int smaps_ok; int64_t groups[4][5];
 } memory_detail;
-struct d2k_diag {
+struct d2s_diag {
     memory_detail first[PROCESS_COUNT],latest[PROCESS_COUNT];
     event events[EVENTS];sample samples[SAMPLES];
     size_t ne,ns;uint64_t event_total,sample_total;int64_t last_ms;int sampled;
 };
-typedef char bounded_ring[(sizeof(struct d2k_diag)<=128*1024)?1:-1];
+typedef char bounded_ring[(sizeof(struct d2s_diag)<=128*1024)?1:-1];
 static void copy(char *to,size_t cap,const char *s) {
     if(!s)s="";
     size_t n=strlen(s);if(n>=cap)n=cap-1;
@@ -53,12 +53,12 @@ static void js(FILE *f,const char *s) {
     }fputc('"',f);
 }
 static void number(FILE *f,int64_t v) {if(v<0)fputs("null",f);else fprintf(f,"%lld",(long long)v);}
-d2k_diag *d2k_diag_new(void){return calloc(1,sizeof(d2k_diag));}
-void d2k_diag_free(d2k_diag *d){free(d);}
-size_t d2k_diag_bytes(const d2k_diag *d){return d?sizeof *d:0;}
-size_t d2k_diag_event_count(const d2k_diag *d){return d?d->ne:0;}
-size_t d2k_diag_sample_count(const d2k_diag *d){return d?d->ns:0;}
-void d2k_diag_record(d2k_diag *d,const d2k_diag_event *v) {
+d2s_diag *d2s_diag_new(void){return calloc(1,sizeof(d2s_diag));}
+void d2s_diag_free(d2s_diag *d){free(d);}
+size_t d2s_diag_bytes(const d2s_diag *d){return d?sizeof *d:0;}
+size_t d2s_diag_event_count(const d2s_diag *d){return d?d->ne:0;}
+size_t d2s_diag_sample_count(const d2s_diag *d){return d?d->ns:0;}
+void d2s_diag_record(d2s_diag *d,const d2s_diag_event *v) {
     if(!d||!v)return;
     event *e=&d->events[d->event_total++%EVENTS];memset(e,0,sizeof *e);
     e->at=(int64_t)time(NULL);e->id=v->id;e->elapsed=v->elapsed_ms;e->queued=v->queue_ms;
@@ -162,7 +162,7 @@ static void write_detail(FILE *f,const memory_detail *m) {
         }fputc('}',f);
     }fputc('}',f);
 }
-void d2k_diag_sample(d2k_diag *d,int64_t ms,const d2k_diag_counts *c,const char *proc,const char *run) {
+void d2s_diag_sample(d2s_diag *d,int64_t ms,const d2s_diag_counts *c,const char *proc,const char *run) {
     if(!d||!c||(d->sampled&&ms>=d->last_ms&&ms-d->last_ms<60000))return;
     d->last_ms=ms;d->sampled=1;
     sample *s=&d->samples[d->sample_total++%SAMPLES];memset(s,0,sizeof *s);
@@ -187,9 +187,9 @@ void d2k_diag_sample(d2k_diag *d,int64_t ms,const d2k_diag_counts *c,const char 
     }
     if(d->ns<SAMPLES)d->ns++;
 }
-int d2k_diag_write(const d2k_diag *d,FILE *f) {
+int d2s_diag_write(const d2s_diag *d,FILE *f) {
     if(!d||!f)return -1;
-    fprintf(f,"{\"schema\":1,\"enabled\":true,\"controller_pid\":%ld,\"release\":",(long)getpid());js(f,D2K_RELEASE_ID);
+    fprintf(f,"{\"schema\":1,\"enabled\":true,\"controller_pid\":%ld,\"release\":",(long)getpid());js(f,D2S_RELEASE_ID);
     fprintf(f,",\"ring_bytes\":%zu,\"event_capacity\":64,\"sample_capacity\":120,\"sample_interval_ms\":60000,\"events_overwritten\":%llu,\"samples_overwritten\":%llu,\"events\":[",sizeof *d,
         (unsigned long long)(d->event_total-d->ne),(unsigned long long)(d->sample_total-d->ns));
     for(size_t i=0;i<d->ne;i++) {
@@ -205,7 +205,7 @@ int d2k_diag_write(const d2k_diag *d,FILE *f) {
     }
     fputs("],\"samples\":[",f);
     for(size_t i=0;i<d->ns;i++) {
-        const sample *s=&d->samples[(d->sample_total-d->ns+i)%SAMPLES];const d2k_diag_counts *c=&s->counts;if(i)fputc(',',f);
+        const sample *s=&d->samples[(d->sample_total-d->ns+i)%SAMPLES];const d2s_diag_counts *c=&s->counts;if(i)fputc(',',f);
         fprintf(f,"{\"at\":%lld,\"mono_ms\":%lld,\"mem_total_kib\":",(long long)s->at,(long long)s->mono);number(f,s->total);
         fputs(",\"mem_available_kib\":",f);number(f,s->available);
         fputs(",\"system_conntrack\":",f);number(f,s->conntrack);

@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "../runtime/d2k_runtime.h"
+#include "../runtime/d2s_runtime.h"
 #include "server.h"
 
 #include <arpa/inet.h>
@@ -18,25 +18,25 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifndef D2K_PANEL_VERSION
-#define D2K_PANEL_VERSION "dev"
+#ifndef D2S_PANEL_VERSION
+#define D2S_PANEL_VERSION "dev"
 #endif
-#ifndef D2K_PANEL_COMMIT
-#define D2K_PANEL_COMMIT ""
+#ifndef D2S_PANEL_COMMIT
+#define D2S_PANEL_COMMIT ""
 #endif
-#ifndef D2K_PANEL_BUILT
-#define D2K_PANEL_BUILT ""
+#ifndef D2S_PANEL_BUILT
+#define D2S_PANEL_BUILT ""
 #endif
-#ifndef D2K_PANEL_DIRTY
-#define D2K_PANEL_DIRTY 0
+#ifndef D2S_PANEL_DIRTY
+#define D2S_PANEL_DIRTY 0
 #endif
-#define D2K_PANEL_FEATURES "telegram-control update-control"
+#define D2S_PANEL_FEATURES "telegram-control update-control"
 
 #define UNKNOWN_MAX 64
 #define UNKNOWN_KEY_MAX 128
 #define CONFIG_LINE_MAX 2048
 
-static const char *health_path = "/tmp/d2k/d2kpanel.health";
+static const char *health_path = "/tmp/d2s/d2spanel.health";
 static volatile sig_atomic_t stop_requested;
 
 static void on_signal(int sig) {
@@ -53,7 +53,7 @@ static void say(const char *fmt, ...) {
 }
 
 static void usage(FILE *f) {
-    fputs("d2kpanel --version | serve [--config FILE] [--live FILE] [--assets DIR] "
+    fputs("d2spanel --version | serve [--config FILE] [--live FILE] [--assets DIR] "
           "[--listen HOST:PORT] [--state-dir DIR] [--mode MODE] [--queue N] "
           "[--service FILE] [--engine-pid FILE] [--controller-pid FILE] "
           "[--telegram-stats PATH] [--log FILE]\n",
@@ -72,16 +72,16 @@ static int known_key(const char *key) {
     static const char *const keys[] = {
         "SCHEMA", "MODE", "PANEL_LISTEN", "STATE_DIR", "QUEUE_NUM",
         "CONTROL_SOCKET", "DECOY_SNI", "MARK", "PROBE_MARK", "FLOWS",
-        "STATS_SEC", "HEAL_EVERY", "LOGMAX", "LOGKEEP", "LOG_EVERY", "D2K_RUNTIME_DIR", "PORTS",
+        "STATS_SEC", "HEAL_EVERY", "LOGMAX", "LOGKEEP", "LOG_EVERY", "D2S_RUNTIME_DIR", "PORTS",
         "CONNBYTES", "VOICE_PORTS", "VOICE_CONNBYTES", "TG_ENABLED",
         "TG_MODE", "TG_DC_MAP_PATH", "TG_RELAY_URL", "TG_RELAY_SECRET", "TG_IDENTITY", "TG_CA_BUNDLE",
         "TG_STATUS", "TG_STATS_SOCKET", "TG_PORT", "TG_ENROLL_PORT",
         "TG_DIAGNOSTIC_DIRECT_TCP",
         "TG_CF_WORKER_DOMAIN",
-        /* Читает files/S99d2k (разгрузка PPE на Keenetic); панели значение
+        /* Читает files/S99d2s (разгрузка PPE на Keenetic); панели значение
            не нужно, но ключ законный и пишется установщиком. */
-        "D2K_PPE_DEOFFLOAD", "D2K_PPE_TCP_PORTS", "D2K_PPE_UDP_PORTS",
-        "AUTOUPDATE", "D2K_REPO", "D2K_RELAY_URL", "KEENETIC_POLICY"
+        "D2S_PPE_DEOFFLOAD", "D2S_PPE_TCP_PORTS", "D2S_PPE_UDP_PORTS",
+        "AUTOUPDATE", "D2S_REPO", "D2S_RELAY_URL", "KEENETIC_POLICY"
     };
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         if (strcmp(key, keys[i]) == 0) { return 1; }
@@ -334,12 +334,12 @@ static int serve(const char *listen_addr, const char *live_path, const char *ass
     char state_note[128];
     set_state_note(config_state, state_note, sizeof state_note);
     for (size_t i = 0; i < n_unknown; i++) { unknown_ptrs[i] = unknown[i]; }
-    d2k_panel_config cfg = {
+    d2s_panel_config cfg = {
         .live_path = live_path,
         .asset_dir = asset_dir,
-        .version = D2K_PANEL_VERSION,
-        .commit = D2K_PANEL_COMMIT,
-        .built = D2K_PANEL_BUILT,
+        .version = D2S_PANEL_VERSION,
+        .commit = D2S_PANEL_COMMIT,
+        .built = D2S_PANEL_BUILT,
         .mode = config_mode,
         .panel_listen = config_listen,
         .config_path = config_path,
@@ -356,20 +356,20 @@ static int serve(const char *listen_addr, const char *live_path, const char *ass
         .started_epoch = (long long)time(NULL),
         .queue_num = queue,
         .config_exists = config_exists,
-        .dirty = D2K_PANEL_DIRTY,
+        .dirty = D2S_PANEL_DIRTY,
         /* The operator explicitly selected this panel bind address. Allow
          * same-origin controls there; server.c rejects cross-origin actions. */
         .control_enabled = 1,
-        .update_state_path = "/opt/d2k/state/update.json",
-        .updater_path = "/opt/d2k/d2k-update.sh",
+        .update_state_path = "/opt/d2s/state/update.json",
+        .updater_path = "/opt/d2s/d2s-update.sh",
         .listener_fd = listener,
     };
-    printf("d2kpanel %s\nhttp://%s/\n", D2K_PANEL_VERSION, listen_addr);
+    printf("d2spanel %s\nhttp://%s/\n", D2S_PANEL_VERSION, listen_addr);
     fflush(stdout);
 
     while (!stop_requested) {
-        (void)d2k_runtime_heartbeat(health_path, NULL, 0, 1, 1);
-        d2k_panel_control_tick();
+        (void)d2s_runtime_heartbeat(health_path, NULL, 0, 1, 1);
+        d2s_panel_control_tick();
         struct pollfd ready = { .fd = listener, .events = POLLIN };
         int pr = poll(&ready, 1, 1000);
         if (pr == 0 || (pr < 0 && errno == EINTR)) continue;
@@ -387,7 +387,7 @@ static int serve(const char *listen_addr, const char *live_path, const char *ass
         (void)fcntl(client, F_SETFD, FD_CLOEXEC);
         (void)setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
         (void)setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
-        (void)d2k_panel_handle_fd(client, &cfg);
+        (void)d2s_panel_handle_fd(client, &cfg);
         close(client);
     }
     close(listener);
@@ -403,34 +403,34 @@ static int offline_self_check(void) {
 }
 
 int main(int argc, char **argv) {
-    int offline = d2k_runtime_offline(argc, argv, "d2kpanel", offline_self_check);
+    int offline = d2s_runtime_offline(argc, argv, "d2spanel", offline_self_check);
     if (offline >= 0) return offline;
-    if (d2k_panel_ignore_sigpipe() != 0) {
+    if (d2s_panel_ignore_sigpipe() != 0) {
         say("не удалось настроить обработку разрыва HTTP-клиента: %s", strerror(errno));
         return 1;
     }
     if (argc == 2 && strcmp(argv[1], "--version") == 0) {
-        printf("d2kpanel %s commit %s features=%s release=%s\n", D2K_PANEL_VERSION,
-               D2K_PANEL_COMMIT, D2K_PANEL_FEATURES, D2K_RELEASE_ID);
+        printf("d2spanel %s commit %s features=%s release=%s\n", D2S_PANEL_VERSION,
+               D2S_PANEL_COMMIT, D2S_PANEL_FEATURES, D2S_RELEASE_ID);
         return 0;
     }
     if (argc < 2 || strcmp(argv[1], "serve") != 0) {
         usage(stderr);
         return 2;
     }
-    const char *config_path = "/opt/d2k/config";
+    const char *config_path = "/opt/d2s/config";
     char live_path[768] = "";
-    char asset_dir[768] = "/opt/d2k/panel";
+    char asset_dir[768] = "/opt/d2s/panel";
     char listen_addr[256] = "127.0.0.1:8090";
     char mode[32] = "observe";
-    char state_dir[512] = "/opt/d2k/state";
+    char state_dir[512] = "/opt/d2s/state";
     int queue = 2000;
     const char *log_path = NULL;
-    const char *service_path = "/opt/etc/init.d/S99d2k";
-    const char *engine_pid_path = "/opt/d2k/run/d2kd.pid";
-    const char *controller_pid_path = "/opt/d2k/run/d2k.pid";
-    const char *telegram_pid_path = "/opt/d2k/run/d2ktg.pid";
-    const char *telegram_status_path = "/opt/d2k/state/telegram.status";
+    const char *service_path = "/opt/etc/init.d/S99d2s";
+    const char *engine_pid_path = "/opt/d2s/run/d2sd.pid";
+    const char *controller_pid_path = "/opt/d2s/run/d2s.pid";
+    const char *telegram_pid_path = "/opt/d2s/run/d2stg.pid";
+    const char *telegram_status_path = "/opt/d2s/state/telegram.status";
     const char *telegram_stats_path = NULL;
     int cli_listen = 0, cli_mode = 0, cli_state = 0, cli_queue = 0;
     for (int i = 2; i < argc; i++) {

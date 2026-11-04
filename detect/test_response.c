@@ -8,14 +8,14 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
-int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
-                         const d2k_opts *opt);
-void d2k_resp_decide(int target, int control, int unmeasured, int repeats,
-                     d2k_resp_result *res);
+int d2s_resp_handshake12(const char *host, const char *port, const char *sni,
+                         const d2s_opts *opt);
+void d2s_resp_decide(int target, int control, int unmeasured, int repeats,
+                     d2s_resp_result *res);
 
-int d2k_resp_scan12(const uint8_t *buf, size_t have, int *done);
+int d2s_resp_scan12(const uint8_t *buf, size_t have, int *done);
 
 static size_t rec(uint8_t *o, uint8_t type, const uint8_t *p, size_t n)
 {
@@ -39,7 +39,7 @@ int main(void)
     stream[n++] = 14; stream[n++] = 0; stream[n++] = 0; stream[n++] = 0;
     o += rec(out + o, 22, stream, 16384);
     o += rec(out + o, 22, stream + 16384, n - 16384);
-    r = d2k_resp_scan12(out, o, &done);
+    r = d2s_resp_scan12(out, o, &done);
     if (r != 1 || !done) { printf("FAIL split cert: r=%d done=%d\n", r, done); fails++; }
 
     /* 0e 00 00 00 внутри тела Certificate на границе записей — не конец */
@@ -51,14 +51,14 @@ int main(void)
     n += certlen; o = 0;
     o += rec(out + o, 22, stream, 16384);
     o += rec(out + o, 22, stream + 16384, n - 16384);
-    r = d2k_resp_scan12(out, o, &done);
+    r = d2s_resp_scan12(out, o, &done);
     if (r != 0 || done) { printf("FAIL embedded 0e: r=%d done=%d\n", r, done); fails++; }
 
     /* заголовок сообщения разорван между записями: 0e | 00 00 00 */
     o = 0;
     o += rec(out + o, 22, (const uint8_t *)"\x0e", 1);
     o += rec(out + o, 22, (const uint8_t *)"\x00\x00\x00", 3);
-    r = d2k_resp_scan12(out, o, &done);
+    r = d2s_resp_scan12(out, o, &done);
     if (r != 1 || !done) { printf("FAIL split header: r=%d done=%d\n", r, done); fails++; }
 
     /* 0e 00 00 00 в НАЧАЛЕ второй записи — тело Certificate, не ServerHelloDone */
@@ -70,19 +70,19 @@ int main(void)
     n += certlen; o = 0;
     o += rec(out + o, 22, stream, 16384);
     o += rec(out + o, 22, stream + 16384, n - 16384);
-    r = d2k_resp_scan12(out, o, &done);
+    r = d2s_resp_scan12(out, o, &done);
     if (r != 0 || done) { printf("FAIL 0e at record start: r=%d done=%d\n", r, done); fails++; }
 
     /* решение: неизмеренное никогда не BLOCKED */
     {
-        d2k_resp_result res;
+        d2s_resp_result res;
         memset(&res, 0, sizeof(res));
-        d2k_resp_decide(0, 3, 1, 3, &res);
-        if (res.verdict != D2K_RESP_NOT_APPLICABLE) { printf("FAIL decide unmeasured\n"); fails++; }
-        d2k_resp_decide(0, 3, 0, 3, &res);
-        if (res.verdict != D2K_RESP_BLOCKED) { printf("FAIL decide blocked\n"); fails++; }
-        d2k_resp_decide(3, 0, 3, 3, &res);
-        if (res.verdict != D2K_RESP_NOT_APPLICABLE) { printf("FAIL decide ctl unmeasured\n"); fails++; }
+        d2s_resp_decide(0, 3, 1, 3, &res);
+        if (res.verdict != D2S_RESP_NOT_APPLICABLE) { printf("FAIL decide unmeasured\n"); fails++; }
+        d2s_resp_decide(0, 3, 0, 3, &res);
+        if (res.verdict != D2S_RESP_BLOCKED) { printf("FAIL decide blocked\n"); fails++; }
+        d2s_resp_decide(3, 0, 3, 3, &res);
+        if (res.verdict != D2S_RESP_NOT_APPLICABLE) { printf("FAIL decide ctl unmeasured\n"); fails++; }
     }
 
     /* живой пир: шлёт >64 КБ записей без ServerHelloDone -> -1, не 0 */
@@ -92,7 +92,7 @@ int main(void)
         socklen_t al = sizeof(a);
         char port[16];
         pid_t pid;
-        d2k_opts opt;
+        d2s_opts opt;
         memset(&a, 0, sizeof(a));
         a.sin_family = AF_INET;
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -114,7 +114,7 @@ int main(void)
         memset(&opt, 0, sizeof(opt));
         opt.timeout_ms = 2000;
         opt.repeats = 1;
-        r = d2k_resp_handshake12("127.0.0.1", port, "example.org", &opt);
+        r = d2s_resp_handshake12("127.0.0.1", port, "example.org", &opt);
         if (r != -1) { printf("FAIL overflow handshake12=%d\n", r); fails++; }
         waitpid(pid, NULL, 0);
         close(ls);

@@ -22,7 +22,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 printf '%s\n' "$target" > "$CURL_TARGET"
-printf 'printf "executed:%%s:%%s\\n" "${D2K_REF:-unset}" "${D2K_SOURCE:-unset}" >> "$RUN_MARKER"\n' > "$target"
+printf 'printf "executed:%%s:%%s\\n" "${D2S_REF:-unset}" "${D2S_SOURCE:-unset}" >> "$RUN_MARKER"\n' > "$target"
 if [ -n "$proxy" ]; then
     printf '%s\n' "$proxy" >> "$GATE_LOG"
     [ "${GATE_FAIL:-0}" = 0 ] || exit 7
@@ -40,7 +40,7 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 printf '%s\n' "$target" > "$CURL_TARGET"
-printf 'printf "executed:%%s:%%s\\n" "${D2K_REF:-unset}" "${D2K_SOURCE:-unset}" >> "$RUN_MARKER"\n' > "$target"
+printf 'printf "executed:%%s:%%s\\n" "${D2S_REF:-unset}" "${D2S_SOURCE:-unset}" >> "$RUN_MARKER"\n' > "$target"
 [ "${DOWNLOAD_FAIL:-0}" = 0 ] || exit 1
 EOF
 chmod +x "$WORK/bin/wget"

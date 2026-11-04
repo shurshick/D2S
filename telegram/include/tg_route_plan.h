@@ -1,5 +1,5 @@
-#ifndef D2K_TG_ROUTE_PLAN_H
-#define D2K_TG_ROUTE_PLAN_H
+#ifndef D2S_TG_ROUTE_PLAN_H
+#define D2S_TG_ROUTE_PLAN_H
 
 #include "tg_config.h"
 #include "tg_cf_domains.h"

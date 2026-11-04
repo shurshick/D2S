@@ -3,14 +3,14 @@
 set -eu
 iptables -t mangle -A POSTROUTING -p udp -s 10.78.0.2 -d 10.77.0.2 \
     --sport 54000 --dport 54321 -m mark ! --mark 45 -j NFQUEUE --queue-num 2101
-ip link add d2k-limit type dummy
-ip link set d2k-limit mtu 1100 up
+ip link add d2s-limit type dummy
+ip link set d2s-limit mtu 1100 up
 run_case() {
     shape=$1 fake=$2 mode=$3
     /w/raw-test plan "$shape" "$fake" /tmp/plan.tlv
-    iface=d2k-out
-    if [ "$mode" = mtu ]; then iface=d2k-limit; fi
-    D2K_TEST_FAULT="$mode" /w/d2kd-test --queue 2101 --plan /tmp/plan.tlv \
+    iface=d2s-out
+    if [ "$mode" = mtu ]; then iface=d2s-limit; fi
+    D2S_TEST_FAULT="$mode" /w/d2sd-test --queue 2101 --plan /tmp/plan.tlv \
         --mode apply --mark 45 --iface "$iface" --stats 0 --journal 64 \
         --control /tmp/ctl.sock --duration 10 > /tmp/daemon.log 2>&1 &
     daemon=$!

@@ -8,7 +8,7 @@
 
 #include <linux/netlink.h>
 
-#include "d2k_nfq.h"
+#include "d2s_nfq.h"
 
 int main(void) {
     const int requested = 16 * 1024 * 1024;
@@ -27,7 +27,7 @@ int main(void) {
     }
     close(probe_fd);
 
-    d2k_nfq_cfg cfg = {
+    d2s_nfq_cfg cfg = {
         .queue = 61431,
         .copy_range = 1500,
         .maxlen = 32,
@@ -35,7 +35,7 @@ int main(void) {
         .rcvbuf = requested
     };
     char err[256] = {0};
-    d2k_nfq *q = d2k_nfq_open(&cfg, err, sizeof err);
+    d2s_nfq *q = d2s_nfq_open(&cfg, err, sizeof err);
     if (!q) {
         fprintf(stderr, "ПРОВАЛ: открыть изолированную NFQUEUE: %s\n", err);
         return 1;
@@ -43,9 +43,9 @@ int main(void) {
 
     int actual = 0;
     socklen_t actual_len = sizeof actual;
-    int got = getsockopt(d2k_nfq_fd(q), SOL_SOCKET, SO_RCVBUF,
+    int got = getsockopt(d2s_nfq_fd(q), SOL_SOCKET, SO_RCVBUF,
                          &actual, &actual_len);
-    d2k_nfq_close(q);
+    d2s_nfq_close(q);
     if (got != 0) {
         perror("ПРОВАЛ: getsockopt(SO_RCVBUF)");
         return 1;

@@ -11,7 +11,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "d2k_wire.h"
+#include "d2s_wire.h"
 
 #define IP_HDR  20
 #define TCP_HDR 20
@@ -51,7 +51,7 @@ static uint16_t rd16(const uint8_t *p) {
  *
  * Арифметика целочисленная и со знаком только в пределах int: на коробках без
  * сопроцессора плавающей точки нет (см. шапку файла). */
-static uint8_t auto_ttl(const d2k_emit *e, uint8_t rev_ttl) {
+static uint8_t auto_ttl(const d2s_emit *e, uint8_t rev_ttl) {
     static const int guesses[] = {64, 128, 255};
     if (!rev_ttl) { return 0; }
     int origin = 0;
@@ -106,7 +106,7 @@ static uint32_t pseudo_sum(const uint8_t *src4, const uint8_t *dst4, size_t tcp_
     return sum16(ph, sizeof ph, 0);
 }
 
-size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
+size_t d2s_wire_build(const d2s_conn *c, const d2s_emit *e,
                       uint8_t *out, size_t cap) {
     if (!c || !e || !out) {
         return 0;
@@ -116,15 +116,15 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
         (!e->urgent && e->urgent_ptr)) { return 0; }
     int ipv6 = c->family == 6;
     size_t ip_hdr = ipv6 ? 40u : IP_HDR;
-    if (ipv6 && (e->poison & D2K_POISON_IPID_ZERO)) { return 0; }
-    if (e->ipfrag || (e->wire_profile != 0 && e->wire_profile != D2K_WIRE_DETECT_TCP &&
-                      e->wire_profile != D2K_WIRE_TCP_TEMPLATE)) { return 0; }
-    int measured = e->wire_profile == D2K_WIRE_DETECT_TCP;
-    if ((e->poison & D2K_POISON_MD5) && !measured) { return 0; }
-    int native = e->wire_profile == D2K_WIRE_TCP_TEMPLATE;
+    if (ipv6 && (e->poison & D2S_POISON_IPID_ZERO)) { return 0; }
+    if (e->ipfrag || (e->wire_profile != 0 && e->wire_profile != D2S_WIRE_DETECT_TCP &&
+                      e->wire_profile != D2S_WIRE_TCP_TEMPLATE)) { return 0; }
+    int measured = e->wire_profile == D2S_WIRE_DETECT_TCP;
+    if ((e->poison & D2S_POISON_MD5) && !measured) { return 0; }
+    int native = e->wire_profile == D2S_WIRE_TCP_TEMPLATE;
     uint8_t native_options[40];
-    size_t opt_len = (e->poison & D2K_POISON_MD5) ? 20
-        : (e->poison & D2K_POISON_TCPTS_BACK) ? TS_OPT_LEN : 0;
+    size_t opt_len = (e->poison & D2S_POISON_MD5) ? 20
+        : (e->poison & D2S_POISON_TCPTS_BACK) ? TS_OPT_LEN : 0;
     if (native) {
         opt_len = c->tcp_options_len;
         if (opt_len > sizeof native_options || opt_len % 4) return 0;
@@ -139,7 +139,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
             if (kind == 8) {
                 if (native_options[off + 1] != 10 || found_timestamp) return 0;
                 found_timestamp = 1;
-                if (e->poison & D2K_POISON_TCPTS_BACK) {
+                if (e->poison & D2S_POISON_TCPTS_BACK) {
                     const uint8_t *v = native_options + off + 2;
                     uint32_t ts = (uint32_t)v[0] << 24 | (uint32_t)v[1] << 16 |
                                   (uint32_t)v[2] << 8 | v[3];
@@ -148,7 +148,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
             }
             off += native_options[off + 1];
         }
-        if ((e->poison & D2K_POISON_TCPTS_BACK) && !found_timestamp) return 0;
+        if ((e->poison & D2S_POISON_TCPTS_BACK) && !found_timestamp) return 0;
         /* МЕТКУ — ПЕРВОЙ (tcp_ts_up документации zapret2): linux отбрасывает
            пакет с валидным seq и невалидным ack только когда опция метки идёт
            первой, и nfqws1 случайно соблюдал это всегда. Переносим опцию
@@ -201,7 +201,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
     /* Идентификатор: либо ноль по требованию порчи, либо чужой плюс единица.
        Совпадение идентификатора с оригиналом — известная ловушка: сборщик
        фрагментов на той стороне может счесть пакеты частями одной дейтаграммы. */
-    wr16(out + 4, (e->poison & D2K_POISON_IPID_ZERO) ? 0
+    wr16(out + 4, (e->poison & D2S_POISON_IPID_ZERO) ? 0
                       : measured ? (uint16_t)(random() % 65535)
                       : native ? c->ip_id : (uint16_t)(c->ip_id + 1));
     wr16(out + 6, measured ? 0 : 0x4000);
@@ -233,7 +233,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
 
     if (native && opt_len) {
         memcpy(t + TCP_HDR, native_options, opt_len);
-    } else if (e->poison & D2K_POISON_MD5) {
+    } else if (e->poison & D2S_POISON_MD5) {
         /* raw.c: MD5 replaces timestamp/options, not an appended option.
          * Header was zeroed: the 16-byte signature is deliberately zero. */
         uint8_t *o = t + TCP_HDR;
@@ -260,7 +260,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
                         : pseudo_sum(out + 12, out + 16, tcp_len);
     acc = sum16(out + ip_hdr, tcp_len, acc);
     uint16_t ck = fold(acc);
-    if (e->poison & D2K_POISON_BADSUM) {
+    if (e->poison & D2S_POISON_BADSUM) {
         /* Measured mode reproduces detect/raw.c, including its zero case;
            legacy plans retain their historical inversion semantics. */
         if (measured) {
@@ -276,7 +276,7 @@ size_t d2k_wire_build(const d2k_conn *c, const d2k_emit *e,
     return total;
 }
 
-int d2k_wire_tcp_checksum_ok(const uint8_t *pkt, size_t len) {
+int d2s_wire_tcp_checksum_ok(const uint8_t *pkt, size_t len) {
     if (!pkt || len < IP_HDR + TCP_HDR) {
         return 0;
     }

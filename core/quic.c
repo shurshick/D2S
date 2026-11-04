@@ -12,7 +12,7 @@
  *
  * 1. Биты типа длинного заголовка (маска 0x30 первого байта) защитой
  *    заголовка НЕ закрыты (RFC 9001 §5.4.1 защищает только младшие 4 бита и
- *    номер пакета). На этом стоит d2k_quic_is_initial — узнать Initial можно
+ *    номер пакета). На этом стоит d2s_quic_is_initial — узнать Initial можно
  *    БЕЗ вывода ключей и без расшифровки.
  *
  * 2. Версия 2 (RFC 9369) — не экзотика, а отдельный, специально
@@ -30,8 +30,8 @@
  *    НЕ доказательство: у донора был замер, где такой пакет приходил дважды
  *    из двух с задержкой как у живого ответа, и это не засчиталось успехом
  *    (см. бриф задачи). Здесь то же самое правило работает в обратную
- *    сторону: d2k_quic_sni возвращает имя ТОЛЬКО если шифротекст прошёл
- *    проверку тега AEAD (d2k_aes128_gcm_decrypt, d2k_crypto.h) — структурно
+ *    сторону: d2s_quic_sni возвращает имя ТОЛЬКО если шифротекст прошёл
+ *    проверку тега AEAD (d2s_aes128_gcm_decrypt, d2s_crypto.h) — структурно
  *    похожий, но не аутентифицированный пакет имени не даёт никогда.
  *
  * СБОРКА ПОТОКА CRYPTO. Кадры внутри одного Initial-пакета — это ломтики
@@ -49,24 +49,24 @@
  * БЕЗ ВЫДЕЛЕНИЙ ПАМЯТИ. Обе функции вызываются на каждом UDP-пакете в
  * горячем пути датапата (задача 4 этой же вертикали, ещё не написана) — вся
  * работа целиком на стеке, буферы фиксированного размера, см.
- * D2K_QUIC_MAX_DGRAM ниже.
+ * D2S_QUIC_MAX_DGRAM ниже.
  */
 #include <string.h>
 
-#include "d2k_quic.h"
-#include "d2k_quicwire.h"
+#include "d2s_quic.h"
+#include "d2s_quicwire.h"
 
 /* ---------------------------------------------------------------------
  * Константы протокола. Каждая — из текста RFC, а не «на вкус».
  * --------------------------------------------------------------------- */
 
-#define D2K_QUIC_V1 0x00000001u /* RFC 9000 */
-#define D2K_QUIC_V2 0x6b3343cfu /* RFC 9369 §3.1 — первые 4 байта sha256("QUICv2 version number") */
+#define D2S_QUIC_V1 0x00000001u /* RFC 9000 */
+#define D2S_QUIC_V2 0x6b3343cfu /* RFC 9369 §3.1 — первые 4 байта sha256("QUICv2 version number") */
 
 /* Обе соли — 20 байт (RFC 9001 §5.2 и RFC 9369 §3.3.1 задают одну и ту же
  * длину), поэтому один именованный размер на обе — decrypt_initial ниже
- * передаёт его в d2k_hkdf_extract независимо от того, какая соль выбрана. */
-#define D2K_QUIC_SALT_LEN 20
+ * передаёт его в d2s_hkdf_extract независимо от того, какая соль выбрана. */
+#define D2S_QUIC_SALT_LEN 20
 
 /* RFC 9000 §17.2: длина DCID/SCID в длинном заголовке — 8-битное число, но
  * "MUST NOT exceed 20 bytes... Endpoints that receive a ... value larger than
@@ -74,7 +74,7 @@
  * технически ПОМЕЩАЕТСЯ в однобайтовое поле) — это требование стандарта,
  * нарушение которого само по себе говорит «не наш Initial». Действует для
  * обеих версий: RFC 9369 не меняет этот пункт. */
-#define D2K_QUIC_CID_MAX 20
+#define D2S_QUIC_CID_MAX 20
 
 /* Наибольшая датаграмма, которую готов держать разбор. Функции этого модуля
  * не выделяют память (задача 4 зовёт их на каждом UDP-пакете в горячем пути)
@@ -88,7 +88,7 @@
  * везде, включая WAN Keenetic (PPPoE даже режет до 1492). Датаграмма крупнее
  * этого предела — не типичный браузерный Initial, и не в этом её отвергать
  * ЖИЗНЕННО: разбор просто честно не пытается её понять (см. parse_initial_header). */
-#define D2K_QUIC_MAX_DGRAM 1500
+#define D2S_QUIC_MAX_DGRAM 1500
 
 /* ---------------------------------------------------------------------
  * Мелкие читалки. rd16/rd32 — big-endian, как весь QUIC (RFC 9000 §17).
@@ -134,7 +134,7 @@ static int read_varint(const uint8_t *p, size_t avail, uint64_t *val, size_t *wi
  * --------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------
- * Разбор заголовка Initial — общий для d2k_quic_is_initial и d2k_quic_sni,
+ * Разбор заголовка Initial — общий для d2s_quic_is_initial и d2s_quic_sni,
  * чтобы у них не было шанса разойтись в том, что считать Initial. НЕ трогает
  * ключи и шифр вовсе — только структура заголовка и границы.
  * --------------------------------------------------------------------- */
@@ -150,7 +150,7 @@ static int parse_initial_header(const uint8_t *p, size_t n, quic_hdr *h) {
     if (!p) {
         return -1; /* проверяется здесь один раз, а не в каждом из двух публичных входов */
     }
-    if (n > D2K_QUIC_MAX_DGRAM) {
+    if (n > D2S_QUIC_MAX_DGRAM) {
         return -1; /* см. комментарий у константы: за этим пределом разбор сознательно не пытается */
     }
     /* РАЗБОР — ОБЩИЙ (core/quicwire.c), а не свой. Копия этого кода уже жила
@@ -158,17 +158,17 @@ static int parse_initial_header(const uint8_t *p, size_t n, quic_hdr *h) {
        другая нет. Здесь остаются только требования, которые предъявляет
        ИМЕННО ЭТОТ путь — пакетный, где нас интересует ровно клиентский
        Initial известной версии. */
-    d2k_qw_hdr qh;
-    if (d2k_qw_hdr_parse(p, n, 0, &qh) != 0) {
+    d2s_qw_hdr qh;
+    if (d2s_qw_hdr_parse(p, n, 0, &qh) != 0) {
         return -1;
     }
     if (!qh.long_hdr) {
         return -1; /* короткий заголовок — до него в Initial-пространстве дело не доходит */
     }
-    if (qh.version != D2K_QW_V1 && qh.version != D2K_QW_V2) {
+    if (qh.version != D2S_QW_V1 && qh.version != D2S_QW_V2) {
         return -1; /* неизвестная версия — честно не наш Initial */
     }
-    if (qh.type != D2K_QW_LT_INITIAL) {
+    if (qh.type != D2S_QW_LT_INITIAL) {
         return -1; /* тот же длинный заголовок, но 0-RTT/Handshake/Retry */
     }
     h->version = qh.version;
@@ -179,7 +179,7 @@ static int parse_initial_header(const uint8_t *p, size_t n, quic_hdr *h) {
     return 0;
 }
 
-int d2k_quic_is_initial(const uint8_t *p, size_t n) {
+int d2s_quic_is_initial(const uint8_t *p, size_t n) {
     quic_hdr h;
     return parse_initial_header(p, n, &h) == 0;
 }
@@ -194,25 +194,25 @@ static int decrypt_initial(const uint8_t *p, const quic_hdr *h, uint8_t *plain, 
        соединения мал, и наибольшего принятого у пакетного разбора нет —
        состояния между вызовами у него не бывает по устройству. */
     uint8_t secret[32];
-    if (d2k_qw_initial_secret(h->version, p + h->dcid_off, h->dcid_len,
-                              D2K_QW_CLIENT, secret) != 0) {
+    if (d2s_qw_initial_secret(h->version, p + h->dcid_off, h->dcid_len,
+                              D2S_QW_CLIENT, secret) != 0) {
         return -1;
     }
-    d2k_qw_keys k;
-    if (d2k_qw_keys_from_secret(h->version, secret, &k) != 0) {
+    d2s_qw_keys k;
+    if (d2s_qw_keys_from_secret(h->version, secret, &k) != 0) {
         return -1;
     }
-    d2k_qw_hdr qh;
+    d2s_qw_hdr qh;
     memset(&qh, 0, sizeof qh);
     qh.long_hdr = 1;
     qh.version = h->version;
-    qh.type = D2K_QW_LT_INITIAL;
+    qh.type = D2S_QW_LT_INITIAL;
     qh.dcid_off = h->dcid_off;
     qh.dcid_len = h->dcid_len;
     qh.pn_offset = h->pn_offset;
     qh.length_claimed = h->length_claimed;
     qh.packet_len = h->pn_offset + h->length_claimed;
-    return d2k_qw_open(&k, &qh, p, 0, plain, plain_len, NULL);
+    return d2s_qw_open(&k, &qh, p, 0, plain, plain_len, NULL);
 }
 
 /* ---------------------------------------------------------------------
@@ -243,7 +243,7 @@ static size_t collect_crypto_frames(const uint8_t *plain, size_t plen,
        прислать сотни однобайтовых CRYPTO в обратном порядке: прежние восемь
        слотов теряли SNI в совершенно корректном Initial. Карта занятости
        позволяет собрать все кадры за один проход без массива на каждый. */
-    if (cap > D2K_QUIC_ASSEMBLY_MAX) { cap = D2K_QUIC_ASSEMBLY_MAX; }
+    if (cap > D2S_QUIC_ASSEMBLY_MAX) { cap = D2S_QUIC_ASSEMBLY_MAX; }
     size_t i = 0;
     while (i < plen) {
         uint8_t t = plain[i];
@@ -281,7 +281,7 @@ static size_t collect_crypto_frames(const uint8_t *plain, size_t plen,
             int ranges_ok = 1;
             /* range_count заявлен отправителем и может быть сколь угодно
              * большим (до 2^62-1) — но каждая итерация обязана прочитать ещё
-             * хотя бы 2 варинта, а payload не больше D2K_QUIC_MAX_DGRAM,
+             * хотя бы 2 варинта, а payload не больше D2S_QUIC_MAX_DGRAM,
              * поэтому read_varint откажет самое позднее через ~plen/2
              * итераций независимо от того, что заявляет range_count. Отдельный
              * потолок на сам range_count не нужен: буфер уже его ставит. */
@@ -547,7 +547,7 @@ static int find_client_hello_sni(const uint8_t *stream, size_t filled,
  * Публичный вход.
  * --------------------------------------------------------------------- */
 
-/* Общая часть d2k_quic_sni и d2k_quic_client_hello: из защищённой датаграммы
+/* Общая часть d2s_quic_sni и d2s_quic_client_hello: из защищённой датаграммы
  * — собранный поток CRYPTO. Возвращает длину собранного (0 — не вышло). */
 static size_t crypto_stream_of(const uint8_t *p, size_t n,
                                uint8_t *stream, size_t cap) {
@@ -555,21 +555,21 @@ static size_t crypto_stream_of(const uint8_t *p, size_t n,
     if (parse_initial_header(p, n, &h) != 0) {
         return 0;
     }
-    uint8_t plain[D2K_QUIC_MAX_DGRAM];
+    uint8_t plain[D2S_QUIC_MAX_DGRAM];
     size_t plain_len;
     if (decrypt_initial(p, &h, plain, &plain_len) != 0) {
         return 0;
     }
-    uint8_t seen[(D2K_QUIC_MAX_DGRAM + 7) / 8] = {0};
+    uint8_t seen[(D2S_QUIC_MAX_DGRAM + 7) / 8] = {0};
     return collect_crypto_frames(plain, plain_len, stream, seen, cap, NULL);
 }
 
-int d2k_quic_client_hello(const uint8_t *p, size_t n,
+int d2s_quic_client_hello(const uint8_t *p, size_t n,
                           uint8_t *out, size_t cap, size_t *out_len) {
     if (!p || !out || !out_len) {
         return -1;
     }
-    uint8_t stream[D2K_QUIC_MAX_DGRAM];
+    uint8_t stream[D2S_QUIC_MAX_DGRAM];
     size_t filled = crypto_stream_of(p, n, stream, sizeof stream);
     if (filled < HS_HDR || stream[0] != HS_CLIENT_HELLO) {
         return -1;
@@ -600,11 +600,11 @@ int d2k_quic_client_hello(const uint8_t *p, size_t n,
  * начинает новый полёт с другим DCID, и склейка двух полётов дала бы
  * «приветствие», которого никто не слал. Разные DCID — отказ, а не догадка.
  *
- * Поток CRYPTO здесь шире, чем у одиночного разбора (D2K_QUIC_MAX_DGRAM):
+ * Поток CRYPTO здесь шире, чем у одиночного разбора (D2S_QUIC_MAX_DGRAM):
  * приветствие с ML-KEM около 2 КБ, и собирать его в буфер размером с одну
  * датаграмму нечем. Буферы статические на поток выполнения: функция зовётся
  * и из рабочих потоков планировщика, и из датапата. */
-int d2k_quic_dgrams_hello(const uint8_t *const *dg, const size_t *len, size_t n,
+int d2s_quic_dgrams_hello(const uint8_t *const *dg, const size_t *len, size_t n,
                           uint8_t *out, size_t cap, size_t *out_len) {
     enum { STREAM_MAX = 8192 };
     static __thread uint8_t stream[STREAM_MAX];
@@ -629,7 +629,7 @@ int d2k_quic_dgrams_hello(const uint8_t *const *dg, const size_t *len, size_t n,
             memcmp(dg[i] + h.dcid_off, dg[0] + first.dcid_off, first.dcid_len) != 0) {
             return -1;
         }
-        uint8_t plain[D2K_QUIC_MAX_DGRAM];
+        uint8_t plain[D2S_QUIC_MAX_DGRAM];
         size_t plain_len = 0;
         if (decrypt_initial(dg[i], &h, plain, &plain_len) != 0) {
             return -1;
@@ -656,9 +656,9 @@ int d2k_quic_dgrams_hello(const uint8_t *const *dg, const size_t *len, size_t n,
     return 0;
 }
 
-/* Имя из УЖЕ СОБРАННОГО ClientHello (его собирает d2k_quic_dgrams_hello).
-   Тот же разбор расширений, что у d2k_quic_sni, — второй копии нет. */
-int d2k_quic_hello_name(const uint8_t *ch, size_t n, char *out, size_t cap) {
+/* Имя из УЖЕ СОБРАННОГО ClientHello (его собирает d2s_quic_dgrams_hello).
+   Тот же разбор расширений, что у d2s_quic_sni, — второй копии нет. */
+int d2s_quic_hello_name(const uint8_t *ch, size_t n, char *out, size_t cap) {
     size_t off = 0, len = 0;
     if (!ch || !out || cap == 0 || find_client_hello_sni(ch, n, &off, &len) != 0 ||
         len == 0 || len + 1 > cap) {
@@ -669,27 +669,27 @@ int d2k_quic_hello_name(const uint8_t *ch, size_t n, char *out, size_t cap) {
     return 0;
 }
 
-int d2k_quic_hello_incomplete(const uint8_t *p, size_t n) {
+int d2s_quic_hello_incomplete(const uint8_t *p, size_t n) {
     if (!p) {
         return 0;
     }
-    uint8_t stream[D2K_QUIC_MAX_DGRAM];
+    uint8_t stream[D2S_QUIC_MAX_DGRAM];
     size_t filled = crypto_stream_of(p, n, stream, sizeof stream);
     if (filled < HS_HDR || stream[0] != HS_CLIENT_HELLO) {
         return 0;
     }
     size_t claimed = ((size_t)stream[1] << 16) | ((size_t)stream[2] << 8) | stream[3];
-    /* Тот же признак, что в d2k_quic_client_hello: заявлено больше, чем
+    /* Тот же признак, что в d2s_quic_client_hello: заявлено больше, чем
        собралось из этой датаграммы. */
     return HS_HDR + claimed > filled ? 1 : 0;
 }
 
-int d2k_quic_sni(const uint8_t *p, size_t n, char *out, size_t cap) {
+int d2s_quic_sni(const uint8_t *p, size_t n, char *out, size_t cap) {
     if (!p || !out || cap == 0) {
         return -1;
     }
 
-    uint8_t stream[D2K_QUIC_MAX_DGRAM];
+    uint8_t stream[D2S_QUIC_MAX_DGRAM];
     size_t filled = crypto_stream_of(p, n, stream, sizeof stream);
 
     size_t sni_off, sni_len;
@@ -705,22 +705,22 @@ int d2k_quic_sni(const uint8_t *p, size_t n, char *out, size_t cap) {
     return 0;
 }
 
-void d2k_quic_assembly_init(d2k_quic_assembly *a) {
+void d2s_quic_assembly_init(d2s_quic_assembly *a) {
     if (a) { memset(a, 0, sizeof *a); }
 }
 
-int d2k_quic_assembly_feed(d2k_quic_assembly *a, const uint8_t *p, size_t n,
+int d2s_quic_assembly_feed(d2s_quic_assembly *a, const uint8_t *p, size_t n,
                            char *out, size_t cap) {
     if (!a || !p || !out || cap == 0) { return -1; }
 
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr ||
-        h.type != D2K_QW_LT_INITIAL || h.dcid_len > D2K_QW_CID_MAX ||
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr ||
+        h.type != D2S_QW_LT_INITIAL || h.dcid_len > D2S_QW_CID_MAX ||
         h.packet_len > n) {
         return -1;
     }
 
-    d2k_quic_assembly next;
+    d2s_quic_assembly next;
     int fresh = !a->active;
     if (a->active && (a->version != h.version || a->dcid_len != h.dcid_len ||
                       memcmp(a->dcid, p + h.dcid_off, h.dcid_len) != 0)) {
@@ -736,9 +736,9 @@ int d2k_quic_assembly_feed(d2k_quic_assembly *a, const uint8_t *p, size_t n,
         next.dcid_len = h.dcid_len;
         memcpy(next.dcid, p + h.dcid_off, h.dcid_len);
         uint8_t secret[32];
-        if (d2k_qw_initial_secret(h.version, next.dcid, next.dcid_len,
-                                  D2K_QW_CLIENT, secret) != 0 ||
-            d2k_qw_keys_from_secret(h.version, secret, &next.keys) != 0) {
+        if (d2s_qw_initial_secret(h.version, next.dcid, next.dcid_len,
+                                  D2S_QW_CLIENT, secret) != 0 ||
+            d2s_qw_keys_from_secret(h.version, secret, &next.keys) != 0) {
             return -1;
         }
         next.active = 1;
@@ -746,10 +746,10 @@ int d2k_quic_assembly_feed(d2k_quic_assembly *a, const uint8_t *p, size_t n,
         next = *a;
     }
 
-    uint8_t plain[D2K_QW_MAX_DGRAM];
+    uint8_t plain[D2S_QW_MAX_DGRAM];
     size_t plain_len = 0;
     uint64_t pn = 0;
-    if (d2k_qw_open(&next.keys, &h, p,
+    if (d2s_qw_open(&next.keys, &h, p,
                     next.have_pn ? next.largest_pn : 0,
                     plain, &plain_len, &pn) != 0) {
         return -1;
@@ -777,7 +777,7 @@ int d2k_quic_assembly_feed(d2k_quic_assembly *a, const uint8_t *p, size_t n,
     return 1;
 }
 
-int d2k_quic_assembly_complete(const d2k_quic_assembly *a) {
+int d2s_quic_assembly_complete(const d2s_quic_assembly *a) {
     if (!a || !a->active) { return 0; }
     /* Длина сообщения — из заголовка Handshake в первых четырёх байтах. */
     for (size_t i = 0; i < 4; i++) {
@@ -806,7 +806,7 @@ int d2k_quic_assembly_complete(const d2k_quic_assembly *a) {
  * исходник на провод не уходит — уходит только переложенный.
  *
  * Разрез — посередине имени, и только если имя собирается из CRYPTO этой
- * датаграммы; иначе отказ D2K_QUIC_SPLIT_NO_NAME. Хвост первым: RFC 9000 §19.6 не
+ * датаграммы; иначе отказ D2S_QUIC_SPLIT_NO_NAME. Хвост первым: RFC 9000 §19.6 не
  * требует возрастания смещений внутри пакета, сервер собирает поток по
  * смещениям, а коробка, читающая кадры по одному, видит обрывок имени.
  * Место под заголовок второго кадра берётся из PADDING; его нет — отказ,
@@ -826,10 +826,10 @@ static int put_split_frame(uint8_t *body, size_t cap, size_t *pos,
     size_t b = *pos;
     if (b >= cap) { return -1; }
     body[b++] = 0x06;
-    size_t w = d2k_qw_varint_write(body + b, cap - b, off);
+    size_t w = d2s_qw_varint_write(body + b, cap - b, off);
     if (w == 0) { return -1; }
     b += w;
-    w = d2k_qw_varint_write(body + b, cap - b, (uint64_t)len);
+    w = d2s_qw_varint_write(body + b, cap - b, (uint64_t)len);
     if (w == 0) { return -1; }
     b += w;
     if (len > cap - b) { return -1; }
@@ -838,27 +838,27 @@ static int put_split_frame(uint8_t *body, size_t cap, size_t *pos,
     return 0;
 }
 
-int d2k_quic_initial_split_crypto(const uint8_t *in, size_t n,
+int d2s_quic_initial_split_crypto(const uint8_t *in, size_t n,
                                   uint8_t *out, size_t cap, size_t *out_len) {
     if (!in || !out || !out_len || cap < n) { return -1; }
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
-        h.type != D2K_QW_LT_INITIAL ||
-        (h.version != D2K_QUIC_V1 && h.version != D2K_QUIC_V2) ||
-        h.packet_len > n || h.packet_len > D2K_QUIC_MAX_DGRAM) {
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
+        h.type != D2S_QW_LT_INITIAL ||
+        (h.version != D2S_QUIC_V1 && h.version != D2S_QUIC_V2) ||
+        h.packet_len > n || h.packet_len > D2S_QUIC_MAX_DGRAM) {
         return -1;
     }
     uint8_t secret[32];
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(h.version, in + h.dcid_off, h.dcid_len,
-                              D2K_QW_CLIENT, secret) != 0 ||
-        d2k_qw_keys_from_secret(h.version, secret, &k) != 0) {
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(h.version, in + h.dcid_off, h.dcid_len,
+                              D2S_QW_CLIENT, secret) != 0 ||
+        d2s_qw_keys_from_secret(h.version, secret, &k) != 0) {
         return -1;
     }
-    uint8_t plain[D2K_QUIC_MAX_DGRAM];
+    uint8_t plain[D2S_QUIC_MAX_DGRAM];
     size_t plain_len = 0;
     uint64_t pn = 0;
-    if (d2k_qw_open(&k, &h, in, 0, plain, &plain_len, &pn) != 0) { return -1; }
+    if (d2s_qw_open(&k, &h, in, 0, plain, &plain_len, &pn) != 0) { return -1; }
     if (h.length_claimed < plain_len + 16) { return -1; }
     size_t pn_len = h.length_claimed - plain_len - 16;
     if (pn_len < 1 || pn_len > 4) { return -1; }
@@ -890,7 +890,7 @@ int d2k_quic_initial_split_crypto(const uint8_t *in, size_t n,
 
     /* Где резать: середина имени в координатах потока CRYPTO. */
     size_t target = SPLIT_MAX_FRAMES, cut = 0;
-    uint8_t stream[D2K_QUIC_MAX_DGRAM];
+    uint8_t stream[D2S_QUIC_MAX_DGRAM];
     size_t filled = crypto_stream_of(in, h.packet_len, stream, sizeof stream);
     size_t sni_off = 0, sni_len = 0;
     if (filled && find_client_hello_sni(stream, filled, &sni_off, &sni_len) == 0 &&
@@ -909,10 +909,10 @@ int d2k_quic_initial_split_crypto(const uint8_t *in, size_t n,
            или середина имени на границе кадров. Разрез где-то ещё никто не
            мерил, и имя всё равно уйдёт целиком — отказ, а не догадка
            (задача 40, круг 1). */
-        return D2K_QUIC_SPLIT_NO_NAME;
+        return D2S_QUIC_SPLIT_NO_NAME;
     }
 
-    uint8_t body[D2K_QUIC_MAX_DGRAM];
+    uint8_t body[D2S_QUIC_MAX_DGRAM];
     size_t b = 0;
     const split_frame *tf = &fr[target];
     if (put_split_frame(body, plain_len, &b, tf->off + cut, plain + tf->data + cut,
@@ -933,11 +933,11 @@ int d2k_quic_initial_split_crypto(const uint8_t *in, size_t n,
 
     /* Заголовок до номера пакета — дословно; первый байт без защиты:
        старшие биты как на проводе, зарезервированные — нули, длину номера
-       допишет d2k_qw_seal. */
-    uint8_t hdr[D2K_QUIC_MAX_DGRAM];
+       допишет d2s_qw_seal. */
+    uint8_t hdr[D2S_QUIC_MAX_DGRAM];
     memcpy(hdr, in, h.pn_offset);
     hdr[0] = (uint8_t)(in[0] & 0xf0u);
-    size_t made = d2k_qw_seal(&k, 1, hdr, h.pn_offset, pn, pn_len, body, plain_len,
+    size_t made = d2s_qw_seal(&k, 1, hdr, h.pn_offset, pn, pn_len, body, plain_len,
                               out, cap);
     if (made != h.packet_len) { return -1; }
     if (n > h.packet_len) {

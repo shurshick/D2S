@@ -1,4 +1,4 @@
-# Датапат d2k. Здесь живёт то, что видит чужие пакеты, и только оно.
+# Датапат d2s. Здесь живёт то, что видит чужие пакеты, и только оно.
 #
 # -Werror не роскошь: непереносимость обязана ловиться в тот день, когда её
 # внесли, а не на роутере. Замер этапа 0 показал, что C даёт ошибки работы с
@@ -7,7 +7,7 @@
 CC      ?= cc
 CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -I$(CORE_DIR)/include
 RELEASE_ID ?= dev
-CFLAGS += -DD2K_RELEASE_ID='"$(RELEASE_ID)"'
+CFLAGS += -DD2S_RELEASE_ID='"$(RELEASE_ID)"'
 LDFLAGS ?=
 
 # Кросс-компиляторы для проверки переносимости. Пути переопределяются извне.
@@ -35,7 +35,7 @@ MIPS_BE_ZIG ?= -target mips-linux-musleabi -mcpu=mips32+soft_float
 CORE_DIR = ../core
 CORESRC  = $(CORE_DIR)/quic.c $(CORE_DIR)/quicsnap.c $(CORE_DIR)/quicwire.c $(CORE_DIR)/crypto.c $(CORE_DIR)/ipfrag.c $(CORE_DIR)/httpup_logic.c
 COREOBJ  = core_quic.o core_quicwire.o core_quicsnap.o core_crypto.o core_ipfrag.o core_httpup_logic.o
-COREHDR  = $(CORE_DIR)/include/d2k_quicsnap.h $(CORE_DIR)/include/d2k_arm.h $(CORE_DIR)/include/d2k_quic.h $(CORE_DIR)/include/d2k_quicwire.h $(CORE_DIR)/include/d2k_crypto.h $(CORE_DIR)/include/d2k_ipfrag.h $(CORE_DIR)/include/d2k_httpup.h
+COREHDR  = $(CORE_DIR)/include/d2s_quicsnap.h $(CORE_DIR)/include/d2s_arm.h $(CORE_DIR)/include/d2s_quic.h $(CORE_DIR)/include/d2s_quicwire.h $(CORE_DIR)/include/d2s_crypto.h $(CORE_DIR)/include/d2s_ipfrag.h $(CORE_DIR)/include/d2s_httpup.h
 QUIC_FIXTURE_OBJ = core_quichello.o core_hello.o core_tls13core.o core_x25519.o
 
 # Переносимый датапат: собирается и проверяется на любой машине.
@@ -45,25 +45,25 @@ SRC     = icmpguard.c http80.c http_trace.c addr.c plan_parse.c plan_apply.c tls
 # cross, которая линкует ПОЛНУЮ службу под обе целевые арки: полная сборка
 # доказывает больше, чем компиляция объектников.
 LINUXSRC = nfq.c raw.c routemark_nl.c
-DAEMON   = d2kd.c
-HDR     = include/d2k_icmpguard.h include/d2k_hold.h include/d2k_udp_hold.h include/d2k_udp_release.h include/d2k_udp_path.h include/d2k_routemark.h include/d2k_capture.h include/d2k_plan.h include/d2k_nat.h include/d2k_tls.h include/d2k_wire.h include/d2k_track.h include/d2k_session.h include/d2k_nl.h include/d2k_ctq.h include/d2k_sched.h include/d2k_nfq.h include/d2k_raw.h include/d2k_journal.h include/d2k_plans.h include/d2k_ctl.h include/d2k_ctlsrv.h include/d2k_http80.h plan_internal.h $(COREHDR)
+DAEMON   = d2sd.c
+HDR     = include/d2s_icmpguard.h include/d2s_hold.h include/d2s_udp_hold.h include/d2s_udp_release.h include/d2s_udp_path.h include/d2s_routemark.h include/d2s_capture.h include/d2s_plan.h include/d2s_nat.h include/d2s_tls.h include/d2s_wire.h include/d2s_track.h include/d2s_session.h include/d2s_nl.h include/d2s_ctq.h include/d2s_sched.h include/d2s_nfq.h include/d2s_raw.h include/d2s_journal.h include/d2s_plans.h include/d2s_ctl.h include/d2s_ctlsrv.h include/d2s_http80.h plan_internal.h $(COREHDR)
 
-HDR += include/d2k_http_response.h include/d2k_http_request_stream.h
-HDR += ../runtime/d2k_runtime.h ../runtime/d2k_protocol.h include/d2k_http_trace.h
+HDR += include/d2s_http_response.h include/d2s_http_request_stream.h
+HDR += ../runtime/d2s_runtime.h ../runtime/d2s_protocol.h include/d2s_http_trace.h
 
 # Тесты и их объектные файлы. Один список — чтобы санитайзерная цель не
 # разъезжалась с обычной: разъехавшись, она проверяла бы не то дерево.
 TESTS   = test_icmpguard test_addr test_hold test_udp_hold test_udp_release test_udp_path test_routemark test_capture test_plan_parse test_plan_apply test_tls test_wire test_wire_udp test_track test_session test_nat test_nl test_sched test_journal test_plans test_ctl test_stun_session test_quic_session test_ctq test_http80 test_http_hello test_http_trace
 
-.PHONY: all check san gcc-warn ctlprobe d2kd-linux-arm64 test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-quic-session test-stun-session test-udp-release test-udp-path test-routemark cross clean
+.PHONY: all check san gcc-warn ctlprobe d2sd-linux-arm64 test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-quic-session test-stun-session test-udp-release test-udp-path test-routemark cross clean
 
 # Linux integration regression: the NFQUEUE receive buffer must honor a large
 # request even when net.core.rmem_max is lower (the target router setting).
 .PHONY: test-nfq-rcvbuf-linux
-test_nfq_rcvbuf: test_nfq_rcvbuf.c nfq.c nl.c include/d2k_nfq.h include/d2k_nl.h
+test_nfq_rcvbuf: test_nfq_rcvbuf.c nfq.c nl.c include/d2s_nfq.h include/d2s_nl.h
 	$(CC) $(CFLAGS) -o $@ test_nfq_rcvbuf.c nfq.c nl.c $(LDFLAGS)
 
-test_nfq_rcvbuf_unit: test_nfq_rcvbuf_unit.c nfq.c nl.c include/d2k_nfq.h include/d2k_nl.h
+test_nfq_rcvbuf_unit: test_nfq_rcvbuf_unit.c nfq.c nl.c include/d2s_nfq.h include/d2s_nl.h
 	$(CC) $(CFLAGS) -o $@ test_nfq_rcvbuf_unit.c nl.c $(LDFLAGS)
 
 test-nfq-rcvbuf-linux: test_nfq_rcvbuf test_nfq_rcvbuf_unit
@@ -72,13 +72,13 @@ test-nfq-rcvbuf-linux: test_nfq_rcvbuf test_nfq_rcvbuf_unit
 
 all: planlab ctlprobe
 
-HDR += include/d2k_packet.h
-HDR += $(CORE_DIR)/include/d2k_ip6frag_send.h
+HDR += include/d2s_packet.h
+HDR += $(CORE_DIR)/include/d2s_ip6frag_send.h
 
 # Implicitly compiled objects also depend on shared structure layouts.
-$(SRC:.c=.o): $(HDR) include/d2k_addr.h
+$(SRC:.c=.o): $(HDR) include/d2s_addr.h
 
-test_addr: test_addr.c addr.c include/d2k_addr.h include/d2k_packet.h
+test_addr: test_addr.c addr.c include/d2s_addr.h include/d2s_packet.h
 	$(CC) $(CFLAGS) -o $@ test_addr.c addr.c $(LDFLAGS)
 
 .PHONY: test-addr
@@ -88,7 +88,7 @@ test-addr: test_addr
 # Real raw IPv6 delivery and failure injection. Linux network namespace only.
 .PHONY: test-raw6-linux
 test-raw6-linux: test_raw6.c raw.c wire_udp.c $(HDR)
-	$(CC) $(CFLAGS) -Dsetsockopt=d2k_test_setsockopt -c raw.c -o raw6_test.o
+	$(CC) $(CFLAGS) -Dsetsockopt=d2s_test_setsockopt -c raw.c -o raw6_test.o
 	$(CC) $(CFLAGS) -o test_raw6 test_raw6.c raw6_test.o wire_udp.c ../core/ipfrag.c $(LDFLAGS)
 	./test_raw6
 
@@ -101,10 +101,10 @@ test-raw-cap-linux: test_raw_cap.c raw.c wire_udp.c $(HDR)
 check: test-addr
 
 # ICMP time-exceeded на собственные фальшивки (поле 04.10.2026, icmp-rua.pcap).
-icmpguard.o: icmpguard.c include/d2k_icmpguard.h
+icmpguard.o: icmpguard.c include/d2s_icmpguard.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-test_icmpguard: test_icmpguard.c icmpguard.o include/d2k_icmpguard.h
+test_icmpguard: test_icmpguard.c icmpguard.o include/d2s_icmpguard.h
 	$(CC) $(CFLAGS) -o $@ test_icmpguard.c icmpguard.o $(LDFLAGS)
 
 .PHONY: test-icmpguard
@@ -143,7 +143,7 @@ test_udp_hold: test_udp_hold.c udp_hold.o udp_release.o hold.o capture.o track.o
 udp_path.o: udp_path.c $(HDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Владение ID в обвязке d2kd (задача 46, ревью M4): сессия, удержание и
+# Владение ID в обвязке d2sd (задача 46, ревью M4): сессия, удержание и
 # выпуск — настоящие модули, сокеты заменены записью вызовов.
 test_udp_path: test_udp_path.c udp_path.o udp_hold.o udp_release.o routemark.o session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(QUIC_FIXTURE_OBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_udp_path.c udp_path.o udp_hold.o udp_release.o routemark.o session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(QUIC_FIXTURE_OBJ) $(LDFLAGS)
@@ -208,7 +208,7 @@ core_crypto.o: $(CORE_DIR)/crypto.c $(COREHDR)
 core_ipfrag.o: $(CORE_DIR)/ipfrag.c $(COREHDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# Узнавание портала блокировки в ответе — тот же разбор, что был у d2khttp
+# Узнавание портала блокировки в ответе — тот же разбор, что был у d2shttp
 # (задача 51): датапат видит запрос и ответ разными пакетами.
 core_httpup_logic.o: $(CORE_DIR)/httpup_logic.c $(COREHDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -243,7 +243,7 @@ test-http-trace: test_http_trace
 	./test_http_trace
 check: test-http-trace
 
-core_quichello.o: $(CORE_DIR)/quichello.c $(COREHDR) $(CORE_DIR)/include/d2k_quichello.h $(CORE_DIR)/include/d2k_hello.h
+core_quichello.o: $(CORE_DIR)/quichello.c $(COREHDR) $(CORE_DIR)/include/d2s_quichello.h $(CORE_DIR)/include/d2s_hello.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # hello.c #include'ит сгенерированный core/hello_profiles.inc: на чистом
@@ -251,10 +251,10 @@ core_quichello.o: $(CORE_DIR)/quichello.c $(COREHDR) $(CORE_DIR)/include/d2k_qui
 $(CORE_DIR)/hello_profiles.inc:
 	$(MAKE) -C $(CORE_DIR) hello_profiles.inc
 
-core_hello.o: $(CORE_DIR)/hello.c $(COREHDR) $(CORE_DIR)/include/d2k_hello.h $(CORE_DIR)/hello_profiles.inc
+core_hello.o: $(CORE_DIR)/hello.c $(COREHDR) $(CORE_DIR)/include/d2s_hello.h $(CORE_DIR)/hello_profiles.inc
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-core_tls13core.o: $(CORE_DIR)/tls13core.c $(COREHDR) $(CORE_DIR)/include/d2k_tls13core.h
+core_tls13core.o: $(CORE_DIR)/tls13core.c $(COREHDR) $(CORE_DIR)/include/d2s_tls13core.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 core_x25519.o: $(CORE_DIR)/x25519.c $(COREHDR)
@@ -275,8 +275,8 @@ ctl.o: ctl.c $(HDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # ctlsrv.o и вся цепочка session.o добавлены задачей про вытеснение таблицы
-# планов: test_ctl проверял только framing сокета (d2k_ctl.c), а разбор
-# команд SET_NAME/SET_ADDR (d2k_ctlsrv_command, ctlsrv.c) не проверялся
+# планов: test_ctl проверял только framing сокета (d2s_ctl.c), а разбор
+# команд SET_NAME/SET_ADDR (d2s_ctlsrv_command, ctlsrv.c) не проверялся
 # настоящим кадром вовсе — отказ «нет места» от отказа «план негоден»
 # различимы на уровне ЭТОГО разбора, и подделывать его нельзя (см. шапку
 # файла). Тот же список объектников, что у test_session/ctlprobe.
@@ -294,13 +294,13 @@ test_journal: test_journal.c journal.o track.o $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_journal.c journal.o track.o $(LDFLAGS)
 
 # wire_udp.o и core_quic.o/core_crypto.o добавлены задачей 4: session.c теперь
-# зовёт d2k_wire_build_udp и разбор QUIC на UDP-ветке пакетного пути, и без
+# зовёт d2s_wire_build_udp и разбор QUIC на UDP-ветке пакетного пути, и без
 # них линковка падает неопределёнными ссылками.
 test_session: test_session.c session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_session.c session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(LDFLAGS)
 
 # test_quic_session.c (задача 4) — то же самое дерево модулей, что и
-# test_session, тем же списком объектников: обе проверяют d2k_session_packet
+# test_session, тем же списком объектников: обе проверяют d2s_session_packet
 # целиком, только на разных транспортах.
 test_quic_session: test_quic_session.c session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(QUIC_FIXTURE_OBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_quic_session.c session.o http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(QUIC_FIXTURE_OBJ) $(LDFLAGS)
@@ -322,7 +322,7 @@ wire_udp.o: wire_udp.c $(HDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 # Трансляция NAT: каким адресом поток виден серверу. Нужна ПОТОМУ, что
-# очередь висит на mangle POSTROUTING, а SNAT делается позже — см. d2k_nat.h.
+# очередь висит на mangle POSTROUTING, а SNAT делается позже — см. d2s_nat.h.
 nat.o: nat.c $(HDR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
@@ -368,7 +368,7 @@ test_plan_apply: test_plan_apply.c plan_parse.o plan_apply.o wire_udp.o $(COREOB
 planlab: planlab.c plan_parse.o plan_apply.o $(COREOBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ planlab.c plan_parse.o plan_apply.o $(COREOBJ) $(LDFLAGS)
 
-# Стенд управляющего сокета: тот же разбор команд и та же сессия, что в d2kd,
+# Стенд управляющего сокета: тот же разбор команд и та же сессия, что в d2sd,
 # но пакеты собираются на месте. Нужен, чтобы Go-клиент проверялся против
 # настоящего C-сервера, а не против представления о нём.
 #
@@ -436,13 +436,13 @@ san: $(CORE_DIR)/hello_profiles.inc
 	@set -e; for t in $(TESTS); do \
 		echo "== $$t =="; \
 		extra=; if [ "$$t" = test_quic_session ] || [ "$$t" = test_stun_session ] || [ "$$t" = test_udp_path ]; then extra="$(CORE_DIR)/quichello.c $(CORE_DIR)/hello.c $(CORE_DIR)/tls13core.c $(CORE_DIR)/x25519.c"; fi; \
-		$(CC) $(SANFLAGS) -o /tmp/d2k-san-$$t $$t.c \
+		$(CC) $(SANFLAGS) -o /tmp/d2s-san-$$t $$t.c \
 			$$(echo "$(SRC)" | tr ' ' '\n' | grep -v '^$$') $(CORESRC) $$extra; \
-		/tmp/d2k-san-$$t; \
+		/tmp/d2s-san-$$t; \
 	done
 	@echo "== planlab =="
-	@$(CC) $(SANFLAGS) -o /tmp/d2k-san-planlab planlab.c plan_parse.c plan_apply.c $(CORESRC)
-	@/tmp/d2k-san-planlab testdata/fake_before.tlv testdata/one_hello.txt >/dev/null
+	@$(CC) $(SANFLAGS) -o /tmp/d2s-san-planlab planlab.c plan_parse.c plan_apply.c $(CORESRC)
+	@/tmp/d2s-san-planlab testdata/fake_before.tlv testdata/one_hello.txt >/dev/null
 	@echo "санитайзеры: все проверки прошли"
 
 # Тот же набор ЧУЖИМ компилятором. Не роскошь: локально всё собирает clang, а
@@ -456,28 +456,28 @@ san: $(CORE_DIR)/hello_profiles.inc
 GCC ?= mipsel-unknown-linux-gnu-gcc
 gcc-warn:
 	@for f in $(SRC) $(CORESRC) $(LINUXSRC) $(DAEMON) planlab.c ctlprobe.c $(TESTS:=.c); do \
-		$(GCC) $(CFLAGS) -c -o /tmp/d2k-gccwarn.o $$f || exit 1; \
+		$(GCC) $(CFLAGS) -c -o /tmp/d2s-gccwarn.o $$f || exit 1; \
 	done
 	@echo "чужой компилятор: предупреждений нет"
 
 # Переносимость проверяется компиляцией под целевые арки. Запускать там нечего
 # и не нужно: ловим порядок байт, выравнивание и ширину типов. planlab слинкован
-# целиком по той же причине, что и d2kd целиком чуть ниже: компиляция
+# целиком по той же причине, что и d2sd целиком чуть ниже: компиляция
 # по-файлово в цикле выше не гарантирует, что именно ЭТА комбинация объектов
 # слинкуется под обеими целевыми libc.
 cross:
 	@for f in $(SRC) $(CORESRC); do \
 		echo "== $$f =="; \
-		$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -c -o /tmp/d2k-a64.o $$f || exit 1; \
-		$(ZIG) cc $(MIPS_BE_ZIG) $(CFLAGS) -c -o /tmp/d2k-mips.o $$f || exit 1; \
-		$(MIPSEL_CC) $(CFLAGS) -c -o /tmp/d2k-mipsel.o $$f || exit 1; \
+		$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -c -o /tmp/d2s-a64.o $$f || exit 1; \
+		$(ZIG) cc $(MIPS_BE_ZIG) $(CFLAGS) -c -o /tmp/d2s-mips.o $$f || exit 1; \
+		$(MIPSEL_CC) $(CFLAGS) -c -o /tmp/d2s-mipsel.o $$f || exit 1; \
 	done
-	@echo "== d2kd целиком =="
-	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2kd-a64 \
+	@echo "== d2sd целиком =="
+	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2sd-a64 \
 		$(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1
-	@$(ZIG) cc $(MIPS_BE_ZIG) $(CFLAGS) -o /tmp/d2kd-mips \
+	@$(ZIG) cc $(MIPS_BE_ZIG) $(CFLAGS) -o /tmp/d2sd-mips \
 		$(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1
-	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2kd-mipsel $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1
+	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2sd-mipsel $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1
 	@echo "== planlab целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/planlab-a64 \
 		planlab.c plan_parse.c plan_apply.c $(CORESRC) || exit 1
@@ -491,10 +491,10 @@ cross:
 	@if command -v $(MIPS_CC) >/dev/null 2>&1; then \
 	  echo "== big-endian mips: $(MIPS_CC) =="; \
 	  for f in $(SRC) $(CORESRC); do \
-	    $(MIPS_CC) $(CFLAGS) -c -o /tmp/d2k-mips-gcc.o $$f || exit 1; \
+	    $(MIPS_CC) $(CFLAGS) -c -o /tmp/d2s-mips-gcc.o $$f || exit 1; \
 	  done; \
-	  rm -f /tmp/d2k-mips-gcc.o; \
-	  $(MIPS_CC) $(CFLAGS) -o /tmp/d2kd-mips-gcc $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1; \
+	  rm -f /tmp/d2s-mips-gcc.o; \
+	  $(MIPS_CC) $(CFLAGS) -o /tmp/d2sd-mips-gcc $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) || exit 1; \
 	else \
 	  echo "cross: $(MIPS_CC) не найден — big-endian mips проверен zig-проходом выше"; \
 	fi
@@ -507,13 +507,13 @@ cross:
 # На маке НЕ СОБИРАЕТСЯ и не должна: nfq.c/raw.c — Linux (см. LINUXSRC выше).
 # Отказ здесь честен; подделывать сокеты ядра ради сборки значило бы
 # проверять подделку.
-d2kd: $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) $(HDR)
+d2sd: $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) $(HDR)
 	$(CC) $(CFLAGS) -o $@ $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC) $(LDFLAGS)
 
 # Служба для целевого устройства. Статическая musl: на роутере нет ни нужной
 # libc, ни желания зависеть от той, что там есть.
 #
-# ИМЯ ФАЙЛА — то же, что у сборок Go (builds/d2k-linux-arm64): его ищет
+# ИМЯ ФАЙЛА — то же, что у сборок Go (builds/d2s-linux-arm64): его ищет
 # scripts/install.sh, и расхождение здесь означало бы «скачанного файла нет»
 # на живом роутере. Одно имя на всё, а не два похожих.
 BUILDDIR ?= ../builds
@@ -521,12 +521,12 @@ TARGET ?= aarch64-linux-musl
 TARGET_FLAGS ?=
 ARCH ?= arm64
 .PHONY: release
-d2kd-linux-arm64: release
+d2sd-linux-arm64: release
 release:
 	@mkdir -p $(BUILDDIR)
 	$(ZIG) cc -target $(TARGET) $(TARGET_FLAGS) $(CFLAGS) -static -Wl,-S \
-		-o $(BUILDDIR)/d2kd-linux-$(ARCH) $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC)
-	@ls -l $(BUILDDIR)/d2kd-linux-$(ARCH)
+		-o $(BUILDDIR)/d2sd-linux-$(ARCH) $(DAEMON) $(LINUXSRC) $(SRC) $(CORESRC)
+	@ls -l $(BUILDDIR)/d2sd-linux-$(ARCH)
 
 # planlab тоже в зависимостях, и это не украшение: он собирается отдельной
 # целью, поэтому однажды check остался зелёным при несобирающейся
@@ -542,4 +542,4 @@ test-ctlprobe: test_ctlprobe
 check: all test-hold test-udp-hold test-udp-release test-udp-path test-routemark test-capture test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-stun-session test-quic-session test-ctlprobe
 
 clean:
-	rm -f *.o $(TESTS) test_ctlprobe test_raw_cap test_nfq_rcvbuf test_nfq_rcvbuf_unit planlab ctlprobe d2kd
+	rm -f *.o $(TESTS) test_ctlprobe test_raw_cap test_nfq_rcvbuf test_nfq_rcvbuf_unit planlab ctlprobe d2sd

@@ -76,7 +76,7 @@ static const char *const public_resolvers[PUBLIC_RESOLVERS]={"1.1.1.1","8.8.8.8"
 enum { ROUTE_NONE, ROUTE_HEALTH, ROUTE_REGISTER, ROUTE_RESOLVE };
 
 /* The only names /resolve answers. Public DNS data for a fixed Meta set; the
-   router script and d2ktg --check-instagram-ip carry the same list, and
+   router script and d2stg --check-instagram-ip carry the same list, and
    scripts/test-instagram-dns.sh compares all three. */
 static const char *const resolve_hosts[]={
     /* META_HOSTS_BEGIN */
@@ -210,7 +210,7 @@ static int route_status(shared_limits *limits,int route,uint32_t ip,time_t now) 
 static int valid_proof(const uint8_t *body,size_t len) {
     uint8_t message[70],hash[SHA256_DIGEST_LENGTH];
     if(len!=PROOF_SIZE)return 0;
-    memcpy(message,"d2k-enroll-v1",14);memcpy(message+14,body,56);
+    memcpy(message,"d2s-enroll-v1",14);memcpy(message+14,body,56);
     if(!SHA256(message,sizeof(message),hash))return 0;
     return hash[0]==0&&hash[1]==0&&(hash[2]&0xc0)==0&&
         tg_identity_verify(body+16,message,sizeof(message),body+56)==0;
@@ -696,7 +696,7 @@ int main(int argc,char **argv) {
     (void)setsockopt(listener,SOL_SOCKET,SO_REUSEADDR,&one,sizeof(one));
     struct sockaddr_in addr={.sin_family=AF_INET,.sin_port=htons(port),.sin_addr={.s_addr=htonl(INADDR_ANY)}};
     if(bind(listener,(struct sockaddr *)&addr,sizeof(addr))!=0||listen(listener,32)!=0){close(listener);perror("enrollment listener");return 1;}
-    fprintf(stderr,"D2K C enrollment listening on %u\n",(unsigned)port);
+    fprintf(stderr,"D2S C enrollment listening on %u\n",(unsigned)port);
     shared_limits *limits=shared_limits_create();
     if(!limits){close(listener);fputs("cannot allocate rate limits\n",stderr);return 1;}
     answer_cache=answer_cache_create();

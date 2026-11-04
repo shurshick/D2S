@@ -5,7 +5,7 @@
 #define _DEFAULT_SOURCE
 #endif
 #define _POSIX_C_SOURCE 200809L
-#include "../../runtime/d2k_runtime.h"
+#include "../../runtime/d2s_runtime.h"
 #include "tg_config.h"
 #include "tg_net.h"
 #include "tg_tls.h"
@@ -39,7 +39,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TG_BUILD "d2k-tg-0.3"
+#define TG_BUILD "d2s-tg-0.3"
 #define TG_DC_REFRESH_SECS (6u * 60u * 60u)
 #define TG_DC_REFRESH_RETRY_SECS (60u * 60u)
 #define TG_DC_DISCOVERY_TIMEOUT_MS 12000u
@@ -47,7 +47,7 @@
 #define TG_DC_DISCOVERY_DNS_WAIT_MS 20000u
 #define TG_DC_DISCOVERY_WORKER_LIMIT 3u
 
-static const char *health_path = "/tmp/d2k/d2ktg.health";
+static const char *health_path = "/tmp/d2s/d2stg.health";
 static volatile sig_atomic_t stop_requested;
 
 #if defined(__linux__)
@@ -81,7 +81,7 @@ static void on_signal(int signo) { (void)signo;stop_requested=1; }
 static void log_msg(const char *message) {
     time_t now=time(NULL);struct tm tmv;char stamp[32]="unknown-time";
     if(localtime_r(&now,&tmv))strftime(stamp,sizeof(stamp),"%Y-%m-%d %H:%M:%S",&tmv);
-    fprintf(stderr,"%s d2ktg: %s\n",stamp,message);fflush(stderr);
+    fprintf(stderr,"%s d2stg: %s\n",stamp,message);fflush(stderr);
 }
 
 static int write_status(const char *path,const char *value) {
@@ -480,8 +480,8 @@ static int run_local_daemon(const char *config_path) {
                 next_dc_refresh_at = refresh_now + TG_DC_REFRESH_RETRY_SECS;
             }
         }
-        int ready = d2k_runtime_listener_ready(listener);
-        (void)d2k_runtime_heartbeat(health_path, NULL, 0, ready, ready);
+        int ready = d2s_runtime_listener_ready(listener);
+        (void)d2s_runtime_heartbeat(health_path, NULL, 0, ready, ready);
     }
     (void)write_status(cfg.status_path, rc == 0 ? "stopped\n" : "error\n");
 done:
@@ -651,7 +651,7 @@ static const char *telegram_probe_error_name(tg_mtproto_probe_error error) {
 }
 
 static int check_telegram_wss_matrix(const char *ca_bundle) {
-    if (!ca_bundle || !*ca_bundle) ca_bundle = "/opt/d2k/files/tg-roots.pem";
+    if (!ca_bundle || !*ca_bundle) ca_bundle = "/opt/d2s/files/tg-roots.pem";
     SSL_CTX *tls_context = tg_tls_client_context(ca_bundle);
     if (!tls_context) {
         puts("{\"ok\":false,\"stage\":\"input\",\"error\":\"ca_bundle_unavailable\"}");
@@ -741,24 +741,24 @@ static int discover_telegram_dc_matrix(void) {
 }
 
 int main(int argc,char **argv) {
-    int offline = d2k_runtime_offline(argc, argv, "d2ktg", offline_self_check);
+    int offline = d2s_runtime_offline(argc, argv, "d2stg", offline_self_check);
     if (offline >= 0) return offline;
-    const char *config="/opt/d2k/config",*log_path=NULL;
-    if(argc==2&&strcmp(argv[1],"--version")==0){puts(TG_BUILD " features=instagram-ip-probe,meta-hosts-v3,meta-media-hosts-v1,telegram-local-tcp-epoll,mtproto-respq,mtproto-auth,mtproto-v2,mtproto-help-config,mtproto-gzip-config,mtproto-wss-probe release=" D2K_RELEASE_ID);return 0;}
+    const char *config="/opt/d2s/config",*log_path=NULL;
+    if(argc==2&&strcmp(argv[1],"--version")==0){puts(TG_BUILD " features=instagram-ip-probe,meta-hosts-v3,meta-media-hosts-v1,telegram-local-tcp-epoll,mtproto-respq,mtproto-auth,mtproto-v2,mtproto-help-config,mtproto-gzip-config,mtproto-wss-probe release=" D2S_RELEASE_ID);return 0;}
     if(argc==5&&strcmp(argv[1],"--check-instagram-ip")==0)return check_instagram_ip(argv[2],argv[3],argv[4]);
     if((argc==4||argc==5)&&strcmp(argv[1],"--check-telegram-dc")==0)return check_telegram_dc(argv[2],argv[3],argc==5?argv[4]:NULL);
     if((argc==4||argc==5)&&strcmp(argv[1],"--discover-telegram-dc")==0)return discover_telegram_dc(argv[2],argv[3],argc==5?argv[4]:NULL);
     if(argc==2&&strcmp(argv[1],"--check-telegram-dc-matrix")==0)return check_telegram_dc_matrix();
     if(argc==2&&strcmp(argv[1],"--discover-telegram-dc-matrix")==0)return discover_telegram_dc_matrix();
     if((argc==2||argc==3)&&strcmp(argv[1],"--check-telegram-wss-matrix")==0)return check_telegram_wss_matrix(argc==3?argv[2]:NULL);
-    if(argc==2&&strcmp(argv[1],"--help")==0){puts("d2ktg [--config FILE] | --check-telegram-dc-matrix | --discover-telegram-dc-matrix | --check-telegram-wss-matrix [CA_BUNDLE] | --check-telegram-dc IP DC [PORT] | --discover-telegram-dc IP DC [PORT]");return 0;}
+    if(argc==2&&strcmp(argv[1],"--help")==0){puts("d2stg [--config FILE] | --check-telegram-dc-matrix | --discover-telegram-dc-matrix | --check-telegram-wss-matrix [CA_BUNDLE] | --check-telegram-dc IP DC [PORT] | --discover-telegram-dc IP DC [PORT]");return 0;}
     if(argc==3&&strcmp(argv[1],"--check-config")==0)return check_config(argv[2]);
     for(int i=1;i<argc;i++) {
         if(strcmp(argv[i],"--health-file")==0&&i+1<argc)health_path=argv[++i];
         else if(strcmp(argv[i],"--config")==0&&i+1<argc)config=argv[++i];
         else if(strcmp(argv[i],"--log")==0&&i+1<argc)log_path=argv[++i];
-        else {fprintf(stderr,"usage: d2ktg [--config FILE] [--log FILE]\n");return 2;}
+        else {fprintf(stderr,"usage: d2stg [--config FILE] [--log FILE]\n");return 2;}
     }
-    if(redirect_log(log_path)!=0){fprintf(stderr,"d2ktg: cannot open configured log file\n");return 1;}
+    if(redirect_log(log_path)!=0){fprintf(stderr,"d2stg: cannot open configured log file\n");return 1;}
     return run_local_daemon(config);
 }

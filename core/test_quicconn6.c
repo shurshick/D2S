@@ -6,8 +6,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "d2k_quicconn.h"
-#include "d2k_compose_internal.h"
+#include "d2s_quicconn.h"
+#include "d2s_compose_internal.h"
 
 int main(void) {
     int server = socket(AF_INET6, SOCK_DGRAM, 0);
@@ -19,14 +19,14 @@ int main(void) {
     assert(getsockname(server, (struct sockaddr *)&a, &len) == 0);
     int probe = -1;
     uint16_t sport = 0;
-    assert(d2k_props_bind_udp_family(6, &probe, &sport) == 0);
-    d2k_qc_opts o = {0};
+    assert(d2s_props_bind_udp_family(6, &probe, &sport) == 0);
+    d2s_qc_opts o = {0};
     o.ip = "::1"; o.port = ntohs(a.sin6_port); o.sni = "ipv6.example";
     o.use_fd = probe; o.deadline_ms = 80;
-    d2k_qc *c = NULL;
+    d2s_qc *c = NULL;
     char err[200];
     /* No responder: transmission is not handshake/application success. */
-    assert(d2k_qc_connect(&o, &c, err, sizeof err) != 0 && c == NULL);
+    assert(d2s_qc_connect(&o, &c, err, sizeof err) != 0 && c == NULL);
     uint8_t packet[2048];
     struct sockaddr_in6 peer = {0};
     len = sizeof peer;

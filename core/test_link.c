@@ -1,8 +1,8 @@
-/* test_link.c — связь с датапатом (d2k_link.h), на настоящем ctlprobe.
+/* test_link.c — связь с датапатом (d2s_link.h), на настоящем ctlprobe.
  *
- * ctlprobe — тот же разбор команд (d2k_ctlsrv_command) и та же сессия
- * (d2k_session), что в боевом d2kd, но пакеты собираются на месте, а не из
- * NFQUEUE (см. шапку datapath/ctlprobe.c). Проверять d2k_link_* против
+ * ctlprobe — тот же разбор команд (d2s_ctlsrv_command) и та же сессия
+ * (d2s_session), что в боевом d2sd, но пакеты собираются на месте, а не из
+ * NFQUEUE (см. шапку datapath/ctlprobe.c). Проверять d2s_link_* против
  * представления о протоколе бесполезно — расходятся они молча; здесь
  * расхождение падает набором, как и в internal/control/bridge_test.go на
  * Go-стороне (этот файл — её зеркало на C, тот же сценарий hello+quic).
@@ -26,13 +26,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_link.h"
-#include "d2k_quicsnap.h"
+#include "d2s_link.h"
+#include "d2s_quicsnap.h"
 #include "test_quic_pq.h"
-/* Только ради D2K_KEY_WIRE_LEN — строим синтетические кадры руками (см.
+/* Только ради D2S_KEY_WIRE_LEN — строим синтетические кадры руками (см.
  * send_synthetic ниже), тем же приёмом, что datapath/test_ctl.c: ширина
  * ключа нужна настоящая, а не переизобретённая здесь копией. */
-#include "d2k_ctlsrv.h"
+#include "d2s_ctlsrv.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -65,8 +65,8 @@ static void to_hex(const uint8_t *b, size_t n, char *out) {
  * переполненных событий не шлёт — а разбор обязан отказывать на них не
  * только на бумаге. rest может быть NULL при rest_len == 0. */
 static void send_synthetic(int fd, uint16_t kind, const uint8_t *rest, size_t rest_len) {
-    static uint8_t frame[6 + D2K_KEY_WIRE_LEN + D2K_SHAPE_MAX + 64];
-    size_t body_len = D2K_KEY_WIRE_LEN + rest_len;
+    static uint8_t frame[6 + D2S_KEY_WIRE_LEN + D2S_SHAPE_MAX + 64];
+    size_t body_len = D2S_KEY_WIRE_LEN + rest_len;
     uint32_t plen = (uint32_t)(2 + body_len);
     frame[0] = (uint8_t)(plen >> 24);
     frame[1] = (uint8_t)(plen >> 16);
@@ -74,10 +74,10 @@ static void send_synthetic(int fd, uint16_t kind, const uint8_t *rest, size_t re
     frame[3] = (uint8_t)plen;
     frame[4] = (uint8_t)(kind >> 8);
     frame[5] = (uint8_t)kind;
-    memset(frame + 6, 0xAB, D2K_KEY_WIRE_LEN);
+    memset(frame + 6, 0xAB, D2S_KEY_WIRE_LEN);
     frame[6] = 6;
     if (rest_len) {
-        memcpy(frame + 6 + D2K_KEY_WIRE_LEN, rest, rest_len);
+        memcpy(frame + 6 + D2S_KEY_WIRE_LEN, rest, rest_len);
     }
     (void)!write(fd, frame, 6 + body_len);
 }
@@ -100,8 +100,8 @@ static void probe_write_line(probe *p, const char *line) {
 
 /* Отправляет команду стенду и возвращает его ответную строку (без \n).
  * Синхронизирует: ctlprobe печатает строку-ответ ПОСЛЕ того, как обработал
- * команду и прогнал d2k_ctlsrv_pump — значит, к этому моменту событие(я) уже
- * лежат в сокете управления и можно смело читать их через d2k_link_next. */
+ * команду и прогнал d2s_ctlsrv_pump — значит, к этому моменту событие(я) уже
+ * лежат в сокете управления и можно смело читать их через d2s_link_next. */
 static const char *probe_say(probe *p, const char *line) {
     static char resp[512];
     probe_write_line(p, line);
@@ -181,7 +181,7 @@ static void probe_stop(probe *p, const char *sock_path) {
 static int dial_retry(const char *sock_path, char *err, size_t errcap) {
     int fd = -1;
     for (int i = 0; i < 50; i++) {
-        fd = d2k_link_open(sock_path, err, errcap);
+        fd = d2s_link_open(sock_path, err, errcap);
         if (fd >= 0) {
             return fd;
         }
@@ -197,10 +197,10 @@ static int dial_retry(const char *sock_path, char *err, size_t errcap) {
  * если нашли (и *out заполнено), -1 иначе (тайм-аут/ошибка/не нашли за
  * tries попыток — вызывающему достаточно этой границы, причина не важна: он
  * всё равно CHECK'ает факт "нашли или нет"). */
-static int next_of_kind(int fd, uint16_t want, int tries, d2k_ev *out,
+static int next_of_kind(int fd, uint16_t want, int tries, d2s_ev *out,
                         char *err, size_t errcap) {
     for (int i = 0; i < tries; i++) {
-        int rc = d2k_link_next(fd, out, 2000, err, errcap);
+        int rc = d2s_link_next(fd, out, 2000, err, errcap);
         if (rc != 0) {
             return -1;
         }
@@ -212,10 +212,10 @@ static int next_of_kind(int fd, uint16_t want, int tries, d2k_ev *out,
 }
 
 /* Событие с заданной маской встреченных типов и остальными полями
- * занулёнными — ровно то, что даёт d2k_link_next (см. memset в начале
- * d2k_link_next), только собранное руками для проверки порога без сети. */
-static d2k_ev ev_with_seen(uint8_t seen_types) {
-    d2k_ev ev;
+ * занулёнными — ровно то, что даёт d2s_link_next (см. memset в начале
+ * d2s_link_next), только собранное руками для проверки порога без сети. */
+static d2s_ev ev_with_seen(uint8_t seen_types) {
+    d2s_ev ev;
     memset(&ev, 0, sizeof ev);
     ev.seen_types = seen_types;
     return ev;
@@ -223,27 +223,27 @@ static d2k_ev ev_with_seen(uint8_t seen_types) {
 
 int main(void) {
     {
-        int sv[2];d2k_ev ev;char err[160];
+        int sv[2];d2s_ev ev;char err[160];
         CHECK(!socketpair(AF_UNIX,SOCK_STREAM,0,sv),"bound ACK fixture socket");
         uint8_t rest[4+16+28+1]={0};
-        rest[0]=D2K_CMD_SET_NAME_BOUND>>8;rest[1]=(uint8_t)D2K_CMD_SET_NAME_BOUND;
+        rest[0]=D2S_CMD_SET_NAME_BOUND>>8;rest[1]=(uint8_t)D2S_CMD_SET_NAME_BOUND;
         rest[2]=1;rest[4]=0x87;
         for(unsigned i=0;i<8;i++)rest[20+i]=(uint8_t)(0x81+i);
-        rest[28]=D2K_BIND_NAME;rest[29]=6;rest[30]=D2K_PLAN_SHAPE_HTTP;
+        rest[28]=D2S_BIND_NAME;rest[29]=6;rest[30]=D2S_PLAN_SHAPE_HTTP;
         for(unsigned i=0;i<16;i++)rest[32+i]=(uint8_t)(0xf0+i);
-        send_synthetic(sv[0],D2K_EV_ACK,rest,48);
-        CHECK(!d2k_link_next(sv[1],&ev,100,err,sizeof err) && ev.trial_id[0]==0x87 &&
+        send_synthetic(sv[0],D2S_EV_ACK,rest,48);
+        CHECK(!d2s_link_next(sv[1],&ev,100,err,sizeof err) && ev.trial_id[0]==0x87 &&
               ev.execution_binding.generation==UINT64_C(0x8182838485868788) &&
               ev.execution_binding.family==6 && !memcmp(ev.execution_binding.epoch,rest+32,16),
               "permanent ACK loses command or binding identity");
         for(size_t n=4;n<48;n++) {
-            send_synthetic(sv[0],D2K_EV_ACK,rest,n);
-            CHECK(d2k_link_next(sv[1],&ev,100,err,sizeof err)==-1,"truncated permanent ACK accepted");
+            send_synthetic(sv[0],D2S_EV_ACK,rest,n);
+            CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)==-1,"truncated permanent ACK accepted");
         }
-        send_synthetic(sv[0],D2K_EV_ACK,rest,49);
-        CHECK(d2k_link_next(sv[1],&ev,100,err,sizeof err)==-1,"oversized permanent ACK accepted");
-        rest[29]=5;send_synthetic(sv[0],D2K_EV_ACK,rest,48);
-        CHECK(d2k_link_next(sv[1],&ev,100,err,sizeof err)==-1,"invalid ACK binding family accepted");
+        send_synthetic(sv[0],D2S_EV_ACK,rest,49);
+        CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)==-1,"oversized permanent ACK accepted");
+        rest[29]=5;send_synthetic(sv[0],D2S_EV_ACK,rest,48);
+        CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)==-1,"invalid ACK binding family accepted");
         close(sv[0]);close(sv[1]);
     }
 
@@ -252,32 +252,32 @@ int main(void) {
         int sv[2];
         CHECK(!socketpair(AF_UNIX, SOCK_STREAM, 0, sv), "execution context socketpair");
         const size_t base = refused ? 34u : 32u;
-        uint8_t rest[34 + D2K_CTL_EXECUTION_LEN] = {0};
+        uint8_t rest[34 + D2S_CTL_EXECUTION_LEN] = {0};
         uint8_t *p = rest + base;
         for (unsigned b = 0; b < 8; b++) { p[b] = 1+b; p[8+b] = 0x81+b; }
-        p[16] = D2K_BIND_FLOW; p[17] = 6; p[18] = D2K_PLAN_SHAPE_QUIC; p[19] = 1;
+        p[16] = D2S_BIND_FLOW; p[17] = 6; p[18] = D2S_PLAN_SHAPE_QUIC; p[19] = 1;
         for (unsigned b = 0; b < 16; b++) p[20+b] = (uint8_t)(0xf0+b);
-        d2k_ev ev; char err[128];
-        const uint16_t kind = refused ? D2K_EV_REFUSED : D2K_EV_APPLIED;
-        send_synthetic(sv[0], kind, rest, base + D2K_CTL_EXECUTION_LEN);
-        CHECK(!d2k_link_next(sv[1], &ev, 100, err, sizeof err) &&
+        d2s_ev ev; char err[128];
+        const uint16_t kind = refused ? D2S_EV_REFUSED : D2S_EV_APPLIED;
+        send_synthetic(sv[0], kind, rest, base + D2S_CTL_EXECUTION_LEN);
+        CHECK(!d2s_link_next(sv[1], &ev, 100, err, sizeof err) &&
               ev.execution_id == UINT64_C(0x0102030405060708) &&
               ev.execution_binding.generation == UINT64_C(0x8182838485868788) &&
-              ev.execution_binding.kind == D2K_BIND_FLOW && ev.execution_binding.family == 6 &&
-              ev.execution_binding.shape == D2K_PLAN_SHAPE_QUIC && ev.execution_binding.temporary == 1 &&
+              ev.execution_binding.kind == D2S_BIND_FLOW && ev.execution_binding.family == 6 &&
+              ev.execution_binding.shape == D2S_PLAN_SHAPE_QUIC && ev.execution_binding.temporary == 1 &&
               !memcmp(ev.execution_binding.epoch, p+20, 16),
               "execution context endian/IPv6/probe fields lost");
-        for (size_t tail = 1; tail < D2K_CTL_EXECUTION_LEN; tail++) {
+        for (size_t tail = 1; tail < D2S_CTL_EXECUTION_LEN; tail++) {
             send_synthetic(sv[0], kind, rest, base + tail);
-            CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
+            CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
                   "truncated execution context accepted");
         }
         p[17] = 5;
-        send_synthetic(sv[0], kind, rest, base + D2K_CTL_EXECUTION_LEN);
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
+        send_synthetic(sv[0], kind, rest, base + D2S_CTL_EXECUTION_LEN);
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
               "invalid execution family accepted");
         send_synthetic(sv[0], kind, rest, base);
-        CHECK(!d2k_link_next(sv[1], &ev, 100, err, sizeof err) &&
+        CHECK(!d2s_link_next(sv[1], &ev, 100, err, sizeof err) &&
               !ev.execution_id && !ev.execution_binding.generation,
               "legacy frame fabricated execution context");
         close(sv[0]); close(sv[1]);
@@ -291,19 +291,19 @@ int main(void) {
         if (sv[0] >= 0) {
             uint8_t d1[1500], d2[1500];
             size_t l1 = 0, l2 = 0;
-            CHECK(d2k_test_pq_initials("rutracker.org", d1, &l1, d2, &l2) == 0,
+            CHECK(d2s_test_pq_initials("rutracker.org", d1, &l1, d2, &l2) == 0,
                   "стенд двух Initial");
             const uint8_t *dg[2] = {d1, d2};
             size_t len[2] = {l1, l2};
-            static uint8_t rest[D2K_SHAPE_MAX];
-            size_t bl = d2k_qsnap_pack(dg, len, 2, rest, sizeof rest);
+            static uint8_t rest[D2S_SHAPE_MAX];
+            size_t bl = d2s_qsnap_pack(dg, len, 2, rest, sizeof rest);
             CHECK(bl > 2048, "пачка двух датаграмм не длиннее прежнего предела");
-            send_synthetic(sv[1], D2K_EV_SHAPE, rest, bl);
-            d2k_ev ev;
+            send_synthetic(sv[1], D2S_EV_SHAPE, rest, bl);
+            d2s_ev ev;
             char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
-                  ev.kind == D2K_EV_SHAPE && ev.shape_len == bl &&
-                  d2k_qsnap_is(ev.shape, ev.shape_len) &&
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
+                  ev.kind == D2S_EV_SHAPE && ev.shape_len == bl &&
+                  d2s_qsnap_is(ev.shape, ev.shape_len) &&
                   memcmp(ev.shape, rest, bl) == 0,
                   "пачка приехала не целиком");
             close(sv[0]); close(sv[1]);
@@ -315,11 +315,11 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "HTTP portal socketpair");
         const uint8_t rest[] = {1, 13, 'r','u','t','r','a','c','k','e','r','.','o','r','g'};
-        send_synthetic(sv[0], D2K_EV_HTTP_PORTAL, rest, sizeof rest);
-        d2k_ev ev;
+        send_synthetic(sv[0], D2S_EV_HTTP_PORTAL, rest, sizeof rest);
+        d2s_ev ev;
         char err[256];
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == 0 &&
-              ev.kind == D2K_EV_HTTP_PORTAL && ev.code == 1 &&
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == 0 &&
+              ev.kind == D2S_EV_HTTP_PORTAL && ev.code == 1 &&
               strcmp(ev.name, "rutracker.org") == 0, "HTTP_PORTAL разобран не так");
         uint8_t bound[sizeof rest + 50 + 7] = {0};
         memcpy(bound, rest, sizeof rest);
@@ -328,48 +328,48 @@ int main(void) {
         bound[sizeof rest + 47] = 99;
         bound[sizeof rest + 49] = 7;
         memcpy(bound + sizeof rest + 50, "/False/", 7);
-        send_synthetic(sv[0], D2K_EV_HTTP_PORTAL, bound, sizeof bound);
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == 0 &&
+        send_synthetic(sv[0], D2S_EV_HTTP_PORTAL, bound, sizeof bound);
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == 0 &&
               ev.plan_id[0] == 0x42 && ev.live_execution == 72 && ev.live_request_ms == 99 && !strcmp(ev.live_http_path, "/False/"),
               "HTTP portal lost exact executed plan identity");
-        uint8_t response[sizeof bound+D2K_CTL_BINDING_LEN+18]={0};
+        uint8_t response[sizeof bound+D2S_CTL_BINDING_LEN+18]={0};
         memcpy(response,bound,sizeof bound);response[0]=1;
         uint8_t *meta=response+sizeof bound;
-        meta[7]=9;meta[8]=D2K_BIND_NAME;meta[9]=4;meta[10]=D2K_PLAN_SHAPE_HTTP;meta[12]=7;
-        meta+=D2K_CTL_BINDING_LEN;meta[1]=200;meta[8]=1;meta[9]=2;meta[17]=2;
-        send_synthetic(sv[0],D2K_EV_HTTP_RESPONSE,response,sizeof response);
-        CHECK(!d2k_link_next(sv[1],&ev,100,err,sizeof err) && ev.kind==D2K_EV_HTTP_RESPONSE &&
+        meta[7]=9;meta[8]=D2S_BIND_NAME;meta[9]=4;meta[10]=D2S_PLAN_SHAPE_HTTP;meta[12]=7;
+        meta+=D2S_CTL_BINDING_LEN;meta[1]=200;meta[8]=1;meta[9]=2;meta[17]=2;
+        send_synthetic(sv[0],D2S_EV_HTTP_RESPONSE,response,sizeof response);
+        CHECK(!d2s_link_next(sv[1],&ev,100,err,sizeof err) && ev.kind==D2S_EV_HTTP_RESPONSE &&
               ev.code==1 && ev.live_http_status==200 && ev.live_body_bytes==258 && ev.live_request_no==2 &&
               ev.execution_binding.generation==9 && ev.execution_binding.epoch[0]==7 && ev.live_execution==72,
               "complete live response keeps framing and binding over control socket");
         /* v19: код 4 — обрыв ответа без плана (поле 15.10.2026, cdnbase). */
         response[0]=4;
-        send_synthetic(sv[0],D2K_EV_HTTP_RESPONSE,response,sizeof response);
-        CHECK(!d2k_link_next(sv[1],&ev,100,err,sizeof err) && ev.kind==D2K_EV_HTTP_RESPONSE &&
+        send_synthetic(sv[0],D2S_EV_HTTP_RESPONSE,response,sizeof response);
+        CHECK(!d2s_link_next(sv[1],&ev,100,err,sizeof err) && ev.kind==D2S_EV_HTTP_RESPONSE &&
               ev.code==4 && ev.live_body_bytes==258 && !strcmp(ev.live_http_path,"/False/"),
               "a cut (code 4) is decoded with its path and received body");
         response[0]=5;
-        send_synthetic(sv[0],D2K_EV_HTTP_RESPONSE,response,sizeof response);
-        CHECK(d2k_link_next(sv[1],&ev,100,err,sizeof err)==-1,"unknown HTTP response code accepted");
+        send_synthetic(sv[0],D2S_EV_HTTP_RESPONSE,response,sizeof response);
+        CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)==-1,"unknown HTTP response code accepted");
         response[0]=1;
         for(size_t k=sizeof bound;k<sizeof response;k++) {
-            send_synthetic(sv[0],D2K_EV_HTTP_RESPONSE,response,k);
-            CHECK(d2k_link_next(sv[1],&ev,100,err,sizeof err)==-1,"truncated live response evidence accepted");
+            send_synthetic(sv[0],D2S_EV_HTTP_RESPONSE,response,k);
+            CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)==-1,"truncated live response evidence accepted");
         }
         const uint8_t cut[] = {0, 13, 'r','u'};
-        send_synthetic(sv[0], D2K_EV_HTTP_PORTAL, cut, sizeof cut);
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
+        send_synthetic(sv[0], D2S_EV_HTTP_PORTAL, cut, sizeof cut);
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
               "HTTP_PORTAL с обрезанным именем принят");
-        CHECK(d2k_link_set_https(sv[0], "RuTracker.org", 21600, err, sizeof err) == 0,
+        CHECK(d2s_link_set_https(sv[0], "RuTracker.org", 21600, err, sizeof err) == 0,
               "SET_HTTPS не отправился");
         uint8_t f[64];
         ssize_t n = read(sv[1], f, sizeof f);
         CHECK(n == 6 + 1 + 13 + 4 && f[3] == 2 + 1 + 13 + 4 &&
-              f[4] == (uint8_t)(D2K_CMD_SET_HTTPS >> 8) && f[5] == (uint8_t)D2K_CMD_SET_HTTPS &&
+              f[4] == (uint8_t)(D2S_CMD_SET_HTTPS >> 8) && f[5] == (uint8_t)D2S_CMD_SET_HTTPS &&
               f[6] == 13 && memcmp(f + 7, "RuTracker.org", 13) == 0 &&
               f[20] == 0 && f[21] == 0 && f[22] == 0x54 && f[23] == 0x60,
               "кадр SET_HTTPS собран не так");
-        CHECK(d2k_link_set_https(sv[0], "", 1, err, sizeof err) != 0, "SET_HTTPS с пустым именем ушёл");
+        CHECK(d2s_link_set_https(sv[0], "", 1, err, sizeof err) != 0, "SET_HTTPS с пустым именем ушёл");
         close(sv[0]); close(sv[1]);
     }
     {
@@ -377,8 +377,8 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "IPv6 event socketpair");
         /* v4 control: family, two 16-byte addresses, ports, transport, name. */
         uint8_t frame[45] = {0,0,0,41,0,0};
-        frame[4] = (uint8_t)(D2K_EV_HELLO >> 8);
-        frame[5] = (uint8_t)D2K_EV_HELLO;
+        frame[4] = (uint8_t)(D2S_EV_HELLO >> 8);
+        frame[5] = (uint8_t)D2S_EV_HELLO;
         frame[6] = 6;
         frame[7] = 0x20; frame[8] = 1; frame[22] = 1;
         frame[23] = 0x20; frame[24] = 2; frame[38] = 2;
@@ -386,20 +386,20 @@ int main(void) {
         frame[41] = 1; frame[42] = 0xbb;
         frame[43] = 6; frame[44] = 0;
         CHECK(write(sv[0], frame, sizeof frame) == (ssize_t)sizeof frame, "IPv6 frame write");
-        d2k_ev ev;
+        d2s_ev ev;
         char err[256];
-        int rc = d2k_link_next(sv[1], &ev, 100, err, sizeof err);
+        int rc = d2s_link_next(sv[1], &ev, 100, err, sizeof err);
         CHECK(rc == 0 && ev.low_port == 49153 && ev.high_port == 443 && ev.transport == 6,
               "IPv6 control event misdecoded");
         CHECK(ev.family == 6 && memcmp(ev.low_ip, frame + 7, 16) == 0 &&
               memcmp(ev.high_ip, frame + 23, 16) == 0, "IPv6 control address truncated");
         frame[6] = 7;
         CHECK(write(sv[0], frame, sizeof frame) == (ssize_t)sizeof frame, "bad family write");
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
               "unknown address family accepted");
         frame[6] = 4;
         CHECK(write(sv[0], frame, sizeof frame) == (ssize_t)sizeof frame, "noncanonical IPv4 write");
-        CHECK(d2k_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
+        CHECK(d2s_link_next(sv[1], &ev, 100, err, sizeof err) == -1,
               "IPv4 address with nonzero tail accepted");
         close(sv[0]); close(sv[1]);
     }
@@ -410,12 +410,12 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0,
               "socketpair (проверка живости связи) не создался");
         if (sv[0] >= 0 && sv[1] >= 0) {
-            CHECK(d2k_link_peer_closed(sv[0]) == 0,
+            CHECK(d2s_link_peer_closed(sv[0]) == 0,
                   "открытый управляющий сокет ошибочно признан закрытым");
             close(sv[1]);
-            CHECK(d2k_link_peer_closed(sv[0]) == 1,
+            CHECK(d2s_link_peer_closed(sv[0]) == 1,
                   "закрытый управляющий peer не распознан");
-            CHECK(d2k_link_peer_closed(-1) == -1,
+            CHECK(d2s_link_peer_closed(-1) == -1,
                   "ошибочный fd не вернул ошибку живости связи");
             close(sv[0]);
         }
@@ -432,27 +432,27 @@ int main(void) {
             CHECK(setsockopt(sv[1], SOL_SOCKET, SO_SNDBUF, &capacity, sizeof capacity) == 0,
                   "room for 300 queued IPv6 events");
             for (int i = 0; i < 300; i++) {
-                send_synthetic(sv[1], D2K_EV_HELLO, hello, sizeof hello);
+                send_synthetic(sv[1], D2S_EV_HELLO, hello, sizeof hello);
             }
             close(sv[1]);
-            CHECK(d2k_link_peer_closed(sv[0]) == 1,
+            CHECK(d2s_link_peer_closed(sv[0]) == 1,
                   "закрытие peer не видно при ещё читаемой очереди");
             int received = 0;
             for (;;) {
                 int drained = 0;
                 for (; drained < 256; drained++) {
-                    d2k_ev ev; char err[128];
-                    if (d2k_link_next(sv[0], &ev, 0, err, sizeof err) != 0) { break; }
+                    d2s_ev ev; char err[128];
+                    if (d2s_link_next(sv[0], &ev, 0, err, sizeof err) != 0) { break; }
                     received++;
                 }
-                if (drained < 256 || d2k_link_peer_closed(sv[0]) != 1) { break; }
+                if (drained < 256 || d2s_link_peer_closed(sv[0]) != 1) { break; }
             }
             CHECK(received == 300, "закрытие потеряло конечную очередь из 300 событий");
             close(sv[0]);
         }
     }
     /* A real closed AF_UNIX peer must return an error even when the
-       application has the default SIGPIPE disposition (e.g. d2kask). */
+       application has the default SIGPIPE disposition (e.g. d2sask). */
     {
         pid_t pid = fork();
         CHECK(pid >= 0, "fork for closed-peer regression");
@@ -461,7 +461,7 @@ int main(void) {
             int sv[2]; char err[128];
             if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) { _exit(2); }
             close(sv[1]);
-            int rc = d2k_link_arm_shape(sv[0], "closed.example", 6, err, sizeof err);
+            int rc = d2s_link_arm_shape(sv[0], "closed.example", 6, err, sizeof err);
             close(sv[0]); _exit(rc == -1 ? 0 : 3);
         }
         if (pid > 0) {
@@ -476,44 +476,44 @@ int main(void) {
      * и ВЕСЬ второй полёт рукопожатия (RFC 8446 §5.2), а настоящий тип лежит
      * внутри шифротекста. Значит это НАБЛЮДЕНИЕ (§4.2, уровень 2), а не
      * подтверждение работы приложения — подтверждение даёт собственный зонд
-     * (core/verify.c). Каждый бит — свой тип записи (D2K_TLS_* минус 20);
+     * (core/verify.c). Каждый бит — свой тип записи (D2S_TLS_* минус 20);
      * проверяем и «только этот бит», и «этот бит среди прочих», и «все
      * прочие биты, кроме него». ---------------------------------------- */
     {
-        uint8_t bit_appdata = (uint8_t)(1u << (D2K_TLS_APPLICATION_DATA - 20));      /* 8 */
-        uint8_t bit_handshake = (uint8_t)(1u << (D2K_TLS_HANDSHAKE - 20));           /* 4 */
-        uint8_t bit_alert = (uint8_t)(1u << (D2K_TLS_ALERT - 20));                   /* 2 */
-        uint8_t bit_ccs = (uint8_t)(1u << (D2K_TLS_CHANGE_CIPHER_SPEC - 20));         /* 1 */
+        uint8_t bit_appdata = (uint8_t)(1u << (D2S_TLS_APPLICATION_DATA - 20));      /* 8 */
+        uint8_t bit_handshake = (uint8_t)(1u << (D2S_TLS_HANDSHAKE - 20));           /* 4 */
+        uint8_t bit_alert = (uint8_t)(1u << (D2S_TLS_ALERT - 20));                   /* 2 */
+        uint8_t bit_ccs = (uint8_t)(1u << (D2S_TLS_CHANGE_CIPHER_SPEC - 20));         /* 1 */
 
-        d2k_ev e;
+        d2s_ev e;
         e = ev_with_seen(bit_appdata);
-        CHECK(d2k_ev_outer_appdata(&e) == 1, "внешний тип 23 не распознан");
+        CHECK(d2s_ev_outer_appdata(&e) == 1, "внешний тип 23 не распознан");
         e = ev_with_seen(bit_alert);
-        CHECK(d2k_ev_outer_appdata(&e) == 0, "предупреждение TLS принято за внешний тип 23 — это ОТКАЗ сервера");
+        CHECK(d2s_ev_outer_appdata(&e) == 0, "предупреждение TLS принято за внешний тип 23 — это ОТКАЗ сервера");
         e = ev_with_seen(bit_handshake);
-        CHECK(d2k_ev_outer_appdata(&e) == 0, "рукопожатие принято за внешний тип 23");
+        CHECK(d2s_ev_outer_appdata(&e) == 0, "рукопожатие принято за внешний тип 23");
         e = ev_with_seen(bit_ccs);
-        CHECK(d2k_ev_outer_appdata(&e) == 0, "смена шифра принята за внешний тип 23");
+        CHECK(d2s_ev_outer_appdata(&e) == 0, "смена шифра принята за внешний тип 23");
         e = ev_with_seen(0);
-        CHECK(d2k_ev_outer_appdata(&e) == 0, "пустая маска принята за внешний тип 23");
+        CHECK(d2s_ev_outer_appdata(&e) == 0, "пустая маска принята за внешний тип 23");
         /* Внешний тип 23 СРЕДИ прочих типов — реалистичный многозаписный
            обмен (рукопожатие, потом данные): бит смещения обязан быть ровно
            тем, а не соседним — мутация индекса сдвига здесь и поймается. */
         e = ev_with_seen((uint8_t)(bit_handshake | bit_appdata));
-        CHECK(d2k_ev_outer_appdata(&e) == 1, "внешний тип 23 среди прочих типов не распознан");
+        CHECK(d2s_ev_outer_appdata(&e) == 1, "внешний тип 23 среди прочих типов не распознан");
         /* Все ТРИ прочих типа сразу, но НЕ 23 — граница, отличающая «бит
            appdata» от «маска вообще не нулевая». */
         e = ev_with_seen((uint8_t)(bit_ccs | bit_alert | bit_handshake));
-        CHECK(d2k_ev_outer_appdata(&e) == 0, "все типы кроме 23 приняты за внешний тип 23");
+        CHECK(d2s_ev_outer_appdata(&e) == 0, "все типы кроме 23 приняты за внешний тип 23");
         e = ev_with_seen(0xFF);
-        CHECK(d2k_ev_outer_appdata(&e) == 1, "полная маска (включая 23) не распознана");
-        CHECK(d2k_ev_outer_appdata(NULL) == 0, "у NULL-события нашёлся внешний тип 23");
+        CHECK(d2s_ev_outer_appdata(&e) == 1, "полная маска (включая 23) не распознана");
+        CHECK(d2s_ev_outer_appdata(NULL) == 0, "у NULL-события нашёлся внешний тип 23");
     }
 
     /* --- открытие несуществующего сокета отказывает, а не зависает -------- */
     {
         char err[200] = {0};
-        int fd = d2k_link_open("/tmp/d2k-core-link-test-nobody-home.sock", err, sizeof err);
+        int fd = d2s_link_open("/tmp/d2s-core-link-test-nobody-home.sock", err, sizeof err);
         CHECK(fd < 0, "открытие несуществующего сокета должно отказать");
         CHECK(err[0] != '\0', "отказ открытия без причины в err");
     }
@@ -524,17 +524,17 @@ int main(void) {
            без явной проверки, через ENOENT от connect() на несуществующем
            пути — здесь такой смежной страховки нет). */
         char err[200] = {0};
-        CHECK(d2k_link_open(NULL, err, sizeof err) < 0, "открытие с NULL-путём должно отказать, не падать");
-        CHECK(d2k_link_open("", err, sizeof err) < 0, "открытие с пустым путём должно отказать");
+        CHECK(d2s_link_open(NULL, err, sizeof err) < 0, "открытие с NULL-путём должно отказать, не падать");
+        CHECK(d2s_link_open("", err, sizeof err) < 0, "открытие с пустым путём должно отказать");
     }
 
-    /* --- защита входа d2k_link_next/d2k_link_close ------------------------ */
+    /* --- защита входа d2s_link_next/d2s_link_close ------------------------ */
     {
         char err[200] = {0};
-        d2k_ev ev;
-        CHECK(d2k_link_next(-1, &ev, 100, err, sizeof err) == -1, "закрытый fd должен отказывать, не тайм-аутить");
-        CHECK(d2k_link_next(-1, NULL, 100, err, sizeof err) == -1, "нет места для события должно отказывать");
-        d2k_link_close(-1); /* не должно падать */
+        d2s_ev ev;
+        CHECK(d2s_link_next(-1, &ev, 100, err, sizeof err) == -1, "закрытый fd должен отказывать, не тайм-аутить");
+        CHECK(d2s_link_next(-1, NULL, 100, err, sizeof err) == -1, "нет места для события должно отказывать");
+        d2s_link_close(-1); /* не должно падать */
     }
 
     /* --- разбор кадра против ПОДДЕЛЬНОГО собеседника: границы длины ------- */
@@ -544,9 +544,9 @@ int main(void) {
         if (sv[0] >= 0 && sv[1] >= 0) {
             uint8_t bad[6] = { 0, 0, 0, 0, 0, 0 }; /* plen = 0: короче минимума под тип */
             CHECK(write(sv[1], bad, sizeof bad) == (ssize_t)sizeof bad, "тестовый кадр (длина 0) не записался");
-            d2k_ev ev;
+            d2s_ev ev;
             char err[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
+            CHECK(d2s_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
                   "кадр с длиной payload < 2 должен быть отказом, а не тихо принят");
             close(sv[0]);
             close(sv[1]);
@@ -556,15 +556,15 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (короче ключа) не создался");
         if (sv[0] >= 0 && sv[1] >= 0) {
-            /* plen=2 — только тип, тела вовсе нет: короче D2K_KEY_WIRE_LEN. */
+            /* plen=2 — только тип, тела вовсе нет: короче D2S_KEY_WIRE_LEN. */
             uint8_t bad[6];
             bad[0] = 0; bad[1] = 0; bad[2] = 0; bad[3] = 2;
-            bad[4] = (uint8_t)(D2K_EV_HELLO >> 8);
-            bad[5] = (uint8_t)D2K_EV_HELLO;
+            bad[4] = (uint8_t)(D2S_EV_HELLO >> 8);
+            bad[5] = (uint8_t)D2S_EV_HELLO;
             CHECK(write(sv[1], bad, sizeof bad) == (ssize_t)sizeof bad, "тестовый кадр (короче ключа) не записался");
-            d2k_ev ev;
+            d2s_ev ev;
             char err[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
+            CHECK(d2s_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
                   "кадр короче ключа потока должен быть отказом");
             close(sv[0]);
             close(sv[1]);
@@ -572,13 +572,13 @@ int main(void) {
     }
     {
         /* Тот же отказ, но РОВНО на 1 байт короче ключа — граница, отличающая
-           верную проверку "body_len < D2K_KEY_WIRE_LEN" от однобайтно
-           ослабленной "< D2K_KEY_WIRE_LEN - 1"; предыдущая проверка (тело
+           верную проверку "body_len < D2S_KEY_WIRE_LEN" от однобайтно
+           ослабленной "< D2S_KEY_WIRE_LEN - 1"; предыдущая проверка (тело
            нулевой длины) обе версии отклоняют одинаково и мутацию здесь не
            поймала бы (поймано мутацией на первом прогоне). Размер — через
-           D2K_KEY_WIRE_LEN, не литералом: это ИМЕННО тот тест, что должен
+           D2S_KEY_WIRE_LEN, не литералом: это ИМЕННО тот тест, что должен
            защищать от зашитой числом ширины ключа, а не сам её зашивать. */
-        enum { SHORT_KEY_LEN = D2K_KEY_WIRE_LEN - 1 };
+        enum { SHORT_KEY_LEN = D2S_KEY_WIRE_LEN - 1 };
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (ключ короче на 1 байт) не создался");
         if (sv[0] >= 0 && sv[1] >= 0) {
@@ -586,21 +586,21 @@ int main(void) {
             uint32_t plen = (uint32_t)(2 + SHORT_KEY_LEN);
             frame[0] = (uint8_t)(plen >> 24); frame[1] = (uint8_t)(plen >> 16);
             frame[2] = (uint8_t)(plen >> 8);  frame[3] = (uint8_t)plen;
-            frame[4] = (uint8_t)(D2K_EV_APPLIED >> 8); frame[5] = (uint8_t)D2K_EV_APPLIED;
+            frame[4] = (uint8_t)(D2S_EV_APPLIED >> 8); frame[5] = (uint8_t)D2S_EV_APPLIED;
             memset(frame + 6, 0xAB, SHORT_KEY_LEN);
             CHECK(write(sv[1], frame, sizeof frame) == (ssize_t)sizeof frame,
                   "тестовый кадр (ключ короче на 1 байт) не записался");
-            d2k_ev ev;
+            d2s_ev ev;
             char err[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
-                  "кадр короче ключа РОВНО на 1 байт (D2K_KEY_WIRE_LEN - 1) должен отклоняться");
+            CHECK(d2s_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
+                  "кадр короче ключа РОВНО на 1 байт (D2S_KEY_WIRE_LEN - 1) должен отклоняться");
             close(sv[0]);
             close(sv[1]);
         }
     }
     {
-        /* Кадр за пределом D2K_CTL_FRAME_MAX. Тело — ровно на 1 байт больше
-           разрешённого (D2K_CTL_FRAME_MAX - 2 + 1): без верхней границы
+        /* Кадр за пределом D2S_CTL_FRAME_MAX. Тело — ровно на 1 байт больше
+           разрешённого (D2S_CTL_FRAME_MAX - 2 + 1): без верхней границы
            разбор попытался бы дочитать все эти байты в g_scratch (тот на 6
            байт больше предела, так что здесь бы не переполнился, но принял
            бы кадр как валидный — 0 вместо -1). Писать 65535 байт в один
@@ -615,14 +615,14 @@ int main(void) {
             CHECK(wpid >= 0, "fork писателя (кадр за пределом) не удался");
             if (wpid == 0) {
                 close(sv[0]);
-                uint32_t body_len = (uint32_t)D2K_CTL_FRAME_MAX - 1;
+                uint32_t body_len = (uint32_t)D2S_CTL_FRAME_MAX - 1;
                 uint32_t plen = body_len + 2;
                 uint8_t hdr[6];
                 hdr[0] = (uint8_t)(plen >> 24); hdr[1] = (uint8_t)(plen >> 16);
                 hdr[2] = (uint8_t)(plen >> 8);  hdr[3] = (uint8_t)plen;
-                hdr[4] = (uint8_t)(D2K_EV_STATS >> 8); hdr[5] = (uint8_t)D2K_EV_STATS;
+                hdr[4] = (uint8_t)(D2S_EV_STATS >> 8); hdr[5] = (uint8_t)D2S_EV_STATS;
                 (void)!write(sv[1], hdr, sizeof hdr);
-                static uint8_t filler[D2K_CTL_FRAME_MAX];
+                static uint8_t filler[D2S_CTL_FRAME_MAX];
                 memset(filler, 0x22, body_len);
                 size_t sent = 0;
                 while (sent < body_len) {
@@ -634,10 +634,10 @@ int main(void) {
                 _exit(0);
             }
             close(sv[1]);
-            d2k_ev ev;
+            d2s_ev ev;
             char err[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 2000, err, sizeof err) == -1,
-                  "кадр длиннее D2K_CTL_FRAME_MAX должен отклоняться");
+            CHECK(d2s_link_next(sv[0], &ev, 2000, err, sizeof err) == -1,
+                  "кадр длиннее D2S_CTL_FRAME_MAX должен отклоняться");
             close(sv[0]);
             if (wpid > 0) { (void)waitpid(wpid, NULL, 0); }
         }
@@ -647,9 +647,9 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (уход без байта) не создался");
         if (sv[0] >= 0 && sv[1] >= 0) {
             close(sv[1]); /* собеседник ушёл, не написав ни байта заголовка */
-            d2k_ev ev;
+            d2s_ev ev;
             char err[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
+            CHECK(d2s_link_next(sv[0], &ev, 1000, err, sizeof err) == -1,
                   "уход без единого байта — это отказ, а не тайм-аут (1)");
             close(sv[0]);
         }
@@ -663,9 +663,9 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (HELLO без длины имени) не создался");
         if (sv[0] >= 0) {
-            send_synthetic(sv[1], D2K_EV_HELLO, NULL, 0);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_HELLO, NULL, 0);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "HELLO без байта длины имени должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
@@ -681,9 +681,9 @@ int main(void) {
                совпадали, и мутация в этом самом месте прошла бы незамеченной
                (поймано мутацией на первом прогоне этого файла). */
             uint8_t rest[5] = { 5, 'a', 'b', 'c', 'd' }; /* заявлено 5, дано 4 */
-            send_synthetic(sv[1], D2K_EV_HELLO, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_HELLO, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "HELLO короче объявленной длины имени РОВНО на 1 байт должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
@@ -695,9 +695,9 @@ int main(void) {
             uint8_t rest[256];
             rest[0] = 255;
             for (int i = 0; i < 255; i++) { rest[1 + i] = (uint8_t)('a' + (i % 26)); }
-            send_synthetic(sv[1], D2K_EV_HELLO, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            send_synthetic(sv[1], D2S_EV_HELLO, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "HELLO с именем ровно 255 байт (граница буфера name[256]) должен приниматься");
             CHECK(strlen(ev.name) == 255, "имя длиной 255 байт не поместилось целиком в out->name");
             close(sv[0]); close(sv[1]);
@@ -707,25 +707,25 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (SUSPECT без кода) не создался");
         if (sv[0] >= 0) {
-            send_synthetic(sv[1], D2K_EV_SUSPECT, NULL, 0);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_SUSPECT, NULL, 0);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "SUSPECT без кода причины должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
     }
     {
         /* Подробности подозрения — те самые пять байт, из которых складывается
-           отпечаток коробки (datapath/ctlsrv.c, D2K_JRN_SUSPECT). До 11.09
+           отпечаток коробки (datapath/ctlsrv.c, D2S_JRN_SUSPECT). До 11.09
            разбор читал только код и молча терял их: каталог хранил бы факт
            «был сброс», по которому одну коробку от другой не отличить. */
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (подробности SUSPECT) не создался");
         if (sv[0] >= 0) {
-            uint8_t rest[8] = { 1, 127, 53, 0x20, 0x12, 0x34, D2K_LINK_PLANNED_NO, 1 };
-            send_synthetic(sv[1], D2K_EV_SUSPECT, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            uint8_t rest[8] = { 1, 127, 53, 0x20, 0x12, 0x34, D2S_LINK_PLANNED_NO, 1 };
+            send_synthetic(sv[1], D2S_EV_SUSPECT, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "SUSPECT с подробностями должен приниматься");
             CHECK(ev.code == 1, "код причины подозрения потерян");
             CHECK(ev.ttl == 127, "TTL подделки потерян — по нему узнаётся коробка");
@@ -742,14 +742,14 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (SUSPECT v12) не создался");
         if (sv[0] >= 0) {
-            uint8_t rest[10] = { D2K_SUSPECT_TCP_STALL, 0, 0, 0, 0, 0, D2K_LINK_PLANNED_NO, 1, 0, 25 };
-            send_synthetic(sv[1], D2K_EV_SUSPECT, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
-                  ev.code == D2K_SUSPECT_TCP_STALL && ev.num == 25,
+            uint8_t rest[10] = { D2S_SUSPECT_TCP_STALL, 0, 0, 0, 0, 0, D2S_LINK_PLANNED_NO, 1, 0, 25 };
+            send_synthetic(sv[1], D2S_EV_SUSPECT, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
+                  ev.code == D2S_SUSPECT_TCP_STALL && ev.num == 25,
                   "оценка пакетов в подозрении «TCP встал на бюджете» потеряна");
-            send_synthetic(sv[1], D2K_EV_SUSPECT, rest, 8);
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 && ev.num == 0,
+            send_synthetic(sv[1], D2S_EV_SUSPECT, rest, 8);
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 && ev.num == 0,
                   "подозрение без хвоста v12 получило выдуманное число");
             close(sv[0]); close(sv[1]);
         }
@@ -762,9 +762,9 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (короткий SUSPECT) не создался");
         if (sv[0] >= 0) {
             uint8_t rest[1] = { 3 };
-            send_synthetic(sv[1], D2K_EV_SUSPECT, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            send_synthetic(sv[1], D2S_EV_SUSPECT, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "SUSPECT без подробностей должен приниматься");
             CHECK(ev.code == 3, "код причины короткого подозрения потерян");
             CHECK(ev.ttl == 0 && ev.ref_ttl == 0 && ev.tos == 0 && ev.ipid == 0,
@@ -783,17 +783,17 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (APPLIED с id) не создался");
         if (sv[0] >= 0) {
-            uint8_t rest[D2K_PLAN_ID_LEN + D2K_TRIAL_ID_LEN];
-            for (int i = 0; i < D2K_PLAN_ID_LEN; i++) { rest[i] = (uint8_t)(0xA0 + i); }
-            for (int i = 0; i < D2K_TRIAL_ID_LEN; i++) { rest[D2K_PLAN_ID_LEN + i] = (uint8_t)(0xD0 + i); }
-            send_synthetic(sv[1], D2K_EV_APPLIED, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            uint8_t rest[D2S_PLAN_ID_LEN + D2S_TRIAL_ID_LEN];
+            for (int i = 0; i < D2S_PLAN_ID_LEN; i++) { rest[i] = (uint8_t)(0xA0 + i); }
+            for (int i = 0; i < D2S_TRIAL_ID_LEN; i++) { rest[D2S_PLAN_ID_LEN + i] = (uint8_t)(0xD0 + i); }
+            send_synthetic(sv[1], D2S_EV_APPLIED, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "APPLIED с идентификатором плана должен приниматься");
             int same = 1;
             for (int i = 0; i < 16; i++) { if (ev.plan_id[i] != (uint8_t)(0xA0 + i)) { same = 0; } }
             CHECK(same, "идентификатор плана потерян при разборе события");
-            CHECK(memcmp(ev.trial_id, rest + D2K_PLAN_ID_LEN, D2K_TRIAL_ID_LEN) == 0,
+            CHECK(memcmp(ev.trial_id, rest + D2S_PLAN_ID_LEN, D2S_TRIAL_ID_LEN) == 0,
                   "trial ID потерян при разборе события");
             close(sv[0]); close(sv[1]);
         }
@@ -803,9 +803,9 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (APPLIED без id) не создался");
         if (sv[0] >= 0) {
-            send_synthetic(sv[1], D2K_EV_APPLIED, NULL, 0);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_APPLIED, NULL, 0);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "APPLIED без идентификатора должен отвергаться");
             int zero = 1;
             for (int i = 0; i < 16; i++) { if (ev.plan_id[i] != 0) { zero = 0; } }
@@ -818,11 +818,11 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (APPLIED с обрезанным id) не создался");
         if (sv[0] >= 0) {
-            uint8_t rest[D2K_PLAN_ID_LEN + D2K_TRIAL_ID_LEN - 1];
+            uint8_t rest[D2S_PLAN_ID_LEN + D2S_TRIAL_ID_LEN - 1];
             memset(rest, 0xC7, sizeof rest);
-            send_synthetic(sv[1], D2K_EV_APPLIED, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_APPLIED, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "APPLIED с обрезанным идентификатором должен отвергаться");
             int zero = 1;
             for (int i = 0; i < 16; i++) { if (ev.plan_id[i] != 0) { zero = 0; } }
@@ -835,11 +835,11 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (старое исполнение) не создался");
         if (sv[0] >= 0) {
             uint8_t id[16]; memset(id, 0xC7, sizeof id);
-            send_synthetic(sv[1], D2K_EV_PREPARED, id, sizeof id);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            send_synthetic(sv[1], D2S_EV_PREPARED, id, sizeof id);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "старое событие не должно ломать канал");
-            CHECK(ev.kind == D2K_EV_PREPARED && ev.kind != D2K_EV_APPLIED,
+            CHECK(ev.kind == D2S_EV_PREPARED && ev.kind != D2S_EV_APPLIED,
                   "старая подготовка выдана за подтверждение исполнения");
             close(sv[0]); close(sv[1]);
         }
@@ -848,15 +848,15 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (отказ с ID) не создался");
         if (sv[0] >= 0) {
-            uint8_t rest[1 + D2K_PLAN_ID_LEN + D2K_TRIAL_ID_LEN];
+            uint8_t rest[1 + D2S_PLAN_ID_LEN + D2S_TRIAL_ID_LEN];
             memset(rest, 0xC7, sizeof rest); rest[0] = 3;
-            send_synthetic(sv[1], D2K_EV_REFUSED, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            send_synthetic(sv[1], D2S_EV_REFUSED, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "отказ с ID не разобран");
             CHECK(ev.code == 3 && memcmp(ev.plan_id, rest + 1, 16) == 0,
                   "отказ потерял код или ID кандидата");
-            CHECK(memcmp(ev.trial_id, rest + 1 + D2K_PLAN_ID_LEN, D2K_TRIAL_ID_LEN) == 0,
+            CHECK(memcmp(ev.trial_id, rest + 1 + D2S_PLAN_ID_LEN, D2S_TRIAL_ID_LEN) == 0,
                   "отказ потерял trial ID");
             close(sv[0]); close(sv[1]);
         }
@@ -866,9 +866,9 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (EXCHANGE короче 6) не создался");
         if (sv[0] >= 0) {
             uint8_t rest[5] = { 22, 0, 0, 0, 0 }; /* на 1 короче минимума в 6 байт */
-            send_synthetic(sv[1], D2K_EV_EXCHANGE, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_EXCHANGE, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "EXCHANGE короче 6 байт (тип записи + маска + длина) должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
@@ -884,9 +884,9 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (EXCHANGE num порядок байт) не создался");
         if (sv[0] >= 0) {
             uint8_t rest[6] = { 23, 0, 0x01, 0x02, 0x03, 0x04 };
-            send_synthetic(sv[1], D2K_EV_EXCHANGE, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0, "EXCHANGE с различимым num не разобрался");
+            send_synthetic(sv[1], D2S_EV_EXCHANGE, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0, "EXCHANGE с различимым num не разобрался");
             CHECK(ev.num == 0x01020304u,
                   "EXCHANGE.num собран не в том порядке байт (ожидали 0x01020304)");
             close(sv[0]); close(sv[1]);
@@ -897,9 +897,9 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (ACK короче 4) не создался");
         if (sv[0] >= 0) {
             uint8_t rest[3] = { 0, 0x81, 1 }; /* на 1 короче минимума в 4 байта */
-            send_synthetic(sv[1], D2K_EV_ACK, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_ACK, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "ACK короче 4 байт (тип команды + признак + причина) должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
@@ -911,20 +911,20 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (CLIENT_TCP) не создался");
         if (sv[0] >= 0) {
             static const uint8_t ts[12] = {1, 1, 8, 10, 0, 0, 0x23, 0x28, 0, 0, 0, 0};
-            send_synthetic(sv[1], D2K_EV_CLIENT_TCP, ts, sizeof ts);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
-                  ev.kind == D2K_EV_CLIENT_TCP &&
+            send_synthetic(sv[1], D2S_EV_CLIENT_TCP, ts, sizeof ts);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
+                  ev.kind == D2S_EV_CLIENT_TCP &&
                   ev.tcp_options_len == 12 && memcmp(ev.tcp_options, ts, 12) == 0,
                   "CLIENT_TCP: набор опций клиента не разобран");
-            send_synthetic(sv[1], D2K_EV_CLIENT_TCP, NULL, 0);
+            send_synthetic(sv[1], D2S_EV_CLIENT_TCP, NULL, 0);
             memset(&ev, 0xff, sizeof ev);
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
-                  ev.kind == D2K_EV_CLIENT_TCP && ev.tcp_options_len == 0,
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0 &&
+                  ev.kind == D2S_EV_CLIENT_TCP && ev.tcp_options_len == 0,
                   "CLIENT_TCP: пустой набор не принят как известный");
             static const uint8_t over[41] = {0};
-            send_synthetic(sv[1], D2K_EV_CLIENT_TCP, over, sizeof over);
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_CLIENT_TCP, over, sizeof over);
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "CLIENT_TCP длиннее 40 байт должен отклоняться");
             close(sv[0]); close(sv[1]);
         }
@@ -933,11 +933,11 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (SHAPE переполнение) не создался");
         if (sv[0] >= 0) {
-            static uint8_t rest[D2K_SHAPE_MAX + 1]; /* на 1 больше буфера out->shape */
+            static uint8_t rest[D2S_SHAPE_MAX + 1]; /* на 1 больше буфера out->shape */
             memset(rest, 0x16, sizeof rest);
-            send_synthetic(sv[1], D2K_EV_SHAPE, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
+            send_synthetic(sv[1], D2S_EV_SHAPE, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == -1,
                   "форма приветствия длиннее буфера должна отклоняться, а не переполнять его");
             close(sv[0]); close(sv[1]);
         }
@@ -946,18 +946,18 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (SHAPE во весь буфер) не создался");
         if (sv[0] >= 0) {
-            static uint8_t rest[D2K_SHAPE_MAX]; /* ровно во весь буфер out->shape */
+            static uint8_t rest[D2S_SHAPE_MAX]; /* ровно во весь буфер out->shape */
             memset(rest, 0x16, sizeof rest);
-            send_synthetic(sv[1], D2K_EV_SHAPE, rest, sizeof rest);
-            d2k_ev ev; char e[200] = {0};
-            CHECK(d2k_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
+            send_synthetic(sv[1], D2S_EV_SHAPE, rest, sizeof rest);
+            d2s_ev ev; char e[200] = {0};
+            CHECK(d2s_link_next(sv[0], &ev, 1000, e, sizeof e) == 0,
                   "форма приветствия во весь буфер (граница) должна приниматься");
-            CHECK(ev.shape_len == D2K_SHAPE_MAX, "shape_len не во весь буфер на границе");
+            CHECK(ev.shape_len == D2S_SHAPE_MAX, "shape_len не во весь буфер на границе");
             close(sv[0]); close(sv[1]);
         }
     }
 
-    /* --- проверка hex/имени у d2k_link_set_name — без сети целиком --------
+    /* --- проверка hex/имени у d2s_link_set_name — без сети целиком --------
      * Один заведомо валидный fd (сокет-пара, второй конец никто не читает)
      * достаточен: все эти отказы случаются ДО первой попытки записи. */
     {
@@ -965,18 +965,18 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "socketpair (валидация set_name) не создался");
         if (sv[0] >= 0) {
             char err[200] = {0};
-            CHECK(d2k_link_set_name(sv[0], "x.example", 6, "abc", D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
+            CHECK(d2s_link_set_name(sv[0], "x.example", 6, "abc", D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
                   "нечётная длина hex должна отклоняться");
-            CHECK(d2k_link_set_name(sv[0], "x.example", 6, "zz", D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
+            CHECK(d2s_link_set_name(sv[0], "x.example", 6, "zz", D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
                   "недопустимый hex-символ должен отклоняться");
-            CHECK(d2k_link_set_name(sv[0], "", 6, "", D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
+            CHECK(d2s_link_set_name(sv[0], "", 6, "", D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
                   "пустое имя должно отклоняться");
-            CHECK(d2k_link_set_name(sv[0], "x.example", 99, "", D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
+            CHECK(d2s_link_set_name(sv[0], "x.example", 99, "", D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
                   "транспорт вне {6,17} должен отклоняться до похода к серверу");
             char longname[300];
             memset(longname, 'a', sizeof longname - 1);
             longname[sizeof longname - 1] = '\0';
-            CHECK(d2k_link_set_name(sv[0], longname, 6, "", D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
+            CHECK(d2s_link_set_name(sv[0], longname, 6, "", D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == -1,
                   "имя длиннее 255 байт должно отклоняться");
             close(sv[0]);
             close(sv[1]);
@@ -987,65 +987,65 @@ int main(void) {
         int sv[2];
         CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, sv) == 0, "name family socketpair");
         char err[200]; uint8_t wire[64];
-        CHECK(d2k_link_set_name_family(sv[0], "x", 6, "aabb", 1, 0, 6,
+        CHECK(d2s_link_set_name_family(sv[0], "x", 6, "aabb", 1, 0, 6,
                                       err, sizeof err) == 0, "IPv6 name command");
         CHECK(read(sv[1], wire, sizeof wire) == 12, "IPv6 name command length");
         CHECK(wire[6] == 1 && wire[7] == 'x' && wire[8] == 1 &&
               wire[9] == 6 && wire[10] == 0xaa && wire[11] == 0xbb,
               "IPv6 name command exact bytes");
-        CHECK(d2k_link_set_name_family(sv[0], "x", 6, "", 1, 0, 0,
+        CHECK(d2s_link_set_name_family(sv[0], "x", 6, "", 1, 0, 0,
                                       err, sizeof err) == -1, "ambiguous family rejected");
-        CHECK(d2k_link_set_name(sv[0], "x", 6, "", 1, err, sizeof err) == 0,
+        CHECK(d2s_link_set_name(sv[0], "x", 6, "", 1, err, sizeof err) == 0,
               "IPv4 compatibility command");
         CHECK(read(sv[1], wire, sizeof wire) == 10 && wire[9] == 4,
               "legacy API explicitly encodes IPv4");
-        CHECK(d2k_link_del_name_family(sv[0], "x", 17, D2K_LINK_SHAPE_QUIC, 6,
+        CHECK(d2s_link_del_name_family(sv[0], "x", 17, D2S_LINK_SHAPE_QUIC, 6,
                                        err, sizeof err) == 0,
               "IPv6 delete name");
-        CHECK(read(sv[1], wire, sizeof wire) == 11 && wire[5] == D2K_CMD_DEL_NAME &&
-              wire[8] == 17 && wire[9] == D2K_LINK_SHAPE_QUIC && wire[10] == 6,
+        CHECK(read(sv[1], wire, sizeof wire) == 11 && wire[5] == D2S_CMD_DEL_NAME &&
+              wire[8] == 17 && wire[9] == D2S_LINK_SHAPE_QUIC && wire[10] == 6,
               "DEL_NAME v9 carries transport, shape and family");
-        CHECK(d2k_link_del_name_family(sv[0], "x", 6, 0, 4, err, sizeof err) == -1,
+        CHECK(d2s_link_del_name_family(sv[0], "x", 6, 0, 4, err, sizeof err) == -1,
               "DEL_NAME without shape (name-wide delete) rejected");
-        CHECK(d2k_link_del_name_family(sv[0], "x", 0, 1, 4, err, sizeof err) == -1,
+        CHECK(d2s_link_del_name_family(sv[0], "x", 0, 1, 4, err, sizeof err) == -1,
               "DEL_NAME without transport rejected");
-        CHECK(d2k_link_set_suffix_family(sv[0], "x.com", 6, "aabb", 1, 6, err, sizeof err) == 0,
+        CHECK(d2s_link_set_suffix_family(sv[0], "x.com", 6, "aabb", 1, 6, err, sizeof err) == 0,
               "IPv6 suffix send");
-        CHECK(read(sv[1], wire, sizeof wire) == 32 && wire[5] == D2K_CMD_SET_SUFFIX &&
+        CHECK(read(sv[1], wire, sizeof wire) == 32 && wire[5] == D2S_CMD_SET_SUFFIX &&
               wire[12] == 1 && wire[13] == 6 && wire[14] == 0xaa, "suffix wire layout");
-        CHECK(d2k_link_set_bypass_family(sv[0], "x.com", 6, 1, 6, err, sizeof err) == 0,
+        CHECK(d2s_link_set_bypass_family(sv[0], "x.com", 6, 1, 6, err, sizeof err) == 0,
               "IPv6 exact bypass send");
-        CHECK(read(sv[1], wire, sizeof wire) == 31 && wire[5] == D2K_CMD_SET_BYPASS &&
+        CHECK(read(sv[1], wire, sizeof wire) == 31 && wire[5] == D2S_CMD_SET_BYPASS &&
               wire[12] == 6 && wire[13] == 1 && wire[14] == 6, "bypass context wire layout");
-        CHECK(d2k_link_del_name_probe_family(sv[0], "x", 17, 3, htons(40000), 6,
+        CHECK(d2s_link_del_name_probe_family(sv[0], "x", 17, 3, htons(40000), 6,
                                              err, sizeof err) == 0, "IPv6 probe delete");
         CHECK(read(sv[1], wire, sizeof wire) == 12 && wire[8] == 3 &&
               wire[9] == 6 && wire[10] == 0x9c && wire[11] == 0x40,
               "IPv6 probe delete wire");
-        CHECK(d2k_link_arm_shape_family(sv[0], "x", 17, 6, err, sizeof err) == 0,
+        CHECK(d2s_link_arm_shape_family(sv[0], "x", 17, 6, err, sizeof err) == 0,
               "IPv6 snapshot request");
         CHECK(read(sv[1], wire, sizeof wire) == 10 && wire[8] == 17 && wire[9] == 6,
               "snapshot wire carries transport and family");
         const uint8_t ip6[16] = {0x20,1,0xdb,8,0,0,0,0,0,0,0,0,0,0,0,1};
-        CHECK(d2k_link_set_addr_family(sv[0], ip6, 6, D2K_LINK_SHAPE_QUIC, "aabb",
+        CHECK(d2s_link_set_addr_family(sv[0], ip6, 6, D2S_LINK_SHAPE_QUIC, "aabb",
                                        err, sizeof err) == 0,
               "IPv6 address binding command");
         CHECK(read(sv[1], wire, sizeof wire) == 26 && wire[6] == 6 &&
-              !memcmp(wire + 7, ip6, 16) && wire[23] == D2K_LINK_SHAPE_QUIC &&
+              !memcmp(wire + 7, ip6, 16) && wire[23] == D2S_LINK_SHAPE_QUIC &&
               wire[24] == 0xaa && wire[25] == 0xbb,
               "IPv6 address binding wire carries protocol shape before the plan");
-        CHECK(d2k_link_del_addr_family(sv[0], ip6, 6, D2K_LINK_SHAPE_VOICE,
+        CHECK(d2s_link_del_addr_family(sv[0], ip6, 6, D2S_LINK_SHAPE_VOICE,
                                        err, sizeof err) == 0,
               "IPv6 address unbind command");
         CHECK(read(sv[1], wire, sizeof wire) == 24 && wire[6] == 6 &&
-              !memcmp(wire + 7, ip6, 16) && wire[23] == D2K_LINK_SHAPE_VOICE,
+              !memcmp(wire + 7, ip6, 16) && wire[23] == D2S_LINK_SHAPE_VOICE,
               "IPv6 address unbind wire carries protocol shape");
         /* Адресная привязка без формы или с дедушкиным правом «подходила бы
            всем протоколам IP» (задача 16) — на провод не уходит. */
-        CHECK(d2k_link_set_addr_family(sv[0], ip6, 6, 0, "aabb", err, sizeof err) != 0 &&
-              d2k_link_set_addr_family(sv[0], ip6, 6, D2K_LINK_SHAPE_GRANDFATHER, "aabb",
+        CHECK(d2s_link_set_addr_family(sv[0], ip6, 6, 0, "aabb", err, sizeof err) != 0 &&
+              d2s_link_set_addr_family(sv[0], ip6, 6, D2S_LINK_SHAPE_GRANDFATHER, "aabb",
                                        err, sizeof err) != 0 &&
-              d2k_link_del_addr_family(sv[0], ip6, 6, 0, err, sizeof err) != 0,
+              d2s_link_del_addr_family(sv[0], ip6, 6, 0, err, sizeof err) != 0,
               "address command without protocol shape accepted");
         close(sv[0]); close(sv[1]);
     }
@@ -1056,18 +1056,18 @@ int main(void) {
               "socketpair (SET_ADDR_PROBE wire) не создался");
         if (sv[0] >= 0 && sv[1] >= 0) {
             const uint8_t src[4] = {192, 0, 2, 10}, dst[4] = {203, 0, 113, 7};
-            const uint8_t trial[D2K_TRIAL_ID_LEN] = {1, 2, 3, 4, 5, 6, 7, 8,
+            const uint8_t trial[D2S_TRIAL_ID_LEN] = {1, 2, 3, 4, 5, 6, 7, 8,
                 9, 10, 11, 12, 13, 14, 15, 16};
             char err[160] = {0};
-            CHECK(d2k_link_set_addr_probe(sv[0], src, htons(40000), dst,
+            CHECK(d2s_link_set_addr_probe(sv[0], src, htons(40000), dst,
                   htons(443), 17, trial, 120000, "00", err, sizeof err) == 0,
                   "SET_ADDR_PROBE wire-команда не собралась");
             uint8_t frame[128];
             ssize_t n = read(sv[1], frame, sizeof frame);
-            CHECK(n == 6 + 38 + D2K_TRIAL_ID_LEN + 4 + 1,
+            CHECK(n == 6 + 38 + D2S_TRIAL_ID_LEN + 4 + 1,
                   "SET_ADDR_PROBE имеет неверную длину кадра");
-            if (n >= 6 + 38 + D2K_TRIAL_ID_LEN + 4 + 1) {
-                CHECK(frame[4] == 0 && frame[5] == D2K_CMD_SET_ADDR_PROBE,
+            if (n >= 6 + 38 + D2S_TRIAL_ID_LEN + 4 + 1) {
+                CHECK(frame[4] == 0 && frame[5] == D2S_CMD_SET_ADDR_PROBE,
                       "SET_ADDR_PROBE имеет неверный command type");
                 CHECK(frame[6] == 4 && memcmp(frame + 7, src, 4) == 0 &&
                       memcmp(frame + 39, (uint8_t[]){0x9c, 0x40}, 2) == 0 &&
@@ -1081,7 +1081,7 @@ int main(void) {
             }
             const uint8_t src6[16] = {0x20,1,0xdb,8,0,0,0,0,0,0,0,0,0,0,0,1};
             const uint8_t dst6[16] = {0x20,1,0xdb,8,0,0,0,0,0,0,0,0,0,0,0,2};
-            CHECK(d2k_link_set_addr_probe_family(sv[0], src6, htons(40000), dst6,
+            CHECK(d2s_link_set_addr_probe_family(sv[0], src6, htons(40000), dst6,
                   htons(443), 17, 6, trial, 120000, "00", err, sizeof err) == 0,
                   "IPv6 exact tuple command");
             n = read(sv[1], frame, sizeof frame);
@@ -1093,7 +1093,7 @@ int main(void) {
 
     /* --- дальше всё против НАСТОЯЩЕГО ctlprobe ----------------------------- */
     char sock_path[64];
-    snprintf(sock_path, sizeof sock_path, "/tmp/d2k-core-link-%d.sock", (int)getpid());
+    snprintf(sock_path, sizeof sock_path, "/tmp/d2s-core-link-%d.sock", (int)getpid());
     probe p;
     memset(&p, 0, sizeof p);
     p.in_fd = -1;
@@ -1121,14 +1121,14 @@ int main(void) {
      * нарочно переиспользует порт последнего "hello". ------------------- */
     {
         (void)probe_say(&p, "hello example.com");
-        d2k_ev a;
+        d2s_ev a;
         char e1[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_HELLO, 5, &a, e1, sizeof e1) == 0, "первое (TCP) приветствие не пришло");
+        CHECK(next_of_kind(fd, D2S_EV_HELLO, 5, &a, e1, sizeof e1) == 0, "первое (TCP) приветствие не пришло");
 
         (void)probe_say(&p, "quic");
-        d2k_ev b;
+        d2s_ev b;
         char e2[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_HELLO, 5, &b, e2, sizeof e2) == 0, "второе (QUIC) приветствие не пришло");
+        CHECK(next_of_kind(fd, D2S_EV_HELLO, 5, &b, e2, sizeof e2) == 0, "второе (QUIC) приветствие не пришло");
 
         CHECK(strcmp(a.name, "example.com") == 0, "имя TCP-приветствия не example.com");
         CHECK(strcmp(b.name, "example.com") == 0, "имя QUIC-приветствия не example.com");
@@ -1159,18 +1159,18 @@ int main(void) {
         CHECK(a.high_port == 40001, "порт высокого конца не 40001 (первый hello в процессе)");
 
         /* Дренируем то, что осталось (REFUSED от "quic": плана для имени
-           нет), прежде чем проверять тайм-аут ниже — иначе d2k_link_next
+           нет), прежде чем проверять тайм-аут ниже — иначе d2s_link_next
            честно вернёт 0 на уже лежащем в очереди событии, а не тайм-аут. */
-        d2k_ev tmp;
+        d2s_ev tmp;
         char e3[200] = {0};
-        while (d2k_link_next(fd, &tmp, 200, e3, sizeof e3) == 0) { }
+        while (d2s_link_next(fd, &tmp, 200, e3, sizeof e3) == 0) { }
     }
 
     /* --- тайм-аут без события — это 1, а не 0 и не -1 ---------------------- */
     {
-        d2k_ev ev;
+        d2s_ev ev;
         char e[200] = {0};
-        int rc = d2k_link_next(fd, &ev, 50, e, sizeof e);
+        int rc = d2s_link_next(fd, &ev, 50, e, sizeof e);
         CHECK(rc == 1, "тайм-аут без события должен возвращать 1");
     }
 
@@ -1187,30 +1187,30 @@ int main(void) {
         to_hex(tiny, sizeof tiny, tiny_hex);
 
         char e1[200] = {0};
-        CHECK(d2k_link_set_name(fd, "ok.example", 6, tiny_hex, D2K_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
+        CHECK(d2s_link_set_name(fd, "ok.example", 6, tiny_hex, D2S_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
               "SET_NAME с годным планом не отправилась");
 
-        d2k_ev ack;
+        d2s_ev ack;
         char e2[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_ACK, 5, &ack, e2, sizeof e2) == 0, "ack на годную команду не пришёл");
-        CHECK(ack.code == D2K_CMD_SET_NAME, "ack не на команду SET_NAME");
+        CHECK(next_of_kind(fd, D2S_EV_ACK, 5, &ack, e2, sizeof e2) == 0, "ack на годную команду не пришёл");
+        CHECK(ack.code == D2S_CMD_SET_NAME, "ack не на команду SET_NAME");
         CHECK(((ack.num >> 8) & 0xFFu) == 1, "годная команда подтверждена как отвергнутая");
-        CHECK((ack.num & 0xFFu) == D2K_ACK_OK, "у успеха причина не D2K_ACK_OK");
+        CHECK((ack.num & 0xFFu) == D2S_ACK_OK, "у успеха причина не D2S_ACK_OK");
 
-        d2k_ev first = {0}, second = {0};
+        d2s_ev first = {0}, second = {0};
         (void)probe_say(&p, "hello ok.example");
-        CHECK(!next_of_kind(fd, D2K_EV_APPLIED, 8, &first, e2, sizeof e2),
+        CHECK(!next_of_kind(fd, D2S_EV_APPLIED, 8, &first, e2, sizeof e2),
               "bound execution did not reach controller");
         CHECK(first.execution_id && first.execution_binding.generation &&
               memcmp(first.execution_binding.epoch, (const uint8_t[16]){0}, 16) &&
-              first.execution_binding.kind == D2K_BIND_NAME &&
+              first.execution_binding.kind == D2S_BIND_NAME &&
               first.execution_binding.family == 4 && !first.execution_binding.temporary,
               "Session/journal/control/link lost execution binding");
-        CHECK(!d2k_link_set_name(fd, "ok.example", 6, tiny_hex,
-              D2K_LINK_SHAPE_GRANDFATHER, e1, sizeof e1), "same plan reinstall");
-        CHECK(!next_of_kind(fd, D2K_EV_ACK, 8, &ack, e2, sizeof e2), "reinstall ACK");
+        CHECK(!d2s_link_set_name(fd, "ok.example", 6, tiny_hex,
+              D2S_LINK_SHAPE_GRANDFATHER, e1, sizeof e1), "same plan reinstall");
+        CHECK(!next_of_kind(fd, D2S_EV_ACK, 8, &ack, e2, sizeof e2), "reinstall ACK");
         (void)probe_say(&p, "hello ok.example");
-        CHECK(!next_of_kind(fd, D2K_EV_APPLIED, 8, &second, e2, sizeof e2), "reinstalled execution");
+        CHECK(!next_of_kind(fd, D2S_EV_APPLIED, 8, &second, e2, sizeof e2), "reinstalled execution");
         CHECK(second.execution_id != first.execution_id &&
               second.execution_binding.generation != first.execution_binding.generation &&
               !memcmp(first.execution_binding.epoch, second.execution_binding.epoch, 16) &&
@@ -1218,17 +1218,17 @@ int main(void) {
               "same hash reinstall collapsed distinct execution generations");
     }
 
-    /* --- SET_NAME с негодным планом — ack ok=0, причина D2K_ACK_BAD_PLAN --- */
+    /* --- SET_NAME с негодным планом — ack ok=0, причина D2S_ACK_BAD_PLAN --- */
     {
         char e1[200] = {0};
-        CHECK(d2k_link_set_name(fd, "bad.example", 6, "0000000000000000", D2K_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
+        CHECK(d2s_link_set_name(fd, "bad.example", 6, "0000000000000000", D2S_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
               "SET_NAME с негодным планом должна ДОЕХАТЬ — отказ приходит по ack, не по rc отправки");
 
-        d2k_ev ack;
+        d2s_ev ack;
         char e2[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_ACK, 5, &ack, e2, sizeof e2) == 0, "ack на негодный план не пришёл");
+        CHECK(next_of_kind(fd, D2S_EV_ACK, 5, &ack, e2, sizeof e2) == 0, "ack на негодный план не пришёл");
         CHECK(((ack.num >> 8) & 0xFFu) == 0, "негодный план подтверждён как принятый");
-        CHECK((ack.num & 0xFFu) == D2K_ACK_BAD_PLAN, "негодный план не помечен D2K_ACK_BAD_PLAN");
+        CHECK((ack.num & 0xFFu) == D2S_ACK_BAD_PLAN, "негодный план не помечен D2S_ACK_BAD_PLAN");
     }
 
     /* --- ARM_SHAPE: форма приходит РАНЬШЕ ack на саму команду, если она уже
@@ -1238,57 +1238,57 @@ int main(void) {
         (void)probe_say(&p, "hello shape.example");
 
         char e1[200] = {0};
-        CHECK(d2k_link_arm_shape(fd, "shape.example", 6, e1, sizeof e1) == 0, "ARM_SHAPE не отправилась");
+        CHECK(d2s_link_arm_shape(fd, "shape.example", 6, e1, sizeof e1) == 0, "ARM_SHAPE не отправилась");
 
-        d2k_ev ev;
+        d2s_ev ev;
         int found_shape = 0;
         for (int i = 0; i < 6 && !found_shape; i++) {
             char e2[200] = {0};
-            int rc = d2k_link_next(fd, &ev, 2000, e2, sizeof e2);
+            int rc = d2s_link_next(fd, &ev, 2000, e2, sizeof e2);
             CHECK(rc == 0, "событие в очереди после ARM_SHAPE не пришло");
             if (rc != 0) { break; }
-            if (ev.kind == D2K_EV_SHAPE) { found_shape = 1; }
+            if (ev.kind == D2S_EV_SHAPE) { found_shape = 1; }
         }
         CHECK(found_shape, "форма приветствия не пришла после ARM_SHAPE");
         CHECK(ev.shape_len >= 3 && ev.shape[0] == 0x16 && ev.shape[1] == 0x03 && ev.shape[2] == 0x01,
               "форма приветствия не похожа на снятый ClientHello (build_hello, ctlprobe.c)");
 
-        d2k_ev ack;
+        d2s_ev ack;
         char e3[200] = {0};
-        CHECK(d2k_link_next(fd, &ack, 2000, e3, sizeof e3) == 0, "ack на ARM_SHAPE не пришёл следом за формой");
-        CHECK(ack.kind == D2K_EV_ACK, "событие сразу после формы — не ack (нарушен документированный порядок)");
-        CHECK(ack.code == D2K_CMD_ARM_SHAPE, "ack не на команду ARM_SHAPE");
+        CHECK(d2s_link_next(fd, &ack, 2000, e3, sizeof e3) == 0, "ack на ARM_SHAPE не пришёл следом за формой");
+        CHECK(ack.kind == D2S_EV_ACK, "событие сразу после формы — не ack (нарушен документированный порядок)");
+        CHECK(ack.code == D2S_CMD_ARM_SHAPE, "ack не на команду ARM_SHAPE");
         CHECK(((ack.num >> 8) & 0xFFu) == 1, "ARM_SHAPE не подтверждена как принятая");
     }
 
     /* --- EXCHANGE: code липкий (первый тип), поэтому появление прикладных
      * данных ПОСЛЕ другого типа видно только по seen_types, а не по code —
      * ровно та причина, по которой seen_types добавлено сверх контракта
-     * брифа (см. d2k_link.h). Проверяем на настоящем обмене: рукопожатие
+     * брифа (см. d2s_link.h). Проверяем на настоящем обмене: рукопожатие
      * (22), потом прикладные данные (23) на ОДНОМ потоке. --------------- */
     {
         (void)probe_say(&p, "hello exchange.example");
         (void)probe_say(&p, "reply 22");
 
-        d2k_ev ev1;
+        d2s_ev ev1;
         char e1[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_EXCHANGE, 6, &ev1, e1, sizeof e1) == 0, "первый обмен (код 22) не пришёл");
+        CHECK(next_of_kind(fd, D2S_EV_EXCHANGE, 6, &ev1, e1, sizeof e1) == 0, "первый обмен (код 22) не пришёл");
         CHECK(ev1.code == 22, "первый обмен: тип записи не 22");
         /* rec[64] в ctlprobe.c ("reply <тип>") — 64 байта нагрузки ровно
            одним пакетом; num = fl->rev_payload_after_hello (session.c) —
            НАКОПЛЕННЫЙ счёт с момента приветствия, не размер текущего
            пакета, поэтому после ВТОРОГО reply это 128, а не снова 64. */
         CHECK(ev1.num == 64, "первый обмен: число байт не 64 — порядок байт длины разобрался неверно");
-        CHECK(d2k_ev_outer_appdata(&ev1) == 0,
+        CHECK(d2s_ev_outer_appdata(&ev1) == 0,
               "рукопожатие в настоящем обмене принято за внешний тип 23");
 
         (void)probe_say(&p, "reply 23");
-        d2k_ev ev2;
+        d2s_ev ev2;
         char e2[200] = {0};
-        CHECK(next_of_kind(fd, D2K_EV_EXCHANGE, 6, &ev2, e2, sizeof e2) == 0,
+        CHECK(next_of_kind(fd, D2S_EV_EXCHANGE, 6, &ev2, e2, sizeof e2) == 0,
               "второй обмен (появились прикладные данные) не пришёл");
         CHECK(ev2.code == 22,
-              "второй обмен: code изменился — липкое поле ведёт себя иначе, чем задокументировано в d2k_link.h");
+              "второй обмен: code изменился — липкое поле ведёт себя иначе, чем задокументировано в d2s_link.h");
         CHECK(ev2.num == 128, "второй обмен: накопленное число байт не 128 (64+64)");
         /* Ровно тот вход, на котором старый (удалённый по ревью) подход —
            «тип ПЕРВОЙ записи == 23» — солгал бы: code второй записи EXCHANGE
@@ -1296,16 +1296,16 @@ int main(void) {
            Документируем эту ложь явно, не называя удалённую функцию (её
            больше нет в дереве), а наблюдение внешнего типа обязано на ЭТОМ
            ЖЕ входе дать истину. */
-        CHECK(ev2.code != D2K_TLS_APPLICATION_DATA,
+        CHECK(ev2.code != D2S_TLS_APPLICATION_DATA,
               "документирует дефект старого подхода: код первой записи не должен быть 23 на этом входе");
-        CHECK(d2k_ev_outer_appdata(&ev2) == 1,
+        CHECK(d2s_ev_outer_appdata(&ev2) == 1,
               "внешний тип 23 во втором обмене не увиден — та самая дырка, которую закрывает seen_types");
         /* И ровно здесь проходит граница задачи 4: этот же вход НЕ является
            доказательством работы приложения. Второй полёт рукопожатия
            TLS 1.3 едет наружу тем же типом 23 (RFC 8446 §5.2), и с провода
            он неотличим от прикладных данных. Что ответило ПРИЛОЖЕНИЕ,
            узнаёт только тот, кто вёл рукопожатие своим ключом
-           (core/verify.c, D2K_VER_APPLICATION); порог каталога живёт там, а
+           (core/verify.c, D2S_VER_APPLICATION); порог каталога живёт там, а
            не здесь. Стенд ctlprobe шлёт "reply 23" открытым текстом — он не
            умеет и не обязан отличать одно от другого, и это ровно то, что
            умеет наблюдатель на проводе. */
@@ -1316,18 +1316,18 @@ int main(void) {
      * моменту вызова (иначе тест мог бы зависнуть навечно при поломке). --- */
     {
         char e1[200] = {0};
-        CHECK(d2k_link_set_name(fd, "forever.example", 17, "", D2K_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
+        CHECK(d2s_link_set_name(fd, "forever.example", 17, "", D2S_LINK_SHAPE_GRANDFATHER, e1, sizeof e1) == 0,
               "SET_NAME для проверки wait_ms<0 не отправилась");
         nap_ms(100); /* ack успевает дойти и лечь в буфер сокета */
 
-        d2k_ev ack;
+        d2s_ev ack;
         char e2[200] = {0};
-        int rc = d2k_link_next(fd, &ack, -1, e2, sizeof e2);
+        int rc = d2s_link_next(fd, &ack, -1, e2, sizeof e2);
         CHECK(rc == 0, "wait_ms<0 не увидел уже лежащее в буфере событие");
-        CHECK(ack.kind == D2K_EV_ACK, "wait_ms<0 прочитал не то событие");
+        CHECK(ack.kind == D2S_EV_ACK, "wait_ms<0 прочитал не то событие");
     }
 
-    d2k_link_close(fd);
+    d2s_link_close(fd);
     probe_stop(&p, sock_path);
 
     if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }

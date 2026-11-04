@@ -4,7 +4,7 @@
  *    (даже с верным тегом), Version Negotiation, Initial на ключах приманки
  *    и Initial не нашему SCID — не успех. Настоящие сокеты на 127.0.0.1.
  * 2. Прошедшее фильтр плечо засчитывается, только если после рукопожатия
- *    прошло не меньше D2K_QUIC_ARM_DATA_BYTES данных: обрыв на 6 КБ — не
+ *    прошло не меньше D2S_QUIC_ARM_DATA_BYTES данных: обрыв на 6 КБ — не
  *    прошло, ответ, кончившийся до порога, — «не измерено», не успех.
  * 3. Каждая попытка (повтор фильтра, плечо, этап данных) — на своём местном
  *    порту; уже выданный порт за окно остаточной блокировки не повторяется.
@@ -22,13 +22,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_quic.h"
-#include "d2k_quichello.h"
-#include "d2k_quicprobe.h"
-#include "d2k_quic_arms.h"
-#include "d2k_quicwire.h"
+#include "d2s_quic.h"
+#include "d2s_quichello.h"
+#include "d2s_quicprobe.h"
+#include "d2s_quic_arms.h"
+#include "d2s_quicwire.h"
 #ifndef HEAD_API
-#include "d2k_meas.h"
+#include "d2s_meas.h"
 #endif
 
 static int fails;
@@ -61,36 +61,36 @@ static size_t server_initial(const uint8_t *key_dcid, size_t key_len,
                              const uint8_t *to_dcid, size_t to_len,
                              uint8_t *out, size_t cap) {
     uint8_t secret[32];
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(D2K_QW_V1, key_dcid, key_len, D2K_QW_SERVER, secret) != 0 ||
-        d2k_qw_keys_from_secret(D2K_QW_V1, secret, &k) != 0) return 0;
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(D2S_QW_V1, key_dcid, key_len, D2S_QW_SERVER, secret) != 0 ||
+        d2s_qw_keys_from_secret(D2S_QW_V1, secret, &k) != 0) return 0;
     uint8_t body[40] = {0x02, 0x00, 0x00, 0x00, 0x00}; /* ACK 0, далее PADDING */
     static const uint8_t scid[8] = {0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e, 0x5e};
     uint8_t hdr[64];
-    size_t hl = d2k_qw_long_hdr(hdr, sizeof hdr, D2K_QW_V1, D2K_QW_LT_INITIAL,
+    size_t hl = d2s_qw_long_hdr(hdr, sizeof hdr, D2S_QW_V1, D2S_QW_LT_INITIAL,
                                 to_dcid, to_len, scid, sizeof scid, 1, sizeof body);
     if (!hl) return 0;
-    return d2k_qw_seal(&k, 1, hdr, hl, 0, 1, body, sizeof body, out, cap);
+    return d2s_qw_seal(&k, 1, hdr, hl, 0, 1, body, sizeof body, out, cap);
 }
 
 /* Смещение первого кадра CRYPTO в клиентском Initial (-1 — не Initial или
    не раскрылся). Хвост первым — признак разреза задачи 40. */
 static long first_crypto_off(const uint8_t *p, size_t n) {
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr || h.type != D2K_QW_LT_INITIAL) return -1;
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr || h.type != D2S_QW_LT_INITIAL) return -1;
     uint8_t sec[32], plain[2048];
-    d2k_qw_keys k;
+    d2s_qw_keys k;
     size_t pl = 0;
     uint64_t pn = 0;
-    if (d2k_qw_initial_secret(h.version, p + h.dcid_off, h.dcid_len, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(h.version, sec, &k) != 0 ||
-        h.packet_len > sizeof plain || d2k_qw_open(&k, &h, p, 0, plain, &pl, &pn) != 0) return -1;
+    if (d2s_qw_initial_secret(h.version, p + h.dcid_off, h.dcid_len, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(h.version, sec, &k) != 0 ||
+        h.packet_len > sizeof plain || d2s_qw_open(&k, &h, p, 0, plain, &pl, &pn) != 0) return -1;
     size_t i = 0;
     while (i < pl && (plain[i] == 0x00 || plain[i] == 0x01)) i++;
     if (i >= pl || plain[i] != 0x06) return -1;
     uint64_t off = 0;
     size_t w = 0;
-    if (d2k_qw_varint_read(plain + i + 1, pl - i - 1, &off, &w) != 0) return -1;
+    if (d2s_qw_varint_read(plain + i + 1, pl - i - 1, &off, &w) != 0) return -1;
     return (long)off;
 }
 
@@ -103,7 +103,7 @@ static void *stand_run(void *arg) {
         ssize_t n = recvfrom(g_fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
         if (n <= 0) return NULL;
         char sni[256] = {0};
-        int ours = d2k_quic_sni(buf, (size_t)n, sni, sizeof sni) == 0 && strcmp(sni, TARGET) == 0;
+        int ours = d2s_quic_sni(buf, (size_t)n, sni, sizeof sni) == 0 && strcmp(sni, TARGET) == 0;
         pthread_mutex_lock(&g_mu);
         if (g_seen_n < MAX_SEEN) {
             g_seen_port[g_seen_n] = ntohs(from.sin_port);
@@ -112,9 +112,9 @@ static void *stand_run(void *arg) {
             g_seen_token[g_seen_n] = 0;
             g_seen_split[g_seen_n] = first_crypto_off(buf, (size_t)n) > 0;
             {
-                d2k_qw_hdr th;
-                if (d2k_qw_hdr_parse(buf, (size_t)n, 0, &th) == 0 && th.long_hdr &&
-                    th.type == D2K_QW_LT_INITIAL) {
+                d2s_qw_hdr th;
+                if (d2s_qw_hdr_parse(buf, (size_t)n, 0, &th) == 0 && th.long_hdr &&
+                    th.type == D2S_QW_LT_INITIAL) {
                     g_seen_token[g_seen_n] = th.token_len;g_seen_packet_len[g_seen_n]=th.packet_len;
                     g_seen_zero_tail[g_seen_n]=1;
                     for(size_t k=th.packet_len;k<(size_t)n;k++)if(buf[k])g_seen_zero_tail[g_seen_n]=0;
@@ -123,9 +123,9 @@ static void *stand_run(void *arg) {
             g_seen_n++;
         }
         pthread_mutex_unlock(&g_mu);
-        d2k_qw_hdr h;
-        if (d2k_qw_hdr_parse(buf, (size_t)n, 0, &h) != 0 || !h.long_hdr ||
-            h.type != D2K_QW_LT_INITIAL) continue;
+        d2s_qw_hdr h;
+        if (d2s_qw_hdr_parse(buf, (size_t)n, 0, &h) != 0 || !h.long_hdr ||
+            h.type != D2S_QW_LT_INITIAL) continue;
         const uint8_t *dcid = buf + h.dcid_off, *scid = buf + h.scid_off;
         uint8_t out[1500];
         size_t ol = 0;
@@ -144,7 +144,7 @@ static void *stand_run(void *arg) {
                 size_t rsl = g_mode == M_RETRY_NOSCID ? 0
                            : g_mode == M_RETRY_SCID_IS_DCID ? h.dcid_len : sizeof other;
                 size_t tl = g_mode == M_RETRY_NOTOKEN ? 0 : 3;
-                ol = d2k_qw_retry_build(out, sizeof out, D2K_QW_V1, dcid, h.dcid_len,
+                ol = d2s_qw_retry_build(out, sizeof out, D2S_QW_V1, dcid, h.dcid_len,
                                         scid, h.scid_len, rs, rsl, (const uint8_t *)"tok", tl);
             }
             break;
@@ -157,7 +157,7 @@ static void *stand_run(void *arg) {
                молча (повторный Retry клиент обязан отвергнуть). */
             if (ours && h.token_len == 0) {
                 int foreign = g_mode == M_RETRY_FOREIGN;
-                ol = d2k_qw_retry_build(out, sizeof out, D2K_QW_V1, dcid, h.dcid_len,
+                ol = d2s_qw_retry_build(out, sizeof out, D2S_QW_V1, dcid, h.dcid_len,
                                         foreign ? other : scid, foreign ? sizeof other : h.scid_len,
                                         other, sizeof other, (const uint8_t *)"tok", 3);
                 if (ol && g_mode == M_RETRY_BADTAG) out[ol - 1] ^= 0x01;
@@ -208,12 +208,12 @@ static void seen_reset(void) {
     pthread_mutex_unlock(&g_mu);
 }
 
-static d2k_quic_arm_question quic5_question(void) {
-    d2k_quic_arm_question q;
+static d2s_quic_arm_question quic5_question(void) {
+    d2s_quic_arm_question q;
     memset(&q, 0, sizeof q);
     q.label = "фальшивка quic5";
     q.addr = "127.0.0.1";
-    q.blob = d2k_quic_original_blob(0, &q.blob_len, NULL);
+    q.blob = d2s_quic_original_blob(0, &q.blob_len, NULL);
     q.copies = 2;
     return q;
 }
@@ -235,9 +235,9 @@ static void test_bound_replies_only(uint16_t port) {
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         g_mode = cases[i].mode;
-        d2k_quic_arm_question q = quic5_question();
+        d2s_quic_arm_question q = quic5_question();
         int sent = 0;
-        d2k_tally t = d2k_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
+        d2s_tally t = d2s_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
         if (t.pass != cases[i].want) printf("     pass=%d sent=%d\n", t.pass, sent);
         CHECK(sent == 3 && t.pass == cases[i].want, cases[i].what);
     }
@@ -251,27 +251,27 @@ static void test_ladder_handshake_without_data(uint16_t port) {
     g_mode = M_BOUND;
     uint8_t trig[1500];
     size_t tl = 0;
-    if (d2k_quic_probe_initial(TARGET, trig, sizeof trig, &tl) != 0) {
+    if (d2s_quic_probe_initial(TARGET, trig, sizeof trig, &tl) != 0) {
         CHECK(0, "триггер собран");
         return;
     }
-    static const char pool[1][D2K_QUIC_ADDR_LEN] = {"127.0.0.1"};
-    d2k_quic_arm_context c;
+    static const char pool[1][D2S_QUIC_ADDR_LEN] = {"127.0.0.1"};
+    d2s_quic_arm_context c;
     memset(&c, 0, sizeof c);
     c.pool = pool; c.n_pool = 1; c.marked = 1;
-    d2k_hello trigger = {trig, tl, NULL, 0, 0, 0}, control = {NULL, 0, NULL, 0, 0, 0};
-    d2k_quic_arm r = d2k_quic_original_measure(&c, port, trigger, control, 100, 0);
+    d2s_hello trigger = {trig, tl, NULL, 0, 0, 0}, control = {NULL, 0, NULL, 0, 0, 0};
+    d2s_quic_arm r = d2s_quic_original_measure(&c, port, trigger, control, 100, 0);
     int filter_passes = 0;
     for (size_t i = 0; i < r.n_trace; i++) {
-        if (r.trace[i].answered == D2K_QUIC_REPEATS) filter_passes++;
+        if (r.trace[i].answered == D2S_QUIC_REPEATS) filter_passes++;
     }
     CHECK(filter_passes > 0, "фильтр плеч проходит (сервер отвечает на наш Initial)");
-    CHECK(r.kind != D2K_QA_COPIES && r.kind != D2K_QA_TTL && r.kind != D2K_QA_BLOB,
+    CHECK(r.kind != D2S_QA_COPIES && r.kind != D2S_QA_TTL && r.kind != D2S_QA_BLOB,
           "ответ на Initial без рукопожатия и данных не делает плечо найденным");
 #ifndef HEAD_API
     int no_hs = 0, other = 0;
     for (size_t i = 0; i < r.n_trace; i++) {
-        if (r.trace[i].data == D2K_QAD_NO_HANDSHAKE) no_hs++;
+        if (r.trace[i].data == D2S_QAD_NO_HANDSHAKE) no_hs++;
         else if (r.trace[i].data != 0) other++;
     }
     CHECK(no_hs > 0 && other == 0,
@@ -283,111 +283,111 @@ static void test_ladder_handshake_without_data(uint16_t port) {
 /* --- 2б. судья и лестница с подменённым этапом данных -------------------- */
 
 static void test_judge(void) {
-    d2k_qw_ranges r;
+    d2s_qw_ranges r;
     /* Полный короткий ответ: FIN, все байты 0..3000 — прошло. */
-    d2k_qw_ranges_reset(&r);
-    d2k_qw_ranges_add(&r, 1000, 2000, 1);
-    d2k_qw_ranges_add(&r, 0, 1000, 0);
-    CHECK(d2k_qw_ranges_complete(&r) && d2k_qw_ranges_bytes(&r) == 3000, "FIN и все байты до него — ответ целиком");
-    CHECK(d2k_quic_arm_data_judge(1, 200, d2k_qw_ranges_bytes(&r), d2k_qw_ranges_complete(&r)) == D2K_QAD_PASS,
+    d2s_qw_ranges_reset(&r);
+    d2s_qw_ranges_add(&r, 1000, 2000, 1);
+    d2s_qw_ranges_add(&r, 0, 1000, 0);
+    CHECK(d2s_qw_ranges_complete(&r) && d2s_qw_ranges_bytes(&r) == 3000, "FIN и все байты до него — ответ целиком");
+    CHECK(d2s_quic_arm_data_judge(1, 200, d2s_qw_ranges_bytes(&r), d2s_qw_ranges_complete(&r)) == D2S_QAD_PASS,
           "полный короткий ответ (3 КБ) — прошло");
     /* Дыра перед FIN — не целиком, ниже порога — обрыв. */
-    d2k_qw_ranges_reset(&r);
-    d2k_qw_ranges_add(&r, 0, 1000, 0);
-    d2k_qw_ranges_add(&r, 2000, 1000, 1);
-    CHECK(!d2k_qw_ranges_complete(&r) && d2k_qw_ranges_bytes(&r) == 2000, "дыра перед FIN — ответ не целиком");
-    CHECK(d2k_quic_arm_data_judge(1, 200, d2k_qw_ranges_bytes(&r), d2k_qw_ranges_complete(&r)) == D2K_QAD_CUT,
+    d2s_qw_ranges_reset(&r);
+    d2s_qw_ranges_add(&r, 0, 1000, 0);
+    d2s_qw_ranges_add(&r, 2000, 1000, 1);
+    CHECK(!d2s_qw_ranges_complete(&r) && d2s_qw_ranges_bytes(&r) == 2000, "дыра перед FIN — ответ не целиком");
+    CHECK(d2s_quic_arm_data_judge(1, 200, d2s_qw_ranges_bytes(&r), d2s_qw_ranges_complete(&r)) == D2S_QAD_CUT,
           "дыра перед FIN — не прошло");
     /* Поток встал на 6 КБ без FIN — обрыв. */
-    d2k_qw_ranges_reset(&r);
-    for (uint64_t off = 0; off < 6144; off += 1024) d2k_qw_ranges_add(&r, off, 1024, 0);
-    d2k_qw_ranges_add(&r, 0, 1024, 0); /* повтор не считается дважды */
-    CHECK(d2k_qw_ranges_bytes(&r) == 6144 && r.n == 1, "повтор кадра не раздувает счёт");
-    CHECK(d2k_quic_arm_data_judge(1, 200, d2k_qw_ranges_bytes(&r), d2k_qw_ranges_complete(&r)) == D2K_QAD_CUT,
+    d2s_qw_ranges_reset(&r);
+    for (uint64_t off = 0; off < 6144; off += 1024) d2s_qw_ranges_add(&r, off, 1024, 0);
+    d2s_qw_ranges_add(&r, 0, 1024, 0); /* повтор не считается дважды */
+    CHECK(d2s_qw_ranges_bytes(&r) == 6144 && r.n == 1, "повтор кадра не раздувает счёт");
+    CHECK(d2s_quic_arm_data_judge(1, 200, d2s_qw_ranges_bytes(&r), d2s_qw_ranges_complete(&r)) == D2S_QAD_CUT,
           "рукопожатие есть, поток встал на 6 КБ без FIN — не прошло");
-    CHECK(d2k_quic_arm_data_judge(1, 200, D2K_QUIC_ARM_DATA_BYTES, 0) == D2K_QAD_PASS,
+    CHECK(d2s_quic_arm_data_judge(1, 200, D2S_QUIC_ARM_DATA_BYTES, 0) == D2S_QAD_PASS,
           "не меньше порога без FIN — прошло");
-    CHECK(d2k_quic_arm_data_judge(1, 200, D2K_QUIC_ARM_DATA_BYTES - 1, 0) == D2K_QAD_CUT,
+    CHECK(d2s_quic_arm_data_judge(1, 200, D2S_QUIC_ARM_DATA_BYTES - 1, 0) == D2S_QAD_CUT,
           "на байт меньше порога без FIN — обрыв");
-    CHECK(d2k_quic_arm_data_judge(0, 200, 100000, 1) == D2K_QAD_NO_HANDSHAKE,
+    CHECK(d2s_quic_arm_data_judge(0, 200, 100000, 1) == D2S_QAD_NO_HANDSHAKE,
           "без рукопожатия данных не бывает");
     /* Пустой поток с FIN — не ответ; без HEADERS нет ответа — правило
        плеча совпадает с проверкой плана (verify.c ждёт код ответа). */
-    d2k_qw_ranges_reset(&r);
-    d2k_qw_ranges_add(&r, 0, 0, 1);
-    CHECK(!d2k_qw_ranges_complete(&r), "пустой поток с FIN — не ответ целиком");
-    CHECK(d2k_quic_arm_data_judge(1, 0, 3000, 1) == D2K_QAD_CUT,
+    d2s_qw_ranges_reset(&r);
+    d2s_qw_ranges_add(&r, 0, 0, 1);
+    CHECK(!d2s_qw_ranges_complete(&r), "пустой поток с FIN — не ответ целиком");
+    CHECK(d2s_quic_arm_data_judge(1, 0, 3000, 1) == D2S_QAD_CUT,
           "полный поток без заголовков HTTP/3 — не прошло (как у проверки плана)");
-    CHECK(d2k_quic_arm_data_judge(1, 0, D2K_QUIC_ARM_DATA_BYTES, 0) == D2K_QAD_CUT,
+    CHECK(d2s_quic_arm_data_judge(1, 0, D2S_QUIC_ARM_DATA_BYTES, 0) == D2S_QAD_CUT,
           "порог данных без заголовков — не прошло");
-    CHECK(d2k_quic_arm_data_judge(1, 451, 3000, 1) == D2K_QAD_CUT,
+    CHECK(d2s_quic_arm_data_judge(1, 451, 3000, 1) == D2S_QAD_CUT,
           "HTTP 451 — отказ, не успех плеча");
     /* Задача 44: заголовки длиннее нашего буфера — не измеренный обрыв. */
-    CHECK(d2k_quic_arm_data_judge_limited(1, 0, 70000, 0, 1) == D2K_QAD_NOT_RUN,
+    CHECK(d2s_quic_arm_data_judge_limited(1, 0, 70000, 0, 1) == D2S_QAD_NOT_RUN,
           "заголовки не поместились в наш буфер — этап не проведён, не CUT");
-    CHECK(d2k_quic_arm_data_judge_limited(1, 0, 3000, 0, 0) == D2K_QAD_CUT,
+    CHECK(d2s_quic_arm_data_judge_limited(1, 0, 3000, 0, 0) == D2S_QAD_CUT,
           "без признака предела пустые заголовки по-прежнему обрыв");
-    CHECK(d2k_quic_arm_data_judge_limited(1, 200, 40000, 0, 1) == D2K_QAD_PASS,
+    CHECK(d2s_quic_arm_data_judge_limited(1, 200, 40000, 0, 1) == D2S_QAD_PASS,
           "разобранные заголовки признак предела не отменяет");
-    CHECK(d2k_quic_arm_data_judge_limited(0, 0, 0, 0, 1) == D2K_QAD_NO_HANDSHAKE,
+    CHECK(d2s_quic_arm_data_judge_limited(0, 0, 0, 0, 1) == D2S_QAD_NO_HANDSHAKE,
           "без рукопожатия предел заголовков ничего не меняет");
-    CHECK(D2K_QUIC_ARM_DATA_BYTES >= 16384 && D2K_QUIC_ARM_DATA_BYTES <= 32768,
+    CHECK(D2S_QUIC_ARM_DATA_BYTES >= 16384 && D2S_QUIC_ARM_DATA_BYTES <= 32768,
           "порог в пределах 16–32 КБ");
 }
 
 static int g_calls, g_data_calls;
-static d2k_quic_arm_data_verdict g_data_verdict;
+static d2s_quic_arm_data_verdict g_data_verdict;
 static uint32_t g_spent;
 
-static d2k_tally all_pass(const d2k_quic_arm_question *q, void *u, int *sent) {
+static d2s_tally all_pass(const d2s_quic_arm_question *q, void *u, int *sent) {
     (void)q; (void)u;
     g_calls++;
-    d2k_tally t = {0};
+    d2s_tally t = {0};
     t.marked = 1; t.pass = 3; *sent = 3;
     return t;
 }
 
-static d2k_quic_arm_data fixed_data(const d2k_quic_arm_question *q, void *u) {
+static d2s_quic_arm_data fixed_data(const d2s_quic_arm_question *q, void *u) {
     (void)q; (void)u;
     g_data_calls++;
-    d2k_quic_arm_data d;
+    d2s_quic_arm_data d;
     memset(&d, 0, sizeof d);
     d.verdict = g_data_verdict;
-    d.app_bytes = g_data_verdict == D2K_QAD_PASS ? 3000 : 6144;
+    d.app_bytes = g_data_verdict == D2S_QAD_PASS ? 3000 : 6144;
     return d;
 }
 
 static void spent(void *u, uint32_t ms) { (void)u; g_spent += ms + 1; }
 
 static void test_ladder_with_data_stage(void) {
-    static const char pool[1][D2K_QUIC_ADDR_LEN] = {"127.0.0.1"};
-    d2k_quic_arm_context c;
+    static const char pool[1][D2S_QUIC_ADDR_LEN] = {"127.0.0.1"};
+    d2s_quic_arm_context c;
     memset(&c, 0, sizeof c);
     c.pool = pool; c.n_pool = 1; c.marked = 1;
     c.probe = all_pass; c.data = fixed_data; c.spent = spent;
 
-    g_data_verdict = D2K_QAD_CUT; g_calls = g_data_calls = 0; g_spent = 0;
-    d2k_quic_arm r = d2k_quic_original_arms(&c);
-    CHECK(r.kind == D2K_QA_NOT_FOUND || r.kind == D2K_QA_FRAG,
+    g_data_verdict = D2S_QAD_CUT; g_calls = g_data_calls = 0; g_spent = 0;
+    d2s_quic_arm r = d2s_quic_original_arms(&c);
+    CHECK(r.kind == D2S_QA_NOT_FOUND || r.kind == D2S_QA_FRAG,
           "все плечи 3/3, но поток оборван после 6 КБ — фальшивка не выбрана");
     CHECK(r.len == 0, "фальшивка оборванного плеча в план не попала");
     CHECK(g_data_calls > 0 && g_data_calls == g_calls - 1,
           "этап данных — у каждого прошедшего фильтр плеча, кроме контроля фрагментов");
     CHECK(g_spent >= (uint32_t)g_data_calls, "время этапа данных продлевает бюджет Run");
     int cut_steps = 0;
-    for (size_t i = 0; i < r.n_trace; i++) cut_steps += r.trace[i].data == D2K_QAD_CUT;
+    for (size_t i = 0; i < r.n_trace; i++) cut_steps += r.trace[i].data == D2S_QAD_CUT;
     CHECK(cut_steps == g_data_calls, "трасса несёт исход этапа данных");
 
-    g_data_verdict = D2K_QAD_PASS; g_calls = g_data_calls = 0;
-    r = d2k_quic_original_arms(&c);
-    CHECK(r.kind == D2K_QA_COPIES && r.copies == 1 && !r.ttl &&
+    g_data_verdict = D2S_QAD_PASS; g_calls = g_data_calls = 0;
+    r = d2s_quic_original_arms(&c);
+    CHECK(r.kind == D2S_QA_COPIES && r.copies == 1 && !r.ttl &&
           r.len > 0 && strcmp(r.blob_name, "quic5") == 0 && g_calls == 1 && g_data_calls == 1,
           "первое плечо с прошедшим этапом данных завершает поиск");
 
     c.data = NULL;
     g_calls = g_data_calls = 0;
-    r = d2k_quic_original_arms(&c);
-    CHECK(r.kind == D2K_QA_COPIES && r.copies == 1 && g_calls == 1 && !g_data_calls,
+    r = d2s_quic_original_arms(&c);
+    CHECK(r.kind == D2S_QA_COPIES && r.copies == 1 && g_calls == 1 && !g_data_calls,
           "без этапа данных (только юнит-оракул) — остановка на первом ответе");
 }
 
@@ -403,16 +403,16 @@ static int all_distinct(const uint16_t *p, int n) {
 static void test_fresh_ports(uint16_t port) {
     g_mode = M_SILENT;
     seen_reset();
-    d2k_quic_arm_question q = quic5_question();
+    d2s_quic_arm_question q = quic5_question();
     int sent = 0;
-    (void)d2k_quic_ask_arm_hook(&q, TARGET, port, 60, 0, &sent);
-    (void)d2k_quic_ask_arm_hook(&q, TARGET, port, 60, 0, &sent);
-    d2k_quic_arm_data d = d2k_quic_arm_data_hook(&q, TARGET, NULL, port, 60, 0);
+    (void)d2s_quic_ask_arm_hook(&q, TARGET, port, 60, 0, &sent);
+    (void)d2s_quic_ask_arm_hook(&q, TARGET, port, 60, 0, &sent);
+    d2s_quic_arm_data d = d2s_quic_arm_data_hook(&q, TARGET, NULL, port, 60, 0);
     {
         struct timespec nap = {0, 50000000L};
         (void)nanosleep(&nap, NULL);
     }
-    CHECK(d.verdict == D2K_QAD_NO_HANDSHAKE, "этап данных без ответа: Initial ушёл, рукопожатия нет");
+    CHECK(d.verdict == D2S_QAD_NO_HANDSHAKE, "этап данных без ответа: Initial ушёл, рукопожатия нет");
     uint16_t ports[16];
     int np = 0;
     pthread_mutex_lock(&g_mu);
@@ -437,26 +437,26 @@ static void test_fresh_ports(uint16_t port) {
           "этап данных: 2 копии приманки перед первым Initial на той же четвёрке");
 
     /* Учёт выданных портов: свежий записывается, повторный отвергается. */
-    d2k_udp_port_forget_all();
+    d2s_udp_port_forget_all();
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     struct sockaddr_in a = {0};
     a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(0x7f000001); a.sin_port = htons(port);
     int okc = s >= 0 && connect(s, (struct sockaddr *)&a, sizeof a) == 0;
-    CHECK(okc && d2k_udp_port_claim(s) == 0, "свежий порт записан за зондом");
-    CHECK(okc && d2k_udp_port_claim(s) == 1, "тот же порт за окно остаточной блокировки отвергнут");
+    CHECK(okc && d2s_udp_port_claim(s) == 0, "свежий порт записан за зондом");
+    CHECK(okc && d2s_udp_port_claim(s) == 1, "тот же порт за окно остаточной блокировки отвергнут");
     if (s >= 0) close(s);
-    CHECK(D2K_UDP_RESIDUAL_MS >= 420000u, "окно не короче 420 с остаточной блокировки");
+    CHECK(D2S_UDP_RESIDUAL_MS >= 420000u, "окно не короче 420 с остаточной блокировки");
 }
 #endif
 
-/* Retry, прошедший фильтр, ведёт этап данных: d2k_qc идёт за его токеном
+/* Retry, прошедший фильтр, ведёт этап данных: d2s_qc идёт за его токеном
    на той же свежей четвёрке. Стенд второй Retry не шлёт и рукопожатия не
    ведёт — исход «рукопожатия нет», но Initial с токеном обязан уйти. */
 static void test_data_stage_follows_retry(uint16_t port) {
     g_mode = M_RETRY;
     seen_reset();
-    d2k_quic_arm_question q = quic5_question();
-    d2k_quic_arm_data d = d2k_quic_arm_data_hook(&q, TARGET, "/big.css", port, 100, 0);
+    d2s_quic_arm_question q = quic5_question();
+    d2s_quic_arm_data d = d2s_quic_arm_data_hook(&q, TARGET, "/big.css", port, 100, 0);
     struct timespec nap = {0, 50000000L};
     (void)nanosleep(&nap, NULL);
     int plain = 0, with_token = 0, decoys_before = 0, decoys_after_retry = 0;
@@ -479,8 +479,8 @@ static void test_data_stage_follows_retry(uint16_t port) {
           "трасса говорит, что Initial после Retry без воздействия");
     CHECK(d.local_port && plain >= 1 && with_token >= 1,
           "этап данных идёт за верным Retry: Initial с его токеном на той же четвёрке");
-    CHECK(d.verdict == D2K_QAD_NO_HANDSHAKE, "Retry без рукопожатия плечо не засчитывает");
-    CHECK(strstr(d.note, "d2k_qc") && strstr(d.note, "/big.css"),
+    CHECK(d.verdict == D2S_QAD_NO_HANDSHAKE, "Retry без рукопожатия плечо не засчитывает");
+    CHECK(strstr(d.note, "d2s_qc") && strstr(d.note, "/big.css"),
           "трасса этапа: каким приветствием и по какому пути");
 }
 
@@ -492,11 +492,11 @@ static void test_strategy_questions_on_wire(uint16_t port) {
     /* Разрез CRYPTO: три свежих Initial, у каждого хвост первым, сервер
        собирает имя и отвечает на НАШ Initial. */
     seen_reset();
-    d2k_quic_arm_question q;
+    d2s_quic_arm_question q;
     memset(&q, 0, sizeof q);
     q.label = "разрез CRYPTO"; q.addr = "127.0.0.1"; q.split = 1;
     int sent = 0;
-    d2k_tally t = d2k_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
+    d2s_tally t = d2s_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
     struct timespec nap = {0, 50000000L};
     (void)nanosleep(&nap, NULL);
     int ours = 0, split = 0;
@@ -509,7 +509,7 @@ static void test_strategy_questions_on_wire(uint16_t port) {
     /* Этап данных разреза: первый Initial соединения разрезан, тем же
        кодом, что у датапата. */
     seen_reset();
-    d2k_quic_arm_data d = d2k_quic_arm_data_hook(&q, TARGET, NULL, port, 100, 0);
+    d2s_quic_arm_data d = d2s_quic_arm_data_hook(&q, TARGET, NULL, port, 100, 0);
     (void)nanosleep(&nap, NULL);
     int first_split = -1;
     pthread_mutex_lock(&g_mu);
@@ -518,13 +518,13 @@ static void test_strategy_questions_on_wire(uint16_t port) {
     }
     pthread_mutex_unlock(&g_mu);
     CHECK(d.local_port && first_split == 1, "этап данных: первый Initial соединения разрезан");
-    CHECK(d.verdict == D2K_QAD_NO_HANDSHAKE, "этап данных разреза: стенд без рукопожатия — не прошло");
+    CHECK(d.verdict == D2S_QAD_NO_HANDSHAKE, "этап данных разреза: стенд без рукопожатия — не прошло");
 
     /* Adaptive fake x split: same eleven prefixes before the reshaped
        Initial on all three filter ports and on the data-stage port. */
-    q.blob=d2k_quic_original_blob(3,&q.blob_len,NULL); q.copies=11;
+    q.blob=d2s_quic_original_blob(3,&q.blob_len,NULL); q.copies=11;
     seen_reset();
-    t=d2k_quic_ask_arm_hook(&q,TARGET,port,150,0,&sent);
+    t=d2s_quic_ask_arm_hook(&q,TARGET,port,150,0,&sent);
     (void)nanosleep(&nap,NULL);
     CHECK(sent==3 && t.pass==3, "fake x split filter must run 3/3");
     int good=0;
@@ -537,7 +537,7 @@ static void test_strategy_questions_on_wire(uint16_t port) {
     pthread_mutex_unlock(&g_mu);
     CHECK(good==3,"fake x split: exact prefixes and CRYPTO order on filter wire");
     seen_reset();
-    d=d2k_quic_arm_data_hook(&q,TARGET,NULL,port,100,0);
+    d=d2s_quic_arm_data_hook(&q,TARGET,NULL,port,100,0);
     (void)nanosleep(&nap,NULL);
     good=0;
     pthread_mutex_lock(&g_mu);
@@ -553,9 +553,9 @@ static void test_strategy_questions_on_wire(uint16_t port) {
        на той же четвёрке — и в фильтре, и на этапе данных. */
     memset(&q, 0, sizeof q);
     q.label = "разрешение"; q.addr = "127.0.0.1"; q.benign = 1;
-    q.blob = d2k_quic_benign; q.blob_len = D2K_QUIC_BENIGN_LEN; q.copies = 1;
+    q.blob = d2s_quic_benign; q.blob_len = D2S_QUIC_BENIGN_LEN; q.copies = 1;
     seen_reset();
-    t = d2k_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
+    t = d2s_quic_ask_arm_hook(&q, TARGET, port, 150, 0, &sent);
     CHECK(sent == 3 && t.pass == 3, "разрешение: фильтр 3/3 на привязанный ответ");
     /* Круг 1 (M3a): и в фильтре безобидная датаграмма и Initial — одна
        четвёрка: на каждом порту ровно одна 16-байтная датаграмма, затем наш
@@ -570,7 +570,7 @@ static void test_strategy_questions_on_wire(uint16_t port) {
             int benign_before = 0;
             for (int j = 0; j < i; j++)
                 if (g_seen_port[j] == g_seen_port[i] && !g_seen_ours[j] &&
-                    g_seen_len[j] == D2K_QUIC_BENIGN_LEN) benign_before++;
+                    g_seen_len[j] == D2S_QUIC_BENIGN_LEN) benign_before++;
             if (benign_before == 1) good++;
             fp[nfp++] = g_seen_port[i];
         }
@@ -579,7 +579,7 @@ static void test_strategy_questions_on_wire(uint16_t port) {
               "разрешение, фильтр: на каждой свежей четвёрке одна безобидная датаграмма, затем Initial");
     }
     seen_reset();
-    d = d2k_quic_arm_data_hook(&q, TARGET, NULL, port, 100, 0);
+    d = d2s_quic_arm_data_hook(&q, TARGET, NULL, port, 100, 0);
     (void)nanosleep(&nap, NULL);
     int before = 0, at = -1;
     size_t blen = 0;
@@ -590,16 +590,16 @@ static void test_strategy_questions_on_wire(uint16_t port) {
         before++; blen = g_seen_len[i];
     }
     pthread_mutex_unlock(&g_mu);
-    CHECK(d.local_port && at == 1 && before == 1 && blen == D2K_QUIC_BENIGN_LEN,
+    CHECK(d.local_port && at == 1 && before == 1 && blen == D2S_QUIC_BENIGN_LEN,
           "разрешение: одна безобидная датаграмма 16 байт, затем Initial той же четвёрки");
 }
 #endif
 
 static void test_length_runtime(uint16_t port){
     uint8_t initial[4096];size_t n=0;
-    CHECK(!d2k_quic_probe_initial(TARGET,initial,sizeof initial,&n),"length input builds");
+    CHECK(!d2s_quic_probe_initial(TARGET,initial,sizeof initial,&n),"length input builds");
     g_mode=M_BOUND;g_seen_n=0;int sent=0;
-    d2k_tally t=d2k_quic_ask_longer_hook("127.0.0.1",port,NULL,0,(d2k_hello){initial, n, NULL, 0, 0, 0},
+    d2s_tally t=d2s_quic_ask_longer_hook("127.0.0.1",port,NULL,0,(d2s_hello){initial, n, NULL, 0, 0, 0},
         400,0,3,NULL,NULL,&sent,NULL);
     CHECK(t.pass==3 && sent==3,"runtime length question receives bound replies 3/3");
     pthread_mutex_lock(&g_mu);
@@ -610,8 +610,8 @@ static void test_length_runtime(uint16_t port){
 }
 
 int main(void) {
-    int old_local = d2k_quic_allow_local;
-    d2k_quic_allow_local = 1;
+    int old_local = d2s_quic_allow_local;
+    d2s_quic_allow_local = 1;
     uint16_t port = stand_start();
     if (!port) { puts("FAIL stand"); return 1; }
     test_length_runtime(port);
@@ -624,7 +624,7 @@ int main(void) {
     test_data_stage_follows_retry(port);
     test_strategy_questions_on_wire(port);
 #endif
-    d2k_quic_allow_local = old_local;
+    d2s_quic_allow_local = old_local;
     if (fails) { printf("test_quic_arm_data: %d FAIL\n", fails); return 1; }
     puts("test_quic_arm_data: all passed");
     return 0;

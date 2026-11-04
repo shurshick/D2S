@@ -3,8 +3,8 @@
 #include <string.h>
 #include <strings.h>
 
-#include "d2k_httpup.h"
-#include "d2k_http_reply.h"
+#include "d2s_httpup.h"
+#include "d2s_http_reply.h"
 
 typedef struct {
     char host[256];
@@ -45,7 +45,7 @@ static int host_equal(const char *a, const char *b) {
 
 static int known_portal_host(const char *host) {
     for (size_t i = 0; i < 6; i++) {
-        if (host_equal(host, d2k_http_portal(i))) { return 1; }
+        if (host_equal(host, d2s_http_portal(i))) { return 1; }
     }
     return 0;
 }
@@ -129,7 +129,7 @@ static int parse_request(const char *request, size_t request_len, http_request *
     return dns_host(out->host, host_len);
 }
 
-int d2k_httpup_request_safe(const char *request, size_t request_len) {
+int d2s_httpup_request_safe(const char *request, size_t request_len) {
     http_request req;
     return parse_request(request, request_len, &req);
 }
@@ -142,7 +142,7 @@ static int build_redirect(const http_request *req, const char *reason,
         "Cache-Control: no-store\r\n"
         "Connection: close\r\n"
         "Content-Length: 0\r\n"
-        "X-D2K-HTTP-Upgrade: %s\r\n\r\n",
+        "X-D2S-HTTP-Upgrade: %s\r\n\r\n",
         req->host, (int)req->target_len, req->target, reason);
     if (written < 0 || (size_t)written >= response_cap) { response[0] = '\0'; return 0; }
     return 1;
@@ -224,7 +224,7 @@ static int portal_answer(const char *req_host, const char *upstream, size_t upst
            (known_portal || portal_marker(location_host));
 }
 
-int d2k_httpup_portal_response(const char *request, size_t request_len,
+int d2s_httpup_portal_response(const char *request, size_t request_len,
                                const char *upstream, size_t upstream_len,
                                char *response, size_t response_cap) {
     http_request req;
@@ -237,7 +237,7 @@ int d2k_httpup_portal_response(const char *request, size_t request_len,
     return build_redirect(&req, "provider-portal", response, response_cap);
 }
 
-int d2k_httpup_request_target(const char *request, size_t request_len,
+int d2s_httpup_request_target(const char *request, size_t request_len,
                               char *host, size_t host_cap,
                               char *target, size_t target_cap) {
     http_request req;
@@ -250,7 +250,7 @@ int d2k_httpup_request_target(const char *request, size_t request_len,
     return 1;
 }
 
-int d2k_httpup_portal_location(const char *host, const char *response, size_t response_len,
+int d2s_httpup_portal_location(const char *host, const char *response, size_t response_len,
                                char *portal, size_t portal_cap) {
     char location_host[256];
     if (!host || !portal || portal_cap == 0) { return 0; }
@@ -261,7 +261,7 @@ int d2k_httpup_portal_location(const char *host, const char *response, size_t re
     return 1;
 }
 
-size_t d2k_httpup_redirect_https(const char *host, const char *target,
+size_t d2s_httpup_redirect_https(const char *host, const char *target,
                                  char *response, size_t response_cap) {
     http_request req;
     if (!response || response_cap == 0) { return 0; }

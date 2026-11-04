@@ -12,10 +12,10 @@
  * mode:
  *   0 — отвечает всегда;
  *   1 — префиксный матчер: молчит, если ПЕРВЫЙ прочитанный сегмент целиком
- *       (>= 4 байт) совпадает с d2k_test_sig. Смотрит только в начало и не
+ *       (>= 4 байт) совпадает с d2s_test_sig. Смотрит только в начало и не
  *       ждёт хвоста — разрез внутри сигнатуры его обманывает;
  *   2 — пересобирает: копит всё, что придёт по соединению, пока не наступит
- *       пауза длиннее D2K_TEST_IDLE_MS без новых байт, и ищет d2k_test_sig
+ *       пауза длиннее D2S_TEST_IDLE_MS без новых байт, и ищет d2s_test_sig
  *       ГДЕ УГОДНО в накопленном, а не только в начале. Разрез на несколько
  *       кусков её не обманывает — обмануть может только другое содержимое
  *       (см. контроль другим именем в test_verdict.c);
@@ -34,7 +34,7 @@
  *       этого блока, и закрывает без ответа) — но после ПЯТОГО принятого
  *       подключения дополнительно НАВСЕГДА закрывает слушающий сокет:
  *       шестое и любое следующее подключение получит отказ уже на
- *       connect(), то есть d2k_meas_once вернёт -1, а не 0. Нужен ровно
+ *       connect(), то есть d2s_meas_once вернёт -1, а не 0. Нужен ровно
  *       одному тесту в test_verdict.c — сочетанию «часть повторов шага —
  *       настоящая тишина, часть — ошибка транспорта» (0 < err < repeats);
  *   6 — отвечает на первые 3 подключения, дальше молчит (без ошибок
@@ -59,12 +59,12 @@
  *       сбой опыта, а не молчание мишени.
  *
  * ЧЕМ ОТВЕЧАЕТ СТЕНД, КОГДА ОТВЕЧАЕТ ПРАВДОЙ. Настоящей записью ServerHello
- * (d2k_test_serverhello ниже), а не произвольными байтами: приёмка замера
- * (d2k_accept_serverhello, d2k_meas.h) разбирает ответ, и стенд, отвечающий
+ * (d2s_test_serverhello ниже), а не произвольными байтами: приёмка замера
+ * (d2s_accept_serverhello, d2s_meas.h) разбирает ответ, и стенд, отвечающий
  * «чем попало», проверял бы не дерево вердиктов, а собственную выдумку.
  */
-#ifndef D2K_TEST_STAND_H
-#define D2K_TEST_STAND_H
+#ifndef D2S_TEST_STAND_H
+#define D2S_TEST_STAND_H
 
 #include <netinet/in.h>
 #include <pthread.h>
@@ -80,37 +80,37 @@
 /* Сигнатура «похоже на TLS-приветствие», которую распознают режимы 1 и 2.
  * Общая с построением тестовых hello в обоих .c — иначе стенд и байты,
  * которые он проверяет, могли бы разойтись независимо друг от друга. */
-static const uint8_t d2k_test_sig[4] = { 0x16, 0x03, 0x01, 0x00 };
+static const uint8_t d2s_test_sig[4] = { 0x16, 0x03, 0x01, 0x00 };
 
 /* Настоящий ответ сервера: запись TLS типа 22 (handshake, 0x16), версия
  * 0x0303, длина тела 2, первый байт тела — тип рукопожатия 0x02
- * (server_hello). Ровно это и только это приёмка d2k_accept_serverhello
- * (d2k_meas.h) считает доказательством прохода. Байты не новые: они стояли
+ * (server_hello). Ровно это и только это приёмка d2s_accept_serverhello
+ * (d2s_meas.h) считает доказательством прохода. Байты не новые: они стояли
  * россыпью в каждом отвечающем режиме и раньше — теперь у них одно имя,
  * потому что теперь их кто-то РАЗБИРАЕТ. */
-static const uint8_t d2k_test_serverhello[7] = { 0x16, 0x03, 0x03, 0x00, 0x02, 0x02, 0x00 };
+static const uint8_t d2s_test_serverhello[7] = { 0x16, 0x03, 0x03, 0x00, 0x02, 0x02, 0x00 };
 
 /* Фатальный алерт TLS: тип записи 21 (0x15), версия 0x0303, длина тела 2,
  * уровень 2 (fatal), описание 40 (handshake_failure, RFC 8446 §6.2). Семь
  * байт — ровно тот размер ответа, который донор когда-то засчитал за обмен по
- * Дискорду (см. d2k_ev_outer_appdata в d2k_link.h): заголовок записи 5 байт
+ * Дискорду (см. d2s_ev_outer_appdata в d2s_link.h): заголовок записи 5 байт
  * плюс два байта тела. */
-static const uint8_t d2k_test_alert[7] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28 };
+static const uint8_t d2s_test_alert[7] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28 };
 
 /* Блок-страница: ответ пришёл, и он не TLS вовсе. Отличается от алерта не
  * «сильнее/слабее», а ВИДОМ: приёмка контроля (любая запись TLS) алерт
  * засчитывает, а это — нет. */
-static const char d2k_test_blockpage[] =
+static const char d2s_test_blockpage[] =
     "HTTP/1.1 302 Found\r\nLocation: http://blocked.invalid/\r\n\r\n";
 
 /* Насколько дольше самой длинной паузы между кусками в проверках (5000 мкс —
- * см. вызовы d2k_meas/d2k_classify с gap_us=5000) стенд обязан молчать сам,
+ * см. вызовы d2s_meas/d2s_classify с gap_us=5000) стенд обязан молчать сам,
  * прежде чем решить, что читать больше нечего: без запаса в порядок
  * величины разрез опыта неотличим от «стенд поторопился ответить, не
  * дождавшись второго куска». 100 мс — это ×20 к 5 мс паузы, тот же приём,
  * что задаёт CONNECT_TIMEOUT_MS/WAIT_CEIL_MS в meas.c: запас, а не число «на
  * глаз» под конкретный тест. */
-#define D2K_TEST_IDLE_MS 100
+#define D2S_TEST_IDLE_MS 100
 
 struct stand { int fd; uint16_t port; int mode; size_t want; int n_accepted; };
 
@@ -123,7 +123,7 @@ static void *stand_run(void *arg) {
         if (c < 0) { free(s); return NULL; }
 
         if (s->mode == 4) {
-            /* Пауза дольше d2k_send_timeout_s обязательна: короткая запись
+            /* Пауза дольше d2s_send_timeout_s обязательна: короткая запись
                НАБЛЮДАЕТСЯ только когда SO_SNDTIMEO успевает истечь при
                недренирующем приёмнике — см. идентичный комментарий у теста
                короткой записи в test_meas.c. */
@@ -137,7 +137,7 @@ static void *stand_run(void *arg) {
                 got += (size_t)n;
             }
             if (got == s->want) {
-                (void)send(c, d2k_test_serverhello, sizeof d2k_test_serverhello, 0);
+                (void)send(c, d2s_test_serverhello, sizeof d2s_test_serverhello, 0);
             }
             close(c);
             continue;
@@ -151,7 +151,7 @@ static void *stand_run(void *arg) {
                первый сегмент. */
             uint8_t acc[8192];
             size_t got = 0;
-            struct timeval tv = { 0, D2K_TEST_IDLE_MS * 1000 };
+            struct timeval tv = { 0, D2S_TEST_IDLE_MS * 1000 };
             setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
             for (;;) {
                 if (got >= sizeof acc) { break; }
@@ -160,16 +160,16 @@ static void *stand_run(void *arg) {
                 got += (size_t)n;
             }
             int blocked = 0;
-            if (got >= sizeof d2k_test_sig) {
-                for (size_t i = 0; i + sizeof d2k_test_sig <= got; i++) {
-                    if (memcmp(acc + i, d2k_test_sig, sizeof d2k_test_sig) == 0) {
+            if (got >= sizeof d2s_test_sig) {
+                for (size_t i = 0; i + sizeof d2s_test_sig <= got; i++) {
+                    if (memcmp(acc + i, d2s_test_sig, sizeof d2s_test_sig) == 0) {
                         blocked = 1;
                         break;
                     }
                 }
             }
             if (!blocked) {
-                (void)send(c, d2k_test_serverhello, sizeof d2k_test_serverhello, 0);
+                (void)send(c, d2s_test_serverhello, sizeof d2s_test_serverhello, 0);
             }
             close(c);
             continue;
@@ -189,21 +189,21 @@ static void *stand_run(void *arg) {
            Отдельная переменная, а не ветка на каждый режим: «ответил» и «чем
            именно ответил» — разные вопросы, и оракул теперь различает их
            тоже. */
-        const uint8_t *ans = d2k_test_serverhello;
-        size_t ans_len = sizeof d2k_test_serverhello;
-        if ((s->mode == 1 || s->mode == 9) && n >= (ssize_t)sizeof d2k_test_sig &&
-            memcmp(buf, d2k_test_sig, sizeof d2k_test_sig) == 0) {
+        const uint8_t *ans = d2s_test_serverhello;
+        size_t ans_len = sizeof d2s_test_serverhello;
+        if ((s->mode == 1 || s->mode == 9) && n >= (ssize_t)sizeof d2s_test_sig &&
+            memcmp(buf, d2s_test_sig, sizeof d2s_test_sig) == 0) {
             blocked = 1;
         }
         if (s->mode == 7 || s->mode == 9) {
             /* Ответ есть, прохода он не доказывает: алерт инжектируют и сами
                коробки (acceptServerHello, internal/classify/trigger.go). */
-            ans = d2k_test_alert;
-            ans_len = sizeof d2k_test_alert;
+            ans = d2s_test_alert;
+            ans_len = sizeof d2s_test_alert;
         }
         if (s->mode == 8) {
-            ans = (const uint8_t *)d2k_test_blockpage;
-            ans_len = sizeof d2k_test_blockpage - 1; /* без NUL: он не на проводе */
+            ans = (const uint8_t *)d2s_test_blockpage;
+            ans_len = sizeof d2s_test_blockpage - 1; /* без NUL: он не на проводе */
         }
         if (s->mode == 3 && n >= 1 && buf[0] == 0x16) {
             /* Коробке, которая режет весь класс «похоже на TLS-запись»,
@@ -227,9 +227,9 @@ static void *stand_run(void *arg) {
             if (s->n_accepted >= 5) {
                 /* Слушающий сокет закрывается НАВСЕГДА — 6-е подключение
                    (третий повтор «разреза на 1») получит отказ уже на
-                   connect(), d2k_meas_once вернёт -1, а не 0. Порядок
+                   connect(), d2s_meas_once вернёт -1, а не 0. Порядок
                    безопасен без гонки: между двумя send() одного разреза
-                   клиент сам делает паузу gap_us (см. d2k_meas_once) — этого
+                   клиент сам делает паузу gap_us (см. d2s_meas_once) — этого
                    на порядки достаточно, чтобы close(s->fd) здесь успел
                    выполниться до следующего connect() клиента. */
                 close(s->fd);
@@ -239,7 +239,7 @@ static void *stand_run(void *arg) {
             /* Отвечает на первые 3 подключения (столько же, сколько
                обычных repeats в этом дереве), дальше молчит без ошибок
                транспорта — проверяет, что подтверждение
-               (D2K_CLEAR_CONFIRM_REPEATS в verdict.c) действительно
+               (D2S_CLEAR_CONFIRM_REPEATS в verdict.c) действительно
                опрашивается, а не пропускается. */
             s->n_accepted++;
             blocked = s->n_accepted > 3;
@@ -315,4 +315,4 @@ static uint16_t stand_start(struct stand *s, int mode) {
     return stand_start_family(s, mode, AF_INET);
 }
 
-#endif /* D2K_TEST_STAND_H */
+#endif /* D2S_TEST_STAND_H */

@@ -1,8 +1,8 @@
 /* compose.c — свойства пересобирающей коробки и вывод плана для TCP.
- * Контракт и обоснования — в шапке d2k_compose.h; здесь реализация и то, что
+ * Контракт и обоснования — в шапке d2s_compose.h; здесь реализация и то, что
  * относится именно к ней.
  *
- * ПОЧЕМУ D2K_PROPS_ASK ТЕПЕРЬ ШЛЁТ В СЕТЬ (задача 5, шаг 0).
+ * ПОЧЕМУ D2S_PROPS_ASK ТЕПЕРЬ ШЛЁТ В СЕТЬ (задача 5, шаг 0).
  *
  * Пять Go-вопросов (internal/classify/properties.go, PropProbes) двойного
  * назначения: план, которым спрашивают, и есть план, которым обходят, если
@@ -14,39 +14,39 @@
  * Всё это — управление seq/суммой/порядком отправки НИЖЕ уровня обычного
  * подключённого сокета: обычный SOCK_STREAM получает от ядра ПРАВИЛЬНУЮ сумму
  * на каждый сегмент автоматически, и подделать её без пакетного доступа
- * невозможно из пространства пользователя (см. d2k_meas — cuts_valid/
+ * невозможно из пространства пользователя (см. d2s_meas — cuts_valid/
  * send_all там честно ограничены обычным возрастающим разрезом, meas.c).
  *
  * До этой задачи спросить было физически нечем: протокол связи с датапатом
- * (core/link.c, d2k_link.h) поднимала ПАРАЛЛЕЛЬНАЯ задача 4, и на момент
+ * (core/link.c, d2s_link.h) поднимала ПАРАЛЛЕЛЬНАЯ задача 4, и на момент
  * задачи 3 он не существовал — отсюда честный вектор из одних
- * D2K_P_UNKNOWN, который эта функция отдавала раньше (подробное рассуждение,
+ * D2S_P_UNKNOWN, который эта функция отдавала раньше (подробное рассуждение,
  * почему имитация измерения чужим приёмом была бы ХУЖЕ отказа, — в отчёте
  * задачи 3). Задача 4 эту связь дала (слияние 308cc44), и зависимость,
- * не объявленная в плане, закрывается здесь явно: d2k_props_ask ставит
- * план датапату командой SET_NAME (d2k_link_set_name), дожидается
- * подтверждения (D2K_EV_ACK), делает ОДНО обращение к цели СВОИМ вариантом
- * connect+одна посылка (props_ask_contact — не d2k_meas_once напрямую: тот
+ * не объявленная в плане, закрывается здесь явно: d2s_props_ask ставит
+ * план датапату командой SET_NAME (d2s_link_set_name), дожидается
+ * подтверждения (D2S_EV_ACK), делает ОДНО обращение к цели СВОИМ вариантом
+ * connect+одна посылка (props_ask_contact — не d2s_meas_once напрямую: тот
  * метит зонд, а этот обязан идти НЕПОМЕЧЕННЫМ, иначе план мимо очереди —
  * см. её большой комментарий и находку 2 ревью 11.09), и читает исход
- * СТРОГО по событию обмена ЭТОГО ЖЕ ПОТОКА (D2K_EV_EXCHANGE с ключом,
+ * СТРОГО по событию обмена ЭТОГО ЖЕ ПОТОКА (D2S_EV_EXCHANGE с ключом,
  * сверенным против местных и целевых адреса:порта — находка 1 того же
- * ревью, — и наблюдение d2k_ev_outer_appdata) — НЕ по тому, что вернул локальный
+ * ревью, — и наблюдение d2s_ev_outer_appdata) — НЕ по тому, что вернул локальный
  * recv(): обратное направление почти всегда слепо для аппаратной разгрузки
  * роутера, а датапат (NFQUEUE) стоит ДО неё
- * (см. большой комментарий у seen_types/d2k_ev_outer_appdata, d2k_link.h).
+ * (см. большой комментарий у seen_types/d2s_ev_outer_appdata, d2s_link.h).
  *
  * ПОЧЕМУ ПЛАНЫ СОБИРАЮТСЯ В TLV ЗДЕСЬ, А НЕ ЧЕРЕЗ *_plan_text НИЖЕ.
  * Функции ...plan_text в этом файле строят ЧЕЛОВЕЧЕСКУЮ форму плана
- * (d2k-plan N N\n...) — ту, что хранит каталог (d2k_cat_plan.text) и
+ * (d2s-plan N N\n...) — ту, что хранит каталог (d2s_cat_plan.text) и
  * печатает Go Plan.Text(). Исполнитель на датапате читает ТОЛЬКО
- * каноническую TLV-форму (datapath/include/d2k_plan.h: «разборщик текста
+ * каноническую TLV-форму (datapath/include/d2s_plan.h: «разборщик текста
  * здесь был бы лишней поверхностью для ошибок в компоненте, чей вход
  * приходит из сети»), а компилятора «текст → TLV» на C-стороне нет и не
  * планируется (то же решение — docs/decisions/0002, зеркало Go, где этим
  * занимается ТОЛЬКО internal/plan, а не датапат). Строить текст, которому
  * всё равно нечем стать TLV, и парсить его тут же обратно — не перенос
- * логики, а лишний шов. Пяти зондам d2k_props_ask нужны ровно пять МАЛЫХ,
+ * логики, а лишний шов. Пяти зондам d2s_props_ask нужны ровно пять МАЛЫХ,
  * заранее известных по форме планов — они собираются в TLV прямо здесь,
  * маленькими помощниками ниже (tlv_rec/tlv_header и *_plan_tlv), по той же
  * раскладке полей, что datapath/plan_parse.c читает и internal/plan/tlv.go
@@ -59,21 +59,21 @@
  * ПОЧЕМУ CONTROL ИДЁТ В ФАЛЬШИВКУ ВЕРБАТИМ, А НЕ ЧЕРЕЗ build_decoy_hello.
  * Вопросам «счёт дубликатов» и «разбор протокола» нужна приманка похожая на
  * целое приветствие (properties.go: duplicatesPlan/parseProtocolPlan берут
- * plan.Hello(decoy,0)). d2k_compose ниже синтезирует её профилем
+ * plan.Hello(decoy,0)). d2s_compose ниже синтезирует её профилем
  * (build_decoy_hello), потому что у него на входе только ИМЯ decoy строкой —
- * никаких снятых байт. У d2k_props_ask на входе НАСТОЯЩИЙ захват — control,
+ * никаких снятых байт. У d2s_props_ask на входе НАСТОЯЩИЙ захват — control,
  * приветствие ДРУГОГО имени, снятое датапатом с живого клиента (того же
  * рода снимок, что и trigger). Синтезировать из него заново профилем —
  * отбросить более достоверные байты ради менее достоверных без единой
  * причины; этот модуль настаивает на настоящих байтах везде (см. шапку
- * d2k_meas.h про то, чего стоил самодельный hello 06.09.2026) — здесь тот же
+ * d2s_meas.h про то, чего стоил самодельный hello 06.09.2026) — здесь тот же
  * принцип просто применён к байтам, которые уже есть на руках.
  *
  * ДВА ОСОЗНАННЫХ ДОЛГА этой реализации (снять в круге планировщика, задача 5
- * шаги 1-5, не здесь) — полное рассуждение в doc-комментарии d2k_props_ask,
- * d2k_compose.h: (1) план последнего проваленного зонда не снимается с
+ * шаги 1-5, не здесь) — полное рассуждение в doc-комментарии d2s_props_ask,
+ * d2s_compose.h: (1) план последнего проваленного зонда не снимается с
  * датапата при полном провале — DEL_NAME отсюда не зовётся; (2)
- * D2K_PROPS_ASK_WAIT_MS ниже — одно унаследованное число на два РАЗНОРОДНЫХ
+ * D2S_PROPS_ASK_WAIT_MS ниже — одно унаследованное число на два РАЗНОРОДНЫХ
  * ожидания (локальный ack и сетевой обмен), для этого применения не
  * измеренное.
  */
@@ -92,22 +92,22 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_compose.h"
-#include "d2k_compose_internal.h" /* прототипы четырёх сборщиков TLV ниже — не наложением, а для planlab, см. её шапку */
-#include "d2k_hello.h"
-#include "d2k_link.h"
-#include "d2k_quicprobe.h" /* d2k_quic_arm: перевод подобранного плеча в текст плана */
-#include "d2k_plan.h" /* datapath/include — D2K_POISON_BADSUM, тот же публичный контракт, что уже читает d2k_link.h через d2k_ctl.h */
+#include "d2s_compose.h"
+#include "d2s_compose_internal.h" /* прототипы четырёх сборщиков TLV ниже — не наложением, а для planlab, см. её шапку */
+#include "d2s_hello.h"
+#include "d2s_link.h"
+#include "d2s_quicprobe.h" /* d2s_quic_arm: перевод подобранного плеча в текст плана */
+#include "d2s_plan.h" /* datapath/include — D2S_POISON_BADSUM, тот же публичный контракт, что уже читает d2s_link.h через d2s_ctl.h */
 /* 266 имён-кандидатов белого списка, сгенерированы core/Makefile'ом из
  * profiles/tcp1620_whitelist.txt (вывод сборки, в git не идёт — как
- * hello_profiles.inc). Объявляет d2k_tcp1620_whitelist[] и его размер. */
+ * hello_profiles.inc). Объявляет d2s_tcp1620_whitelist[] и его размер. */
 #include "tcp1620_whitelist.inc"
 
-size_t d2k_net_whitelist_count(void) {
-    return sizeof d2k_tcp1620_whitelist / sizeof d2k_tcp1620_whitelist[0];
+size_t d2s_net_whitelist_count(void) {
+    return sizeof d2s_tcp1620_whitelist / sizeof d2s_tcp1620_whitelist[0];
 }
-const char *d2k_net_whitelist_name(size_t i) {
-    return i < d2k_net_whitelist_count() ? d2k_tcp1620_whitelist[i] : NULL;
+const char *d2s_net_whitelist_name(size_t i) {
+    return i < d2s_net_whitelist_count() ? d2s_tcp1620_whitelist[i] : NULL;
 }
 
 /* --------------------------------------------------------------------
@@ -123,18 +123,18 @@ const char *d2k_net_whitelist_name(size_t i) {
  * ctlprobe) на этой.
  * -------------------------------------------------------------------- */
 enum {
-    D2K_REC_PAYLOAD = 0x0010,
-    D2K_REC_POISON  = 0x0011,
-    D2K_REC_SPLIT   = 0x0100,
-    D2K_REC_FAKE    = 0x0101,
-    D2K_REC_SEQOVL  = 0x0102,
-    D2K_REC_ORDER   = 0x0103,
-    D2K_REC_PACE    = 0x0105
+    D2S_REC_PAYLOAD = 0x0010,
+    D2S_REC_POISON  = 0x0011,
+    D2S_REC_SPLIT   = 0x0100,
+    D2S_REC_FAKE    = 0x0101,
+    D2S_REC_SEQOVL  = 0x0102,
+    D2S_REC_ORDER   = 0x0103,
+    D2S_REC_PACE    = 0x0105
 };
-enum { D2K_REC_ID = 0x0001, D2K_REC_PROTO = 0x0002 };
-enum { D2K_ANCHOR_PAYLOAD_START = 0, D2K_ANCHOR_SNI_MIDDLE = 5 };
-enum { D2K_ORDER_FORWARD = 0, D2K_ORDER_REVERSE = 1 };
-enum { D2K_PLACE_BEFORE = 0 };
+enum { D2S_REC_ID = 0x0001, D2S_REC_PROTO = 0x0002 };
+enum { D2S_ANCHOR_PAYLOAD_START = 0, D2S_ANCHOR_SNI_MIDDLE = 5 };
+enum { D2S_ORDER_FORWARD = 0, D2S_ORDER_REVERSE = 1 };
+enum { D2S_PLACE_BEFORE = 0 };
 
 /* Верхняя граница декой-приветствия. До задачи 5 здесь всегда стоял
  * LEGACY (210 байт «в живую», core/profiles/legacy.hex, замер) — потолок был
@@ -144,7 +144,7 @@ enum { D2K_PLACE_BEFORE = 0 };
  * 2). Запас — 1530 + 253 (максимальная длина имени по RFC 1035, на случай
  * decoy длиннее метки __SNI__, которую он заменяет) = 1783, округлено вверх
  * до 1800. */
-#define D2K_COMPOSE_HELLO_MAX 1800
+#define D2S_COMPOSE_HELLO_MAX 1800
 
 static void wr16be(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 static uint16_t rd16be(const uint8_t *p) { return (uint16_t)((uint16_t)p[0] << 8 | p[1]); }
@@ -154,8 +154,8 @@ static void wr32be(uint8_t *p, uint32_t v) {
 }
 
 /* Дописывает одну запись TLV из ДВУХ частей подряд (a затем b), без сборки
- * временного буфера под их сумму — тот же приём, что d2k_emit.pre/pre_len
- * в datapath/include/d2k_plan.h (там ради packet-пути без выделений, тут
+ * временного буфера под их сумму — тот же приём, что d2s_emit.pre/pre_len
+ * в datapath/include/d2s_plan.h (там ради packet-пути без выделений, тут
  * просто чтобы не копировать payload дважды: id-префикс да сами байты
  * приманки). b/blen может быть NULL/0 — тогда запись это просто a. */
 static int tlv_rec(uint8_t *buf, size_t cap, size_t *pos, uint16_t typ,
@@ -174,12 +174,12 @@ static int tlv_rec(uint8_t *buf, size_t cap, size_t *pos, uint16_t typ,
 
 /* Заголовок (12 байт) плюс REC_ID (нулевой — идентификатор плана считает
  * каталог хэшем ТЕКСТА при сохранении, см. emit_header ниже; у зондов
- * d2k_props_ask текстовой формы и каталога вовсе нет, а плану на проводе
+ * d2s_props_ask текстовой формы и каталога вовсе нет, а плану на проводе
  * id всё равно только для чтения человеком) и REC_PROTO. n_records — уже
  * ИТОГОВОЕ число записей плана, включая эти две: у каждого из пяти зондов
  * оно известно заранее по форме (см. вызовы в *_plan_tlv ниже), поэтому
  * запись в один проход без второго прохода/патча длины постфактум. transport
- * всегда 6 (TCP) — d2k_props_ask, как и весь этот файл, только про TCP/TLS
+ * всегда 6 (TCP) — d2s_props_ask, как и весь этот файл, только про TCP/TLS
  * (proto=1, см. emit_header). guards не бывают: minexec=1 достаточно
  * (Plan.NeedExec, plan.go — 2 только когда Guards!=0). */
 static int tlv_header(uint8_t *buf, size_t cap, size_t *pos, uint16_t n_records) {
@@ -191,9 +191,9 @@ static int tlv_header(uint8_t *buf, size_t cap, size_t *pos, uint16_t n_records)
     wr16be(buf + *pos + 10, n_records);
     *pos += 12;
     static const uint8_t id16[16] = { 0 };
-    if (tlv_rec(buf, cap, pos, D2K_REC_ID, id16, sizeof id16, NULL, 0) != 0) { return -1; }
+    if (tlv_rec(buf, cap, pos, D2S_REC_ID, id16, sizeof id16, NULL, 0) != 0) { return -1; }
     uint8_t pr[2]; pr[0] = 6; pr[1] = 1; /* transport=TCP, proto=TLS */
-    return tlv_rec(buf, cap, pos, D2K_REC_PROTO, pr, sizeof pr, NULL, 0);
+    return tlv_rec(buf, cap, pos, D2S_REC_PROTO, pr, sizeof pr, NULL, 0);
 }
 
 /* Удостоверяет собранный TLV: считает идентификатор по его же байтам и
@@ -214,11 +214,11 @@ static int tlv_header(uint8_t *buf, size_t cap, size_t *pos, uint16_t n_records)
  * тип(2) + длина(2) + 16 байт значения. Проверяем её, а не верим на слово:
  * запись не на месте означает, что сборщик изменился, и молча писать в чужие
  * байты нельзя. 0 — удостоверено, -1 — раскладка не та. */
-int plan_tlv_stamp_ident(uint8_t *tlv, size_t len, uint8_t out_id[D2K_PLAN_ID_LEN]) {
+int plan_tlv_stamp_ident(uint8_t *tlv, size_t len, uint8_t out_id[D2S_PLAN_ID_LEN]) {
     const size_t rec = 12;                 /* смещение записи REC_ID */
     const size_t val = rec + 4;            /* смещение её значения */
-    if (!tlv || len < val + D2K_PLAN_ID_LEN) { return -1; }
-    if (rd16be(tlv + rec) != D2K_REC_ID || rd16be(tlv + rec + 2) != D2K_PLAN_ID_LEN) {
+    if (!tlv || len < val + D2S_PLAN_ID_LEN) { return -1; }
+    if (rd16be(tlv + rec) != D2S_REC_ID || rd16be(tlv + rec + 2) != D2S_PLAN_ID_LEN) {
         return -1;
     }
     /* FNV-1a, тот же, что у планировщика (fnv1a в sched.c): один способ
@@ -230,11 +230,11 @@ int plan_tlv_stamp_ident(uint8_t *tlv, size_t len, uint8_t out_id[D2K_PLAN_ID_LE
     }
     char text[32];
     snprintf(text, sizeof text, "plan-%08x", (unsigned)h);
-    memset(out_id, 0, D2K_PLAN_ID_LEN);
+    memset(out_id, 0, D2S_PLAN_ID_LEN);
     size_t n = strlen(text);
-    if (n > D2K_PLAN_ID_LEN) { n = D2K_PLAN_ID_LEN; }
+    if (n > D2S_PLAN_ID_LEN) { n = D2S_PLAN_ID_LEN; }
     memcpy(out_id, text, n);
-    memcpy(tlv + val, out_id, D2K_PLAN_ID_LEN);
+    memcpy(tlv + val, out_id, D2S_PLAN_ID_LEN);
     return 0;
 }
 
@@ -258,12 +258,12 @@ int overlap_plan_tlv(uint8_t *buf, size_t cap, size_t *out_len) {
     size_t pos = 0;
     if (tlv_header(buf, cap, &pos, 5) != 0) { return -1; }
     uint8_t pid[2]; wr16be(pid, 1);
-    uint8_t ovl = D2K_OVERLAP_FILLER;
-    if (tlv_rec(buf, cap, &pos, D2K_REC_PAYLOAD, pid, sizeof pid, &ovl, 1) != 0) { return -1; }
+    uint8_t ovl = D2S_OVERLAP_FILLER;
+    if (tlv_rec(buf, cap, &pos, D2S_REC_PAYLOAD, pid, sizeof pid, &ovl, 1) != 0) { return -1; }
     uint8_t so[4]; wr16be(so, 1); wr16be(so + 2, 0); /* payload_id=1, poison_id=0 */
-    if (tlv_rec(buf, cap, &pos, D2K_REC_SEQOVL, so, sizeof so, NULL, 0) != 0) { return -1; }
-    uint8_t ord = D2K_ORDER_FORWARD;
-    if (tlv_rec(buf, cap, &pos, D2K_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
+    if (tlv_rec(buf, cap, &pos, D2S_REC_SEQOVL, so, sizeof so, NULL, 0) != 0) { return -1; }
+    uint8_t ord = D2S_ORDER_FORWARD;
+    if (tlv_rec(buf, cap, &pos, D2S_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
     *out_len = pos;
     return 0;
 }
@@ -276,14 +276,14 @@ int overlap_plan_tlv(uint8_t *buf, size_t cap, size_t *out_len) {
 int reorder_plan_tlv(uint8_t *buf, size_t cap, size_t *out_len) {
     size_t pos = 0;
     if (tlv_header(buf, cap, &pos, 6) != 0) { return -1; }
-    uint8_t s1[4]; wr16be(s1, D2K_ANCHOR_PAYLOAD_START); wr16be(s1 + 2, 1);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_SPLIT, s1, sizeof s1, NULL, 0) != 0) { return -1; }
-    uint8_t s2[4]; wr16be(s2, D2K_ANCHOR_SNI_MIDDLE); wr16be(s2 + 2, 0);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_SPLIT, s2, sizeof s2, NULL, 0) != 0) { return -1; }
-    uint8_t ord = D2K_ORDER_REVERSE;
-    if (tlv_rec(buf, cap, &pos, D2K_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
-    uint8_t pc[4]; wr32be(pc, D2K_PACE_PIECE_US);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_PACE, pc, sizeof pc, NULL, 0) != 0) { return -1; }
+    uint8_t s1[4]; wr16be(s1, D2S_ANCHOR_PAYLOAD_START); wr16be(s1 + 2, 1);
+    if (tlv_rec(buf, cap, &pos, D2S_REC_SPLIT, s1, sizeof s1, NULL, 0) != 0) { return -1; }
+    uint8_t s2[4]; wr16be(s2, D2S_ANCHOR_SNI_MIDDLE); wr16be(s2 + 2, 0);
+    if (tlv_rec(buf, cap, &pos, D2S_REC_SPLIT, s2, sizeof s2, NULL, 0) != 0) { return -1; }
+    uint8_t ord = D2S_ORDER_REVERSE;
+    if (tlv_rec(buf, cap, &pos, D2S_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
+    uint8_t pc[4]; wr32be(pc, D2S_PACE_PIECE_US);
+    if (tlv_rec(buf, cap, &pos, D2S_REC_PACE, pc, sizeof pc, NULL, 0) != 0) { return -1; }
     *out_len = pos;
     return 0;
 }
@@ -298,18 +298,18 @@ int badsum_fake_plan_tlv(const uint8_t *payload, size_t paylen,
     size_t pos = 0;
     if (tlv_header(buf, cap, &pos, 7) != 0) { return -1; }
     uint8_t pid[2]; wr16be(pid, 1);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_PAYLOAD, pid, sizeof pid, payload, paylen) != 0) { return -1; }
+    if (tlv_rec(buf, cap, &pos, D2S_REC_PAYLOAD, pid, sizeof pid, payload, paylen) != 0) { return -1; }
     uint8_t po[8];
-    wr16be(po, 1); po[2] = 0; po[3] = D2K_POISON_BADSUM; wr32be(po + 4, 0);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_POISON, po, sizeof po, NULL, 0) != 0) { return -1; }
+    wr16be(po, 1); po[2] = 0; po[3] = D2S_POISON_BADSUM; wr32be(po + 4, 0);
+    if (tlv_rec(buf, cap, &pos, D2S_REC_POISON, po, sizeof po, NULL, 0) != 0) { return -1; }
     uint8_t fk[10];
-    wr16be(fk, 1); wr16be(fk + 2, 1); fk[4] = repeats; fk[5] = D2K_PLACE_BEFORE;
+    wr16be(fk, 1); wr16be(fk + 2, 1); fk[4] = repeats; fk[5] = D2S_PLACE_BEFORE;
     wr32be(fk + 6, gap_us);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_FAKE, fk, sizeof fk, NULL, 0) != 0) { return -1; }
-    uint8_t ord = D2K_ORDER_FORWARD;
-    if (tlv_rec(buf, cap, &pos, D2K_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
-    uint8_t pc[4]; wr32be(pc, D2K_PACE_SETTLE_US);
-    if (tlv_rec(buf, cap, &pos, D2K_REC_PACE, pc, sizeof pc, NULL, 0) != 0) { return -1; }
+    if (tlv_rec(buf, cap, &pos, D2S_REC_FAKE, fk, sizeof fk, NULL, 0) != 0) { return -1; }
+    uint8_t ord = D2S_ORDER_FORWARD;
+    if (tlv_rec(buf, cap, &pos, D2S_REC_ORDER, &ord, 1, NULL, 0) != 0) { return -1; }
+    uint8_t pc[4]; wr32be(pc, D2S_PACE_SETTLE_US);
+    if (tlv_rec(buf, cap, &pos, D2S_REC_PACE, pc, sizeof pc, NULL, 0) != 0) { return -1; }
     *out_len = pos;
     return 0;
 }
@@ -320,7 +320,7 @@ int badsum_fake_plan_tlv(const uint8_t *payload, size_t paylen,
  * настоящее приветствие). */
 int checksum_plan_tlv(uint8_t *buf, size_t cap, size_t *out_len) {
     uint8_t filler[64];
-    memset(filler, D2K_OVERLAP_FILLER, sizeof filler);
+    memset(filler, D2S_OVERLAP_FILLER, sizeof filler);
     return badsum_fake_plan_tlv(filler, sizeof filler, 1, 0, buf, cap, out_len);
 }
 
@@ -337,17 +337,17 @@ static void to_hex(const uint8_t *b, size_t n, char *out) {
 }
 
 /* Ключ потока — НЕУПОРЯДОЧЕННАЯ пара адрес:порт плюс транспорт, а не
- * канонический d2k_key (datapath/include/d2k_track.h): у события уже есть
- * канонический ключ (низкий/высокий конец, см. d2k_ev), но переносить сюда
- * саму канонизацию (d2k_key_make, datapath/track.c — сравнение шести байт
+ * канонический d2s_key (datapath/include/d2s_track.h): у события уже есть
+ * канонический ключ (низкий/высокий конец, см. d2s_ev), но переносить сюда
+ * саму канонизацию (d2s_key_make, datapath/track.c — сравнение шести байт
  * адреса и порта в сетевом порядке) означало бы её ВТОРУЮ реализацию, а
  * §2.5 запрещает вторую реализацию преобразований ровно за то, что они
  * расходятся молча. Сравнение НЕУПОРЯДОЧЕННОЙ пары даёт тот же ответ на
  * вопрос «это мой поток?» без канонизации вовсе: событию всё равно, какой
- * его конец досталось назвать низким. Тип d2k_flowkey и объявление этой
- * функции — в d2k_compose_internal.h (не наложением, а чтобы test_compose.c
+ * его конец досталось назвать низким. Тип d2s_flowkey и объявление этой
+ * функции — в d2s_compose_internal.h (не наложением, а чтобы test_compose.c
  * проверял ЕЁ САМУ, а не копию, см. шапку заголовка). */
-int ev_matches_flow(const d2k_ev *ev, const d2k_flowkey *k) {
+int ev_matches_flow(const d2s_ev *ev, const d2s_flowkey *k) {
     if (ev->transport != k->transport) { return 0; }
     uint8_t ef = ev->family ? ev->family : 4;
     uint8_t kf = k->family ? k->family : 4;
@@ -372,15 +372,15 @@ int ev_matches_flow(const d2k_ev *ev, const d2k_flowkey *k) {
  * трафика) между нужными нам ACK/EXCHANGE.
  *
  * flow — ДОПОЛНИТЕЛЬНЫЙ фильтр по ключу потока, NULL отключает его. ОБЯЗАН
- * быть задан для D2K_EV_EXCHANGE (ревью 11.09, круг правок 2, находка 1):
- * D2K_EV_EXCHANGE — НЕ адресный ответ на команду, а наблюдение датапата за
+ * быть задан для D2S_EV_EXCHANGE (ревью 11.09, круг правок 2, находка 1):
+ * D2S_EV_EXCHANGE — НЕ адресный ответ на команду, а наблюдение датапата за
  * ЛЮБЫМ потоком, у которого было приветствие и пришла обратная нагрузка
  * (datapath/session.c: `if (fl->saw_hello && fl->rev_payload_after_hello >
  * 0) ...`, независимо от того, стоит ли на этом имени наш план), и ctlsrv.c
  * проталкивает его единственному клиенту без фильтрации по имени или плану.
  * Без ключа потока фоновый HTTPS-трафик того же роутера (обычное дело, не
  * край) засчитывался бы за ответ на СВОЙ зонд — ревьюер воспроизвёл это 5 из
- * 5 на недостижимом адресе, который ни разу не ответил. Для D2K_EV_ACK
+ * 5 на недостижимом адресе, который ни разу не ответил. Для D2S_EV_ACK
  * ключ, наоборот, ВСЕГДА нулевой (ctlsrv.c: `ack()` заполняет тело
  * `memset(body, 0, sizeof body)` — подтверждение не про поток), и flow там
  * передаётся NULL: фильтровать по заведомо нулевому ключу бессмысленно, а
@@ -394,8 +394,8 @@ int ev_matches_flow(const d2k_ev *ev, const d2k_flowkey *k) {
    применения плана к своему потоку, ответа сервера и отказа отправки, —
    и приходят они в любом порядке. Нулевой want означает «этого вида нет». */
 static int wait_for_event3(int fd, uint16_t want_a, uint16_t want_b, uint16_t want_c,
-                           int code_filter, const d2k_flowkey *flow,
-                           uint32_t deadline_ms, d2k_ev *out,
+                           int code_filter, const d2s_flowkey *flow,
+                           uint32_t deadline_ms, d2s_ev *out,
                            char *err, size_t errcap) {
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -406,7 +406,7 @@ static int wait_for_event3(int fd, uint16_t want_a, uint16_t want_b, uint16_t wa
                           (now.tv_nsec - t0.tv_nsec) / 1000000L;
         if (elapsed_ms < 0) { elapsed_ms = 0; }
         if (elapsed_ms >= (long)deadline_ms) { return -1; }
-        int rc = d2k_link_next(fd, out, (int)((long)deadline_ms - elapsed_ms), err, errcap);
+        int rc = d2s_link_next(fd, out, (int)((long)deadline_ms - elapsed_ms), err, errcap);
         if (rc != 0) { return -1; } /* тайм-аут этого чтения = тайм-аут всего бюджета, либо ошибка */
         if (out->kind != want_a && !(want_b && out->kind == want_b) &&
             !(want_c && out->kind == want_c)) { continue; }
@@ -420,8 +420,8 @@ static int wait_for_event3(int fd, uint16_t want_a, uint16_t want_b, uint16_t wa
 }
 
 static int wait_for_event(int fd, uint16_t want, int code_filter,
-                          const d2k_flowkey *flow,
-                          uint32_t deadline_ms, d2k_ev *out,
+                          const d2s_flowkey *flow,
+                          uint32_t deadline_ms, d2s_ev *out,
                           char *err, size_t errcap) {
     return wait_for_event3(fd, want, 0, 0, code_filter, flow, deadline_ms, out,
                            err, errcap);
@@ -437,16 +437,16 @@ static int wait_for_event(int fd, uint16_t want, int code_filter,
  * наследования") — если на живой линии этот потолок окажется мал именно
  * для connect() или именно для обмена, чинить нужно здесь, числом из
  * замера, а не молчаливым дублированием константы. */
-#define D2K_PROPS_ASK_WAIT_MS 5000
+#define D2S_PROPS_ASK_WAIT_MS 5000
 
-/* Одно обращение к цели — СВОЙ вариант d2k_meas_once (meas.c), а не он сам:
+/* Одно обращение к цели — СВОЙ вариант d2s_meas_once (meas.c), а не он сам:
  * два отличия, и оба обязательны для смысла измерения (ревью 11.09, круг
  * правок 2, находки 1 и 2), а не удобства.
  *
- * 1. НЕПОМЕЧЕННЫЙ ПАКЕТ. d2k_meas_once метит зонд (d2k_mark_hook) — там это
+ * 1. НЕПОМЕЧЕННЫЙ ПАКЕТ. d2s_meas_once метит зонд (d2s_mark_hook) — там это
  *    верно: дереву вердиктов метка нужна, чтобы датапат отпустил зонд БЕЗ
  *    очереди и измерил ГОЛУЮ линию, не искажённую уже действующим планом
- *    (files/S99d2k, ПЕРВОЕ правило исходящей цепочки: "iptables -t mangle
+ *    (files/S99d2s, ПЕРВОЕ правило исходящей цепочки: "iptables -t mangle
  *    -A $CHAIN_OUT -m mark --mark $MARK -j RETURN" — помеченный пакет уходит
  *    из цепочки ДО правила NFQUEUE). Опрос свойств спрашивает ОБРАТНОЕ: он
  *    сам только что поставил план-кандидат и должен дать датапату его
@@ -460,7 +460,7 @@ static int wait_for_event(int fd, uint16_t want, int code_filter,
  *    свойств не дерево вердиктов, у него другой вопрос, и правило сюда не
  *    относится, а не нарушается.
  *
- * 2. МЕСТНЫЙ АДРЕС И ПОРТ НАРУЖУ. d2k_meas_once закрывает сокет изнутри и
+ * 2. МЕСТНЫЙ АДРЕС И ПОРТ НАРУЖУ. d2s_meas_once закрывает сокет изнутри и
  *    ничего не отдаёт вызывающему, а wait_for_event выше обязан отличить
  *    обмен ПО ЭТОМУ соединению от обмена любого другого потока к тому же
  *    адресу и порту (см. её большой комментарий; браузер держит много
@@ -469,21 +469,21 @@ static int wait_for_event(int fd, uint16_t want, int code_filter,
  *    Местные адрес и порт назначаются ядром внутри connect() и не
  *    существуют до этого момента — их нужно снять сразу же, getsockname().
  *
- * Без собственных разрезов, как d2k_meas_once с cuts=NULL: сегментацию
+ * Без собственных разрезов, как d2s_meas_once с cuts=NULL: сегментацию
  * теперь делает поставленный план на пакетном пути, а не эта функция.
  * Возвращает 0 при успехе (местные адрес и порт заполнены), -1 иначе —
- * тот же смысл отказа, что у d2k_meas_once. */
+ * тот же смысл отказа, что у d2s_meas_once. */
 /* ВОЗВРАЩАЕТ ОТКРЫТЫЙ СОКЕТ, а не закрывает его сам (out_fd) — иначе ни один
    вопрос не мог быть отвечен НИКОГДА, и это не домысел, а разобранный живой
    прогон 11.09 (docs/field/2026-09-11-first-c-ask.md): все пять зондов
    вернули "события обмена не пришло" при принятых датапатом планах и
    состоявшемся обращении. Причина в датапате, datapath/session.c:
 
-       if (rst || fin) { ... d2k_track_remove(s->flows, &key); ... }
+       if (rst || fin) { ... d2s_track_remove(s->flows, &key); ... }
 
    close() сразу после send() шлёт FIN через микросекунды после приветствия,
    датапат по нему УДАЛЯЕТ ячейку потока, и ответ сервера, пришедший через
-   RTT, попадает уже в чистую ячейку с saw_hello == 0 — а D2K_JRN_EXCHANGE
+   RTT, попадает уже в чистую ячейку с saw_hello == 0 — а D2S_JRN_EXCHANGE
    журналируется ТОЛЬКО при saw_hello. Ждать после этого события обмена
    бессмысленно по устройству, а не по невезению.
 
@@ -522,35 +522,35 @@ static int props_bind_any(int type, uint8_t family, int *out_fd, uint16_t *sport
     return 0;
 }
 
-int d2k_props_bind(int *out_fd, uint16_t *sport_be) {
-    return d2k_props_bind_family(4, out_fd, sport_be);
+int d2s_props_bind(int *out_fd, uint16_t *sport_be) {
+    return d2s_props_bind_family(4, out_fd, sport_be);
 }
 
-int d2k_props_bind_family(uint8_t family, int *out_fd, uint16_t *sport_be) {
+int d2s_props_bind_family(uint8_t family, int *out_fd, uint16_t *sport_be) {
     return props_bind_any(SOCK_STREAM, family, out_fd, sport_be);
 }
 
-int d2k_props_bind_udp(int *out_fd, uint16_t *sport_be) {
-    return d2k_props_bind_udp_family(4, out_fd, sport_be);
+int d2s_props_bind_udp(int *out_fd, uint16_t *sport_be) {
+    return d2s_props_bind_udp_family(4, out_fd, sport_be);
 }
 
-int d2k_props_bind_udp_family(uint8_t family, int *out_fd, uint16_t *sport_be) {
+int d2s_props_bind_udp_family(uint8_t family, int *out_fd, uint16_t *sport_be) {
     return props_bind_any(SOCK_DGRAM, family, out_fd, sport_be);
 }
 
-int d2k_props_contact(const char *ip, uint16_t port, d2k_hello h,
+int d2s_props_contact(const char *ip, uint16_t port, d2s_hello h,
                       uint8_t *local_ip4, uint16_t *local_port, int *out_fd) {
-    return d2k_props_contact_on(-1, ip, port, h, local_ip4, local_port, out_fd);
+    return d2s_props_contact_on(-1, ip, port, h, local_ip4, local_port, out_fd);
 }
 
-int d2k_props_contact_on(int use_fd, const char *ip, uint16_t port, d2k_hello h,
+int d2s_props_contact_on(int use_fd, const char *ip, uint16_t port, d2s_hello h,
                          uint8_t *local_ip4, uint16_t *local_port, int *out_fd) {
-    return d2k_props_contact_on_family(use_fd, ip, port, h, 4, local_ip4,
+    return d2s_props_contact_on_family(use_fd, ip, port, h, 4, local_ip4,
                                       local_port, out_fd);
 }
 
-int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
-                               d2k_hello h, uint8_t family, uint8_t *local_addr,
+int d2s_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
+                               d2s_hello h, uint8_t family, uint8_t *local_addr,
                                uint16_t *local_port, int *out_fd) {
     if (out_fd) { *out_fd = -1; }
     if (!ip || strchr(ip, '%') || (family != 4 && family != 6)) {
@@ -562,7 +562,7 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
        кладёт — ему от этой функции нужны ровно непомеченный сокет, открытый
        наружу, и местные адрес с портом. Отказать ему здесь значило бы
        завести второе обращение к цели рядом, а расходятся такие копии молча
-       (см. шапку d2k_compose_internal.h). Указатель без длины — по-прежнему
+       (см. шапку d2s_compose_internal.h). Указатель без длины — по-прежнему
        нарушение: это не «нечего слать», это испорченный вызов. */
     if (h.len > 0 && !h.bytes) { if (use_fd >= 0) { close(use_fd); } return -1; }
 
@@ -574,13 +574,13 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
 #ifdef SO_NOSIGPIPE
     /* Библиотека не имеет права убивать вызывающего. Сброс от цели посреди
        посылки — обычное дело для зонда (её ради этого и посылают), и без
-       этого весь процесс получал бы SIGPIPE. d2kc ставит SIG_IGN сам, но
+       этого весь процесс получал бы SIGPIPE. d2sc ставит SIG_IGN сам, но
        полагаться на дисциплину каждого вызывающего нельзя: тест поймал это
        первым же прогоном. На Linux того же добивается MSG_NOSIGNAL ниже. */
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
-    struct timeval tv = { (time_t)(D2K_PROPS_ASK_WAIT_MS / 1000u),
-                          (suseconds_t)(D2K_PROPS_ASK_WAIT_MS % 1000u) * 1000 };
+    struct timeval tv = { (time_t)(D2S_PROPS_ASK_WAIT_MS / 1000u),
+                          (suseconds_t)(D2S_PROPS_ASK_WAIT_MS % 1000u) * 1000 };
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
 
@@ -602,14 +602,14 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
     /* Неблокирующий connect с явным потолком — тот же смысл, что
        connect_bounded в meas.c (не она сама: static там, и вариант здесь не
        нуждается в её остальном контракте): SYN-чёрная-дыра без потолка
-       съела бы умолчание ядра (минуты), а не D2K_PROPS_ASK_WAIT_MS. */
+       съела бы умолчание ядра (минуты), а не D2S_PROPS_ASK_WAIT_MS. */
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) { close(fd); return -1; }
     if (connect(fd, (struct sockaddr *)&a, alen) != 0) {
         if (errno != EINPROGRESS) { close(fd); return -1; }
         struct pollfd pfd;
         pfd.fd = fd; pfd.events = POLLOUT; pfd.revents = 0;
-        int pr = poll(&pfd, 1, (int)D2K_PROPS_ASK_WAIT_MS);
+        int pr = poll(&pfd, 1, (int)D2S_PROPS_ASK_WAIT_MS);
         if (pr <= 0) { close(fd); return -1; }
         int soerr = 0;
         socklen_t soerr_len = sizeof soerr;
@@ -648,9 +648,9 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
         sent += (size_t)n;
     }
     /* Локальный recv не читается вовсе — судит только датапат по
-       D2K_EV_EXCHANGE (см. шапку файла и wait_for_event выше). Сокет при
+       D2S_EV_EXCHANGE (см. шапку файла и wait_for_event выше). Сокет при
        этом остаётся ОТКРЫТЫМ: см. doc-комментарий выше про FIN и
-       d2k_track_remove. */
+       d2s_track_remove. */
     if (sent != h.len) {
         close(fd);
         return -1;
@@ -665,8 +665,8 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
 
 /* ЧТО спрашивает вопрос q — отдельно от того, КТО и КОГДА его двигает.
  *
- * Двигать вопросы умеют теперь двое: блокирующая d2k_props_ask (для d2kask,
- * где блокировать некого) и планировщик d2kc, который не имеет права
+ * Двигать вопросы умеют теперь двое: блокирующая d2s_props_ask (для d2sask,
+ * где блокировать некого) и планировщик d2sc, который не имеет права
  * блокировать цикл и потому кормит те же шаги событиями сам (см. правку плана
  * от 11.09 в docs/superpowers/plans/2026-09-07-engine-c-both-transports.md про
  * единственное управляющее подключение). Смысл вопроса при этом обязан жить в
@@ -695,10 +695,10 @@ int d2k_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
  *
  * Возвращает длину или 0, если не собрать. */
 static size_t build_fake_body(uint8_t *dst, size_t cap, size_t truth_len,
-                              d2k_hello decoy) {
+                              d2s_hello decoy) {
     size_t want = truth_len * 2;
     if (truth_len == 0 || want > cap) { return 0; }
-    memset(dst, D2K_OVERLAP_FILLER, want);
+    memset(dst, D2S_OVERLAP_FILLER, want);
     if (decoy.bytes && decoy.len > 0) {
         size_t n = decoy.len < want ? decoy.len : want;
         memcpy(dst, decoy.bytes, n);
@@ -706,13 +706,13 @@ static size_t build_fake_body(uint8_t *dst, size_t cap, size_t truth_len,
     return want;
 }
 
-int d2k_props_question_plan(int q, d2k_hello control, size_t truth_len,
+int d2s_props_question_plan(int q, d2s_hello control, size_t truth_len,
                             uint8_t *buf, size_t cap, size_t *out_len) {
     if (!buf || !out_len) { return -1; }
     /* Тело фальшивки собирается на стеке: 2× приветствия браузера — три
        килобайта, и держать их статически ради трёх вопросов незачем. */
-    static uint8_t fake[2 * D2K_COMPOSE_HELLO_MAX];
-    d2k_hello nodecoy = {0}; nodecoy.bytes = NULL; nodecoy.len = 0;
+    static uint8_t fake[2 * D2S_COMPOSE_HELLO_MAX];
+    d2s_hello nodecoy = {0}; nodecoy.bytes = NULL; nodecoy.len = 0;
     size_t flen = 0;
     /* ПОРЯДОК — ДОНОРСКИЙ (propProbes, z2k-detect/internal/classify/
        compose.go:33-91): перекрытие, порядок сегментов, контрольная сумма,
@@ -753,52 +753,52 @@ int d2k_props_question_plan(int q, d2k_hello control, size_t truth_len,
 
 /* ЧТО означает проход вопроса q. Пишется ТОЛЬКО по проходу — промах не пишет
  * ничего (§2.4, каждый Set в Go начинается с `if !passed { return }`). */
-void d2k_props_question_passed(int q, d2k_props *pr) {
+void d2s_props_question_passed(int q, d2s_props *pr) {
     if (!pr) { return; }
-    /* Порядок тот же, что у d2k_props_question_plan, и меняться они обязаны
+    /* Порядок тот же, что у d2s_props_question_plan, и меняться они обязаны
        вместе: разойдясь, они стали бы писать свойство не того вопроса. */
     switch (q) {
-    case 0: pr->tolerates_left_overlap = D2K_P_NO; break;
-    case 1: pr->tolerates_reorder = D2K_P_NO; break;
-    case 2: pr->validates_checksum = D2K_P_NO; break;
+    case 0: pr->tolerates_left_overlap = D2S_P_NO; break;
+    case 1: pr->tolerates_reorder = D2S_P_NO; break;
+    case 2: pr->validates_checksum = D2S_P_NO; break;
     case 3:
         /* Разбор протокола пишет ОБА поля из ОДНОГО факта (properties.go,
            комментарий у Set вопроса «разбор протокола»): коробка разобрала
            приманку как TLS И проглотила сегмент с битой суммой — иначе
            испорченный сегмент не дошёл бы до разбора. */
-        pr->parses_l7 = D2K_P_YES;
-        pr->validates_checksum = D2K_P_NO;
+        pr->parses_l7 = D2S_P_YES;
+        pr->validates_checksum = D2S_P_NO;
         break;
-    case 4: pr->counts_duplicates = D2K_P_YES; break;
+    case 4: pr->counts_duplicates = D2S_P_YES; break;
     default: break;
     }
 }
 
 /* --------------------------------------------------------------------
- * d2k_props_ask — см. большой комментарий в шапке файла.
+ * d2s_props_ask — см. большой комментарий в шапке файла.
  * -------------------------------------------------------------------- */
 
 /* Снять пробу ОДНОГО вопроса ровно её ключом: имя, форма, семейство, порт
    вопроса (DEL_NAME_PROBE). Широкое снятие по имени уносило бы подтверждённое
-   знание цели и пробы чужих задач (задача 21, D2K_SPEC §7). Отказ отправки
+   знание цели и пробы чужих задач (задача 21, D2S_SPEC §7). Отказ отправки
    ничего не меняет в наблюдении о коробке и в вектор не пишется. */
 static void question_retire(int link_fd, const char *name, uint8_t shape,
                             uint16_t sport_be, uint8_t family) {
     char derr[128];
-    (void)d2k_link_del_name_probe_family(link_fd, name, 6, shape, sport_be, family,
+    (void)d2s_link_del_name_probe_family(link_fd, name, 6, shape, sport_be, family,
                                          derr, sizeof derr);
 }
 
-d2k_props d2k_props_ask(int link_fd, const char *ip, uint16_t port,
-                        d2k_hello trigger, d2k_hello control, uint32_t mark) {
-    return d2k_props_ask_traced(link_fd, ip, port, trigger, control, mark, NULL);
+d2s_props d2s_props_ask(int link_fd, const char *ip, uint16_t port,
+                        d2s_hello trigger, d2s_hello control, uint32_t mark) {
+    return d2s_props_ask_traced(link_fd, ip, port, trigger, control, mark, NULL);
 }
 
 /* Записать исход шага в трассу. steps == NULL — вызов без трассы, и тогда это
-   ровно то, чем d2k_props_ask была до трассы: ни одной лишней ветки в самом
+   ровно то, чем d2s_props_ask была до трассы: ни одной лишней ветки в самом
    опросе. */
-static void step_rc(d2k_props_step steps[D2K_PROPS_QUESTIONS], int i,
-                    d2k_step_rc rc, const char *err) {
+static void step_rc(d2s_props_step steps[D2S_PROPS_QUESTIONS], int i,
+                    d2s_step_rc rc, const char *err) {
     if (!steps) {
         return;
     }
@@ -808,17 +808,17 @@ static void step_rc(d2k_props_step steps[D2K_PROPS_QUESTIONS], int i,
     }
 }
 
-d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
-                               d2k_hello trigger, d2k_hello control, uint32_t mark,
-                               d2k_props_step steps[D2K_PROPS_QUESTIONS]) {
-    d2k_props pr;
+d2s_props d2s_props_ask_traced(int link_fd, const char *ip, uint16_t port,
+                               d2s_hello trigger, d2s_hello control, uint32_t mark,
+                               d2s_props_step steps[D2S_PROPS_QUESTIONS]) {
+    d2s_props pr;
     memset(&pr, 0, sizeof pr);
     if (steps) {
-        memset(steps, 0, sizeof(d2k_props_step) * D2K_PROPS_QUESTIONS);
+        memset(steps, 0, sizeof(d2s_props_step) * D2S_PROPS_QUESTIONS);
     }
 
-    /* mark принят контрактом интерфейса (см. doc-комментарий d2k_props_ask,
-       d2k_compose.h — там же честно названо, ПОЧЕМУ он здесь не идёт в
+    /* mark принят контрактом интерфейса (см. doc-комментарий d2s_props_ask,
+       d2s_compose.h — там же честно названо, ПОЧЕМУ он здесь не идёт в
        сеть), а не мёртвый груз молча: props_ask_contact ниже ЗАВЕДОМО не
        метит зонд — та же явная развилка, что и в остальном ядре про
        параметры, которые не участвуют в наблюдении ни при каких условиях. */
@@ -840,37 +840,37 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
 
     size_t sni_off = 0, sni_len = 0;
     char name[256];
-    if (d2k_hello_sni(trigger.bytes, trigger.len, &sni_off, &sni_len) != 0 ||
+    if (d2s_hello_sni(trigger.bytes, trigger.len, &sni_off, &sni_len) != 0 ||
         sni_len == 0 || sni_len >= sizeof name) {
         /* В триггере нет извлекаемого имени — SET_NAME нечем задать:
-           датапат матчит план по имени, а не по адресу (d2k_link.h). */
+           датапат матчит план по имени, а не по адресу (d2s_link.h). */
         return pr;
     }
     memcpy(name, trigger.bytes + sni_off, sni_len);
     name[sni_len] = '\0';
 
-    for (int i = 0; i < D2K_PROPS_QUESTIONS; i++) {
+    for (int i = 0; i < D2S_PROPS_QUESTIONS; i++) {
         /* Тело фальшивки — ДВОЙНАЯ длина правды (build_fake_body), а правда
            бывает размером с приветствие браузера. Отсюда потолок: 2 ×
-           D2K_COMPOSE_HELLO_MAX плюс заголовок и записи
+           D2S_COMPOSE_HELLO_MAX плюс заголовок и записи
            ID(20)+PROTO(6)+PAYLOAD-заголовок(6)+POISON(12)+FAKE(14)+ORDER(5)+
            PACE(8) = 71, округлено вверх. Статический, а не на стеке: четыре
            килобайта в кадре опросника — лишняя нагрузка на стек потока. */
-        static uint8_t planbuf[2 * D2K_COMPOSE_HELLO_MAX + 256];
+        static uint8_t planbuf[2 * D2S_COMPOSE_HELLO_MAX + 256];
         size_t plan_len = 0;
-        int built = d2k_props_question_plan(i, control, trigger.len,
+        int built = d2s_props_question_plan(i, control, trigger.len,
                                             planbuf, sizeof planbuf, &plan_len);
         if (built != 0) {
-            step_rc(steps, i, D2K_STEP_NOT_ASKED, NULL);
+            step_rc(steps, i, D2S_STEP_NOT_ASKED, NULL);
             continue; /* этот вопрос сегодня не собрать — не измерено, дальше */
         }
         /* Удостоверяем план: без идентификатора «применён» приписывается
            только по ключу потока, а на том же ключе мог примениться другой
            план. Раскладка не та — вопрос не задаём вовсе: испытание без
            идентичности слабее ровно в том месте, ради которого затевалось. */
-        uint8_t qid[D2K_PLAN_ID_LEN];
+        uint8_t qid[D2S_PLAN_ID_LEN];
         if (plan_tlv_stamp_ident(planbuf, plan_len, qid) != 0) {
-            step_rc(steps, i, D2K_STEP_NOT_ASKED, NULL);
+            step_rc(steps, i, D2S_STEP_NOT_ASKED, NULL);
             continue;
         }
         if (steps) {
@@ -889,9 +889,9 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
            может. Если форма всё же не разобралась, ограничивать нечем:
            объявляем дедушкино право — плану-вопросу иначе не примениться
            вовсе, а живёт он до конца опроса и снимается сразу после. */
-        d2k_shape qsh = d2k_hello_shape(trigger.bytes, trigger.len);
-        uint8_t qshape = (qsh == D2K_SHAPE_UNKNOWN)
-                             ? (uint8_t)D2K_LINK_SHAPE_GRANDFATHER
+        d2s_shape qsh = d2s_hello_shape(trigger.bytes, trigger.len);
+        uint8_t qshape = (qsh == D2S_SHAPE_UNKNOWN)
+                             ? (uint8_t)D2S_LINK_SHAPE_GRANDFATHER
                              : (uint8_t)qsh;
         /* ПОРТ ВОПРОСА ЗАНИМАЕТСЯ ДО УСТАНОВКИ ПЛАНА (0010, R1). Опросник из
            командной строки работает на ЖИВОЙ линии владельца, и его вопрос
@@ -901,28 +901,28 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
            остаётся локальным и не превращается в план для всех. */
         int qfd = -1;
         uint16_t qsport = 0;
-        if (d2k_props_bind_family(family, &qfd, &qsport) != 0 || qsport == 0) {
-            step_rc(steps, i, D2K_STEP_SEND_FAIL, "порт для вопроса не занялся");
+        if (d2s_props_bind_family(family, &qfd, &qsport) != 0 || qsport == 0) {
+            step_rc(steps, i, D2S_STEP_SEND_FAIL, "порт для вопроса не занялся");
             continue;
         }
-        if (d2k_link_set_name_family(link_fd, name, 6, hexbuf, qshape, qsport,
+        if (d2s_link_set_name_family(link_fd, name, 6, hexbuf, qshape, qsport,
                                      family, err, sizeof err) != 0) {
             close(qfd);
-            step_rc(steps, i, D2K_STEP_SEND_FAIL, err);
+            step_rc(steps, i, D2S_STEP_SEND_FAIL, err);
             continue; /* план не отправился вовсе — не измерено */
         }
-        d2k_ev ack;
+        d2s_ev ack;
         /* Подтверждение ждём по ТОМУ ЖЕ типу команды, каким план и уехал:
            вопрос теперь ставится изолированной командой, и ожидание старого
            типа не дождалось бы ничего — каждый вопрос молча становился бы
            «не измерено». */
-        if (wait_for_event(link_fd, D2K_EV_ACK, D2K_CMD_SET_NAME_PROBE, NULL,
-                           D2K_PROPS_ASK_WAIT_MS, &ack, err, sizeof err) != 0) {
+        if (wait_for_event(link_fd, D2S_EV_ACK, D2S_CMD_SET_NAME_PROBE, NULL,
+                           D2S_PROPS_ASK_WAIT_MS, &ack, err, sizeof err) != 0) {
             /* Подтверждение могло потеряться при стоящем плане — снимаем
                ровно свою пробу (имя, форма, семейство, порт вопроса). */
             question_retire(link_fd, name, qshape, qsport, family);
             close(qfd);
-            step_rc(steps, i, D2K_STEP_NO_ACK, err);
+            step_rc(steps, i, D2S_STEP_NO_ACK, err);
             continue; /* ack не пришёл в срок — не измерено */
         }
         if (steps) {
@@ -936,29 +936,29 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
                отказа важна: NO_ROOM не по вине плана, но одинаково не даёт
                задать этот вопрос СЕЙЧАС). */
             close(qfd);
-            step_rc(steps, i, D2K_STEP_REFUSED, NULL);
+            step_rc(steps, i, D2S_STEP_REFUSED, NULL);
             continue;
         }
 
         /* Одно обращение к цели — см. большой комментарий у
-           props_ask_contact про то, почему СВОЙ вариант, а не d2k_meas_once:
+           props_ask_contact про то, почему СВОЙ вариант, а не d2s_meas_once:
            непомеченный зонд (иначе план мимо очереди) и местные адрес+порт
            наружу (иначе обмен чужого потока неотличим от своего). */
         uint8_t local_addr[16] = {0};
         uint16_t local_port = 0;
         int contact_fd = -1;
-        if (d2k_props_contact_on_family(qfd, ip, port, trigger, family, local_addr,
+        if (d2s_props_contact_on_family(qfd, ip, port, trigger, family, local_addr,
                                         &local_port, &contact_fd) != 0) {
             int contact_errno = errno;
             question_retire(link_fd, name, qshape, qsport, family);
-            step_rc(steps, i, D2K_STEP_CONTACT_FAIL, strerror(contact_errno));
+            step_rc(steps, i, D2S_STEP_CONTACT_FAIL, strerror(contact_errno));
             continue; /* обращение не состоялось (транспорт) — не измерено */
         }
         if (steps) {
             steps[i].local_port = local_port;
         }
 
-        d2k_flowkey fk = {0};
+        d2s_flowkey fk = {0};
         memcpy(fk.a_ip, target_addr, sizeof fk.a_ip);
         fk.a_port = port;
         memcpy(fk.b_ip, local_addr, sizeof fk.b_ip);
@@ -967,7 +967,7 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
         fk.family = family;
 
         /* ДВА события на один обмен, а не одно. Датапат сообщает ДВАЖДЫ
-           (datapath/session.c, комментарий у D2K_JRN_EXCHANGE): сперва «обмен
+           (datapath/session.c, комментарий у D2S_JRN_EXCHANGE): сперва «обмен
            вообще пошёл», потом «в нём появились ПРИКЛАДНЫЕ данные» — это
            разные уровни доказательства (§4.2), и второй наступает ПОЗЖЕ
            первого. Брать первое попавшееся и судить по нему значит навсегда
@@ -979,7 +979,7 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
            весь второй полёт после ServerHello едет записями типа 23).
 
            Бюджет один на всё ожидание, а не на каждое событие: потолок
-           D2K_PROPS_ASK_WAIT_MS — страховка от молчания, и продлевать её
+           D2S_PROPS_ASK_WAIT_MS — страховка от молчания, и продлевать её
            каждым пришедшим событием значило бы отменить её вовсе. */
         /* ТРИ ФАКТА, И ВСЕ ТРИ ОБЯЗАТЕЛЬНЫ.
          *
@@ -997,7 +997,7 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
          * Порядок фактов ЛЮБОЙ: применение объявляется после всех посылок
          * плана, включая отложенные, и ответ сервера вполне может опередить
          * его (0009, F3). Поэтому ждём оба, а не первый попавшийся. */
-        d2k_ev exch;
+        d2s_ev exch;
         int got = 0, passed = 0, unsent = 0, applied = 0, hello = 0;
         {
             struct timespec t0;
@@ -1008,26 +1008,26 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
                 long spent = (now.tv_sec - t0.tv_sec) * 1000L +
                              (now.tv_nsec - t0.tv_nsec) / 1000000L;
                 if (spent < 0) { spent = 0; }
-                if (spent >= (long)D2K_PROPS_ASK_WAIT_MS) { break; }
-                if (wait_for_event3(link_fd, D2K_EV_EXCHANGE, D2K_EV_REFUSED,
-                                    D2K_EV_APPLIED, -1, &fk,
-                                    (uint32_t)((long)D2K_PROPS_ASK_WAIT_MS - spent),
+                if (spent >= (long)D2S_PROPS_ASK_WAIT_MS) { break; }
+                if (wait_for_event3(link_fd, D2S_EV_EXCHANGE, D2S_EV_REFUSED,
+                                    D2S_EV_APPLIED, -1, &fk,
+                                    (uint32_t)((long)D2S_PROPS_ASK_WAIT_MS - spent),
                                     &exch, err, sizeof err) != 0) {
                     break;
                 }
-                if (exch.kind == D2K_EV_APPLIED) {
+                if (exch.kind == D2S_EV_APPLIED) {
                     /* Свой ли это план. Нули в событии означают «плану нечем
-                       представиться» (d2k_link.h) и своим планом не считаются:
+                       представиться» (d2s_link.h) и своим планом не считаются:
                        мы свой удостоверили сами чуть выше. */
-                    if (memcmp(exch.plan_id, qid, D2K_PLAN_ID_LEN) == 0) {
+                    if (memcmp(exch.plan_id, qid, D2S_PLAN_ID_LEN) == 0) {
                         applied = 1;
                         if (hello) { passed = 1; break; }
                     }
                     continue;
                 }
-                if (exch.kind == D2K_EV_REFUSED) {
+                if (exch.kind == D2S_EV_REFUSED) {
                     /* НАША неудача, а не ответ коробки: посылка плана не
-                       покинула машину (код в ev.code, D2K_REFUSE_*). Ждать
+                       покинула машину (код в ev.code, D2S_REFUSE_*). Ждать
                        обмена дальше бессмысленно — воздействия на проводе не
                        было. Нулевой код сюда не относится: это обычный отказ
                        применить план к чужому потоку, и он к нашему ключу не
@@ -1066,7 +1066,7 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
                нечего (§2.4). Свойство не пишется в обоих случаях, но трасса
                обязана различать их: иначе собственная поломка читается как
                «приём не сработал» и уводит поиск.  */
-            step_rc(steps, i, D2K_STEP_UNSENT, NULL);
+            step_rc(steps, i, D2S_STEP_UNSENT, NULL);
             if (steps) { steps[i].ack_code = (uint8_t)exch.code; }
             continue;
         }
@@ -1076,16 +1076,16 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
                линию; обмен был без ответа сервера — это про коробку.
                Свойство не пишет ни один из трёх (§2.4), но объяснение у них
                разное, и слитое в одно оно уводит поиск. */
-            d2k_step_rc why = !applied ? D2K_STEP_NO_APPLIED
-                            : got      ? D2K_STEP_NO_SERVER_HELLO
-                                       : D2K_STEP_NO_EXCHANGE;
-            step_rc(steps, i, why, (why == D2K_STEP_NO_EXCHANGE) ? err : NULL);
+            d2s_step_rc why = !applied ? D2S_STEP_NO_APPLIED
+                            : got      ? D2S_STEP_NO_SERVER_HELLO
+                                       : D2S_STEP_NO_EXCHANGE;
+            step_rc(steps, i, why, (why == D2S_STEP_NO_EXCHANGE) ? err : NULL);
             continue; /* промах — не пишет ничего (§2.4, каждый Set в Go
                           начинается с if !passed { return }) */
         }
-        step_rc(steps, i, D2K_STEP_PASSED, NULL);
+        step_rc(steps, i, D2S_STEP_PASSED, NULL);
 
-        d2k_props_question_passed(i, &pr);
+        d2s_props_question_passed(i, &pr);
         /* Вопрос прошёл — это уже стратегия (двойное назначение плана,
            см. шапку файла), второй вопрос той же цели не задаётся: тот же
            принцип, что в controller.go verdictCandidates про то, почему до
@@ -1106,7 +1106,7 @@ d2k_props d2k_props_ask_traced(int link_fd, const char *ip, uint16_t port,
  * пишется в буфер вызывающего, и единственная точка, где проверяется, что
  * это не вышло за cap. Переполнение — ОТКАЗ этого плана целиком (return -1),
  * а не усечение: усечённый план прочитать нельзя как правильный (то же
- * рассуждение, что у d2k_meas_once про точки разреза — тихая подмена на
+ * рассуждение, что у d2s_meas_once про точки разреза — тихая подмена на
  * похожее это тот же грех, что и пересборка, которую этот модуль как раз
  * измеряет).
  * -------------------------------------------------------------------- */
@@ -1131,7 +1131,7 @@ static int append_fmt(char *buf, size_t cap, size_t *pos, const char *fmt, ...) 
  * в самом тексте плана. */
 static int emit_header_proto(char *buf, size_t cap, size_t *pos, const char *proto) {
     static const char zero32[] = "00000000000000000000000000000000000000";
-    if (append_fmt(buf, cap, pos, "d2k-plan 1 1\n") != 0) { return -1; }
+    if (append_fmt(buf, cap, pos, "d2s-plan 1 1\n") != 0) { return -1; }
     if (append_fmt(buf, cap, pos, "id %.32s\n", zero32) != 0) { return -1; }
     if (append_fmt(buf, cap, pos, "proto %s\n", proto) != 0) { return -1; }
     return 0;
@@ -1185,7 +1185,7 @@ int reorder_plan_text(char *buf, size_t cap) {
     if (append_fmt(buf, cap, &pos, "split payload_start +1\n") != 0) { return -1; }
     if (append_fmt(buf, cap, &pos, "split sni_middle +0\n") != 0) { return -1; }
     if (append_fmt(buf, cap, &pos, "order reverse\n") != 0) { return -1; }
-    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_PIECE_US) != 0) { return -1; }
+    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_PIECE_US) != 0) { return -1; }
     return 0;
 }
 
@@ -1211,7 +1211,7 @@ int badsum_fake_plan_text(const uint8_t *payload, size_t paylen,
         return -1;
     }
     if (append_fmt(buf, cap, &pos, "order forward\n") != 0) { return -1; }
-    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_SETTLE_US) != 0) { return -1; }
+    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_SETTLE_US) != 0) { return -1; }
     return 0;
 }
 
@@ -1222,50 +1222,50 @@ int badsum_fake_plan_text(const uint8_t *payload, size_t paylen,
  * этом, не косметическая. */
 int checksum_plan_text(char *buf, size_t cap) {
     uint8_t filler[64];
-    memset(filler, D2K_OVERLAP_FILLER, sizeof filler);
+    memset(filler, D2S_OVERLAP_FILLER, sizeof filler);
     return badsum_fake_plan_text(filler, sizeof filler, 1, 0, buf, cap);
 }
 
 
 /* Собирает приманку-приветствие для decoy ТЕМ ЖЕ путём, что и остальное
- * ядро — d2k_hello_from_profile (hello.c, задача 1), а не самодельными
+ * ядро — d2s_hello_from_profile (hello.c, задача 1), а не самодельными
  * байтами наподобие Go plan.Hello (build.go): самодельное приветствие уже
- * стоило каталога 06.09.2026 (см. шапку d2k_meas.h) — коробка сравнивает то,
+ * стоило каталога 06.09.2026 (см. шапку d2s_meas.h) — коробка сравнивает то,
  * что реально шлёт клиент, а не то, что "похоже на спецификацию".
  *
  * ВИД ПРИМАНКИ — ПО ВИДУ СНЯТОГО ПРИВЕТСТВИЯ ЦЕЛИ, А НЕ НАЗНАЧЕН (задача 5,
  * шаг 0б). До этой задачи здесь всегда стоял LEGACY — ограничение
  * интерфейса задачи 3, а не вывод: char out[][2048] (тогдашний буфер
- * d2k_compose) не вмещал MODERN — 1530 байт приветствия дают 3060
+ * d2s_compose) не вмещал MODERN — 1530 байт приветствия дают 3060
  * hex-символов в ОДНОЙ строке "payload 1 <hex>", а буфер расширен до 4096
  * именно шагом 0б. Теперь профиль решает shape — вид СНЯТОГО приветствия
- * цели (d2k_hello_shape, а не приманки): §6 спеки говорит, что коробка может
+ * цели (d2s_hello_shape, а не приманки): §6 спеки говорит, что коробка может
  * по-разному относиться к TLS 1.2 и 1.3, и подсовывать ей приманку не того
  * вида значит мерить не ту коробку, что видит настоящий клиент. shape
  * известен из снимка цели — выбирать наугад нечего.
  *
- * D2K_SHAPE_UNKNOWN падает на LEGACY (меньший профиль) — безопасный запасной
+ * D2S_SHAPE_UNKNOWN падает на LEGACY (меньший профиль) — безопасный запасной
  * вариант, а не угаданное измерение: это выбор ФОРМЫ ПРИМАНКИ, а не диагноз
- * о коробке, тройственная логика d2k_props здесь не участвует вовсе (та
- * логика — про то, что записывается в d2k_props, а не про то, каким видом
+ * о коробке, тройственная логика d2s_props здесь не участвует вовсе (та
+ * логика — про то, что записывается в d2s_props, а не про то, каким видом
  * собран decoy).
  *
  * Попутно: этот профиль — НАСТОЯЩИЙ захват (снят один раз с настоящего
  * клиента, файлы .hex в core/profiles), а Go-шная приманка (plan.Hello, build.go)
  * самодельная — по этому признаку C-сторона ближе к правилу «коробка
  * сравнивает то, что реально шлёт клиент», чем эталон. */
-static int build_decoy_hello(d2k_shape shape, const char *decoy,
+static int build_decoy_hello(d2s_shape shape, const char *decoy,
                              uint8_t *out, size_t cap, size_t *out_len) {
     if (!decoy || decoy[0] == '\0') { return -1; }
-    if (shape != D2K_SHAPE_MODERN) { shape = D2K_SHAPE_LEGACY; }
-    return d2k_hello_from_profile(shape, decoy, out, cap, out_len);
+    if (shape != D2S_SHAPE_MODERN) { shape = D2S_SHAPE_LEGACY; }
+    return d2s_hello_from_profile(shape, decoy, out, cap, out_len);
 }
 
 /* Вопрос 5 — разбор протокола (parseProtocolPlan, properties.go:293-299):
  * та же форма, что у checksumPlan, но приманка — целое правдоподобное
  * приветствие с decoy-именем, а не набивка. */
-static int parse_protocol_plan_text(d2k_shape shape, const char *decoy, char *buf, size_t cap) {
-    uint8_t hello[D2K_COMPOSE_HELLO_MAX];
+static int parse_protocol_plan_text(d2s_shape shape, const char *decoy, char *buf, size_t cap) {
+    uint8_t hello[D2S_COMPOSE_HELLO_MAX];
     size_t hello_len;
     if (build_decoy_hello(shape, decoy, hello, sizeof hello, &hello_len) != 0) { return -1; }
     return badsum_fake_plan_text(hello, hello_len, 1, 0, buf, cap);
@@ -1275,8 +1275,8 @@ static int parse_protocol_plan_text(d2k_shape shape, const char *decoy, char *bu
  * копии приманки с паузой 20000мкс — число и пауза наследованы из замера
  * донора (боевое плечо обходится ДВУМЯ копиями с разрывом, плотной очереди
  * нужно семь). */
-static int duplicates_plan_text(d2k_shape shape, const char *decoy, char *buf, size_t cap) {
-    uint8_t hello[D2K_COMPOSE_HELLO_MAX];
+static int duplicates_plan_text(d2s_shape shape, const char *decoy, char *buf, size_t cap) {
+    uint8_t hello[D2S_COMPOSE_HELLO_MAX];
     size_t hello_len;
     if (build_decoy_hello(shape, decoy, hello, sizeof hello, &hello_len) != 0) { return -1; }
     return badsum_fake_plan_text(hello, hello_len, 2, 20000, buf, cap);
@@ -1305,9 +1305,9 @@ static size_t body_room(size_t send_cap) {
  * sni_middle}, что и у reorder_plan_text (задача reorder-cut, ревью
  * 2026-09-06) — НЕ AnchorHelloMiddle, той же забракованной замером формы.
  * -------------------------------------------------------------------- */
-static int everything_plan_text(d2k_shape shape, const char *decoy, size_t send_cap,
+static int everything_plan_text(d2s_shape shape, const char *decoy, size_t send_cap,
                                 char *buf, size_t cap) {
-    uint8_t hello[D2K_COMPOSE_HELLO_MAX];
+    uint8_t hello[D2S_COMPOSE_HELLO_MAX];
     size_t hello_len;
     if (build_decoy_hello(shape, decoy, hello, sizeof hello, &hello_len) != 0) { return -1; }
     /* Тело фальшивки урезается по каналу — та же причина и та же оговорка, что
@@ -1323,7 +1323,7 @@ static int everything_plan_text(d2k_shape shape, const char *decoy, size_t send_
     if (append_fmt(buf, cap, &pos, "\n") != 0) { return -1; }
     /* payload 2 — приставка перекрытия, та же, что и у overlap_plan_text. */
     if (append_fmt(buf, cap, &pos, "payload 2 %02x\n",
-                    (unsigned)D2K_OVERLAP_FILLER) != 0) { return -1; }
+                    (unsigned)D2S_OVERLAP_FILLER) != 0) { return -1; }
     if (append_fmt(buf, cap, &pos, "poison 1 badsum\n") != 0) { return -1; }
     if (append_fmt(buf, cap, &pos, "split payload_start +1\n") != 0) { return -1; }
     if (append_fmt(buf, cap, &pos, "split sni_middle +0\n") != 0) { return -1; }
@@ -1369,12 +1369,12 @@ static int everything_plan_text(d2k_shape shape, const char *decoy, size_t send_
 
 /* Одно плечо перебора. Поля — ровно те, что читает отправитель донора
    (probePoison, raw_linux.go): всё остальное было бы выдумкой.
-   Объявление переехало в d2k_compose.h под именем d2k_arm: перенесённый
+   Объявление переехало в d2s_compose.h под именем d2s_arm: перенесённый
    измеритель (detect/) находит плечо САМ и приносит его сюда структурой, а не
    номером в этом списке — номера у него свои и другие. Второго сборщика плана
    заводить нельзя (§2.5: две формы одного плана — это записано одно,
    исполняется другое), поэтому сборщик здесь один, а входов у него два. */
-typedef d2k_arm fb_arm;
+typedef d2s_arm fb_arm;
 
 /* Голова списка — дословно donor poisons()[0..7], без неподдержанных. */
 static const fb_arm g_fb_head[] = {
@@ -1405,9 +1405,9 @@ static const unsigned g_fb_dup_reps[]  = { 2, 3, 4, 7 };
 #define FB_N_DUP  ((sizeof g_fb_dup_gap / sizeof g_fb_dup_gap[0]) * \
                    (sizeof g_fb_dup_reps / sizeof g_fb_dup_reps[0]))
 
-/* Сколько всего плеч в списке — см. контракт в d2k_compose.h. Складывается из
+/* Сколько всего плеч в списке — см. контракт в d2s_compose.h. Складывается из
    тех же слагаемых, что и разбор индекса в fb_arm_at ниже. */
-size_t d2k_fallback_arms(void) {
+size_t d2s_fallback_arms(void) {
     return FB_N_HEAD + FB_N_FAKE + FB_N_FAKE + FB_N_OVL * 2 + FB_N_DUP;
 }
 
@@ -1451,35 +1451,35 @@ static int fb_arm_at(size_t idx, fb_arm *a) {
 }
 
 /* UDP hypothesis compilers are shared with measurement in udpplan.c. */
-int d2k_fallback_plan(size_t idx, d2k_shape shape, const char *decoy,
+int d2s_fallback_plan(size_t idx, d2s_shape shape, const char *decoy,
                       size_t send_cap, char *buf, size_t cap) {
     fb_arm a;
     if (!buf || cap == 0) { return -1; }
     int arm_rc = fb_arm_at(idx, &a);
     if (arm_rc != 0) { return -1; }
-    return d2k_arm_plan(&a, shape, decoy, send_cap, buf, cap);
+    return d2s_arm_plan(&a, shape, decoy, send_cap, buf, cap);
 }
 
-int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
+int d2s_arm_plan(const d2s_arm *arm, d2s_shape shape, const char *decoy,
                  size_t send_cap, char *buf, size_t cap) {
     fb_arm a;
     if (!buf || cap == 0 || !arm) { return -1; }
     a = *arm;
     /* MD5 is expressed only by the measured/raw wire builder. */
     if (a.md5) { return -1; }
-    /* Сегмент — под предел канала (d2k_arm_segment, поле 22.10.2026): при
+    /* Сегмент — под предел канала (d2s_arm_segment, поле 22.10.2026): при
        обычном канале прежние 1400, при узком — короче, а не отказ. */
-    unsigned seg = d2k_arm_segment(send_cap);
+    unsigned seg = d2s_arm_segment(send_cap);
     if (!seg) { return -1; }
     if (a.disorder_pos) {
-        if (a.disorder_pos > D2K_ARM_DECOY_MAX || !a.disorder || a.seqovl ||
+        if (a.disorder_pos > D2S_ARM_DECOY_MAX || !a.disorder || a.seqovl ||
             a.seqovl_hello || a.badsum || a.repeats || a.gap_ms || a.between ||
             a.ttl || a.seq_out || a.decoy_hello || a.tcpts || a.ipidzero || a.oob) {
             return -1;
         }
         size_t plan_pos = 0;
         return append_fmt(buf, cap, &plan_pos,
-            "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\nsplit payload_start +%u\n"
             "order reverse\n",
             seg, a.disorder_pos);
@@ -1490,12 +1490,12 @@ int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
             a.tcpts || a.ipidzero) { return -1; }
         size_t pos = 0;
         return append_fmt(buf, cap, &pos,
-            "d2k-plan 1 8\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 8\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\noob sni_middle 0f\norder forward\n",
             seg);
     }
 
-    uint8_t hello[D2K_COMPOSE_HELLO_MAX];
+    uint8_t hello[D2S_COMPOSE_HELLO_MAX];
     size_t hello_len = 0;
     /* Приманка собирается и там, где телом не едет: из неё берётся ДЛИНА
        набивки (см. ниже). Раньше она собиралась только под decoy, и набивка
@@ -1528,8 +1528,8 @@ int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
        and reverse order exactly, without the extra SNI-middle cut or pacing
        used by the separate generic disorder hypothesis. */
     if (a.disorder_pos) {
-        if (shape != D2K_SHAPE_MODERN || a.disorder_pos < 1 ||
-            a.disorder_pos >= D2K_ARM_DECOY_MAX) { return -1; }
+        if (shape != D2S_SHAPE_MODERN || a.disorder_pos < 1 ||
+            a.disorder_pos >= D2S_ARM_DECOY_MAX) { return -1; }
         if (append_fmt(buf, cap, &pos, "wire detect-tcp-v1\ninput tls-sni\nsegment %u\n"
                        "split payload_start +%u\norder reverse\n",
                        seg, a.disorder_pos)) { return -1; }
@@ -1592,7 +1592,7 @@ int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
             size_t room = body_room(send_cap);
             if (room > 0 && fill > room) { fill = room; }
             for (size_t i = 0; i < fill; i++) {
-                if (append_fmt(buf, cap, &pos, "%02x", (unsigned)D2K_OVERLAP_FILLER) != 0) {
+                if (append_fmt(buf, cap, &pos, "%02x", (unsigned)D2S_OVERLAP_FILLER) != 0) {
                     return -1;
                 }
             }
@@ -1606,7 +1606,7 @@ int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
     } else if (a.seqovl > 0) {
         if (append_fmt(buf, cap, &pos, "payload 2 ") != 0) { return -1; }
         for (unsigned i = 0; i < a.seqovl; i++) {
-            if (append_fmt(buf, cap, &pos, "%02x", (unsigned)D2K_OVERLAP_FILLER) != 0) {
+            if (append_fmt(buf, cap, &pos, "%02x", (unsigned)D2S_OVERLAP_FILLER) != 0) {
                 return -1;
             }
         }
@@ -1654,36 +1654,36 @@ int d2k_arm_plan(const d2k_arm *arm, d2k_shape shape, const char *decoy,
     /* Разнос во времени нужен там, где он есть у донора: между кусками при
        сбитом порядке и между фальшивкой и правдой. */
     if (a.disorder) {
-        if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_PIECE_US) != 0) { return -1; }
+        if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_PIECE_US) != 0) { return -1; }
     } else if (have_fake) {
-        if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_SETTLE_US) != 0) { return -1; }
+        if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_SETTLE_US) != 0) { return -1; }
     }
     return 0;
 }
 
 /* --------------------------------------------------------------------
- * d2k_compose — порт Go Compose (properties.go:153-223).
+ * d2s_compose — порт Go Compose (properties.go:153-223).
  *
  * Порядок веток — ИЗ GO-СТОРОНЫ буквально (см. её же комментарий на
  * properties.go:166-169: этот порядок СВОЙ, отличный от порядка опроса в
  * PropProbes — тот подчинён цене таймаута, а этот приоритету кандидата).
  * yes()/no() Go-стороны (nil-указатель на bool) здесь — прямое сравнение с
- * D2K_P_YES/D2K_P_NO: D2K_P_UNKNOWN не совпадает ни с тем, ни с другим,
+ * D2S_P_YES/D2S_P_NO: D2S_P_UNKNOWN не совпадает ни с тем, ни с другим,
  * ровно как nil не совпадал ни с *b==true, ни с *b==false.
  * -------------------------------------------------------------------- */
-size_t d2k_compose(const d2k_props *pr, d2k_shape target_shape, const char *decoy,
+size_t d2s_compose(const d2s_props *pr, d2s_shape target_shape, const char *decoy,
                    size_t send_cap, char out[][4096], size_t cap) {
     if (!pr || !out || cap == 0) { return 0; }
     size_t n = 0;
     size_t buflen = sizeof(out[0]); /* не литерал: буфер вызывающего меняет размер вместе с сигнатурой, не порознь */
 
-    if (pr->tolerates_left_overlap == D2K_P_NO && n < cap) {
+    if (pr->tolerates_left_overlap == D2S_P_NO && n < cap) {
         if (overlap_plan_text(out[n], buflen) == 0) { n++; }
     }
-    if (pr->tolerates_reorder == D2K_P_NO && n < cap) {
+    if (pr->tolerates_reorder == D2S_P_NO && n < cap) {
         if (reorder_plan_text(out[n], buflen) == 0) { n++; }
     }
-    if (pr->counts_duplicates == D2K_P_YES && n < cap) {
+    if (pr->counts_duplicates == D2S_P_YES && n < cap) {
         if (duplicates_plan_text(target_shape, decoy, out[n], buflen) == 0) { n++; }
     }
     /* Сумма продолжает тот же список только если ValidatesChecksum=NO не
@@ -1693,15 +1693,15 @@ size_t d2k_compose(const d2k_props *pr, d2k_shape target_shape, const char *deco
        собственного прохода вопроса о сумме или от побочного эффекта вопроса
        о разборе — неотличимо, а checksumPlan (голая набивка) на коробке, что
        РАЗБИРАЕТ TLS, заведомо не пройдёт. */
-    if (pr->validates_checksum == D2K_P_NO && pr->parses_l7 != D2K_P_YES && n < cap) {
+    if (pr->validates_checksum == D2S_P_NO && pr->parses_l7 != D2S_P_YES && n < cap) {
         if (checksum_plan_text(out[n], buflen) == 0) { n++; }
     }
-    if (pr->parses_l7 == D2K_P_YES && n < cap) {
+    if (pr->parses_l7 == D2S_P_YES && n < cap) {
         if (parse_protocol_plan_text(target_shape, decoy, out[n], buflen) == 0) { n++; }
     }
     if (n == 0 && cap > 0) {
         /* Вектор пуст (или каждое подходящее плечо не собралось — см.
-           doc-комментарий cap в d2k_compose.h): единственный честный
+           doc-комментарий cap в d2s_compose.h): единственный честный
            кандидат — «всё сразу» (everythingPlan, properties.go:214-221),
            а не «плечей нет». */
         if (everything_plan_text(target_shape, decoy, send_cap, out[0], buflen) == 0) { n = 1; }

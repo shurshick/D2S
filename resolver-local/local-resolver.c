@@ -1,7 +1,7 @@
 /* Local-only /resolve frontend for the existing d2o DNS engine.
  * The original DNS parser, allowlist, cache and query validation are reused.
  * Registration and relay credentials are not exposed by this frontend. */
-#define main d2k_enrollment_unused_main
+#define main d2s_enrollment_unused_main
 #include "upstream-main.c"
 #undef main
 

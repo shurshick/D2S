@@ -33,7 +33,7 @@
       if (!last) { status.textContent = "Ожидаем первый снимок. Отчёт обновляется раз в минуту."; return; }
       status.textContent = "Обновлено " + new Date(last.at * 1000).toLocaleTimeString() + " · снимок раз в минуту";
       var body = doc.getElementById("diagnostic-processes"); body.replaceChildren();
-      var labels = { d2kc: "Контроллер", d2kd: "Датапат", d2kpanel: "Панель" };
+      var labels = { d2sc: "Контроллер", d2sd: "Датапат", d2spanel: "Панель" };
       (last.processes || []).forEach(function (p) {
         var first;
         samples.some(function (s) { first = (s.processes || []).find(function (q) { return q.name === p.name && q.pid === p.pid && typeof q.rss_kib === "number"; }); return !!first; });

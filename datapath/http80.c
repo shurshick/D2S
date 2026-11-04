@@ -1,4 +1,4 @@
-/* http80.c — вставка провайдера в открытый HTTP (задача 51), см. d2k_http80.h.
+/* http80.c — вставка провайдера в открытый HTTP (задача 51), см. d2s_http80.h.
  *
  * Таблица фиксированного размера, вытеснение самого давнего. Решение
  * принимает потоковый ответ каждого разобранного запроса.
@@ -8,11 +8,11 @@
 #include <string.h>
 #include <strings.h>
 
-#include "d2k_http80.h"
-#include "d2k_httpup.h"
-#include "d2k_packet.h"
-#include "d2k_http_response.h"
-#include "d2k_http_request_stream.h"
+#include "d2s_http80.h"
+#include "d2s_httpup.h"
+#include "d2s_packet.h"
+#include "d2s_http_response.h"
+#include "d2s_http_request_stream.h"
 
 enum {
     ST_FREE = 0,
@@ -21,7 +21,7 @@ enum {
     ST_IDLE,       /* ответ наблюдался; известна граница следующего запроса */
     ST_REQUEST,    /* видели запрос GET/HEAD целиком */
     ST_INJECTED,   /* вставка узнана и пропущена как есть */
-    ST_SWAP,       /* 307 собран, ждёт d2k_http80_swap; пакеты проходят */
+    ST_SWAP,       /* 307 собран, ждёт d2s_http80_swap; пакеты проходят */
     ST_ANSWERED,   /* вместо вставки ушёл 307: сервер по потоку снимается */
     ST_DONE        /* решать больше нечего */
 };
@@ -35,9 +35,9 @@ typedef struct {
     uint32_t server_next, client_next;
     uint32_t request_seq;
     int next_known;
-    d2k_http_request_stream request;
+    d2s_http_request_stream request;
     int request_get;
-    d2k_http_response reply;
+    d2s_http_response reply;
     uint32_t reply_next;
     uint64_t reply_time, reply_kstamp, request_no;
     int reply_started, reply_segments;
@@ -46,11 +46,11 @@ typedef struct {
     uint32_t body_start, body_end, acked;
     int body_end_known, cut_told;
     uint64_t progress;
-    d2k_binding_context binding;
+    d2s_binding_context binding;
     uint64_t execution_id;
     uint8_t plan_id[16], trial_id[16];
     char host[256];
-    char target[D2K_HTTP80_TARGET_MAX];
+    char target[D2S_HTTP80_TARGET_MAX];
 } flow;
 
 typedef struct {
@@ -58,22 +58,22 @@ typedef struct {
     uint64_t expires;
 } https_name;
 
-struct d2k_http80 {
-    flow flows[D2K_HTTP80_FLOWS];
-    https_name names[D2K_HTTP80_NAMES];
-    d2k_http80_stats st;
+struct d2s_http80 {
+    flow flows[D2S_HTTP80_FLOWS];
+    https_name names[D2S_HTTP80_NAMES];
+    d2s_http80_stats st;
 };
 
-d2k_http80 *d2k_http80_new(void) {
-    return calloc(1, sizeof(d2k_http80));
+d2s_http80 *d2s_http80_new(void) {
+    return calloc(1, sizeof(d2s_http80));
 }
 
-void d2k_http80_free(d2k_http80 *h) {
+void d2s_http80_free(d2s_http80 *h) {
     free(h);
 }
 
-d2k_http80_stats d2k_http80_get_stats(const d2k_http80 *h) {
-    d2k_http80_stats z;
+d2s_http80_stats d2s_http80_get_stats(const d2s_http80 *h) {
+    d2s_http80_stats z;
     memset(&z, 0, sizeof z);
     return h ? h->st : z;
 }
@@ -94,11 +94,11 @@ static size_t name_norm(const char *name, size_t len, char *o, size_t cap) {
     return len;
 }
 
-int d2k_http80_set_https(d2k_http80 *h, const char *name, size_t len, uint64_t expires) {
+int d2s_http80_set_https(d2s_http80 *h, const char *name, size_t len, uint64_t expires) {
     char n[254];
     if (!h || !name_norm(name, len, n, sizeof n)) { return -1; }
     https_name *pick = NULL;
-    for (size_t i = 0; i < D2K_HTTP80_NAMES; i++) {
+    for (size_t i = 0; i < D2S_HTTP80_NAMES; i++) {
         if (h->names[i].name[0] && strcmp(h->names[i].name, n) == 0) { pick = &h->names[i]; break; }
     }
     if (expires == 0) {
@@ -106,7 +106,7 @@ int d2k_http80_set_https(d2k_http80 *h, const char *name, size_t len, uint64_t e
         return 0;
     }
     if (!pick) {
-        for (size_t i = 0; i < D2K_HTTP80_NAMES; i++) {
+        for (size_t i = 0; i < D2S_HTTP80_NAMES; i++) {
             https_name *e = &h->names[i];
             if (!e->name[0]) { pick = e; break; }
             if (!pick || e->expires < pick->expires) { pick = e; }
@@ -117,10 +117,10 @@ int d2k_http80_set_https(d2k_http80 *h, const char *name, size_t len, uint64_t e
     return 0;
 }
 
-int d2k_http80_https(const d2k_http80 *h, const char *host, uint64_t now) {
+int d2s_http80_https(const d2s_http80 *h, const char *host, uint64_t now) {
     char n[254];
     if (!h || !host || !name_norm(host, strlen(host), n, sizeof n)) { return 0; }
-    for (size_t i = 0; i < D2K_HTTP80_NAMES; i++) {
+    for (size_t i = 0; i < D2S_HTTP80_NAMES; i++) {
         if (h->names[i].name[0] && strcmp(h->names[i].name, n) == 0) {
             return now < h->names[i].expires;
         }
@@ -194,13 +194,13 @@ static uint32_t rd32(const uint8_t *p) {
 /* Монотонные часы, но пакет из одной пачки может прийти с отметкой раньше
    соседнего: разность в обратную сторону — не «давно». */
 static int stale(const flow *f, uint64_t now) {
-    return now > f->touched && now - f->touched > D2K_HTTP80_IDLE_NS;
+    return now > f->touched && now - f->touched > D2S_HTTP80_IDLE_NS;
 }
 
-static flow *find(d2k_http80 *h, uint8_t family, const uint8_t *client, uint16_t cport,
+static flow *find(d2s_http80 *h, uint8_t family, const uint8_t *client, uint16_t cport,
                   const uint8_t *server, uint16_t sport, uint64_t now) {
     size_t alen = family == 6 ? 16 : 4;
-    for (size_t i = 0; i < D2K_HTTP80_FLOWS; i++) {
+    for (size_t i = 0; i < D2S_HTTP80_FLOWS; i++) {
         flow *f = &h->flows[i];
         if (f->state == ST_FREE || f->family != family || f->cport != cport ||
             f->sport != sport || memcmp(f->client, client, alen) != 0 ||
@@ -214,10 +214,10 @@ static flow *find(d2k_http80 *h, uint8_t family, const uint8_t *client, uint16_t
     return NULL;
 }
 
-static flow *make(d2k_http80 *h, uint8_t family, const uint8_t *client, uint16_t cport,
+static flow *make(d2s_http80 *h, uint8_t family, const uint8_t *client, uint16_t cport,
                   const uint8_t *server, uint16_t sport, uint64_t now) {
     flow *pick = NULL;
-    for (size_t i = 0; i < D2K_HTTP80_FLOWS; i++) {
+    for (size_t i = 0; i < D2S_HTTP80_FLOWS; i++) {
         flow *f = &h->flows[i];
         if (f->state == ST_FREE || stale(f, now)) { pick = f; break; }
         if (!pick || f->touched < pick->touched) { pick = f; }
@@ -235,15 +235,15 @@ static flow *make(d2k_http80 *h, uint8_t family, const uint8_t *client, uint16_t
     return pick;
 }
 
-void d2k_http80_executed(d2k_http80 *h, const uint8_t *pkt, size_t len,
+void d2s_http80_executed(d2s_http80 *h, const uint8_t *pkt, size_t len,
     uint64_t now, uint64_t execution_id,
-    const uint8_t plan_id[16], const uint8_t trial_id[16], const d2k_binding_context *binding) {
-    d2k_packet_view v;
+    const uint8_t plan_id[16], const uint8_t trial_id[16], const d2s_binding_context *binding) {
+    d2s_packet_view v;
     if (!h || !execution_id || !plan_id || !trial_id ||
-        !d2k_packet_parse(pkt, len, &v) || v.protocol != 6) return;
+        !d2s_packet_parse(pkt, len, &v) || v.protocol != 6) return;
     const uint8_t *tcp = pkt + v.l4;
-    if (d2k_packet_u16(tcp + 2) != 80) return;
-    flow *f = find(h, v.family, v.src.bytes, d2k_packet_u16(tcp),
+    if (d2s_packet_u16(tcp + 2) != 80) return;
+    flow *f = find(h, v.family, v.src.bytes, d2s_packet_u16(tcp),
                    v.dst.bytes, 80, now);
     if (!f || f->state != ST_REQUEST || f->request_seq != rd32(tcp + 4)) return;
     f->execution_id = execution_id;
@@ -253,7 +253,7 @@ void d2k_http80_executed(d2k_http80 *h, const uint8_t *pkt, size_t len,
     memcpy(f->trial_id, trial_id, 16);
 }
 
-static void request_result(const flow *f,d2k_http80_res *r) {
+static void request_result(const flow *f,d2s_http80_res *r) {
     r->family=f->family;memcpy(r->client,f->client,16);memcpy(r->server,f->server,16);
     r->client_port=f->cport;r->server_port=f->sport;
     r->execution_id=f->execution_id;r->binding=f->binding;r->request_ms=f->t_req/1000000u;
@@ -264,12 +264,12 @@ static void request_result(const flow *f,d2k_http80_res *r) {
     memcpy(r->host,f->host,sizeof r->host);
 }
 
-void d2k_http80_delivered(d2k_http80 *h,const uint8_t *p,size_t n,int accepted,d2k_http80_res *r) {
-    d2k_packet_view v;
-    if(accepted || !h || !r || !d2k_packet_parse(p,n,&v) || v.protocol!=6)return;
+void d2s_http80_delivered(d2s_http80 *h,const uint8_t *p,size_t n,int accepted,d2s_http80_res *r) {
+    d2s_packet_view v;
+    if(accepted || !h || !r || !d2s_packet_parse(p,n,&v) || v.protocol!=6)return;
     const uint8_t *tcp=p+v.l4;size_t thl=(size_t)(tcp[12]>>4)*4;
-    if(d2k_packet_u16(tcp)!=80 || (v.total==v.l4+thl && !(tcp[13]&0x05)))return;
-    flow *f=find(h,v.family,v.dst.bytes,d2k_packet_u16(tcp+2),v.src.bytes,80,0);
+    if(d2s_packet_u16(tcp)!=80 || (v.total==v.l4+thl && !(tcp[13]&0x05)))return;
+    flow *f=find(h,v.family,v.dst.bytes,d2s_packet_u16(tcp+2),v.src.bytes,80,0);
     if(!f || (f->state!=ST_REQUEST && r->response!=1))return;
     f->reply.invalid=1;f->reply.complete=0;f->state=ST_DONE;
     request_result(f,r);r->response=2;
@@ -292,9 +292,9 @@ static int cut_pending(const flow *f) {
            seq_after(f->body_end, delivered(f));
 }
 
-static void cut_result(flow *f, d2k_http80_res *r) {
+static void cut_result(flow *f, d2s_http80_res *r) {
     request_result(f, r);
-    r->response = D2K_HTTP80_CUT;
+    r->response = D2S_HTTP80_CUT;
     uint32_t got = delivered(f) - f->body_start;
     if (seq_after(delivered(f), f->body_start) && (uint64_t)got > r->body_bytes) { r->body_bytes = got; }
     r->rtt_ns = f->rtt;
@@ -302,19 +302,19 @@ static void cut_result(flow *f, d2k_http80_res *r) {
     f->state = ST_DONE;
 }
 
-size_t d2k_http80_sweep(d2k_http80 *h, uint64_t now,
-                        void (*cb)(void *ctx, const d2k_http80_res *r), void *ctx) {
+size_t d2s_http80_sweep(d2s_http80 *h, uint64_t now,
+                        void (*cb)(void *ctx, const d2s_http80_res *r), void *ctx) {
     size_t told = 0;
     if (!h) { return 0; }
-    for (size_t i = 0; i < D2K_HTTP80_FLOWS; i++) {
+    for (size_t i = 0; i < D2S_HTTP80_FLOWS; i++) {
         flow *f = &h->flows[i];
         if (!cut_pending(f) || now <= f->progress) { continue; }
         uint64_t quiet = 3 * f->rtt;
-        if (quiet < D2K_HTTP80_CUT_MIN_NS) { quiet = D2K_HTTP80_CUT_MIN_NS; }
+        if (quiet < D2S_HTTP80_CUT_MIN_NS) { quiet = D2S_HTTP80_CUT_MIN_NS; }
         if (now - f->progress <= quiet) { continue; }
-        d2k_http80_res r;
+        d2s_http80_res r;
         memset(&r, 0, sizeof r);
-        r.action = D2K_HTTP80_PASS;
+        r.action = D2S_HTTP80_PASS;
         cut_result(f, &r);
         told++;
         if (cb) { cb(ctx, &r); }
@@ -325,8 +325,8 @@ size_t d2k_http80_sweep(d2k_http80 *h, uint64_t now,
 /* Recognize identity in a prefix; framing is completed by the shared stream
  * parser. This is not the stricter complete-request HTTPS upgrade API. */
 static int request_prefix(const uint8_t *p,size_t n,flow *f) {
-    d2k_http_req req;
-    if(!d2k_http_request(p,n,&req) || req.host_len>=sizeof f->host)return 0;
+    d2s_http_req req;
+    if(!d2s_http_request(p,n,&req) || req.host_len>=sizeof f->host)return 0;
     size_t method=n>=4&&!memcmp(p,"GET ",4)?4:n>=5&&!memcmp(p,"HEAD ",5)?5:0;
     if(!method)return 0;
     size_t end=method;
@@ -340,21 +340,21 @@ static int request_prefix(const uint8_t *p,size_t n,flow *f) {
     return 1;
 }
 static void request_feed(flow *f,uint32_t seq,const uint8_t *p,size_t n) {
-    d2k_http_request_stream_feed(&f->request,seq,p,n);
+    d2s_http_request_stream_feed(&f->request,seq,p,n);
     f->client_next=f->request.next;
     f->next_known=f->request.header_done && !f->request.invalid &&
         !f->request.past_end && f->request.next==f->request.end;
 }
 
-void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t now,
+void d2s_http80_packet(d2s_http80 *h, const uint8_t *pkt, size_t len, uint64_t now,
                        uint64_t ks,
                        uint8_t *out, size_t out_cap, uint8_t *rst, size_t rst_cap,
-                       d2k_http80_res *r) {
+                       d2s_http80_res *r) {
     if (!r) { return; }
     memset(r, 0, sizeof *r);
-    r->action = D2K_HTTP80_PASS;
-    d2k_packet_view v;
-    if (!h || !d2k_packet_parse(pkt, len, &v) || v.protocol != 6) { return; }
+    r->action = D2S_HTTP80_PASS;
+    d2s_packet_view v;
+    if (!h || !d2s_packet_parse(pkt, len, &v) || v.protocol != 6) { return; }
     const uint8_t *t = pkt + v.l4;
     size_t thl = (size_t)(t[12] >> 4) * 4u;
     if (thl < 20 || thl > v.total - v.l4) { return; }
@@ -405,7 +405,7 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
              * known boundary. A gap/overlap remains unclassified. */
             if (seq != f->client_next) { return; }
             if (request_prefix(pay,plen,f)) {
-                d2k_http_request_stream_init(&f->request,seq);
+                d2s_http_request_stream_init(&f->request,seq);
                 request_feed(f,seq,pay,plen);
                 /* Client ACK gives the response sequence for this request,
                  * including a preceding response spanning many segments. */
@@ -451,7 +451,7 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
     if (f->state == ST_ANSWERED) {
         /* Клиент уже получил 307 и FIN: копия вставки, её FIN и поздний
            настоящий ответ ему только навредят. */
-        r->action = D2K_HTTP80_DROP;
+        r->action = D2S_HTTP80_DROP;
         h->st.dropped++;
         return;
     }
@@ -472,10 +472,10 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
     }
     int had_header=f->reply.header_done;
     if(plen)f->reply_segments++;
-    d2k_http_response_feed(&f->reply,pay,plen,(flags&0x01)!=0);
+    d2s_http_response_feed(&f->reply,pay,plen,(flags&0x01)!=0);
     f->reply_next=seq+(uint32_t)plen;
     if(plen)f->progress=now;
-    if(f->reply.header_done && f->reply.state==D2K_HR_FIXED && !f->reply.invalid) {
+    if(f->reply.header_done && f->reply.state==D2S_HR_FIXED && !f->reply.invalid) {
         /* Конец тела по Content-Length в seq сервера: отсюда ещё remaining. */
         f->body_end=f->reply_next+(uint32_t)f->reply.remaining;
         f->body_start=f->body_end-(uint32_t)(f->reply.body_bytes+f->reply.remaining);
@@ -487,7 +487,7 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
         rtt=f->krtt;dt=f->reply_kstamp-f->k_req;
     }
     int known_portal=!had_header && f->reply.header_done &&
-        d2k_httpup_portal_location(f->host,f->reply.head,f->reply.head_len,r->portal,sizeof r->portal);
+        d2s_httpup_portal_location(f->host,f->reply.head,f->reply.head_len,r->portal,sizeof r->portal);
     int portal=known_portal && !f->reply.interim && rtt && dt<rtt/2;
     if(known_portal && !portal) {
         request_result(f,r);r->response=3;f->state=ST_INJECTED;return;
@@ -504,9 +504,9 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
     /* A prefix already accepted by the kernel cannot be replaced atomically. */
     if(f->reply_segments!=1)return;
 
-    if (!f->next_known || f->request.length || !d2k_http80_https(h, f->host, now)) { return; }
-    char redirect[D2K_HTTP80_TARGET_MAX + 512];
-    size_t rl = d2k_httpup_redirect_https(f->host, f->target, redirect, sizeof redirect);
+    if (!f->next_known || f->request.length || !d2s_http80_https(h, f->host, now)) { return; }
+    char redirect[D2S_HTTP80_TARGET_MAX + 512];
+    size_t rl = d2s_httpup_redirect_https(f->host, f->target, redirect, sizeof redirect);
     uint16_t window = (uint16_t)((unsigned)t[14] << 8 | t[15]);
     size_t n = rl ? build(v.family, f->server, f->client, 80, f->cport, f->server_next,
                           f->client_next, 0x19 /* FIN|PSH|ACK */, window, v.hop_limit,
@@ -519,14 +519,14 @@ void d2k_http80_packet(d2k_http80 *h, const uint8_t *pkt, size_t len, uint64_t n
     if (!n || !m) { return; }   /* не собралось — вставка проходит как есть */
     f->state = ST_SWAP;
     r->flow = (size_t)(f - h->flows);
-    r->action = D2K_HTTP80_REPLACE;
+    r->action = D2S_HTTP80_REPLACE;
     r->len = n;
     r->rst_len = m;
 }
 
-int d2k_http80_swap(d2k_http80 *h, d2k_http80_res *r, const uint8_t *out, const uint8_t *rst,
-                    const d2k_http80_io *io) {
-    if (!h || !r || !io || r->action != D2K_HTTP80_REPLACE || r->flow >= D2K_HTTP80_FLOWS) {
+int d2s_http80_swap(d2s_http80 *h, d2s_http80_res *r, const uint8_t *out, const uint8_t *rst,
+                    const d2s_http80_io *io) {
+    if (!h || !r || !io || r->action != D2S_HTTP80_REPLACE || r->flow >= D2S_HTTP80_FLOWS) {
         return 0;
     }
     flow *f = &h->flows[r->flow];
@@ -548,7 +548,7 @@ int d2k_http80_swap(d2k_http80 *h, d2k_http80_res *r, const uint8_t *out, const 
 
 static int lc(uint8_t c) { return c >= 'A' && c <= 'Z' ? c + 32 : c; }
 
-int d2k_http_request(const uint8_t *p, size_t n, d2k_http_req *r) {
+int d2s_http_request(const uint8_t *p, size_t n, d2s_http_req *r) {
     if (!p || !r) { return 0; }
     memset(r, 0, sizeof *r);
     /* Метод — заглавные латинские буквы (GET, HEAD, POST, PUT…), затем
@@ -622,18 +622,18 @@ int d2k_http_request(const uint8_t *p, size_t n, d2k_http_req *r) {
     if (found != 1) { return 0; }
     r->host_off = off;
     r->host_len = len;
-    d2k_http_request_stream framing;
-    d2k_http_request_stream_init(&framing,0);
-    d2k_http_request_stream_feed(&framing,0,p,n);
+    d2s_http_request_stream framing;
+    d2s_http_request_stream_init(&framing,0);
+    d2s_http_request_stream_feed(&framing,0,p,n);
     if(framing.header_done && !framing.invalid) {
         r->end_known=1;r->head_len=framing.head_len;r->end=framing.end;
     }
     return 1;
 }
 
-int d2k_http_hello(const uint8_t *p, size_t n, size_t *host_off, size_t *host_len) {
-    d2k_http_req r;
-    if (!host_off || !host_len || !d2k_http_request(p, n, &r)) { return 0; }
+int d2s_http_hello(const uint8_t *p, size_t n, size_t *host_off, size_t *host_len) {
+    d2s_http_req r;
+    if (!host_off || !host_len || !d2s_http_request(p, n, &r)) { return 0; }
     *host_off = r.host_off;
     *host_len = r.host_len;
     return 1;

@@ -4,7 +4,7 @@
 set -eu
 if [ "${1:-}" != --inside ]; then
     ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-    WORK=$(mktemp -d /tmp/d2k-native-quic.XXXXXX)
+    WORK=$(mktemp -d /tmp/d2s-native-quic.XXXXXX)
     echo "Native QUIC artifacts: $WORK"
     cd "$ROOT"
     tar -cf - --exclude='*.o' --exclude='test_*' core datapath detect \
@@ -16,8 +16,8 @@ if [ "${1:-}" != --inside ]; then
 fi
 apt-get update -qq
 apt-get install -y -qq iptables iproute2 openssl python3-aioquic >/dev/null
-make -s -C datapath d2kd
-make -s -C core d2kc
+make -s -C datapath d2sd
+make -s -C core d2sc
 cc -std=c99 -O2 -Wall -Wextra -Werror -Idatapath/include -Icore/include \
     -o /tmp/labdpi spike/labdpi.c datapath/nfq.c datapath/nl.c \
     core/quic.c core/quicwire.c core/crypto.c
@@ -64,18 +64,18 @@ if client blocked.example; then
     echo 'FAIL: native QUIC censor did not block the independent client'; exit 1
 fi
 client control.example
-ip6tables -t mangle -N D2K_NATIVE_QUIC
-ip6tables -t mangle -A OUTPUT -j D2K_NATIVE_QUIC
-ip6tables -t mangle -A D2K_NATIVE_QUIC -m mark --mark 45 -j RETURN
-ip6tables -t mangle -A D2K_NATIVE_QUIC -m mark --mark 47 -j RETURN
-ip6tables -t mangle -A D2K_NATIVE_QUIC -p udp --dport 4444 \
+ip6tables -t mangle -N D2S_NATIVE_QUIC
+ip6tables -t mangle -A OUTPUT -j D2S_NATIVE_QUIC
+ip6tables -t mangle -A D2S_NATIVE_QUIC -m mark --mark 45 -j RETURN
+ip6tables -t mangle -A D2S_NATIVE_QUIC -m mark --mark 47 -j RETURN
+ip6tables -t mangle -A D2S_NATIVE_QUIC -p udp --dport 4444 \
     -j NFQUEUE --queue-num 2401 --queue-bypass
 ip6tables -t mangle -A INPUT -p udp --sport 4444 \
     -j NFQUEUE --queue-num 2401 --queue-bypass
 prefix=/w/evidence/quic
 catalog=/w/evidence/catalog.json
 start_engine() {
-    ./datapath/d2kd --mode apply --control /tmp/native-quic.sock --queue 2401 \
+    ./datapath/d2sd --mode apply --control /tmp/native-quic.sock --queue 2401 \
         --mark 45 --probe-mark 46 --udp-reverse-hook --duration 300 --journal 400 \
         >"$prefix-datapath.log" 2>&1 &
     dp=$!
@@ -84,7 +84,7 @@ start_engine() {
         kill -0 "$dp"
         i=$((i + 1)); [ "$i" -lt 100 ]; sleep 0.05
     done
-    ./core/d2kc --control /tmp/native-quic.sock --catalog "$catalog" \
+    ./core/d2sc --control /tmp/native-quic.sock --catalog "$catalog" \
         --mark 46 --measure-mark 47 >"$prefix-controller.log" 2>&1 &
     cp=$!
 }

@@ -16,7 +16,7 @@ run() {
     ( cd "$T/repo" && env GITHUB_OUTPUT="$T/out" NOW=20261013-0102 "$@" sh "$PLAN" >/dev/null )
 }
 key() { sed -n "s/^$1=//p" "$T/out"; }
-notes() { sed -n '/^notes<</,/^D2K_NOTES_EOF$/p' "$T/out" | sed '1d;$d'; }
+notes() { sed -n '/^notes<</,/^D2S_NOTES_EOF$/p' "$T/out" | sed '1d;$d'; }
 expect() {
     if [ "$2" = "$3" ]; then echo "ok: $1"
     else echo "FAIL: $1: expected '$3', got '$2'" >&2; fails=$((fails + 1)); fi
@@ -55,7 +55,7 @@ commit "prefix: not a fix either"
 run
 expect "a type that only starts with fix is not fix" "$(key release)" false
 
-commit "fix(S99d2k): five A&&B||C rewritten as real ifs"
+commit "fix(S99d2s): five A&&B||C rewritten as real ifs"
 run
 short=$(g rev-parse --short=7 HEAD)
 expect "a fix since the last release makes one" "$(key release)" true
@@ -68,7 +68,7 @@ else
     fails=$((fails + 1))
 fi
 expect "the release is the exact commit planned" "$(key sha)" "$(g rev-parse HEAD)"
-has "the fix is in the notes" "- fix(S99d2k): five A&&B||C rewritten as real ifs"
+has "the fix is in the notes" "- fix(S99d2s): five A&&B||C rewritten as real ifs"
 lacks "ci is not in the notes" "ci: speed"
 lacks "refactor is not in the notes" "refactor(quic)"
 

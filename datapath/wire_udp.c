@@ -14,7 +14,7 @@
  */
 #include <string.h>
 
-#include "d2k_wire.h"
+#include "d2s_wire.h"
 
 #define IP_HDR  20
 #define UDP_HDR 8
@@ -51,7 +51,7 @@ static uint16_t fold(uint32_t acc) {
  * протокол здесь 17, а длина — это длина всей UDP-датаграммы (заголовок plus
  * данные), а не длина TCP-сегмента.
  *
- * Адреса, как и в wire.c, принимаются сырыми байтами: в d2k_conn они лежат в
+ * Адреса, как и в wire.c, принимаются сырыми байтами: в d2s_conn они лежат в
  * сетевом порядке, и превращение их в число под wr32 перевернуло бы адрес на
  * little-endian ровно так же, как это уже один раз случилось с TCP. */
 static uint32_t pseudo_sum(const uint8_t *src4, const uint8_t *dst4, size_t udp_len) {
@@ -64,7 +64,7 @@ static uint32_t pseudo_sum(const uint8_t *src4, const uint8_t *dst4, size_t udp_
     return sum16(ph, sizeof ph, 0);
 }
 
-size_t d2k_wire_build_udp(const d2k_conn *c, const d2k_emit *e,
+size_t d2s_wire_build_udp(const d2s_conn *c, const d2s_emit *e,
                           uint8_t *out, size_t cap) {
     if (!c || !e || !out) {
         return 0;
@@ -72,7 +72,7 @@ size_t d2k_wire_build_udp(const d2k_conn *c, const d2k_emit *e,
     if (c->family != 0 && c->family != 4 && c->family != 6) { return 0; }
     int ipv6 = c->family == 6;
     size_t ip_hdr = ipv6 ? 40u : IP_HDR;
-    if (ipv6 && (e->poison & D2K_POISON_IPID_ZERO)) { return 0; }
+    if (ipv6 && (e->poison & D2S_POISON_IPID_ZERO)) { return 0; }
     if (e->wire_profile || e->ipfrag) { return 0; } /* Fragment expansion belongs to session. */
 
     /* Четыре просьбы, которые для UDP нельзя честно исполнить, — отказ (0),
@@ -91,20 +91,20 @@ size_t d2k_wire_build_udp(const d2k_conn *c, const d2k_emit *e,
      *     окно сервера»). У дейтаграммы нет ни последовательности, ни окна —
      *     то самое основание, по которому отвергается pre_len;
      *
-     *   - D2K_POISON_TCPTS_BACK — метка времени со сдвигом назад — это
+     *   - D2S_POISON_TCPTS_BACK — метка времени со сдвигом назад — это
      *     опция заголовка TCP. У UDP заголовка без опций опций не
      *     существует вовсе, вставлять их некуда;
      *
-     *   - D2K_POISON_BADSUM — эта сборка не умеет портить контрольную сумму
+     *   - D2S_POISON_BADSUM — эта сборка не умеет портить контрольную сумму
      *     по требованию (см. комментарий перед подсчётом суммы ниже, почему
      *     это решение, а не пробел).
      *
      * Собрать посылку молча, отбросив непонятное поле или бит и сделав вид,
      * что просили меньше, — значит применить план, отличный от того, что
-     * попросили, и не сказать об этом: то, что описывает d2k_wire.h как
+     * попросили, и не сказать об этом: то, что описывает d2s_wire.h как
      * запрет молча подменять запрошенное на похожее. */
     if (e->pre_len != 0 || e->seq_shift != 0 ||
-        (e->poison & (D2K_POISON_TCPTS_BACK | D2K_POISON_BADSUM)) != 0) {
+        (e->poison & (D2S_POISON_TCPTS_BACK | D2S_POISON_BADSUM)) != 0) {
         return 0;
     }
 
@@ -133,7 +133,7 @@ size_t d2k_wire_build_udp(const d2k_conn *c, const d2k_emit *e,
        — та же ловушка совпадения идентификатора, что и у TCP: сборщик
        фрагментов на стороне получателя может счесть независимые дейтаграммы
        частями одной. */
-    wr16(out + 4, (e->poison & D2K_POISON_IPID_ZERO) ? 0
+    wr16(out + 4, (e->poison & D2S_POISON_IPID_ZERO) ? 0
                                                      : (uint16_t)(c->ip_id + 1));
     /* Не фрагментировать: эта функция не умеет фрагментацию (отдельное плечо
        обхода, которого здесь ещё нет) и всегда собирает ОДНУ цельную
@@ -172,8 +172,8 @@ size_t d2k_wire_build_udp(const d2k_conn *c, const d2k_emit *e,
        дойдёт даже до неё, не то что до сервера, и весь приём смысла не
        имеет. Поэтому сумма считается всегда, безусловно.
 
-       D2K_POISON_BADSUM для UDP отвергается ВЫШЕ, тем же отказом, что и
-       pre_len, seq_shift и D2K_POISON_TCPTS_BACK, — но не по той же причине,
+       D2S_POISON_BADSUM для UDP отвергается ВЫШЕ, тем же отказом, что и
+       pre_len, seq_shift и D2S_POISON_TCPTS_BACK, — но не по той же причине,
        что абзац выше: заявить, что порченную дейтаграмму «тоже могла бы отбросить
        коробка», было бы такой же неизмеренной догадкой, просто в другую
        сторону. Настоящая причина измеримая: фальшивку в этом плане уже

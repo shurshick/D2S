@@ -1,4 +1,4 @@
-/* A real UDP socket -> NFQUEUE -> d2kd -> veth capture. Test-only endpoints. */
+/* A real UDP socket -> NFQUEUE -> d2sd -> veth capture. Test-only endpoints. */
 #define _DEFAULT_SOURCE 1
 #include <arpa/inet.h>
 #include <linux/if_packet.h>
@@ -10,7 +10,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "d2k_ipfrag.h"
+#include "d2s_ipfrag.h"
 
 int fragment_fixture(int,int,uint8_t *,size_t,size_t *);
 int fragment_input(uint8_t *,size_t,size_t *);
@@ -48,7 +48,7 @@ int fragment_nfq_main(int argc,char **argv) {
     }
     int cap=socket(AF_PACKET,SOCK_DGRAM|SOCK_NONBLOCK,htons(ETH_P_ALL));
     struct sockaddr_ll sa={.sll_family=AF_PACKET,.sll_protocol=htons(ETH_P_ALL),
-                           .sll_ifindex=(int)if_nametoindex("d2k-out")};
+                           .sll_ifindex=(int)if_nametoindex("d2s-out")};
     if(cap<0 || bind(cap,(void *)&sa,sizeof sa))return 1;
     uint8_t payload[1500];size_t len=0;
     if(fragment_input(payload,sizeof payload,&len) || send(fd,payload,len,0)!=(ssize_t)len)return 1;
@@ -79,10 +79,10 @@ int fragment_nfq_main(int argc,char **argv) {
     size_t wanted_fake=direct?0:fake?2:0;
     if(nf!=wanted || nfake!=wanted_fake || original!=(size_t)direct)bad=1;
     if(nf) {
-        d2k_ipfrag_plan p;d2k_ipfrag_span spans[3];uint8_t expected[1600];
+        d2s_ipfrag_plan p;d2s_ipfrag_span spans[3];uint8_t expected[1600];
         const uint8_t src[]={10,77,0,1},dst[]={10,77,0,2};
-        d2k_ipfrag_shape(shape,&p);
-        if(!d2k_udpfrag_build(src,dst,55000,54321,payload,len,&p,(uint16_t)id,expected,sizeof expected,spans))return 1;
+        d2s_ipfrag_shape(shape,&p);
+        if(!d2s_udpfrag_build(src,dst,55000,54321,payload,len,&p,(uint16_t)id,expected,sizeof expected,spans))return 1;
         for(size_t i=0;i<nf;i++)if(lengths[i]!=spans[i].len ||
             memcmp(frames[i],expected+spans[i].off,lengths[i]))bad=1;
     }

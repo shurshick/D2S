@@ -8,7 +8,7 @@
 # окне стенда в две, и отличить «идёт» от «висит» было нечем.
 #
 # Здесь поднимается тот же игрушечный цензор, что в lab-transit.sh, и по нему
-# гоняется САМ измеритель (detect/d2k-detect classify) — тот же код, что зовёт
+# гоняется САМ измеритель (detect/d2s-detect classify) — тот же код, что зовёт
 # планировщик, но со своей трассой на выходе. Это не приёмка: ничего не
 # доказывается, показывается ход поиска.
 #
@@ -32,9 +32,9 @@ cat > "$WORK/classify.sh" <<'DRIVER'
 set -e
 cd /w
 
-NAME=${D2K_LAB_NAME:-zamer.example}
-MODE=${D2K_LAB_CENSOR:-naive}
-TARGET=${D2K_LAB_TARGET:-local}
+NAME=${D2S_LAB_NAME:-zamer.example}
+MODE=${D2S_LAB_CENSOR:-naive}
+TARGET=${D2S_LAB_TARGET:-local}
 QUEUE=2107
 PORT=443
 
@@ -71,7 +71,7 @@ echo "== сборка =="
 cc -std=c99 -O2 -Wall -Wextra -Werror -Idatapath/include -Icore/include \
    -o /tmp/labdpi spike/labdpi.c datapath/nfq.c datapath/nl.c \
    core/quic.c core/quicwire.c core/crypto.c
-make -s -C detect d2k-detect
+make -s -C detect d2s-detect
 
 if [ "$TARGET" = "local" ]; then
     # Тот же форкающий сервер, что в lab-censor.sh, и по той же причине:
@@ -93,9 +93,9 @@ echo "== цензор =="
 # Очередь, а не -j DROP: вердикт очереди приходит ПОСЛЕ возврата sendto, а
 # DROP локально рождённого пакета возвращает отправителю EPERM — и измеритель
 # мерил бы собственную реакцию на локальный отказ вместо цензуры.
-iptables -t mangle -N D2KQ 2>/dev/null || iptables -t mangle -F D2KQ
-iptables -t mangle -A POSTROUTING -j D2KQ
-iptables -t mangle -A D2KQ -p tcp --dport "$PORT" -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
+iptables -t mangle -N D2SQ 2>/dev/null || iptables -t mangle -F D2SQ
+iptables -t mangle -A POSTROUTING -j D2SQ
+iptables -t mangle -A D2SQ -p tcp --dport "$PORT" -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
 if [ "$MODE" = "naive" ]; then
     /tmp/labdpi "$QUEUE" "$NAME" 62 --naive > /tmp/labdpi.log 2>&1 &
 else
@@ -115,7 +115,7 @@ echo "== поиск: полная трасса =="
 START=$(date +%s)
 # --progress: трасса печатается в конце, а поиск идёт десятки минут. Без него
 # «идёт» не отличить от «висит» — ровно это и случилось 17.09 дважды.
-./detect/d2k-detect classify "$IP:$PORT" --sni "$NAME" --repeats 3 --progress 2>&1 || true
+./detect/d2s-detect classify "$IP:$PORT" --sni "$NAME" --repeats 3 --progress 2>&1 || true
 END=$(date +%s)
 echo "поиск занял $((END-START)) с"
 
@@ -127,7 +127,7 @@ tail -3 /tmp/labdpi.log 2>/dev/null || true
 DRIVER
 
 docker run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
-    -e "D2K_LAB_NAME=${D2K_LAB_NAME:-zamer.example}" \
-    -e "D2K_LAB_CENSOR=${D2K_LAB_CENSOR:-naive}" \
-    -e "D2K_LAB_TARGET=${D2K_LAB_TARGET:-local}" \
+    -e "D2S_LAB_NAME=${D2S_LAB_NAME:-zamer.example}" \
+    -e "D2S_LAB_CENSOR=${D2S_LAB_CENSOR:-naive}" \
+    -e "D2S_LAB_TARGET=${D2S_LAB_TARGET:-local}" \
     -v "$WORK:/w" -w /w gcc:14 sh /w/classify.sh

@@ -1,9 +1,9 @@
-/* icmpguard.c — см. d2k_icmpguard.h. Разбор чужих байтов: каждое чтение
+/* icmpguard.c — см. d2s_icmpguard.h. Разбор чужих байтов: каждое чтение
  * ограничено длиной, которая есть, а не той, что заявлена в заголовке. */
 #include <string.h>
-#include "d2k_icmpguard.h"
+#include "d2s_icmpguard.h"
 
-void d2k_icmpguard_init(d2k_icmpguard *g) {
+void d2s_icmpguard_init(d2s_icmpguard *g) {
     if (g) { memset(g, 0, sizeof *g); }
 }
 
@@ -46,13 +46,13 @@ static int parse_ip(const uint8_t *p, size_t n, ipq *q) {
     return 1;
 }
 
-int d2k_icmpguard_note(d2k_icmpguard *g, const uint8_t *pkt, size_t len,
+int d2s_icmpguard_note(d2s_icmpguard *g, const uint8_t *pkt, size_t len,
                        uint8_t orig_ttl, uint64_t now_ns) {
     ipq q;
     if (!g || !parse_ip(pkt, len, &q)) { return 0; }
     if (q.ttl >= orig_ttl) { return 0; }   /* TTL не понижен — дойдёт до сервера */
-    d2k_icmpguard_slot *s = &g->slot[g->next];
-    g->next = (g->next + 1) % D2K_ICMPGUARD_SLOTS;
+    d2s_icmpguard_slot *s = &g->slot[g->next];
+    g->next = (g->next + 1) % D2S_ICMPGUARD_SLOTS;
     memset(s, 0, sizeof *s);
     s->at = now_ns ? now_ns : 1;
     s->family = q.family; s->proto = q.proto; s->ttl = q.ttl;
@@ -68,7 +68,7 @@ int d2k_icmpguard_note(d2k_icmpguard *g, const uint8_t *pkt, size_t len,
     return 1;
 }
 
-int d2k_icmpguard_check(d2k_icmpguard *g, const uint8_t *pkt, size_t len,
+int d2s_icmpguard_check(d2s_icmpguard *g, const uint8_t *pkt, size_t len,
                         uint64_t now_ns) {
     if (!g || !pkt || len < 1) { return 0; }
     const uint8_t *icmp;
@@ -93,9 +93,9 @@ int d2k_icmpguard_check(d2k_icmpguard *g, const uint8_t *pkt, size_t len,
     ipq q;
     if (!parse_ip(icmp + 8, avail, &q) || q.family != family) { return 0; }
     size_t alen = family == 6 ? 16 : 4;
-    for (size_t i = 0; i < D2K_ICMPGUARD_SLOTS; i++) {
-        const d2k_icmpguard_slot *s = &g->slot[i];
-        if (!s->at || now_ns < s->at || now_ns - s->at > D2K_ICMPGUARD_KEEP_NS) { continue; }
+    for (size_t i = 0; i < D2S_ICMPGUARD_SLOTS; i++) {
+        const d2s_icmpguard_slot *s = &g->slot[i];
+        if (!s->at || now_ns < s->at || now_ns - s->at > D2S_ICMPGUARD_KEEP_NS) { continue; }
         if (s->family != family || s->proto != q.proto) { continue; }
         if (memcmp(s->src, q.src, alen) || memcmp(s->dst, q.dst, alen)) { continue; }
         if (memcmp(s->sport, q.l4, 2) || memcmp(s->dport, q.l4 + 2, 2)) { continue; }
@@ -109,5 +109,5 @@ int d2k_icmpguard_check(d2k_icmpguard *g, const uint8_t *pkt, size_t len,
     return 0;
 }
 
-uint64_t d2k_icmpguard_dropped(const d2k_icmpguard *g) { return g ? g->dropped : 0; }
-uint64_t d2k_icmpguard_noted(const d2k_icmpguard *g) { return g ? g->noted : 0; }
+uint64_t d2s_icmpguard_dropped(const d2s_icmpguard *g) { return g ? g->dropped : 0; }
+uint64_t d2s_icmpguard_noted(const d2s_icmpguard *g) { return g ? g->noted : 0; }

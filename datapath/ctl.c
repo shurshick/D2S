@@ -13,14 +13,14 @@
 #include <sys/un.h>
 #include <fcntl.h>
 
-#include "d2k_ctl.h"
+#include "d2s_ctl.h"
 
 #define HDR 6u
 
-/* Кольцо исходящих — обоснование размера у поля out в struct d2k_ctl. */
-#define D2K_CTL_OUT_RING 65536u
+/* Кольцо исходящих — обоснование размера у поля out в struct d2s_ctl. */
+#define D2S_CTL_OUT_RING 65536u
 
-struct d2k_ctl {
+struct d2s_ctl {
     int      lfd;
     int      pfd;
     void (*disconnect_hook)(void *);
@@ -48,12 +48,12 @@ struct d2k_ctl {
      *
      * Кадр кладётся ЦЕЛИКОМ или не кладётся вовсе: половина кадра в потоке
      * рассинхронизировала бы разбор у контроллера навсегда. */
-    uint8_t  out[D2K_CTL_OUT_RING];
+    uint8_t  out[D2S_CTL_OUT_RING];
     size_t   out_head;   /* куда писать следующий байт */
     size_t   out_used;   /* сколько байт ждут отправки */
 
     /* Приёмный буфер: команда может прийти по кускам. */
-    uint8_t  in[D2K_CTL_FRAME_MAX + HDR];
+    uint8_t  in[D2S_CTL_FRAME_MAX + HDR];
     size_t   in_len;
 
     uint64_t dropped;
@@ -78,7 +78,7 @@ static int set_nonblock(int fd) {
     return (fl < 0) ? -1 : fcntl(fd, F_SETFL, fl | O_NONBLOCK);
 }
 
-d2k_ctl *d2k_ctl_open(const char *path, char *err, size_t errcap) {
+d2s_ctl *d2s_ctl_open(const char *path, char *err, size_t errcap) {
     if (!path || !*path) {
         say(err, errcap, "путь управляющего сокета пуст");
         return NULL;
@@ -92,7 +92,7 @@ d2k_ctl *d2k_ctl_open(const char *path, char *err, size_t errcap) {
     }
     strcpy(sa.sun_path, path);
 
-    d2k_ctl *c = calloc(1, sizeof *c);
+    d2s_ctl *c = calloc(1, sizeof *c);
     if (!c) {
         say(err, errcap, "нет памяти");
         return NULL;
@@ -126,7 +126,7 @@ d2k_ctl *d2k_ctl_open(const char *path, char *err, size_t errcap) {
     return c;
 }
 
-void d2k_ctl_close(d2k_ctl *c) {
+void d2s_ctl_close(d2s_ctl *c) {
     if (!c) {
         return;
     }
@@ -140,16 +140,16 @@ void d2k_ctl_close(d2k_ctl *c) {
     free(c);
 }
 
-int d2k_ctl_listen_fd(const d2k_ctl *c) { return c ? c->lfd : -1; }
-int d2k_ctl_peer_fd(const d2k_ctl *c)   { return c ? c->pfd : -1; }
+int d2s_ctl_listen_fd(const d2s_ctl *c) { return c ? c->lfd : -1; }
+int d2s_ctl_peer_fd(const d2s_ctl *c)   { return c ? c->pfd : -1; }
 
-void d2k_ctl_set_disconnect_hook(d2k_ctl *c, void (*hook)(void *), void *ctx) {
+void d2s_ctl_set_disconnect_hook(d2s_ctl *c, void (*hook)(void *), void *ctx) {
     if (!c) return;
     c->disconnect_hook = hook;
     c->disconnect_ctx = ctx;
 }
 
-void d2k_ctl_accept(d2k_ctl *c) {
+void d2s_ctl_accept(d2s_ctl *c) {
     if (!c || c->lfd < 0) {
         return;
     }
@@ -170,13 +170,13 @@ void d2k_ctl_accept(d2k_ctl *c) {
     c->pfd = fd;
     c->out_head = c->out_used = 0;
     c->in_len = 0;
-    /* Версию протокола объявляет d2k_ctlsrv_greet, а не этот файл: раскладка
+    /* Версию протокола объявляет d2s_ctlsrv_greet, а не этот файл: раскладка
        тела события (ключ потока впереди) — знание ПРОТОКОЛА команд, а
-       d2k_ctl.c протокольно-независим по устройству. Вызывающий обязан
+       d2s_ctl.c протокольно-независим по устройству. Вызывающий обязан
        позвать greet сразу после accept. */
 }
 
-static void drop_peer(d2k_ctl *c) {
+static void drop_peer(d2s_ctl *c) {
     int connected = c->pfd >= 0;
     if (c->pfd >= 0) {
         close(c->pfd);
@@ -187,16 +187,16 @@ static void drop_peer(d2k_ctl *c) {
     if (connected && c->disconnect_hook) c->disconnect_hook(c->disconnect_ctx);
 }
 
-void d2k_ctl_flush(d2k_ctl *c) {
+void d2s_ctl_flush(d2s_ctl *c) {
     if (!c || c->pfd < 0 || c->out_used == 0) {
         return;
     }
     while (c->out_used > 0) {
-        size_t tail = (c->out_head + D2K_CTL_OUT_RING - c->out_used) % D2K_CTL_OUT_RING;
+        size_t tail = (c->out_head + D2S_CTL_OUT_RING - c->out_used) % D2S_CTL_OUT_RING;
         /* За один write уходит только СПЛОШНОЙ кусок: кольцо переносится
            через край, а write об этом не знает. Остаток допишется следующим
            оборотом цикла либо следующим вызовом. */
-        size_t run = D2K_CTL_OUT_RING - tail;
+        size_t run = D2S_CTL_OUT_RING - tail;
         if (run > c->out_used) { run = c->out_used; }
         ssize_t n = write(c->pfd, c->out + tail, run);
         if (n > 0) {
@@ -214,19 +214,19 @@ void d2k_ctl_flush(d2k_ctl *c) {
     }
 }
 
-void d2k_ctl_event(d2k_ctl *c, uint16_t type, const uint8_t *body, size_t len) {
-    if (!c || c->pfd < 0 || len > D2K_CTL_FRAME_MAX - 2) {
+void d2s_ctl_event(d2s_ctl *c, uint16_t type, const uint8_t *body, size_t len) {
+    if (!c || c->pfd < 0 || len > D2S_CTL_FRAME_MAX - 2) {
         if (c) {
             c->dropped++;
         }
         return;
     }
     /* Сперва освобождаем место тем, что уже можно дописать. */
-    d2k_ctl_flush(c);
+    d2s_ctl_flush(c);
 
     size_t plen = 2 + len;
     size_t need = HDR + len;
-    if (need > D2K_CTL_OUT_RING - c->out_used) {
+    if (need > D2S_CTL_OUT_RING - c->out_used) {
         /* Места нет даже после дописывания — кадр теряется ЦЕЛИКОМ и
            считается. Половина кадра сломала бы разбор у контроллера. */
         c->dropped++;
@@ -243,18 +243,18 @@ void d2k_ctl_event(d2k_ctl *c, uint16_t type, const uint8_t *body, size_t len) {
 
     for (size_t i = 0; i < HDR; i++) {
         c->out[c->out_head] = hdr[i];
-        c->out_head = (c->out_head + 1) % D2K_CTL_OUT_RING;
+        c->out_head = (c->out_head + 1) % D2S_CTL_OUT_RING;
     }
     for (size_t i = 0; i < len; i++) {
         c->out[c->out_head] = body[i];
-        c->out_head = (c->out_head + 1) % D2K_CTL_OUT_RING;
+        c->out_head = (c->out_head + 1) % D2S_CTL_OUT_RING;
     }
     c->out_used += need;
     c->sent++;
-    d2k_ctl_flush(c);
+    d2s_ctl_flush(c);
 }
 
-int d2k_ctl_poll(d2k_ctl *c,
+int d2s_ctl_poll(d2s_ctl *c,
                  void (*cb)(void *ctx, uint16_t type, const uint8_t *body, size_t len),
                  void *ctx) {
     if (!c || c->pfd < 0) {
@@ -282,7 +282,7 @@ int d2k_ctl_poll(d2k_ctl *c,
         const uint8_t *h = c->in + off;
         uint32_t plen = (uint32_t)h[0] << 24 | (uint32_t)h[1] << 16 |
                         (uint32_t)h[2] << 8 | h[3];
-        if (plen < 2 || plen > D2K_CTL_FRAME_MAX) {
+        if (plen < 2 || plen > D2S_CTL_FRAME_MAX) {
             /* Кадр с невозможной длиной. Дальше по потоку идти нельзя:
                следующий заголовок пришлось бы искать по выдуманному
                смещению. Рвём соединение — контроллер переподключится. */
@@ -312,5 +312,5 @@ int d2k_ctl_poll(d2k_ctl *c,
     return done;
 }
 
-uint64_t d2k_ctl_dropped(const d2k_ctl *c) { return c ? c->dropped : 0; }
-uint64_t d2k_ctl_sent(const d2k_ctl *c)    { return c ? c->sent : 0; }
+uint64_t d2s_ctl_dropped(const d2s_ctl *c) { return c ? c->dropped : 0; }
+uint64_t d2s_ctl_sent(const d2s_ctl *c)    { return c ? c->sent : 0; }

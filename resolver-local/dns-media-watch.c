@@ -75,7 +75,7 @@ static int save_names(const char *path,char hosts[HOST_CAP][NAME_CAP],size_t cou
 }
 int main(int argc,char **argv) {
     if(argc==2 && strcmp(argv[1],"--version")==0) {
-        puts("d2o-dns-watch 0.1 LAN-query-only media-whatsapp-only");return 0;
+        puts("d2s-dns-watch 0.1 LAN-query-only media-whatsapp-only");return 0;
     }
     if(argc!=5 || strcmp(argv[1],"--interfaces") || strcmp(argv[3],"--output") || argv[4][0]!='/') return 2;
     char interfaces[1024];

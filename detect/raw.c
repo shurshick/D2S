@@ -28,11 +28,11 @@
  * работы ставим правило, роняющее исходящие RST с нашего порта, и снимаем его
  * при закрытии. Порт из счётчика, правило узкое.
  */
-#include "d2k_detect.h"
-#include "d2k_arm.h"
-#include "d2k_compose.h"
-#include "d2k_plantlv.h"
-#include "d2k_wire.h"
+#include "d2s_detect.h"
+#include "d2s_arm.h"
+#include "d2s_compose.h"
+#include "d2s_plantlv.h"
+#include "d2s_wire.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -49,15 +49,15 @@
  * роутере, v1.4.21). Сверяем её ЦЕЛИКОМ, началом и концом: частичный разбор
  * уже прострелил — правило с чужим действием (-j ACCEPT) принималось за своё.
  *
- * ЗАДАЧА 49: ПРАВИЛО НЕСЁТ PID ВЛАДЕЛЬЦА (-m comment --comment d2k-rst:PID).
+ * ЗАДАЧА 49: ПРАВИЛО НЕСЁТ PID ВЛАДЕЛЬЦА (-m comment --comment d2s-rst:PID).
  * Без него уборка при старте любого процесса-измерителя снимала и правило
- * живого зонда d2kc (поле 03.10: запуск d2k-detect рядом с d2kc снял три
- * правила d2kc). Старое правило без пометки — от прежней версии, владельца
+ * живого зонда d2sc (поле 03.10: запуск d2s-detect рядом с d2sc снял три
+ * правила d2sc). Старое правило без пометки — от прежней версии, владельца
  * у него нет, и оно по-прежнему считается брошенным. */
 static const char RST_PREFIX[] = "-A OUTPUT -p tcp -m tcp --sport ";
 static const char RST_LEGACY_SUFFIX[] = " --tcp-flags RST RST -j DROP";
 static const char RST_OWNED_MID[] = " --tcp-flags RST RST -m comment --comment ";
-static const char RST_OWNED_TAG[] = "d2k-rst:";
+static const char RST_OWNED_TAG[] = "d2s-rst:";
 static const char RST_OWNED_SUFFIX[] = " -j DROP";
 
 static int parse_long_exact(const char *from, size_t len, long *out)
@@ -76,7 +76,7 @@ static int parse_long_exact(const char *from, size_t len, long *out)
     return 1;
 }
 
-int d2k_parse_rst_rule(const char *line, int *port, long *pid)
+int d2s_parse_rst_rule(const char *line, int *port, long *pid)
 {
     size_t n, pl = sizeof(RST_PREFIX) - 1;
     const char *num, *rest;
@@ -118,31 +118,31 @@ int d2k_parse_rst_rule(const char *line, int *port, long *pid)
 }
 
 /* Прежний вход: наше ли правило (любого формата) и на каком порту. */
-int d2k_parse_stale_rst_rule(const char *line, int *port)
+int d2s_parse_stale_rst_rule(const char *line, int *port)
 {
-    return d2k_parse_rst_rule(line, port, NULL);
+    return d2s_parse_rst_rule(line, port, NULL);
 }
 
 /* Жив ли процесс-владелец. Крючок — для теста; EPERM тоже «жив». */
-int (*d2k_raw_alive_hook)(long pid);
+int (*d2s_raw_alive_hook)(long pid);
 static int pid_alive(long pid)
 {
-    if (d2k_raw_alive_hook) return d2k_raw_alive_hook(pid);
+    if (d2s_raw_alive_hook) return d2s_raw_alive_hook(pid);
     return kill((pid_t)pid, 0) == 0 || errno == EPERM;
 }
 
 /* Брошенное ли наше правило: без владельца (прежняя версия) или владелец
  * мёртв. Правило живого процесса — никогда, в том числе своего: его снимет
  * тот, кто ставил (raw_close / отложенный повтор). */
-int d2k_rst_rule_stale(const char *line, int *port, long *pid)
+int d2s_rst_rule_stale(const char *line, int *port, long *pid)
 {
     long owner = 0;
-    if (!d2k_parse_rst_rule(line, port, &owner)) return 0;
+    if (!d2s_parse_rst_rule(line, port, &owner)) return 0;
     if (pid) *pid = owner;
     return owner == 0 || !pid_alive(owner);
 }
 
-#if defined(__linux__) || defined(D2K_RAW_UNIT_TEST)
+#if defined(__linux__) || defined(D2S_RAW_UNIT_TEST)
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -156,12 +156,12 @@ int d2k_rst_rule_stale(const char *line, int *port, long *pid)
 #ifndef SO_MARK
 #define SO_MARK 36
 #endif
-#if defined(D2K_RAW_UNIT_TEST) && !defined(IPV6_HDRINCL)
+#if defined(D2S_RAW_UNIT_TEST) && !defined(IPV6_HDRINCL)
 /* Only packet helpers run in the non-Linux unit harness. */
 #define IPV6_HDRINCL (-1)
 #endif
 
-int d2k_raw_supported(void) { return 1; }
+int d2s_raw_supported(void) { return 1; }
 
 enum {
     TCP_FIN = 0x01,
@@ -191,7 +191,7 @@ typedef struct {
     uint8_t tcp_options[12];
     uint8_t tcp_options_len;
     /* Предлагать ли метку времени в SYN — по набору опций клиента, чьё
-     * приветствие повторяет зонд (d2k_trigger_offers_ts; замысел 2026-10-23,
+     * приветствие повторяет зонд (d2s_trigger_offers_ts; замысел 2026-10-23,
      * п. 5.1). Прежде метка стояла литералом, и зонд здоровался не как клиент. */
     uint8_t offer_ts;
     /* raw_recv returns a slice which must survive until the next receive
@@ -227,7 +227,7 @@ static int raw_rule_system(const char *cmd)
     if (pid < 0) return -1;
     if (pid == 0) {
         /* Только async-signal-safe вызовы: процесс многопоточный. Дескрипторы
-         * d2kc (NFQUEUE, сокеты зондов, журналы) команде правила не нужны и не
+         * d2sc (NFQUEUE, сокеты зондов, журналы) команде правила не нужны и не
          * должны пережить её в iptables — закрываем всё, кроме 0–2. */
         setpgid(0, 0);
         long maxfd = sysconf(_SC_OPEN_MAX);
@@ -237,34 +237,34 @@ static int raw_rule_system(const char *cmd)
         _exit(127);
     }
     setpgid(pid, pid);
-    int64_t deadline = d2k_now_ms() + g_rule_deadline_ms;
+    int64_t deadline = d2s_now_ms() + g_rule_deadline_ms;
     for (;;) {
         int st = 0;
         pid_t w = waitpid(pid, &st, WNOHANG);
         if (w == pid) return st;
         if (w < 0 && errno != EINTR) return -1;
-        if (d2k_now_ms() >= deadline) {
+        if (d2s_now_ms() >= deadline) {
             kill(-pid, SIGKILL);
             kill(pid, SIGKILL);
             while (waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
-            return D2K_RAW_RULE_KILLED;
+            return D2S_RAW_RULE_KILLED;
         }
         struct timespec ts = {0, 10 * 1000 * 1000};
         nanosleep(&ts, NULL);
     }
 }
-d2k_raw_rule_fn d2k_raw_rule_hook = raw_rule_system;
+d2s_raw_rule_fn d2s_raw_rule_hook = raw_rule_system;
 static uint32_t g_sport_counter;
 static pthread_once_t g_seed_once = PTHREAD_ONCE_INIT;
 static pthread_once_t g_sweep_once = PTHREAD_ONCE_INIT;
 static pthread_mutex_t g_raw_state = PTHREAD_MUTEX_INITIALIZER;
 
-unsigned long d2k_raw_rst_fail_count(void) { return t_rst_rule_failures; }
-unsigned long d2k_raw_dial_count(void) { return t_raw_dials; }
+unsigned long d2s_raw_rst_fail_count(void) { return t_rst_rule_failures; }
+unsigned long d2s_raw_dial_count(void) { return t_raw_dials; }
 
 static void seed_init(void)
 {
-    srandom((unsigned)((uint64_t)d2k_now_ms() ^ (uint64_t)getpid()));
+    srandom((unsigned)((uint64_t)d2s_now_ms() ^ (uint64_t)getpid()));
     g_sport_counter = (uint32_t)(random() % 25000);
 }
 
@@ -294,9 +294,9 @@ static uint16_t next_source_port(void)
 /* sweepStaleRSTRules снимает правила подавления, оставшиеся от прошлых
  * прогонов: уборщик не выполнится, если процесс убили сигналом KILL — а
  * панель именно так и добивает замер, не уложившийся в отведённое время. */
-/* OpenWrt без iptables (25.12, 07.10.2026): S99d2k ставит правила в nftables
- * и экспортирует D2K_FW=nft. Тогда правило подавления — элемент множества
- * inet d2k_rst (rst4/rst6) с таймаутом: после kill -9 он истекает сам, и ни
+/* OpenWrt без iptables (25.12, 07.10.2026): S99d2s ставит правила в nftables
+ * и экспортирует D2S_FW=nft. Тогда правило подавления — элемент множества
+ * inet d2s_rst (rst4/rst6) с таймаутом: после kill -9 он истекает сам, и ни
  * уборки по владельцу, ни комментария не нужно. Таймаут с запасом больше
  * жизни зонда (шаги по timeout_ms, секунды). */
 #define RST_NFT_TIMEOUT "300s"
@@ -312,7 +312,7 @@ typedef struct {
 } rst_key;
 static int rst_nft(void)
 {
-    const char *fw = getenv("D2K_FW");
+    const char *fw = getenv("D2S_FW");
     return fw && strcmp(fw, "nft") == 0;
 }
 
@@ -334,8 +334,8 @@ static void sweep_stale_rst_rules(void)
     while (fgets(line, sizeof(line), f)) {
         int port;
         long owner = 0;
-        if (d2k_rst_rule_stale(line, &port, &owner)) {
-            char cmd[256], tag[64] = ""; /* " -m comment --comment d2k-rst:" + 20 цифр long */
+        if (d2s_rst_rule_stale(line, &port, &owner)) {
+            char cmd[256], tag[64] = ""; /* " -m comment --comment d2s-rst:" + 20 цифр long */
             if (owner > 0) snprintf(tag, sizeof tag, " -m comment --comment %s%ld", RST_OWNED_TAG, owner);
             snprintf(cmd, sizeof(cmd),
                      "%s -w -D OUTPUT -p tcp --sport %d --tcp-flags RST RST%s -j DROP"
@@ -387,16 +387,16 @@ static int rst_rule_cmd_form(const char *op, const rst_key *k, int comment)
         const char *verb = strcmp(op, "-I") == 0 ? "add" : strcmp(op, "-D") == 0 ? "delete" : "get";
         char addr[INET6_ADDRSTRLEN];
         if (!inet_ntop(k->family == 6 ? AF_INET6 : AF_INET, k->dst, addr, sizeof addr)) return -1;
-        snprintf(cmd, sizeof(cmd), "nft %s element inet d2k_rst rst%c { %u . %s . %u%s } >/dev/null 2>&1",
+        snprintf(cmd, sizeof(cmd), "nft %s element inet d2s_rst rst%c { %u . %s . %u%s } >/dev/null 2>&1",
                  verb, k->family == 6 ? '6' : '4', (unsigned)k->sport, addr, (unsigned)k->dport,
                  strcmp(verb, "add") == 0 ? " timeout " RST_NFT_TIMEOUT : "");
-        return d2k_raw_rule_hook(cmd);
+        return d2s_raw_rule_hook(cmd);
     }
     if (comment) snprintf(tag, sizeof tag, " -m comment --comment %s%ld", RST_OWNED_TAG, (long)getpid());
     snprintf(cmd, sizeof(cmd),
              "%s -w %s OUTPUT -p tcp --sport %u --tcp-flags RST RST%s -j DROP >/dev/null 2>&1",
              k->family == 6 ? "ip6tables" : "iptables", op, (unsigned)k->sport, tag);
-    return d2k_raw_rule_hook(cmd);
+    return d2s_raw_rule_hook(cmd);
 }
 
 static int rst_rule_cmd(const char *op, const rst_key *k)
@@ -427,9 +427,9 @@ static void rst_abandon(const rst_key *k)
     uint8_t family = k->family;
     if (g_rst_abandon_said) return;
     g_rst_abandon_said = 1;
-    fprintf(stderr, "d2k: правило подавления RST (%s, порт %u) не снято за %d попыток — "
+    fprintf(stderr, "d2s: правило подавления RST (%s, порт %u) не снято за %d попыток — "
                     "больше не повторяю до выхода процесса; при выходе попробую ещё раз, "
-                    "оставшееся снимет уборка следующего запуска d2k\n",
+                    "оставшееся снимет уборка следующего запуска d2s\n",
             family == 6 ? "ip6tables" : "iptables", (unsigned)sport, RST_RELEASE_ATTEMPTS);
 }
 
@@ -475,17 +475,17 @@ static void rst_release_locked(const rst_key *k)
     }
 }
 
-/* Отложенные снятия — и тогда, когда новых правок правил нет (d2kc простаивает
+/* Отложенные снятия — и тогда, когда новых правок правил нет (d2sc простаивает
  * или прогон обходится без сырого слоя): перед каждой пачкой зондов (старт
  * прогона классификатора) и при выходе процесса. */
-void d2k_raw_flush_pending(void)
+void d2s_raw_flush_pending(void)
 {
     pthread_mutex_lock(&g_raw_state);
     if (g_rst_pending_n) retry_pending_releases(0);
     pthread_mutex_unlock(&g_raw_state);
 }
 
-size_t d2k_raw_pending_count(void)
+size_t d2s_raw_pending_count(void)
 {
     size_t n;
     pthread_mutex_lock(&g_raw_state);
@@ -496,7 +496,7 @@ size_t d2k_raw_pending_count(void)
 
 static void raw_atexit(void)
 {
-    /* На выходе рабочие потоки уже собраны (d2k_sched_free); если замок всё же
+    /* На выходе рабочие потоки уже собраны (d2s_sched_free); если замок всё же
      * занят — не ждать его, выход важнее. */
     if (pthread_mutex_trylock(&g_raw_state) != 0) return;
     if (g_rst_pending_n) retry_pending_releases(1);
@@ -527,7 +527,7 @@ static int suppress_kernel_rst(const raw_conn *c)
     if (rc > 0 && g_rst_comment && !rst_nft() && WIFEXITED(rc) && WEXITSTATUS(rc) <= 2 &&
         rst_rule_cmd_form("-I", k, 0) == 0) {
         g_rst_comment = 0;
-        fprintf(stderr, "d2k: в прошивке нет xt_comment — правила подавления RST "
+        fprintf(stderr, "d2s: в прошивке нет xt_comment — правила подавления RST "
                         "ставлю без метки владельца\n");
         rc = 0;
     }
@@ -538,7 +538,7 @@ static int suppress_kernel_rst(const raw_conn *c)
          * знаем, не снимет никто, пока процесс жив, — снимаем его сами (ревью
          * detect, I2). Ненулевой код самого iptables означает, что фиксации
          * не было: снимать нечего. */
-        if (rc == D2K_RAW_RULE_KILLED) rst_release_locked(k);
+        if (rc == D2S_RAW_RULE_KILLED) rst_release_locked(k);
     }
     pthread_mutex_unlock(&g_raw_state);
     return rc == 0;
@@ -654,7 +654,7 @@ static size_t build_ipv4_tcp(uint8_t *pkt, size_t cap,
                              uint16_t sport, uint16_t dport,
                              uint32_t seq, uint32_t ack, uint8_t flags,
                              const uint8_t *payload, size_t plen,
-                             const d2k_poison *p,
+                             const d2s_poison *p,
                              const uint8_t *extra, size_t extralen)
 {
     uint8_t opts[64];
@@ -751,7 +751,7 @@ static size_t build_ip_tcp(uint8_t *pkt, size_t cap, uint8_t family,
                             const uint8_t *src, const uint8_t *dst,
                             uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack,
                             uint8_t flags, const uint8_t *payload, size_t plen,
-                            const d2k_poison *p, const uint8_t *extra, size_t extralen)
+                            const d2s_poison *p, const uint8_t *extra, size_t extralen)
 {
     if (family != 6)
         return build_ipv4_tcp(pkt, cap, src, dst, sport, dport, seq, ack, flags,
@@ -806,12 +806,12 @@ static int raw_sendto(raw_conn *c, const uint8_t *pkt, size_t n)
  * 1400 — с запасом под PPPoE (1492) и под опции TCP в нашем же заголовке.
  *
  * Потолок — переменная, а не константа (поле 22.10.2026, issue #5/#7): ядро
- * ставит его по пределу датапата (d2k_arm_segment), и замер уходит теми же
+ * ставит его по пределу датапата (d2s_arm_segment), и замер уходит теми же
  * сегментами, какими потом пойдёт план. Иначе на узком канале (туннель, LTE)
  * замер шёл сегментами 1400, а план с таким сегментом датапат отвергал — и
  * измеренное расходилось с исполнимым. По умолчанию — прежние 1400. */
-static unsigned seg_max = D2K_ARM_SEGMENT_MAX;
-void d2k_raw_set_segment_max(unsigned seg) { seg_max = seg ? seg : D2K_ARM_SEGMENT_MAX; }
+static unsigned seg_max = D2S_ARM_SEGMENT_MAX;
+void d2s_raw_set_segment_max(unsigned seg) { seg_max = seg ? seg : D2S_ARM_SEGMENT_MAX; }
 
 /* send кладёт нагрузку на провод. Номер последовательности НЕ двигается при
  * отравленной посылке: фальшивка обязана занять ту же область, что займут
@@ -828,7 +828,7 @@ void d2k_raw_set_segment_max(unsigned seg) { seg_max = seg ? seg : D2K_ARM_SEGME
  * коробки «одним сегментом или двумя» — не разница; для не пересобирающей
  * ответ уже получен выше по дереву. */
 static int raw_send(raw_conn *c, const uint8_t *payload, size_t plen,
-                    uint8_t flags, const d2k_poison *p)
+                    uint8_t flags, const d2s_poison *p)
 {
     uint8_t pkt[2048];
     uint32_t seq = c->seq;
@@ -883,7 +883,7 @@ static int raw_send_syn(raw_conn *c)
     const uint8_t *opts = c->offer_ts ? opts_ts : opts_plain;
     size_t optlen = c->offer_ts ? sizeof(opts_ts) : sizeof(opts_plain);
     uint8_t pkt[256];
-    d2k_poison none;
+    d2s_poison none;
     size_t n;
 
     memset(&none, 0, sizeof(none));
@@ -899,14 +899,14 @@ static int raw_send_syn(raw_conn *c)
 enum { RAW_RECV_WAIT = -1, RAW_RECV_ERROR = -2 };
 static int raw_recv(raw_conn *c, uint8_t *flags, uint32_t *seq, uint32_t *ack,
                     const uint8_t **payload, size_t *plen,
-                    int64_t deadline, const d2k_detect_stop *cancel)
+                    int64_t deadline, const d2s_detect_stop *cancel)
 {
     uint8_t *buf = c->buffers->recv;
     for (;;) {
         /* SO_RCVTIMEO bounds one recvfrom, not this filtering loop. On a
          * busy router unrelated packets otherwise keep a silent probe alive
          * forever, also preventing cancellation and occupying its worker. */
-        if (d2k_now_ms() >= deadline || d2k_detect_stopped(cancel)) return -1;
+        if (d2s_now_ms() >= deadline || d2s_detect_stopped(cancel)) return -1;
         struct sockaddr_storage peer;
         socklen_t peerlen = sizeof peer;
         ssize_t n = recvfrom(c->recv_fd, buf, sizeof(c->buffers->recv), 0,
@@ -949,13 +949,13 @@ static int raw_recv(raw_conn *c, uint8_t *flags, uint32_t *seq, uint32_t *ack,
 }
 
 /* readPayload ждёт от сервера сегмент с данными. */
-static int raw_read_payload(raw_conn *c, int timeout_ms, const d2k_detect_stop *cancel,
+static int raw_read_payload(raw_conn *c, int timeout_ms, const d2s_detect_stop *cancel,
                             uint8_t *out, size_t cap, size_t *outlen)
 {
-    int64_t deadline = d2k_now_ms() + timeout_ms;
-    while (d2k_now_ms() < deadline) {
+    int64_t deadline = d2s_now_ms() + timeout_ms;
+    while (d2s_now_ms() < deadline) {
         uint8_t flags;
-        if (d2k_detect_stopped(cancel)) {
+        if (d2s_detect_stopped(cancel)) {
             return -1;
         }
         uint32_t seq, ack;
@@ -1005,18 +1005,18 @@ static void raw_close(raw_conn *c)
     c->buffers = NULL;
 }
 
-static int raw_handshake(raw_conn *c, int timeout_ms, const d2k_detect_stop *cancel,
+static int raw_handshake(raw_conn *c, int timeout_ms, const d2s_detect_stop *cancel,
                          char *err, size_t errcap)
 {
     int64_t deadline;
-    d2k_poison none;
+    d2s_poison none;
 
     memset(&none, 0, sizeof(none));
     if (raw_send_syn(c) != 0) {
         snprintf(err, errcap, "%s", strerror(errno));
         return -1;
     }
-    deadline = d2k_now_ms() + timeout_ms;
+    deadline = d2s_now_ms() + timeout_ms;
     /* ПОТЕРЯННЫЙ SYN ПОВТОРЯЕТСЯ, КАК У TCP ЯДРА (RFC 6298: RTO с секунды,
      * затем вдвое), тем же номером. Поле 15.10.2026, flibusta.is: путь
      * эпизодами теряет SYN (17-19 %, в эпизоде до половины), а единственный
@@ -1025,23 +1025,23 @@ static int raw_handshake(raw_conn *c, int timeout_ms, const d2k_detect_stop *can
      * клиент повторяет SYN; зонд, который этого не делает, мерит не коробку,
      * а потери пути. */
     int rto_ms = 1000;
-    int64_t next_syn = d2k_now_ms() + rto_ms;
-    while (d2k_now_ms() < deadline) {
+    int64_t next_syn = d2s_now_ms() + rto_ms;
+    while (d2s_now_ms() < deadline) {
         uint8_t flags;
         uint32_t seq, ack;
         const uint8_t *pay;
         size_t plen;
-        if (d2k_detect_stopped(cancel)) {
+        if (d2s_detect_stopped(cancel)) {
             snprintf(err, errcap, "context canceled");
             return -1;
         }
-        if (d2k_now_ms() >= next_syn) {
+        if (d2s_now_ms() >= next_syn) {
             if (raw_send_syn(c) != 0) {
                 snprintf(err, errcap, "%s", strerror(errno));
                 return -1;
             }
             rto_ms *= 2;
-            next_syn = d2k_now_ms() + rto_ms;
+            next_syn = d2s_now_ms() + rto_ms;
         }
         int received = raw_recv(c, &flags, &seq, &ack, &pay, &plen,
                                 next_syn < deadline ? next_syn : deadline, cancel);
@@ -1085,12 +1085,12 @@ static int raw_handshake(raw_conn *c, int timeout_ms, const d2k_detect_stop *can
         }
     }
     snprintf(err, errcap, "classify: SYN-ACK не пришёл");
-    return D2K_RAW_CONNECT_TIMEOUT;
+    return D2S_RAW_CONNECT_TIMEOUT;
 }
 
 /* dialRaw поднимает соединение своими руками и возвращает его установленным. */
 static int raw_dial(raw_conn *c, const uint8_t *dst, uint8_t family, uint16_t dport,
-                    int timeout_ms, uint32_t mark_val, const d2k_detect_stop *cancel,
+                    int timeout_ms, uint32_t mark_val, const d2s_detect_stop *cancel,
                     int offer_ts, char *err, size_t errcap)
 {
     int one = 1;
@@ -1167,7 +1167,7 @@ static int raw_dial(raw_conn *c, const uint8_t *dst, uint8_t family, uint16_t dp
      * своя поломка, а не свойство сети: вернув ошибку, мы роняли
      * самопроверку, и цель уходила в «обойти нечем». Факт отказа не молчит:
      * он считается в t_rst_rule_failures потока (трасса вердикта и адаптер
-     * планировщика сравнивают d2k_raw_rst_fail_count со стартом прогона). */
+     * планировщика сравнивают d2s_raw_rst_fail_count со стартом прогона). */
     t_raw_dials++;
     c->rule_up = suppress_kernel_rst(c);
 
@@ -1184,8 +1184,8 @@ static int raw_dial(raw_conn *c, const uint8_t *dst, uint8_t family, uint16_t dp
  * 2026-08-28, googlevideo: тот фронтенд обслуживает только заблокированные
  * имена, безобидной нагрузки для него не существует, и самопроверка падала не
  * потому, что слой сломан, а потому, что отвечать было не на что. */
-int d2k_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port,
-                            int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel,
+int d2s_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port,
+                            int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel,
                             int offer_ts, char *err, size_t errcap)
 {
     raw_conn c;
@@ -1206,21 +1206,21 @@ int d2k_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port
 /* The measured Plan is the program, not a second description reconstructed
  * after the experiment. Same compiler, parser, TLS modifiers, segmentation,
  * ordering and IP/TCP builder as the datapath. Only the sink differs. */
-static int raw_send_plan(raw_conn *c, const d2k_trigger *tr, const d2k_poison *p,
-                         const d2k_detect_stop *cancel, char *err, size_t errcap)
+static int raw_send_plan(raw_conn *c, const d2s_trigger *tr, const d2s_poison *p,
+                         const d2s_detect_stop *cancel, char *err, size_t errcap)
 {
-    d2k_arm arm;
-    d2k_arm_input input = {0};
-    d2k_plan *plan = NULL;
-    d2k_actions out = {0};
-    d2k_pkt pkt = {0};
-    d2k_conn conn = {0};
-    struct plan_buffers { char text[8192]; uint8_t tlv[D2K_PLAN_TLV_MAX]; uint8_t packet[8192]; };
+    d2s_arm arm;
+    d2s_arm_input input = {0};
+    d2s_plan *plan = NULL;
+    d2s_actions out = {0};
+    d2s_pkt pkt = {0};
+    d2s_conn conn = {0};
+    struct plan_buffers { char text[8192]; uint8_t tlv[D2S_PLAN_TLV_MAX]; uint8_t packet[8192]; };
     struct plan_buffers *b = NULL;
     size_t tn = 0;
     int rc = -1;
     if (errcap) err[0] = '\0';
-    if (d2k_arm_from_poison(p, &arm, err, errcap)) return -1;
+    if (d2s_arm_from_poison(p, &arm, err, errcap)) return -1;
     if (p->decoy_len > sizeof input.decoy || (p->decoy_len && !p->decoy)) {
         snprintf(err, errcap, "приманку измерительного плана нельзя сохранить целиком");
         return -1;
@@ -1231,13 +1231,13 @@ static int raw_send_plan(raw_conn *c, const d2k_trigger *tr, const d2k_poison *p
     if (p->decoy_len) memcpy(input.decoy, p->decoy, p->decoy_len);
     b = malloc(sizeof *b);
     if (!b) { snprintf(err, errcap, "нет памяти для измерительного плана"); return -1; }
-    if (d2k_arm_plan_measured(&arm, &input, b->text, sizeof b->text) ||
-        d2k_plan_text_to_tlv(b->text, b->tlv, sizeof b->tlv, &tn, err, errcap) ||
-        d2k_plan_load(b->tlv, tn, &plan, err, errcap)) goto done;
+    if (d2s_arm_plan_measured(&arm, &input, b->text, sizeof b->text) ||
+        d2s_plan_text_to_tlv(b->text, b->tlv, sizeof b->tlv, &tn, err, errcap) ||
+        d2s_plan_load(b->tlv, tn, &plan, err, errcap)) goto done;
     pkt.seq = c->seq; pkt.payload = tr->payload; pkt.payload_len = tr->len;
     pkt.have_sni = tr->sni_off > 0 && tr->sni_len > 0;
     pkt.sni_off = tr->sni_off; pkt.sni_len = tr->sni_len;
-    if (d2k_plan_apply(plan, NULL, &pkt, &out) || out.fate != D2K_ORIG_DROP) goto done;
+    if (d2s_plan_apply(plan, NULL, &pkt, &out) || out.fate != D2S_ORIG_DROP) goto done;
     conn.family = c->family; conn.ack = c->ack; conn.window = 65535; conn.ttl = 64;
     memcpy(&conn.src_ip, c->src, 4); memcpy(&conn.dst_ip, c->dst, 4);
     memcpy(conn.src_ip6, c->src, 16); memcpy(conn.dst_ip6, c->dst, 16);
@@ -1245,19 +1245,19 @@ static int raw_send_plan(raw_conn *c, const d2k_trigger *tr, const d2k_poison *p
     memcpy(conn.tcp_options, c->tcp_options, c->tcp_options_len);
     conn.tcp_options_len = c->tcp_options_len;
     for (size_t i = 0; i < out.n; i++) {
-        if (d2k_detect_stopped(cancel)) { snprintf(err, errcap, "context canceled"); goto done; }
-        if (out.v[i].delay_us) d2k_sleep_ms((int)(out.v[i].delay_us / 1000));
-        size_t n = d2k_wire_build(&conn, &out.v[i], b->packet, sizeof b->packet);
+        if (d2s_detect_stopped(cancel)) { snprintf(err, errcap, "context canceled"); goto done; }
+        if (out.v[i].delay_us) d2s_sleep_ms((int)(out.v[i].delay_us / 1000));
+        size_t n = d2s_wire_build(&conn, &out.v[i], b->packet, sizeof b->packet);
         if (!n || raw_sendto(c, b->packet, n)) goto done;
     }
     /* Historical receive-side grace period; not an emission instruction. */
     if (p->disorder && !p->disorder_pos && !p->seqovl && !p->seqovl_exact && !p->fake_between)
-        d2k_sleep_ms(12);
+        d2s_sleep_ms(12);
     c->seq += (uint32_t)tr->len + (p->oob ? 1u : 0u);
     rc = 0;
 done:
     if (rc && errcap && !err[0]) snprintf(err, errcap, "не удалось исполнить измерительный план");
-    d2k_actions_free(&out); d2k_plan_free(plan); free(b);
+    d2s_actions_free(&out); d2s_plan_free(plan); free(b);
     return rc;
 }
 
@@ -1269,9 +1269,9 @@ done:
  * (замер 2026-08-28: 48 гипотез поодиночке мимо, то же плечо в связке — 10 из
  * 10 на том же адресе). Поэтому здесь два независимых шага: отравить буфер
  * фальшивкой и отдать правду — как есть, задом наперёд или внахлёст слева. */
-int d2k_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t port,
-                         const d2k_trigger *tr, const d2k_poison *p,
-                         int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel,
+int d2s_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t port,
+                         const d2s_trigger *tr, const d2s_poison *p,
+                         int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel,
                          char *err, size_t errcap)
 {
     uint8_t *resp;
@@ -1280,7 +1280,7 @@ int d2k_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t por
     int rc = 0;
 
     int dial_rc = raw_dial(&c, ip4, family, port, timeout_ms, mark, cancel,
-                          d2k_trigger_offers_ts(tr), err, errcap);
+                          d2s_trigger_offers_ts(tr), err, errcap);
     if (dial_rc != 0) return dial_rc;
     resp = c.buffers->resp;
 
@@ -1296,7 +1296,7 @@ int d2k_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t por
 
     /* Non-bypass diagnostics only: direct control / unsupported SYN-data.
        Neither can be promoted to a measured bypass plan by the bridge. */
-    d2k_poison none = {0};
+    d2s_poison none = {0};
     if (raw_send(&c, tr->payload, tr->len,
                  (uint8_t)(TCP_PSH | TCP_ACK | (p->syn_data ? TCP_SYN : 0)), &none)) {
         goto senderr;
@@ -1310,7 +1310,7 @@ receive:
         raw_close(&c); return -1;
     }
     if (rc != 0) { raw_close(&c); return 0; }
-    rc = d2k_trigger_accepts(tr, resp, resp_len);
+    rc = d2s_trigger_accepts(tr, resp, resp_len);
     raw_close(&c);
     return rc;
 
@@ -1325,16 +1325,16 @@ senderr:
 /* Сырого слоя вне Linux нет. Это не заглушка «на будущее»: отрицательный
  * результат отравления без сырых сокетов не означает ничего, и вердикт обязан
  * это сказать (см. res.RawUsable в эталоне), а не промолчать. */
-int d2k_raw_supported(void) { return 0; }
-void d2k_raw_set_segment_max(unsigned seg) { (void)seg; }
-unsigned long d2k_raw_rst_fail_count(void) { return 0; }
-unsigned long d2k_raw_dial_count(void) { return 0; }
-void d2k_raw_flush_pending(void) {}
-size_t d2k_raw_pending_count(void) { return 0; }
+int d2s_raw_supported(void) { return 0; }
+void d2s_raw_set_segment_max(unsigned seg) { (void)seg; }
+unsigned long d2s_raw_rst_fail_count(void) { return 0; }
+unsigned long d2s_raw_dial_count(void) { return 0; }
+void d2s_raw_flush_pending(void) {}
+size_t d2s_raw_pending_count(void) { return 0; }
 
-int d2k_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t port,
-                         const d2k_trigger *tr, const d2k_poison *p,
-                         int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel,
+int d2s_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t port,
+                         const d2s_trigger *tr, const d2s_poison *p,
+                         int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel,
                          char *err, size_t errcap)
 {
     (void)family; (void)ip4; (void)port; (void)tr; (void)p; (void)timeout_ms; (void)mark; (void)cancel;
@@ -1342,8 +1342,8 @@ int d2k_raw_probe_poison_family(const uint8_t *ip4, uint8_t family, uint16_t por
     return -1;
 }
 
-int d2k_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port,
-                            int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel,
+int d2s_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port,
+                            int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel,
                             int offer_ts, char *err, size_t errcap)
 {
     (void)family; (void)ip4; (void)port; (void)timeout_ms; (void)mark; (void)cancel;
@@ -1354,24 +1354,24 @@ int d2k_raw_probe_handshake_as(const uint8_t *ip4, uint8_t family, uint16_t port
 
 #endif /* __linux__ */
 
-int d2k_raw_probe_handshake(const uint8_t ip4[4], uint16_t port,
-    int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel, char *err, size_t errcap)
+int d2s_raw_probe_handshake(const uint8_t ip4[4], uint16_t port,
+    int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel, char *err, size_t errcap)
 {
-    return d2k_raw_probe_handshake_family(ip4, 4, port, timeout_ms, mark, cancel, err, errcap);
+    return d2s_raw_probe_handshake_family(ip4, 4, port, timeout_ms, mark, cancel, err, errcap);
 }
 
 /* Прежняя подпись — прежний набор с меткой времени. */
-int d2k_raw_probe_handshake_family(const uint8_t *ip4, uint8_t family, uint16_t port,
-                            int timeout_ms, uint32_t mark, const d2k_detect_stop *cancel,
+int d2s_raw_probe_handshake_family(const uint8_t *ip4, uint8_t family, uint16_t port,
+                            int timeout_ms, uint32_t mark, const d2s_detect_stop *cancel,
                             char *err, size_t errcap)
 {
-    return d2k_raw_probe_handshake_as(ip4, family, port, timeout_ms, mark, cancel, 1,
+    return d2s_raw_probe_handshake_as(ip4, family, port, timeout_ms, mark, cancel, 1,
                                       err, errcap);
 }
 
-int d2k_raw_probe_poison(const uint8_t ip4[4], uint16_t port,
-    const d2k_trigger *tr, const d2k_poison *p, int timeout_ms, uint32_t mark,
-    const d2k_detect_stop *cancel, char *err, size_t errcap)
+int d2s_raw_probe_poison(const uint8_t ip4[4], uint16_t port,
+    const d2s_trigger *tr, const d2s_poison *p, int timeout_ms, uint32_t mark,
+    const d2s_detect_stop *cancel, char *err, size_t errcap)
 {
-    return d2k_raw_probe_poison_family(ip4, 4, port, tr, p, timeout_ms, mark, cancel, err, errcap);
+    return d2s_raw_probe_poison_family(ip4, 4, port, tr, p, timeout_ms, mark, cancel, err, errcap);
 }

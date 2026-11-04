@@ -3,7 +3,7 @@
 # Requires compiledb (uv tool install compiledb) and jq.
 set -eu
 repo_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-index_tmp=$(mktemp -d "${TMPDIR:-/tmp}/d2k-code-index.XXXXXX")
+index_tmp=$(mktemp -d "${TMPDIR:-/tmp}/d2s-code-index.XXXXXX")
 trap 'rm -f "$index_tmp/core.json" "$index_tmp/datapath.json" "$index_tmp/detect.json" "$index_tmp/merged.json"; rmdir "$index_tmp"' EXIT HUP INT TERM
 for component in core datapath detect; do
     # Run inside the component: make -C is not reliably tracked by compiledb

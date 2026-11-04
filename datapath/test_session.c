@@ -8,18 +8,18 @@
 #include <stdio.h>
 #include <string.h>
 #include "test_nat_stub.h"
-#include "d2k_nat.h"
-#include "d2k_session.h"
-#include "d2k_hold.h"
-#include "d2k_tls.h"
-#include "d2k_ctq.h"
+#include "d2s_nat.h"
+#include "d2s_session.h"
+#include "d2s_hold.h"
+#include "d2s_tls.h"
+#include "d2s_ctq.h"
 
 static int fails;
 static size_t hold_released;
 static void hold_release(void *ctx, uint32_t id, const uint8_t *p, size_t n) {
     (void)id;
     hold_released++;
-    d2k_session_observe_tcp(ctx, p, n, 20);
+    d2s_session_observe_tcp(ctx, p, n, 20);
 }
 #define CHECK(cond, msg)                                   \
     do {                                                   \
@@ -29,17 +29,17 @@ static void hold_release(void *ctx, uint32_t id, const uint8_t *p, size_t n) {
         }                                                  \
     } while (0)
 
-/* Сколько раз в журнале встретился отказ плана (D2K_JRN_PLAN_REFUSED) — по
+/* Сколько раз в журнале встретился отказ плана (D2S_JRN_PLAN_REFUSED) — по
    count, не по note: разные причины отказа делят один и тот же вид записи
-   (см. d2k_journal.h), а здесь для каждого сценария в таблице ровно одна
+   (см. d2s_journal.h), а здесь для каждого сценария в таблице ровно одна
    цель, так что кода причины достаточно. */
-static size_t count_plan_refused(const d2k_session *s) {
-    const d2k_journal *j = d2k_session_journal(s);
-    size_t n = d2k_journal_count(j);
+static size_t count_plan_refused(const d2s_session *s) {
+    const d2s_journal *j = d2s_session_journal(s);
+    size_t n = d2s_journal_count(j);
     size_t c = 0;
     for (size_t i = 0; i < n; i++) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i);
-        if (e && e->kind == D2K_JRN_PLAN_REFUSED) {
+        const d2s_jrn_entry *e = d2s_journal_at(j, i);
+        if (e && e->kind == D2S_JRN_PLAN_REFUSED) {
             c++;
         }
     }
@@ -49,12 +49,12 @@ static size_t count_plan_refused(const d2k_session *s) {
 /* Сколько записей заданного вида в журнале. Отдельно от count_plan_refused:
    «план не доисполнен» и «план не применялся» — разные виды записи, и считать
    их одной функцией значило бы снова смешать два разных факта. */
-static size_t count_kind(const d2k_session *s, uint8_t kind) {
-    const d2k_journal *j = d2k_session_journal(s);
-    size_t n = d2k_journal_count(j);
+static size_t count_kind(const d2s_session *s, uint8_t kind) {
+    const d2s_journal *j = d2s_session_journal(s);
+    size_t n = d2s_journal_count(j);
     size_t c = 0;
     for (size_t i = 0; i < n; i++) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i);
+        const d2s_jrn_entry *e = d2s_journal_at(j, i);
         if (e && e->kind == kind) {
             c++;
         }
@@ -63,12 +63,12 @@ static size_t count_kind(const d2k_session *s, uint8_t kind) {
 }
 
 /* Последняя запись заданного вида. NULL — такой не было. */
-static const d2k_jrn_entry *last_of_kind(const d2k_session *s, uint8_t kind) {
-    const d2k_journal *j = d2k_session_journal(s);
-    size_t n = d2k_journal_count(j);
-    const d2k_jrn_entry *found = NULL;
+static const d2s_jrn_entry *last_of_kind(const d2s_session *s, uint8_t kind) {
+    const d2s_journal *j = d2s_session_journal(s);
+    size_t n = d2s_journal_count(j);
+    const d2s_jrn_entry *found = NULL;
     for (size_t i = 0; i < n; i++) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i);
+        const d2s_jrn_entry *e = d2s_journal_at(j, i);
         if (e && e->kind == kind) {
             found = e;
         }
@@ -138,7 +138,7 @@ static const uint8_t plan_owns_payload[] = {
     0x01, 0x05, 0x00, 0x04, 0x00, 0x00, 0x2E, 0xE0
 };
 
-/* План с числом повторов D2K_RESULT_MAX+1: больше вместимости результата.
+/* План с числом повторов D2S_RESULT_MAX+1: больше вместимости результата.
  * Он должен отвергаться целиком, а не тихо обрезаться. Заголовок schema=1
  * + minexec=1 + flags=0 + число записей=2: REC_PAYLOAD (id=1, байт 0xAA) и
  * REC_FAKE (payload_id=1, poison_id=0, placement=PLACE_BEFORE,
@@ -146,10 +146,10 @@ static const uint8_t plan_owns_payload[] = {
 static const uint8_t plan_too_many_repeats[] = {
     'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
     0x00, 0x10, 0x00, 0x03, 0x00, 0x01, 0xAA,
-    0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, D2K_RESULT_MAX + 1, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, D2S_RESULT_MAX + 1, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
-/* Порты в ключе потока лежат в СЕТЕВОМ порядке (d2k_key_make, d2k_track.h):
+/* Порты в ключе потока лежат в СЕТЕВОМ порядке (d2s_key_make, d2s_track.h):
    сравнивать их с числом напрямую значит сравнить по-разному на разных арках.
    Своя функция, а не htons: <arpa/inet.h> тянуть в переносимый тест незачем. */
 static uint16_t htons16(uint16_t v) {
@@ -364,12 +364,12 @@ static int nat_stub(const char *path, uint8_t proto,
  * Отличить их может только датапат: он один знает, применялся ли план к
  * ЭТОМУ потоку. Три состояния, а не два: «не сказано» нужно для старой
  * службы, где поля ещё нет, — иначе её подозрения молча сменили бы смысл. */
-static const d2k_jrn_entry *last_suspect(const d2k_session *s) {
-    const d2k_journal *j = d2k_session_journal(s);
-    size_t n = d2k_journal_count(j);
+static const d2s_jrn_entry *last_suspect(const d2s_session *s) {
+    const d2s_journal *j = d2s_session_journal(s);
+    size_t n = d2s_journal_count(j);
     for (size_t i = n; i > 0; i--) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i - 1);
-        if (e && e->kind == D2K_JRN_SUSPECT) { return e; }
+        const d2s_jrn_entry *e = d2s_journal_at(j, i - 1);
+        if (e && e->kind == D2S_JRN_SUSPECT) { return e; }
     }
     return NULL;
 }
@@ -380,83 +380,83 @@ static void test_suspect_tells_planned(void) {
 
     /* План стоит и применился — подозрение по ЭТОМУ потоку улика настоящая. */
     {
-        d2k_session *s = d2k_session_new(64, 64);
-        d2k_plan *p = NULL;
+        d2s_session *s = d2s_session_new(64, 64);
+        d2s_plan *p = NULL;
         char err[160];
-        CHECK(d2k_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p,
+        CHECK(d2s_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p,
                             err, sizeof err) == 0, "план не загрузился");
-        d2k_session_set_plan(s, p);
+        d2s_session_set_plan(s, p);
         uint8_t pkt[1024], buf[8192];
-        d2k_result r;
+        d2s_result r;
         size_t pn = build_pkt(pkt, 47700, 0x18, hello, hl);
-        d2k_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
         CHECK(r.applied, "план не применился — проверять нечего");
         /* Два повтора того же приветствия: клиент ждёт ответа. */
-        d2k_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
-        d2k_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
-        const d2k_jrn_entry *e = last_suspect(s);
+        d2s_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
+        const d2s_jrn_entry *e = last_suspect(s);
         CHECK(e != NULL, "подозрение по повтору приветствия не записано");
-        CHECK(e && e->d_planned == D2K_PLANNED_YES,
+        CHECK(e && e->d_planned == D2S_PLANNED_YES,
               "подозрение молчит о том, что план к этому потоку применялся");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* A duplicate ClientHello after a real server TLS response is not
        evidence that the hello went unanswered. Late response cuts have their
        own RST/FIN path and must not re-enter the early-hello search. */
     {
-        d2k_session *s = d2k_session_new(64, 64);
-        d2k_plan *p = NULL; char err[160];
-        CHECK(d2k_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p,
+        d2s_session *s = d2s_session_new(64, 64);
+        d2s_plan *p = NULL; char err[160];
+        CHECK(d2s_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p,
                             err, sizeof err) == 0, "answered-repeat plan fixture");
-        d2k_session_set_plan(s, p);
-        uint8_t pkt[1024], buf[8192]; d2k_result r;
+        d2s_session_set_plan(s, p);
+        uint8_t pkt[1024], buf[8192]; d2s_result r;
         size_t pn = build_pkt(pkt, 47702, 0x18, hello, hl);
-        d2k_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
         const uint8_t appdata[] = {0x17, 0x03, 0x03, 0x00, 0x01, 0x00};
         pn = build_rev_pkt(pkt, 47702, 0x18, appdata, sizeof appdata);
-        d2k_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
         pn = build_pkt(pkt, 47702, 0x18, hello, hl);
-        d2k_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
-        d2k_session_packet(s, pkt, pn, 4000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 4000, buf, sizeof buf, &r);
         CHECK(!last_suspect(s), "answered TLS flow must not restart search on duplicate hello");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* A record-type byte or truncated/invalid header is not a TLS reply. */
     for (unsigned variant=0; variant<3; variant++) {
-        d2k_session *s=d2k_session_new(64,64);
-        uint8_t pkt[1024],buf[8192]; d2k_result r;
+        d2s_session *s=d2s_session_new(64,64);
+        uint8_t pkt[1024],buf[8192]; d2s_result r;
         size_t pn=build_pkt(pkt,47703,0x18,hello,hl);
-        d2k_session_packet(s,pkt,pn,1000,buf,sizeof buf,&r);
+        d2s_session_packet(s,pkt,pn,1000,buf,sizeof buf,&r);
         const uint8_t bad[][6]={{0x17}, {0x17,0x03,0x03,0x00,0x10,0x00},
                               {0x17,0x03,0xff,0x00,0x01,0x00}};
         pn=build_rev_pkt(pkt,47703,0x18,bad[variant],variant?6:1);
-        d2k_session_packet(s,pkt,pn,2000,buf,sizeof buf,&r);
+        d2s_session_packet(s,pkt,pn,2000,buf,sizeof buf,&r);
         pn=build_pkt(pkt,47703,0x18,hello,hl);
-        d2k_session_packet(s,pkt,pn,3000,buf,sizeof buf,&r);
-        d2k_session_packet(s,pkt,pn,4000,buf,sizeof buf,&r);
-        const d2k_jrn_entry *e=last_suspect(s);
-        CHECK(e && e->code==D2K_SUSPECT_REPEAT,
+        d2s_session_packet(s,pkt,pn,3000,buf,sizeof buf,&r);
+        d2s_session_packet(s,pkt,pn,4000,buf,sizeof buf,&r);
+        const d2s_jrn_entry *e=last_suspect(s);
+        CHECK(e && e->code==D2S_SUSPECT_REPEAT,
               "malformed reverse payload must not hide unanswered ClientHello repeats");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* Плана не было вовсе — подозрение о таком потоке про план не говорит. */
     {
-        d2k_session *s = d2k_session_new(64, 64);
+        d2s_session *s = d2s_session_new(64, 64);
         uint8_t pkt[1024], buf[8192];
-        d2k_result r;
+        d2s_result r;
         size_t pn = build_pkt(pkt, 47701, 0x18, hello, hl);
-        d2k_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 1000, buf, sizeof buf, &r);
         CHECK(!r.applied, "план взялся ниоткуда");
-        d2k_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
-        d2k_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
-        const d2k_jrn_entry *e = last_suspect(s);
+        d2s_session_packet(s, pkt, pn, 2000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, pn, 3000, buf, sizeof buf, &r);
+        const d2s_jrn_entry *e = last_suspect(s);
         CHECK(e != NULL, "подозрение по повтору приветствия не записано");
-        CHECK(e && e->d_planned == D2K_PLANNED_NO,
+        CHECK(e && e->d_planned == D2S_PLANNED_NO,
               "поток без плана объявлен таким, к которому план применялся");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 }
 
@@ -465,107 +465,107 @@ static void test_suspect_tells_planned(void) {
    прислал прикладные данные, поэтому причиной поиска может стать только
    воспроизводимый обрыв ответа, измеренный контроллером. */
 static void test_late_rst_after_tls_appdata(void) {
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия позднего RST не создалась");
     if (!s) { return; }
 
     uint8_t hello[512], pkt[1024], buf[8192];
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
 
     size_t n = build_pkt(pkt, 47801, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
 
     /* Тип записи 23 важен, содержимое зашифровано и разбирать его не надо. */
     const uint8_t appdata[] = {0x17, 0x03, 0x03, 0x00, 0x01, 0x00};
     n = build_rev_pkt(pkt, 47801, 0x18, appdata, sizeof appdata);
-    d2k_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
-    CHECK(count_kind(s, D2K_JRN_EXCHANGE) == 1,
+    d2s_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
+    CHECK(count_kind(s, D2S_JRN_EXCHANGE) == 1,
           "TLS app-data не записаны до позднего RST");
 
     n = build_rev_pkt(pkt, 47801, 0x14, NULL, 0);
-    d2k_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
-    const d2k_jrn_entry *e = last_suspect(s);
+    d2s_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
+    const d2s_jrn_entry *e = last_suspect(s);
     CHECK(e != NULL, "поздний RST после TLS app-data не замечен");
-    CHECK(e && e->code == D2K_SUSPECT_RST_AFTER_APP,
+    CHECK(e && e->code == D2S_SUSPECT_RST_AFTER_APP,
           "поздний RST смешан с ранним RST до ответа");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Если браузер закрывает зависшую загрузку сам, его поздний RST тоже
        должен инициировать только парное измерение RX-объёма. Входящий
        ClientHello и обычное число исходящих пакетов попадают в узкое окно;
        firewall отдельно пропускает сюда поздний RST. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия позднего клиентского RST не создалась");
     if (!s) { return; }
     n = build_pkt(pkt, 47803, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 3100, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3100, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47803, 0x18, appdata, sizeof appdata);
-    d2k_session_packet(s, pkt, n, 3200, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3200, buf, sizeof buf, &r);
     n = build_pkt(pkt, 47803, 0x14, NULL, 0);
-    d2k_session_packet(s, pkt, n, 3300, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3300, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(e != NULL && e->code == D2K_SUSPECT_RST_AFTER_APP,
+    CHECK(e != NULL && e->code == D2S_SUSPECT_RST_AFTER_APP,
           "клиентский RST после TLS app-data не дал узкий RX-volume-сигнал");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* The protective drop must preserve the measurement trigger: an alien
        RST after response data is still a residual RX suspicion, not proof. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "guarded late-RST session allocation failed");
     if (!s) return;
-    d2k_plan *guard = NULL;
+    d2s_plan *guard = NULL;
     char err[200];
-    CHECK(d2k_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
           "guarded late-RST plan failed");
-    d2k_session_set_plan(s, guard);
+    d2s_session_set_plan(s, guard);
     n = build_pkt(pkt, 47804, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 3400, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3400, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47804, 0x18, appdata, sizeof appdata);
     pkt[8] = 53;
-    d2k_session_packet(s, pkt, n, 3500, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3500, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47804, 0x14, NULL, 0);
     pkt[8] = 127;
-    d2k_session_packet(s, pkt, n, 3600, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3600, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(r.verdict == D2K_VERDICT_DROP && e && e->code == D2K_SUSPECT_RST_AFTER_APP,
+    CHECK(r.verdict == D2S_VERDICT_DROP && e && e->code == D2S_SUSPECT_RST_AFTER_APP,
           "alien RST drop hid residual RX measurement trigger");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     guard = NULL;
-    CHECK(d2k_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
           "FIN retry plan fixture failed");
-    d2k_session_set_plan(s, guard);
+    d2s_session_set_plan(s, guard);
     n = build_pkt(pkt, 47805, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 3700, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3700, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47805, 0x18, appdata, sizeof appdata);
-    d2k_session_packet(s, pkt, n, 3800, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3800, buf, sizeof buf, &r);
     n = build_pkt(pkt, 47805, 0x11, NULL, 0);
-    d2k_session_packet(s, pkt, n, 3900, buf, sizeof buf, &r);
-    CHECK(!last_suspect(s) && r.verdict == D2K_VERDICT_ACCEPT,
+    d2s_session_packet(s, pkt, n, 3900, buf, sizeof buf, &r);
+    CHECK(!last_suspect(s) && r.verdict == D2S_VERDICT_ACCEPT,
           "first FIN triggered RX or was intercepted");
-    d2k_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_FIN_RETRY && r.verdict == D2K_VERDICT_ACCEPT,
+    CHECK(e && e->code == D2S_SUSPECT_FIN_RETRY && r.verdict == D2S_VERDICT_ACCEPT,
           "unanswered FIN retry under plan did not trigger narrow RX measurement");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* A handshake/ServerHello response followed by RST is not enough to
        start an RX-volume search: application-data must have been observed. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "контрольная сессия late-RST не создалась");
     if (!s) { return; }
     const uint8_t handshake[] = {0x16, 0x03, 0x03, 0x00, 0x01, 0x00};
     n = build_pkt(pkt, 47802, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47802, 0x18, handshake, sizeof handshake);
-    d2k_session_packet(s, pkt, n, 5000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 5000, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 47802, 0x14, NULL, 0);
-    d2k_session_packet(s, pkt, n, 6000, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 6000, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0,
           "late-RST measurement trigger fired before TLS app-data");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* ГЛУХОЙ ОБРЫВ ОТВЕТА БЕЗ RST/FIN (задача 50, поле 03.10.2026, rua.gr).
@@ -590,9 +590,9 @@ static size_t cut_seq(uint8_t *pkt, size_t n, uint32_t seq, uint32_t ack) {
 
 /* isn — начальный номер СЕРВЕРА (данные идут с isn + 1); t0 — время SYN,
    rtt — от SYN до SYN-ACK. Остальные пакеты рукопожатия — сразу после. */
-static void cut_handshake_at(d2k_session *s, uint16_t port, const uint8_t *hello,
+static void cut_handshake_at(d2s_session *s, uint16_t port, const uint8_t *hello,
                              size_t hlen, uint8_t *pkt, uint8_t *buf, size_t cap,
-                             d2k_result *r, uint32_t isn, uint64_t t0, uint64_t rtt) {
+                             d2s_result *r, uint32_t isn, uint64_t t0, uint64_t rtt) {
     /* ServerHello: запись 0x16, тело 40 байт (минимум 38), и продолжение
        зашифрованной записи без заголовка — ровно как в поле. */
     uint8_t sh[49];
@@ -602,79 +602,79 @@ static void cut_handshake_at(d2k_session *s, uint16_t port, const uint8_t *hello
     uint8_t cont[100];
     memset(cont, 0x5a, sizeof cont);
     size_t n = cut_seq(pkt, build_pkt(pkt, port, 0x02, NULL, 0), 999, 0);
-    d2k_session_packet(s, pkt, n, t0, buf, cap, r);
+    d2s_session_packet(s, pkt, n, t0, buf, cap, r);
     n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x12, NULL, 0), isn, 1000);
-    d2k_session_packet(s, pkt, n, t0 + rtt, buf, cap, r);
+    d2s_session_packet(s, pkt, n, t0 + rtt, buf, cap, r);
     n = cut_seq(pkt, build_pkt(pkt, port, 0x18, hello, hlen), 1000, isn + 1);
-    d2k_session_packet(s, pkt, n, t0 + rtt + 100, buf, cap, r);
+    d2s_session_packet(s, pkt, n, t0 + rtt + 100, buf, cap, r);
     n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x18, sh, sizeof sh), isn + 1,
                 1000 + (uint32_t)hlen);
-    d2k_session_packet(s, pkt, n, t0 + rtt + 200, buf, cap, r);
+    d2s_session_packet(s, pkt, n, t0 + rtt + 200, buf, cap, r);
     n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x10, cont, sizeof cont),
                 isn + 1 + (uint32_t)sizeof sh, 1000 + (uint32_t)hlen);
-    d2k_session_packet(s, pkt, n, t0 + rtt + 300, buf, cap, r);
+    d2s_session_packet(s, pkt, n, t0 + rtt + 300, buf, cap, r);
 }
 
-static void cut_handshake(d2k_session *s, uint16_t port, const uint8_t *hello,
+static void cut_handshake(d2s_session *s, uint16_t port, const uint8_t *hello,
                           size_t hlen, uint8_t *pkt, uint8_t *buf, size_t cap,
-                          d2k_result *r) {
+                          d2s_result *r) {
     cut_handshake_at(s, port, hello, hlen, pkt, buf, cap, r, 4999, 1000, 100);
 }
 
 static void test_silent_cut_fin_retry(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
     const uint32_t fin_seq = 1000 + (uint32_t)hlen + 24;
     const uint32_t seen = 49 + 100;
 
     /* Обрыв: клиент подтвердил 19 923 байта ответа, очередь видела 149. */
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия глухого обрыва не создалась");
     if (!s) { return; }
     cut_handshake(s, 47820, hello, hlen, pkt, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0, "рукопожатие с ответом объявлено подозрением");
+    CHECK(d2s_session_suspects(s) == 0, "рукопожатие с ответом объявлено подозрением");
     size_t n = cut_seq(pkt, build_pkt(pkt, 47820, 0x11, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    CHECK(!last_suspect(s) && r.verdict == D2K_VERDICT_ACCEPT,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    CHECK(!last_suspect(s) && r.verdict == D2S_VERDICT_ACCEPT,
           "первый FIN после обрыва уже подозрение или задержан");
     /* Повтор — FIN с нагрузкой close_notify, конец тот же. */
     const uint8_t alert[24] = {0x17, 0x03, 0x03, 0x00, 0x13};
     n = cut_seq(pkt, build_pkt(pkt, 47820, 0x19, alert, sizeof alert), fin_seq - 24,
                 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
-    const d2k_jrn_entry *e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_FIN_RETRY && r.verdict == D2K_VERDICT_ACCEPT,
+    d2s_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
+    const d2s_jrn_entry *e = last_suspect(s);
+    CHECK(e && e->code == D2S_SUSPECT_FIN_RETRY && r.verdict == D2S_VERDICT_ACCEPT,
           "повтор FIN без ответа после глухого обрыва (без плана) не дал узкого RX-сигнала");
-    CHECK(e && e->d_planned == D2K_PLANNED_NO,
+    CHECK(e && e->d_planned == D2S_PLANNED_NO,
           "подозрение глухого обрыва без плана объявлено плановым");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Обычное закрытие: сервер ответил своим FIN — поток отпущен, повтора нет. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "контрольная сессия закрытия не создалась");
     if (!s) { return; }
     cut_handshake(s, 47821, hello, hlen, pkt, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_pkt(pkt, 47821, 0x11, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_rev_pkt(pkt, 47821, 0x11, NULL, 0), 5000 + 19923, fin_seq + 1);
-    d2k_session_packet(s, pkt, n, 40050, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0, "обычное закрытие долгого ответа стало подозрением");
-    CHECK(d2k_session_flows_tcp(s) == 0, "закрытый с обеих сторон поток не отпущен");
-    d2k_session_free(s);
+    d2s_session_packet(s, pkt, n, 40050, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0, "обычное закрытие долгого ответа стало подозрением");
+    CHECK(d2s_session_flows_tcp(s) == 0, "закрытый с обеих сторон поток не отпущен");
+    d2s_session_free(s);
 
     /* Закрытие после одного рукопожатия: подтверждение не ушло за видимое —
        об обрыве ОТВЕТА говорить не из чего, даже если FIN повторён. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "контрольная сессия рукопожатия не создалась");
     if (!s) { return; }
     cut_handshake(s, 47822, hello, hlen, pkt, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_pkt(pkt, 47822, 0x11, NULL, 0), fin_seq, 5000 + seen);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    d2k_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0,
           "повтор FIN без ответа сверх рукопожатия принят за обрыв ответа");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* Задача 50, раунд правок 1.
@@ -692,7 +692,7 @@ static void test_silent_cut_fin_retry(void) {
 static void test_silent_cut_round1(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
     const uint32_t fin_seq = 1000 + (uint32_t)hlen + 24;
     const uint64_t S = 1000000000ull;
 
@@ -700,128 +700,128 @@ static void test_silent_cut_round1(void) {
        сигнал (решение раунда 2: у RST нет повтора в тишину, и обычные RST
        клиентов ложатся в тот же объём, см. session.c). Сигналом остаётся
        повтор FIN. */
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия RST после обрыва не создалась");
     if (!s) { return; }
     cut_handshake(s, 47830, hello, hlen, pkt, buf, sizeof buf, &r);
     size_t n = cut_seq(pkt, build_pkt(pkt, 47830, 0x14, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    const d2k_jrn_entry *e = last_suspect(s);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    const d2s_jrn_entry *e = last_suspect(s);
+    CHECK(d2s_session_suspects(s) == 0,
           "RST клиента по одному подтверждению за видимым стал подозрением");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* RST клиента после одного рукопожатия — не обрыв ответа. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     cut_handshake(s, 47831, hello, hlen, pkt, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_pkt(pkt, 47831, 0x14, NULL, 0), fin_seq, 5000 + 149);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0,
           "RST клиента без ответа сверх рукопожатия принят за обрыв ответа");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* RST сервера: его подтверждение — про байты клиента, не про ответ. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     cut_handshake(s, 47832, hello, hlen, pkt, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_rev_pkt(pkt, 47832, 0x14, NULL, 0), 5000 + 149, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0,
           "подтверждение в RST сервера принято за свидетельство ответа");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* (2) Под планом: тот же обрыв, повтор FIN — сигнал с planned=YES. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
-    d2k_plan *guard = NULL;
+    d2s_plan *guard = NULL;
     char err[200];
-    CHECK(d2k_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_guard, sizeof plan_guard, &guard, err, sizeof err) == 0,
           "план для планового обрыва не загрузился");
-    d2k_session_set_plan(s, guard);
+    d2s_session_set_plan(s, guard);
     cut_handshake(s, 47833, hello, hlen, pkt, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_pkt(pkt, 47833, 0x11, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
     CHECK(!last_suspect(s), "первый FIN планового потока уже подозрение");
-    d2k_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_FIN_RETRY && e->d_planned == D2K_PLANNED_YES,
+    CHECK(e && e->code == D2S_SUSPECT_FIN_RETRY && e->d_planned == D2S_PLANNED_YES,
           "повтор FIN под планом после глухого обрыва TLS 1.3 не дал сигнала с planned=YES");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* (3) Окно удержания после FIN: RTT 100 нс -> пол 1 с -> окно 3 с. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     cut_handshake_at(s, 47834, hello, hlen, pkt, buf, sizeof buf, &r, 4999, S, 100);
     n = cut_seq(pkt, build_pkt(pkt, 47834, 0x11, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 2 * S, buf, sizeof buf, &r);
-    d2k_session_expire(s, 2 * S + 3 * S - 1, 120 * S);
-    CHECK(d2k_session_flows_tcp(s) == 1, "запись после FIN снята раньше окна повтора");
-    d2k_session_expire(s, 2 * S + 3 * S, 120 * S);
-    CHECK(d2k_session_flows_tcp(s) == 0,
+    d2s_session_packet(s, pkt, n, 2 * S, buf, sizeof buf, &r);
+    d2s_session_expire(s, 2 * S + 3 * S - 1, 120 * S);
+    CHECK(d2s_session_flows_tcp(s) == 1, "запись после FIN снята раньше окна повтора");
+    d2s_session_expire(s, 2 * S + 3 * S, 120 * S);
+    CHECK(d2s_session_flows_tcp(s) == 0,
           "запись после FIN без повтора держит место дольше окна повтора FIN");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Измеренный RTT 1 с: первый RTO 3 с, окно 9 с; повтор на 8-й секунде
        ещё ловится. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     cut_handshake_at(s, 47835, hello, hlen, pkt, buf, sizeof buf, &r, 4999, S, S);
     n = cut_seq(pkt, build_pkt(pkt, 47835, 0x11, NULL, 0), fin_seq, 5000 + 19923);
-    d2k_session_packet(s, pkt, n, 3 * S, buf, sizeof buf, &r);
-    d2k_session_expire(s, 11 * S, 120 * S);
-    CHECK(d2k_session_flows_tcp(s) == 1, "окно повтора FIN не учло измеренный RTT");
-    d2k_session_packet(s, pkt, n, 11 * S, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3 * S, buf, sizeof buf, &r);
+    d2s_session_expire(s, 11 * S, 120 * S);
+    CHECK(d2s_session_flows_tcp(s) == 1, "окно повтора FIN не учло измеренный RTT");
+    d2s_session_packet(s, pkt, n, 11 * S, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_FIN_RETRY,
+    CHECK(e && e->code == D2S_SUSPECT_FIN_RETRY,
           "повтор FIN в окне медленной линии потерян");
-    d2k_session_expire(s, 12 * S, 120 * S);
-    CHECK(d2k_session_flows_tcp(s) == 0, "запись после FIN пережила окно повтора");
-    d2k_session_free(s);
+    d2s_session_expire(s, 12 * S, 120 * S);
+    CHECK(d2s_session_flows_tcp(s) == 0, "запись после FIN пережила окно повтора");
+    d2s_session_free(s);
 
     /* (4) Сервер начал у самого 2^32: подтверждение переходит через ноль. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     const uint32_t isn = 0xFFFFFF00u;
     cut_handshake_at(s, 47836, hello, hlen, pkt, buf, sizeof buf, &r, isn, 1000, 100);
     n = cut_seq(pkt, build_pkt(pkt, 47836, 0x11, NULL, 0), fin_seq, isn + 1 + 19923);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    d2k_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_FIN_RETRY,
+    CHECK(e && e->code == D2S_SUSPECT_FIN_RETRY,
           "обрыв не замечен, когда номера сервера перешли через 2^32");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     if (!s) { return; }
     cut_handshake_at(s, 47837, hello, hlen, pkt, buf, sizeof buf, &r, isn, 1000, 100);
     n = cut_seq(pkt, build_pkt(pkt, 47837, 0x11, NULL, 0), fin_seq, isn + 1 + 149);
-    d2k_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
-    d2k_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_packet(s, pkt, n, 40000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 40440, buf, sizeof buf, &r);
+    CHECK(d2s_session_suspects(s) == 0,
           "переход через 2^32 превратил закрытие после рукопожатия в обрыв ответа");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* TCP silence must survive the three ways a flow stops being observed:
  * periodic sweep, idle expiry, and an ordinary FIN/RST close. A reverse empty
  * ACK proves visibility but is not a TLS response. */
-static uint64_t tcp_silent_seed(d2k_session *s, uint16_t port,
+static uint64_t tcp_silent_seed(d2s_session *s, uint16_t port,
                                 const uint8_t *hello, size_t hello_len,
                                 uint64_t rtt_ns, int server_empty_ack) {
     uint8_t pkt[1024], out[4096];
-    d2k_result r;
+    d2s_result r;
     size_t n = cut_seq(pkt, build_pkt(pkt, port, 0x02, NULL, 0), 999, 0);
-    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, 0, out, sizeof out, &r);
     n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x12, NULL, 0), 4999, 1000);
-    d2k_session_packet(s, pkt, n, rtt_ns, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, rtt_ns, out, sizeof out, &r);
     uint64_t hello_ns = rtt_ns + 10000000ull;
     n = cut_seq(pkt, build_pkt(pkt, port, 0x18, hello, hello_len), 1000, 5000);
-    d2k_session_packet(s, pkt, n, hello_ns, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, hello_ns, out, sizeof out, &r);
     if (server_empty_ack) {
         n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x10, NULL, 0),
                     5000, 1000 + (uint32_t)hello_len);
-        d2k_session_packet(s, pkt, n, hello_ns + 10000000ull,
+        d2s_session_packet(s, pkt, n, hello_ns + 10000000ull,
                            out, sizeof out, &r);
     }
     return hello_ns;
@@ -832,69 +832,69 @@ static void test_tcp_silent_lifecycle(void) {
     const uint64_t sec = 1000000000ull;
     uint8_t hello[512], pkt[1024], out[4096];
     size_t hello_len = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
 
     /* SYN-ACK alone never creates a silent-flow event, even after both
        observation windows have elapsed. */
-    d2k_session *s = d2k_session_new(16, 32);
+    d2s_session *s = d2s_session_new(16, 32);
     CHECK(s != NULL, "SYN-ACK-only session allocation failed");
     if (!s) { return; }
     size_t n = cut_seq(pkt, build_pkt(pkt, 45100, 0x02, NULL, 0), 999, 0);
-    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, 0, out, sizeof out, &r);
     n = cut_seq(pkt, build_rev_pkt(pkt, 45100, 0x12, NULL, 0), 4999, 1000);
-    d2k_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
-    CHECK(d2k_session_sweep(s, 10 * sec) == 0,
+    d2s_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
+    CHECK(d2s_session_sweep(s, 10 * sec) == 0,
           "SYN-ACK without ClientHello emitted a silent suspicion");
-    d2k_session_expire(s, 20 * sec, 1 * sec);
-    CHECK(d2k_session_suspects(s) == 0,
+    d2s_session_expire(s, 20 * sec, 1 * sec);
+    CHECK(d2s_session_suspects(s) == 0,
           "SYN-ACK alone reached the suspect journal at flow expiry");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* An empty server ACK is not TLS data. Sweep and expiry must use the same
        decision, and expiry must report before removing the flow. */
-    s = d2k_session_new(16, 32);
+    s = d2s_session_new(16, 32);
     CHECK(s != NULL, "empty-ACK session allocation failed");
     if (!s) { return; }
     uint64_t hello_ns = tcp_silent_seed(s, 45101, hello, hello_len, 20 * ms, 1);
-    CHECK(d2k_session_sweep(s, hello_ns + 1500 * ms) == 1,
+    CHECK(d2s_session_sweep(s, hello_ns + 1500 * ms) == 1,
           "empty ACK was mistaken for a TLS response by sweep");
-    const d2k_jrn_entry *e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_SILENT,
+    const d2s_jrn_entry *e = last_suspect(s);
+    CHECK(e && e->code == D2S_SUSPECT_SILENT,
           "empty ACK did not retain the silent event kind");
-    CHECK(d2k_session_sweep(s, hello_ns + 3 * sec) == 0 &&
-          d2k_session_suspects(s) == 1,
+    CHECK(d2s_session_sweep(s, hello_ns + 3 * sec) == 0 &&
+          d2s_session_suspects(s) == 1,
           "sweep duplicated the silent event");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
-    s = d2k_session_new(16, 32);
+    s = d2s_session_new(16, 32);
     CHECK(s != NULL, "expiry session allocation failed");
     if (!s) { return; }
     hello_ns = tcp_silent_seed(s, 45102, hello, hello_len, 20 * ms, 1);
-    CHECK(d2k_session_expire(s, hello_ns + 2 * sec, 500 * ms) == 1,
+    CHECK(d2s_session_expire(s, hello_ns + 2 * sec, 500 * ms) == 1,
           "idle TCP flow was not expired");
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_SILENT && d2k_session_suspects(s) == 1,
+    CHECK(e && e->code == D2S_SUSPECT_SILENT && d2s_session_suspects(s) == 1,
           "expiry discarded eligible silence after a reverse empty ACK");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* An early close is not enough. Once the measured silence deadline has
        elapsed, FIN and RST must emit before the flow slot is removed. */
     const uint8_t close_flags[] = {0x11, 0x14}; /* client FIN|ACK, RST|ACK */
     for (size_t i = 0; i < sizeof close_flags; i++) {
         uint16_t port = (uint16_t)(45110 + i);
-        s = d2k_session_new(16, 32);
+        s = d2s_session_new(16, 32);
         CHECK(s != NULL, "early-close session allocation failed");
         if (!s) { continue; }
         hello_ns = tcp_silent_seed(s, port, hello, hello_len, 20 * ms, 1);
         n = cut_seq(pkt, build_pkt(pkt, port, close_flags[i], NULL, 0),
                     1000 + (uint32_t)hello_len, 5000);
-        d2k_session_packet(s, pkt, n, hello_ns + 500 * ms,
+        d2s_session_packet(s, pkt, n, hello_ns + 500 * ms,
                            out, sizeof out, &r);
-        CHECK(d2k_session_suspects(s) == 0,
+        CHECK(d2s_session_suspects(s) == 0,
               "early FIN/RST without a retransmission was treated as silence");
-        d2k_session_free(s);
+        d2s_session_free(s);
 
-        s = d2k_session_new(16, 32);
+        s = d2s_session_new(16, 32);
         CHECK(s != NULL, "late-close session allocation failed");
         if (!s) { continue; }
         hello_ns = tcp_silent_seed(s, (uint16_t)(port + 10), hello, hello_len,
@@ -902,54 +902,54 @@ static void test_tcp_silent_lifecycle(void) {
         n = cut_seq(pkt, build_pkt(pkt, (uint16_t)(port + 10), close_flags[i],
                                    NULL, 0),
                     1000 + (uint32_t)hello_len, 5000);
-        d2k_session_packet(s, pkt, n, hello_ns + 1500 * ms,
+        d2s_session_packet(s, pkt, n, hello_ns + 1500 * ms,
                            out, sizeof out, &r);
         e = last_suspect(s);
-        CHECK(e && e->code == D2K_SUSPECT_SILENT,
+        CHECK(e && e->code == D2S_SUSPECT_SILENT,
               "FIN/RST removed an eligible silent flow before reporting it");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* One same-sequence ClientHello retransmission is a credible retry. It
        can release a silent event before the RTT-scaled wait expires; the
        server has not ACKed the ClientHello on this flow. */
-    s = d2k_session_new(16, 32);
+    s = d2s_session_new(16, 32);
     CHECK(s != NULL, "retransmission session allocation failed");
     if (!s) { return; }
     hello_ns = tcp_silent_seed(s, 45130, hello, hello_len, 200 * ms, 0);
     n = cut_seq(pkt, build_pkt(pkt, 45130, 0x18, hello, hello_len), 1000, 5000);
-    d2k_session_packet(s, pkt, n, hello_ns + 1100 * ms, out, sizeof out, &r);
-    CHECK(d2k_session_sweep(s, hello_ns + 1200 * ms) == 1,
+    d2s_session_packet(s, pkt, n, hello_ns + 1100 * ms, out, sizeof out, &r);
+    CHECK(d2s_session_sweep(s, hello_ns + 1200 * ms) == 1,
           "credible ClientHello retransmission did not release silence early");
     e = last_suspect(s);
-    CHECK(e && e->code == D2K_SUSPECT_SILENT,
+    CHECK(e && e->code == D2S_SUSPECT_SILENT,
           "credible retransmission emitted the wrong event");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* A TLS-looking but unrecognized ClientHello remains diagnosable and
        cannot become a search signal merely because SYN-ACK was visible. */
-    s = d2k_session_new(16, 32);
+    s = d2s_session_new(16, 32);
     CHECK(s != NULL, "unrecognized-hello session allocation failed");
     if (!s) { return; }
     n = cut_seq(pkt, build_pkt(pkt, 45140, 0x02, NULL, 0), 999, 0);
-    d2k_session_packet(s, pkt, n, 0, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, 0, out, sizeof out, &r);
     n = cut_seq(pkt, build_rev_pkt(pkt, 45140, 0x12, NULL, 0), 4999, 1000);
-    d2k_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
+    d2s_session_packet(s, pkt, n, 20 * ms, out, sizeof out, &r);
     /* The handshake length exceeds the containing TLS record, so the parser
        must not accept this as a ClientHello even though the type byte is 1. */
     const uint8_t malformed_hello[] = {0x16, 0x03, 0x03, 0x00, 0x40,
                                        0x01, 0x00, 0x00, 0x40};
     n = cut_seq(pkt, build_pkt(pkt, 45140, 0x18, malformed_hello,
                                sizeof malformed_hello), 1000, 5000);
-    d2k_session_packet(s, pkt, n, 30 * ms, out, sizeof out, &r);
-    d2k_payload_stats ps;
-    d2k_session_payload_stats(s, &ps);
+    d2s_session_packet(s, pkt, n, 30 * ms, out, sizeof out, &r);
+    d2s_payload_stats ps;
+    d2s_session_payload_stats(s, &ps);
     CHECK(ps.not_hello == 1 && ps.last_first_byte == 0x16,
           "unrecognized TLS handshake did not produce bounded parse diagnostics");
-    CHECK(d2k_session_sweep(s, 10 * sec) == 0 &&
-          d2k_session_suspects(s) == 0,
+    CHECK(d2s_session_sweep(s, 10 * sec) == 0 &&
+          d2s_session_suspects(s) == 0,
           "unrecognized ClientHello triggered a silent suspicion/search");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* --- ОТВЕТ, КОТОРЫЙ СПРЯТАЛ УСКОРИТЕЛЬ -----------------------------------
@@ -968,74 +968,74 @@ static void test_tcp_silent_lifecycle(void) {
 static void test_reply_hidden_by_accelerator(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
 
     /* Ответ скрыт: приветствие, затем чистое ACK клиента с подвинутым
        подтверждением, обратных пакетов ноль. Второй такой пакет поток
        повторно не считает. */
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия скрытого ответа не создалась");
     if (!s) { return; }
-    CHECK(d2k_session_reply_hidden(s) == 0, "счётчик скрытого ответа не с нуля");
+    CHECK(d2s_session_reply_hidden(s) == 0, "счётчик скрытого ответа не с нуля");
     size_t n = build_pkt(pkt, 47901, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
     n = build_pkt(pkt, 47901, 0x10, NULL, 0);
     wr32(pkt + 24, 1000 + (uint32_t)hlen);
     wr32(pkt + 28, 0x11223344u + 1400u);
-    d2k_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
-    CHECK(r.verdict == D2K_VERDICT_ACCEPT, "диагностика видимости тронула пакет");
+    d2s_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
+    CHECK(r.verdict == D2S_VERDICT_ACCEPT, "диагностика видимости тронула пакет");
     wr32(pkt + 28, 0x11223344u + 2800u);
-    d2k_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
-    CHECK(d2k_session_reply_hidden(s) == 1,
+    d2s_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
+    CHECK(d2s_session_reply_hidden(s) == 1,
           "подтверждение данных сервера без единого ответа в очереди не учтено");
-    CHECK(d2k_session_tcp_hello_flows(s) == 1,
+    CHECK(d2s_session_tcp_hello_flows(s) == 1,
           "знаменатель скрытых ответов — не потоки TCP с приветствием");
-    CHECK(d2k_session_suspects(s) == 0,
+    CHECK(d2s_session_suspects(s) == 0,
           "скрытый ответ выдан за подозрение на блокировку");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Ответ виден: тот же порядок, но сервер ответил в очередь. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "контрольная сессия видимого ответа не создалась");
     if (!s) { return; }
     n = build_pkt(pkt, 47902, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
     const uint8_t handshake[] = {0x16, 0x03, 0x03, 0x00, 0x01, 0x00};
     n = build_rev_pkt(pkt, 47902, 0x18, handshake, sizeof handshake);
-    d2k_session_packet(s, pkt, n, 1500, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 1500, buf, sizeof buf, &r);
     n = build_pkt(pkt, 47902, 0x10, NULL, 0);
     wr32(pkt + 28, 0x11223344u + 1400u);
-    d2k_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
-    CHECK(d2k_session_reply_hidden(s) == 0,
+    d2s_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
+    CHECK(d2s_session_reply_hidden(s) == 0,
           "поток с увиденным ответом посчитан скрытым");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Зонд контроллера — не пользовательский поток: ни в числителе, ни в
        знаменателе. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "сессия зонда не создалась");
     if (!s) { return; }
     n = build_pkt(pkt, 47904, 0x18, hello, hlen);
-    d2k_session_packet_probe(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet_probe(s, pkt, n, 1000, buf, sizeof buf, &r);
     n = build_pkt(pkt, 47904, 0x10, NULL, 0);
     wr32(pkt + 28, 0x11223344u + 1400u);
-    d2k_session_packet_probe(s, pkt, n, 2000, buf, sizeof buf, &r);
-    CHECK(d2k_session_reply_hidden(s) == 0 && d2k_session_tcp_hello_flows(s) == 0,
+    d2s_session_packet_probe(s, pkt, n, 2000, buf, sizeof buf, &r);
+    CHECK(d2s_session_reply_hidden(s) == 0 && d2s_session_tcp_hello_flows(s) == 0,
           "зонд контроллера попал в счёт скрытых ответов");
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Молчание: повторы приветствия с прежним подтверждением. Это не
        невидимый ответ, а отсутствие ответа. */
-    s = d2k_session_new(64, 64);
+    s = d2s_session_new(64, 64);
     CHECK(s != NULL, "контрольная сессия молчания не создалась");
     if (!s) { return; }
     n = build_pkt(pkt, 47903, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
-    d2k_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
-    d2k_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
-    CHECK(d2k_session_reply_hidden(s) == 0,
+    d2s_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
+    CHECK(d2s_session_reply_hidden(s) == 0,
           "повтор приветствия без ответа посчитан скрытым ответом");
-    d2k_session_free(s);
+    d2s_session_free(s);
 }
 
 /* ЗАДАЧА 47, п. 1: ПЛАНУ НА ПРИВЕТСТВИИ НЕ НУЖНО ЧИТАТЬ ТАБЛИЦУ CONNTRACK,
@@ -1045,83 +1045,83 @@ static void test_reply_hidden_by_accelerator(void) {
  * Без увиденного ответа (нет обратного правила, лаборатория) проверка
  * остаётся. */
 static void test_tcp_plan_skips_conntrack_read(void) {
-    d2k_nat_fn saved = d2k_nat_hook;
-    d2k_nat_hook = nat_stub;
+    d2s_nat_fn saved = d2s_nat_hook;
+    d2s_nat_hook = nat_stub;
     uint8_t hello[512], pkt[1024], buf[8192];
     char err[128];
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
 
-    d2k_session *g = d2k_session_new(8, 4);
-    d2k_plan *gp = NULL;
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
-    d2k_session_set_plan(g, gp);
+    d2s_session *g = d2s_session_new(8, 4);
+    d2s_plan *gp = NULL;
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
+    d2s_session_set_plan(g, gp);
     nat_calls = 0;
     nat_miss_first_n = 1000;   /* the table would say "absent": it must not be asked */
     size_t n = build_pkt(pkt, 41300, 0x02, NULL, 0);           /* SYN */
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 41300, 0x12, NULL, 0);              /* SYN-ACK */
-    d2k_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
     n = build_pkt(pkt, 41300, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
     CHECK(r.n_out > 0 && r.skipped == NULL, "plan applied on the ClientHello");
     CHECK(nat_calls == 0, "a reply already proved the conntrack entry: no table read");
-    d2k_session_free(g);
+    d2s_session_free(g);
 
     /* No reply seen: the entry is still proven by the table. */
-    g = d2k_session_new(8, 4);
+    g = d2s_session_new(8, 4);
     gp = NULL;
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
-    d2k_session_set_plan(g, gp);
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
+    d2s_session_set_plan(g, gp);
     nat_calls = 0;
     nat_miss_first_n = 0;
     n = build_pkt(pkt, 41301, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
     CHECK(r.n_out > 0 && nat_calls >= 1, "without a reply the table is still read");
-    d2k_session_free(g);
-    d2k_nat_hook = saved;
+    d2s_session_free(g);
+    d2s_nat_hook = saved;
 }
 
 /* ЗАДАЧА 47, п. 0: КЛИЕНТ С МЕТКОЙ МАРШРУТИЗАЦИИ ПЛАНА НЕ ПОЛУЧАЕТ.
  * Keenetic метит пакеты клиента с маршрутом по политике/доменам (0xffffaaa ->
- * таблица 4096, VPN) до нашей очереди; сырые посылки d2k идут с меткой 0x2d
+ * таблица 4096, VPN) до нашей очереди; сырые посылки d2s идут с меткой 0x2d
  * мимо этой таблицы — через провайдера. Поток идёт ядром без вмешательства и
  * без наблюдения: его поведение — свойство чужого пути, не коробки. */
 static void test_routed_client_gets_no_plan_tcp(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     char err[128];
     size_t hlen = build_hello(hello);
-    d2k_result r;
-    d2k_session *g = d2k_session_new(8, 8);
-    d2k_plan *gp = NULL;
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
-    d2k_session_set_plan(g, gp);
+    d2s_result r;
+    d2s_session *g = d2s_session_new(8, 8);
+    d2s_plan *gp = NULL;
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
+    d2s_session_set_plan(g, gp);
 
-    d2k_session_set_route_mark(g, 0xffffaaa);
+    d2s_session_set_route_mark(g, 0xffffaaa);
     size_t n = build_pkt(pkt, 41400, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
     CHECK(r.routed_first && r.routed_mark == 0xffffaaa, "first packet of a routed flow reported");
-    d2k_session_set_route_mark(g, 0);           /* replies carry no client mark */
+    d2s_session_set_route_mark(g, 0);           /* replies carry no client mark */
     n = build_rev_pkt(pkt, 41400, 0x12, NULL, 0);
-    d2k_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
     CHECK(!r.routed_first && r.skipped != NULL, "the flow's replies are left alone too");
-    d2k_session_set_route_mark(g, 0xffffaaa);
+    d2s_session_set_route_mark(g, 0xffffaaa);
     n = build_pkt(pkt, 41400, 0x18, hello, hlen);
-    CHECK(d2k_session_hold_candidate(g, pkt, n) == 0, "a routed flow is never held");
-    d2k_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
-    CHECK(r.n_out == 0 && !r.applied && r.verdict == D2K_VERDICT_ACCEPT,
+    CHECK(d2s_session_hold_candidate(g, pkt, n) == 0, "a routed flow is never held");
+    d2s_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
+    CHECK(r.n_out == 0 && !r.applied && r.verdict == D2S_VERDICT_ACCEPT,
           "routed client: no plan, kernel path");
     CHECK(!r.routed_first, "reported once per flow");
-    CHECK(count_kind(g, D2K_JRN_HELLO_SNI) == 0 && count_plan_refused(g) == 0,
+    CHECK(count_kind(g, D2S_JRN_HELLO_SNI) == 0 && count_plan_refused(g) == 0,
           "nothing about a foreign path reaches the controller");
-    CHECK(d2k_session_routed_flows(g) == 1, "counted once");
+    CHECK(d2s_session_routed_flows(g) == 1, "counted once");
 
     /* The same session still plans an unmarked client. */
-    d2k_session_set_route_mark(g, 0);
+    d2s_session_set_route_mark(g, 0);
     n = build_pkt(pkt, 41401, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 4000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 4000, buf, sizeof buf, &r);
     CHECK(r.n_out > 0, "unmarked client still planned");
-    d2k_session_free(g);
+    d2s_session_free(g);
 }
 
 /* ЗАДАЧА 47, ревью I1: метка одного пакета не переходит на другой. Отпуск
@@ -1132,26 +1132,26 @@ static void test_route_mark_does_not_leak(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     char err[128];
     size_t hlen = build_hello(hello);
-    d2k_result r;
-    d2k_session *g = d2k_session_new(8, 8);
-    d2k_plan *gp = NULL;
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
-    d2k_session_set_plan(g, gp);
+    d2s_result r;
+    d2s_session *g = d2s_session_new(8, 8);
+    d2s_plan *gp = NULL;
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
+    d2s_session_set_plan(g, gp);
     size_t n = build_pkt(pkt, 41500, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);   /* A, unmarked */
-    d2k_session_set_route_mark(g, 0xffffaaa);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);   /* A, unmarked */
+    d2s_session_set_route_mark(g, 0xffffaaa);
     n = build_pkt(pkt, 41600, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);   /* B, marked */
+    d2s_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);   /* B, marked */
     /* A's held segment is released (no mark is set for it). */
     n = build_pkt(pkt, 41500, 0x10, hello, 100);
-    d2k_session_observe_tcp(g, pkt, n, 1200);
-    CHECK(d2k_session_routed_flows(g) == 1, "routed flows after release: 1");
-    d2k_session_set_route_mark(g, 0);           /* d2kd sets it per packet */
+    d2s_session_observe_tcp(g, pkt, n, 1200);
+    CHECK(d2s_session_routed_flows(g) == 1, "routed flows after release: 1");
+    d2s_session_set_route_mark(g, 0);           /* d2sd sets it per packet */
     n = build_pkt(pkt, 41500, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 1300, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1300, buf, sizeof buf, &r);
     CHECK(!r.routed_first && (r.skipped == NULL || strstr(r.skipped, "меткой") == NULL),
           "A is not treated as a routed flow");
-    d2k_session_free(g);
+    d2s_session_free(g);
 }
 
 /* ЗАДАЧА 47, ревью M1: новый SYN на том же кортеже — новое соединение; флаг
@@ -1160,25 +1160,25 @@ static void test_routed_flag_reset_on_new_syn(void) {
     uint8_t hello[512], pkt[1024], buf[8192];
     char err[128];
     size_t hlen = build_hello(hello);
-    d2k_result r;
-    d2k_session *g = d2k_session_new(8, 8);
-    d2k_plan *gp = NULL;
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
-    d2k_session_set_plan(g, gp);
-    d2k_session_set_route_mark(g, 0xffffaaa);
+    d2s_result r;
+    d2s_session *g = d2s_session_new(8, 8);
+    d2s_plan *gp = NULL;
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0, "plan");
+    d2s_session_set_plan(g, gp);
+    d2s_session_set_route_mark(g, 0xffffaaa);
     size_t n = build_pkt(pkt, 41700, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
     CHECK(r.routed_first, "first connection routed");
     /* Policy changed; the client reuses the port for a new connection. */
-    d2k_session_set_route_mark(g, 0);
+    d2s_session_set_route_mark(g, 0);
     n = build_pkt(pkt, 41700, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
     CHECK(r.skipped == NULL || strstr(r.skipped, "меткой") == NULL,
           "an unmarked SYN starts a new, unrouted connection");
     n = build_pkt(pkt, 41700, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
     CHECK(r.n_out > 0, "the new connection is planned");
-    d2k_session_free(g);
+    d2s_session_free(g);
 }
 
 /* ЗАДАЧА 56. TCP ВСТАЛ НА БЮДЖЕТЕ КОРОБКИ, КЛИЕНТ НЕ ЗАКРЫВАЕТ (поле 04.10,
@@ -1186,13 +1186,13 @@ static void test_routed_flag_reset_on_new_syn(void) {
  * данных вниз, 26 с данными в обе стороны, затем 42 с тишины; www.romfea.gr
  * (Cloudflare): 25 с данными в обе стороны, 41 с тишины. Safari держит
  * соединение открытым: ни RST, ни FIN — ни один из детекторов позднего
- * закрытия не срабатывает, d2kc молчал.
+ * закрытия не срабатывает, d2sc молчал.
  *
  * Очередь видит первые ~8 пакетов каждой стороны; дальше — счётчики
  * conntrack по кортежу (тот же ctnetlink, что у QUIC). Подменяем запрос. */
-static struct { uint16_t cport; d2k_ct_info info; int answer; } tcp_ct;
+static struct { uint16_t cport; d2s_ct_info info; int answer; } tcp_ct;
 static unsigned tcp_ct_queries;
-static int fake_tcp_ct(void *ctx, const d2k_ct_tuple *t, d2k_ct_info *out) {
+static int fake_tcp_ct(void *ctx, const d2s_ct_tuple *t, d2s_ct_info *out) {
     (void)ctx;
     tcp_ct_queries++;
     static const uint8_t cli[4] = {192, 168, 1, 67}, srv[4] = {1, 2, 3, 4};
@@ -1210,51 +1210,51 @@ static void tcp_ct_set(uint16_t cport, uint64_t orig, uint64_t reply, int establ
     tcp_ct.info.orig_pkts = orig;
     tcp_ct.info.reply_pkts = reply;
     tcp_ct.info.tcp_state_known = 1;
-    tcp_ct.info.tcp_state = established ? D2K_CT_TCP_ESTABLISHED : 5 /* CLOSE_WAIT */;
+    tcp_ct.info.tcp_state = established ? D2S_CT_TCP_ESTABLISHED : 5 /* CLOSE_WAIT */;
 }
 
 /* Окно очереди одного потока: SYN, SYN-ACK через rtt, приветствие, затем
    fwd_data-1 пакетов данных клиента и fwd_acks чистых ACK, rev_data пакетов
    данных сервера и rev_acks чистых ACK сервера (кроме SYN-ACK). Номера
    последовательности честные: повтор номера приветствия — другая улика. */
-static d2k_session *tcp_window(uint16_t port, uint64_t t0, uint64_t rtt,
+static d2s_session *tcp_window(uint16_t port, uint64_t t0, uint64_t rtt,
                                int fwd_data, int fwd_acks, int rev_data, int rev_acks) {
-    d2k_session *s = d2k_session_new(64, 64);
+    d2s_session *s = d2s_session_new(64, 64);
     if (!s) return NULL;
-    d2k_session_set_ct_query(s, fake_tcp_ct, NULL);
+    d2s_session_set_ct_query(s, fake_tcp_ct, NULL);
     uint8_t hello[512], pkt[2048], buf[8192], junk[1440];
     memset(junk, 0x5a, sizeof junk);
     junk[0] = 0x17; junk[1] = 0x03; junk[2] = 0x03;   /* запись app-data */
     size_t hlen = build_hello(hello);
-    d2k_result r;
+    d2s_result r;
     uint32_t cseq = 1000, sseq = 5000;
     uint64_t t = t0;
     size_t n = cut_seq(pkt, build_pkt(pkt, port, 0x02, NULL, 0), cseq - 1, 0);
-    d2k_session_packet(s, pkt, n, t, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, t, buf, sizeof buf, &r);
     t += rtt;
     n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x12, NULL, 0), sseq - 1, cseq);
-    d2k_session_packet(s, pkt, n, t, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, t, buf, sizeof buf, &r);
     n = cut_seq(pkt, build_pkt(pkt, port, 0x18, hello, hlen), cseq, sseq);
-    d2k_session_packet(s, pkt, n, t + 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, t + 1000, buf, sizeof buf, &r);
     cseq += (uint32_t)hlen;
     for (int i = 0; i < rev_data; i++) {
         size_t len = i == 0 ? 1440 : 900;
         n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x18, junk, len), sseq, cseq);
-        d2k_session_packet(s, pkt, n, t + 2000 + (uint64_t)i, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, t + 2000 + (uint64_t)i, buf, sizeof buf, &r);
         sseq += (uint32_t)len;
     }
     for (int i = 0; i < rev_acks; i++) {
         n = cut_seq(pkt, build_rev_pkt(pkt, port, 0x10, NULL, 0), sseq, cseq);
-        d2k_session_packet(s, pkt, n, t + 3000 + (uint64_t)i, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, t + 3000 + (uint64_t)i, buf, sizeof buf, &r);
     }
     for (int i = 1; i < fwd_data; i++) {
         n = cut_seq(pkt, build_pkt(pkt, port, 0x18, junk, 64), cseq, sseq);
-        d2k_session_packet(s, pkt, n, t + 4000 + (uint64_t)i, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, t + 4000 + (uint64_t)i, buf, sizeof buf, &r);
         cseq += 64;
     }
     for (int i = 0; i < fwd_acks; i++) {
         n = cut_seq(pkt, build_pkt(pkt, port, 0x10, NULL, 0), cseq, sseq);
-        d2k_session_packet(s, pkt, n, t + 5000 + (uint64_t)i, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, t + 5000 + (uint64_t)i, buf, sizeof buf, &r);
     }
     return s;
 }
@@ -1264,23 +1264,23 @@ static void test_tcp_stall(void) {
 
     /* Ничего не наблюдается — ядро не спрашивается вовсе. */
     {
-        d2k_session *s = d2k_session_new(64, 64);
-        d2k_session_set_ct_query(s, fake_tcp_ct, NULL);
+        d2s_session *s = d2s_session_new(64, 64);
+        d2s_session_set_ct_query(s, fake_tcp_ct, NULL);
         tcp_ct_queries = 0;
-        d2k_session_sweep(s, 5 * S);
+        d2s_session_sweep(s, 5 * S);
         /* Поток без ответа сервера после приветствия — не этот детектор. */
         uint8_t hello[512], pkt[1024], buf[8192];
         size_t hlen = build_hello(hello);
-        d2k_result r;
+        d2s_result r;
         size_t n = cut_seq(pkt, build_pkt(pkt, 47900, 0x02, NULL, 0), 999, 0);
-        d2k_session_packet(s, pkt, n, 6 * S, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, 6 * S, buf, sizeof buf, &r);
         n = cut_seq(pkt, build_rev_pkt(pkt, 47900, 0x12, NULL, 0), 4999, 1000);
-        d2k_session_packet(s, pkt, n, 6 * S + 80 * MS, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, 6 * S + 80 * MS, buf, sizeof buf, &r);
         n = cut_seq(pkt, build_pkt(pkt, 47900, 0x18, hello, hlen), 1000, 5000);
-        d2k_session_packet(s, pkt, n, 6 * S + 81 * MS, buf, sizeof buf, &r);
-        d2k_session_sweep(s, 7 * S);
+        d2s_session_packet(s, pkt, n, 6 * S + 81 * MS, buf, sizeof buf, &r);
+        d2s_session_sweep(s, 7 * S);
         CHECK(tcp_ct_queries == 0, "TCP: conntrack спрошен, хотя сервер ещё не отвечал данными");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* mailsuite.com, поле 04.10 (s2-mailsuite.pcap): RTT 81 мс; очередь
@@ -1292,164 +1292,164 @@ static void test_tcp_stall(void) {
        не подтверждена — третья даёт подозрение. */
     {
         tcp_ct_queries = 0;
-        d2k_session *s = tcp_window(47901, 1 * S, 81 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47901, 1 * S, 81 * MS, 3, 4, 4, 3);
         tcp_ct_set(47901, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
-        d2k_session_sweep(s, 3 * S);
-        CHECK(d2k_session_suspects(s) == 0, "mailsuite: секунда тишины уже объявлена обрывом");
-        for (uint64_t k = 4; k <= 40; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0,
+        d2s_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 3 * S);
+        CHECK(d2s_session_suspects(s) == 0, "mailsuite: секунда тишины уже объявлена обрывом");
+        for (uint64_t k = 4; k <= 40; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0,
               "mailsuite: тишина при молчащем клиенте объявлена обрывом");
         tcp_ct_set(47901, 21, 25, 1);
-        d2k_session_sweep(s, 41 * S);
-        CHECK(d2k_session_suspects(s) == 0, "mailsuite: два пакета клиента в тишину уже обрыв");
+        d2s_session_sweep(s, 41 * S);
+        CHECK(d2s_session_suspects(s) == 0, "mailsuite: два пакета клиента в тишину уже обрыв");
         tcp_ct_set(47901, 22, 25, 1);
-        d2k_session_sweep(s, 42 * S);
-        const d2k_jrn_entry *e = last_suspect(s);
-        CHECK(e && e->code == D2K_SUSPECT_TCP_STALL,
+        d2s_session_sweep(s, 42 * S);
+        const d2s_jrn_entry *e = last_suspect(s);
+        CHECK(e && e->code == D2S_SUSPECT_TCP_STALL,
               "mailsuite: поток встал на бюджете, клиент не закрывает — подозрения нет");
         CHECK(e && e->num == 24, "mailsuite: в подозрении не та оценка пакетов с данными (ждали 24)");
-        CHECK(e && e->d_planned == D2K_PLANNED_NO, "mailsuite: поток без плана объявлен плановым");
+        CHECK(e && e->d_planned == D2S_PLANNED_NO, "mailsuite: поток без плана объявлен плановым");
         tcp_ct_set(47901, 30, 25, 1);
-        d2k_session_sweep(s, 50 * S);
-        d2k_session_sweep(s, 60 * S);
-        CHECK(d2k_session_suspects(s) == 1, "mailsuite: один поток дал больше одного подозрения");
-        d2k_session_free(s);
+        d2s_session_sweep(s, 50 * S);
+        d2s_session_sweep(s, 60 * S);
+        CHECK(d2s_session_suspects(s) == 1, "mailsuite: один поток дал больше одного подозрения");
+        d2s_session_free(s);
     }
 
     /* mailsuite.com повторно, замер 04.10 11:13 на роутере: Safari сразу
        продолжает слать по вставшему соединению (прямой 17 → 20 → 21 за 3 с,
        обратный стоит на 25) — подозрение через RTO. */
     {
-        d2k_session *s = tcp_window(47915, 1 * S, 81 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47915, 1 * S, 81 * MS, 3, 4, 4, 3);
         tcp_ct_set(47915, 17, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47915, 20, 25, 1);
-        d2k_session_sweep(s, 3 * S);
-        CHECK(d2k_session_suspects(s) == 0, "mailsuite-2: тишина короче RTO объявлена обрывом");
+        d2s_session_sweep(s, 3 * S);
+        CHECK(d2s_session_suspects(s) == 0, "mailsuite-2: тишина короче RTO объявлена обрывом");
         tcp_ct_set(47915, 21, 25, 1);
-        d2k_session_sweep(s, 4 * S + 100 * MS);
-        CHECK(last_suspect(s) && last_suspect(s)->code == D2K_SUSPECT_TCP_STALL,
+        d2s_session_sweep(s, 4 * S + 100 * MS);
+        CHECK(last_suspect(s) && last_suspect(s)->code == D2S_SUSPECT_TCP_STALL,
               "mailsuite-2: клиент говорит в тишину на бюджете — подозрения нет");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* Ложные полосы (замер 04.10: 15 из 21): keep-alive после полного ответа
        на 22–28 пакетах. Клиент подтвердил последние данные (один пакет) и
        молчит; потом шлёт PING HTTP/2 — сервер отвечает. Подозрения нет. */
     {
-        d2k_session *s = tcp_window(47916, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47916, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47916, 14, 22, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47916, 15, 22, 1);
-        for (uint64_t k = 3; k <= 16; k++) d2k_session_sweep(s, k * S);
+        for (uint64_t k = 3; k <= 16; k++) d2s_session_sweep(s, k * S);
         tcp_ct_set(47916, 16, 23, 1);
-        for (uint64_t k = 17; k <= 31; k++) d2k_session_sweep(s, k * S);
+        for (uint64_t k = 17; k <= 31; k++) d2s_session_sweep(s, k * S);
         tcp_ct_set(47916, 17, 24, 1);
-        for (uint64_t k = 32; k <= 60; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0,
+        for (uint64_t k = 32; k <= 60; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0,
               "keep-alive на бюджете с отвечающим сервером объявлен обрывом");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* www.romfea.gr, поле 04.10 (s2-romfea.pcap): RTT 62 мс; клиент
        S . hello . . . 80 348 (3), сервер S. . . 1440 1440 993 544 31 (5);
        обратный 25 к тишине, клиент ещё шлёт ACK (прямой растёт). 3+5+17 = 25. */
     {
-        d2k_session *s = tcp_window(47902, 1 * S, 62 * MS, 3, 5, 5, 2);
+        d2s_session *s = tcp_window(47902, 1 * S, 62 * MS, 3, 5, 5, 2);
         tcp_ct_set(47902, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47902, 22, 25, 1);
-        d2k_session_sweep(s, 3 * S);
+        d2s_session_sweep(s, 3 * S);
         tcp_ct_set(47902, 24, 25, 1);
-        d2k_session_sweep(s, 4 * S + 100 * MS);
-        const d2k_jrn_entry *e = last_suspect(s);
-        CHECK(e && e->code == D2K_SUSPECT_TCP_STALL && e->num == 25,
+        d2s_session_sweep(s, 4 * S + 100 * MS);
+        const d2s_jrn_entry *e = last_suspect(s);
+        CHECK(e && e->code == D2S_SUSPECT_TCP_STALL && e->num == 25,
               "romfea: поток встал на 25 пакетах — подозрения нет");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 
     /* Простаивающее keep-alive после ПОЛНОГО ответа, число пакетов вне
        полосы: ни сразу, ни через минуту. Выше полосы поток больше не
        спрашивается — в неё уже не вернуться. */
     {
-        d2k_session *s = tcp_window(47903, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47903, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47903, 30, 60, 1);
         tcp_ct_queries = 0;
-        for (uint64_t k = 2; k <= 60; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "keep-alive после полного ответа (60 пакетов) объявлен обрывом");
+        for (uint64_t k = 2; k <= 60; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "keep-alive после полного ответа (60 пакетов) объявлен обрывом");
         CHECK(tcp_ct_queries == 1, "поток выше полосы продолжают спрашивать каждую секунду");
-        d2k_session_free(s);
+        d2s_session_free(s);
         /* Маленький полный ответ ниже полосы. */
         s = tcp_window(47904, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47904, 12, 12, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47904, 20, 12, 1);   /* даже если клиент говорит в тишину */
-        for (uint64_t k = 3; k <= 60; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "keep-alive после маленького ответа (12 пакетов) объявлен обрывом");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 60; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "keep-alive после маленького ответа (12 пакетов) объявлен обрывом");
+        d2s_session_free(s);
     }
 
     /* Медленный сервер, который продолжает: пауза на бюджете короче RTO,
        затем ответ идёт дальше — подозрения нет. С измеренным RTT 1 с RTO —
        3 с, и пауза 2,5 с тоже не обрыв. */
     {
-        d2k_session *s = tcp_window(47905, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47905, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47905, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47905, 23, 25, 1);   /* клиент шлёт, сервер думает */
-        d2k_session_sweep(s, 3 * S + 500 * MS);
+        d2s_session_sweep(s, 3 * S + 500 * MS);
         tcp_ct_set(47905, 30, 70, 1);
-        d2k_session_sweep(s, 4 * S);
-        for (uint64_t k = 5; k <= 20; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "медленный сервер, продолживший ответ, объявлен обрывом");
-        d2k_session_free(s);
+        d2s_session_sweep(s, 4 * S);
+        for (uint64_t k = 5; k <= 20; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "медленный сервер, продолживший ответ, объявлен обрывом");
+        d2s_session_free(s);
 
         s = tcp_window(47906, 1 * S, 1 * S, 3, 4, 4, 3);
         tcp_ct_set(47906, 19, 25, 1);
-        d2k_session_sweep(s, 3 * S);
+        d2s_session_sweep(s, 3 * S);
         tcp_ct_set(47906, 23, 25, 1);
-        d2k_session_sweep(s, 4 * S);
-        d2k_session_sweep(s, 5 * S + 500 * MS);
-        CHECK(d2k_session_suspects(s) == 0, "пауза 2,5 с при RTT 1 с (RTO 3 с) объявлена обрывом");
+        d2s_session_sweep(s, 4 * S);
+        d2s_session_sweep(s, 5 * S + 500 * MS);
+        CHECK(d2s_session_suspects(s) == 0, "пауза 2,5 с при RTT 1 с (RTO 3 с) объявлена обрывом");
         tcp_ct_set(47906, 40, 90, 1);
-        d2k_session_sweep(s, 6 * S);
-        CHECK(d2k_session_suspects(s) == 0, "медленный сервер с RTT 1 с объявлен обрывом");
-        d2k_session_free(s);
+        d2s_session_sweep(s, 6 * S);
+        CHECK(d2s_session_suspects(s) == 0, "медленный сервер с RTT 1 с объявлен обрывом");
+        d2s_session_free(s);
 
         /* Медленный первый байт: тишина ниже полосы, потом полный ответ. */
         s = tcp_window(47907, 1 * S, 50 * MS, 3, 4, 2, 3);
         tcp_ct_set(47907, 8, 9, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47907, 12, 9, 1);
-        for (uint64_t k = 3; k <= 10; k++) d2k_session_sweep(s, k * S);
+        for (uint64_t k = 3; k <= 10; k++) d2s_session_sweep(s, k * S);
         tcp_ct_set(47907, 40, 120, 1);
-        for (uint64_t k = 11; k <= 20; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "медленный первый байт объявлен обрывом");
-        d2k_session_free(s);
+        for (uint64_t k = 11; k <= 20; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "медленный первый байт объявлен обрывом");
+        d2s_session_free(s);
     }
 
     /* Соединение уже не установлено (клиент закрыл: CLOSE_WAIT и дальше) —
        это дело детекторов закрытия, не этого. Нет ответа ядра — не знаем. */
     {
-        d2k_session *s = tcp_window(47908, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47908, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47908, 19, 25, 0);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47908, 25, 25, 0);
-        for (uint64_t k = 3; k <= 10; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "закрывающееся соединение объявлено обрывом");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 10; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "закрывающееся соединение объявлено обрывом");
+        d2s_session_free(s);
         s = tcp_window(47909, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47909, 19, 25, 1);
         tcp_ct.answer = 0;
-        for (uint64_t k = 2; k <= 10; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "без ответа ядра поток объявлен обрывом");
+        for (uint64_t k = 2; k <= 10; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "без ответа ядра поток объявлен обрывом");
         tcp_ct.info.tcp_state_known = 0;
         tcp_ct.info.orig_pkts = 30;
         tcp_ct.answer = 1;
-        for (uint64_t k = 11; k <= 20; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "без состояния TCP поток объявлен обрывом");
-        d2k_session_free(s);
+        for (uint64_t k = 11; k <= 20; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "без состояния TCP поток объявлен обрывом");
+        d2s_session_free(s);
     }
 
     /* ИЗМЕРЕННЫЙ БЮДЖЕТ (контроллер передаёт бюджеты коробок): поток на 24
@@ -1457,59 +1457,59 @@ static void test_tcp_stall(void) {
        поток на 17 при бюджете 16 — в полосе. */
     {
         const uint16_t b16[] = {16}, b16_25[] = {16, 25};
-        d2k_session *s = tcp_window(47910, 1 * S, 50 * MS, 3, 4, 4, 3);
-        d2k_session_set_stall_budgets(s, b16, 1);
+        d2s_session *s = tcp_window(47910, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session_set_stall_budgets(s, b16, 1);
         tcp_ct_set(47910, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47910, 22, 25, 1);
-        for (uint64_t k = 3; k <= 6; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 0, "24 пакета при бюджете коробки 16 объявлены обрывом");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 6; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 0, "24 пакета при бюджете коробки 16 объявлены обрывом");
+        d2s_session_free(s);
         s = tcp_window(47911, 1 * S, 50 * MS, 3, 4, 4, 3);
-        d2k_session_set_stall_budgets(s, b16_25, 2);
+        d2s_session_set_stall_budgets(s, b16_25, 2);
         tcp_ct_set(47911, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47911, 22, 25, 1);
-        for (uint64_t k = 3; k <= 6; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 1, "24 пакета при бюджетах 16 и 25 не стали подозрением");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 6; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 1, "24 пакета при бюджетах 16 и 25 не стали подозрением");
+        d2s_session_free(s);
         s = tcp_window(47912, 1 * S, 50 * MS, 3, 4, 4, 3);
-        d2k_session_set_stall_budgets(s, b16, 1);
+        d2s_session_set_stall_budgets(s, b16, 1);
         tcp_ct_set(47912, 12, 18, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47912, 15, 18, 1);
-        for (uint64_t k = 3; k <= 6; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 1, "17 пакетов при бюджете 16 не стали подозрением");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 6; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 1, "17 пакетов при бюджете 16 не стали подозрением");
+        d2s_session_free(s);
         /* Пустой список — снова поле 04.10 (25). */
         s = tcp_window(47913, 1 * S, 50 * MS, 3, 4, 4, 3);
-        d2k_session_set_stall_budgets(s, b16, 1);
-        d2k_session_set_stall_budgets(s, NULL, 0);
+        d2s_session_set_stall_budgets(s, b16, 1);
+        d2s_session_set_stall_budgets(s, NULL, 0);
         tcp_ct_set(47913, 19, 25, 1);
-        d2k_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 2 * S);
         tcp_ct_set(47913, 22, 25, 1);
-        for (uint64_t k = 3; k <= 6; k++) d2k_session_sweep(s, k * S);
-        CHECK(d2k_session_suspects(s) == 1, "сброс бюджетов не вернул полевой бюджет 25");
-        d2k_session_free(s);
+        for (uint64_t k = 3; k <= 6; k++) d2s_session_sweep(s, k * S);
+        CHECK(d2s_session_suspects(s) == 1, "сброс бюджетов не вернул полевой бюджет 25");
+        d2s_session_free(s);
     }
 
     /* Цикл очереди не ждёт: запрос — один на наблюдаемый поток за обход,
        а поток после FIN клиента (ждёт повтора FIN) не наблюдается. */
     {
-        d2k_session *s = tcp_window(47914, 1 * S, 50 * MS, 3, 4, 4, 3);
+        d2s_session *s = tcp_window(47914, 1 * S, 50 * MS, 3, 4, 4, 3);
         tcp_ct_set(47914, 19, 21, 1);
         tcp_ct_queries = 0;
-        d2k_session_sweep(s, 2 * S);
-        d2k_session_sweep(s, 3 * S);
+        d2s_session_sweep(s, 2 * S);
+        d2s_session_sweep(s, 3 * S);
         CHECK(tcp_ct_queries == 2, "наблюдаемый поток спрошен не по разу за обход");
         uint8_t pkt[256], buf[4096];
-        d2k_result r;
+        d2s_result r;
         size_t n = cut_seq(pkt, build_pkt(pkt, 47914, 0x11, NULL, 0), 3000, 5000 + 30000);
-        d2k_session_packet(s, pkt, n, 3 * S + 1, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, 3 * S + 1, buf, sizeof buf, &r);
         tcp_ct_queries = 0;
-        d2k_session_sweep(s, 4 * S);
+        d2s_session_sweep(s, 4 * S);
         CHECK(tcp_ct_queries == 0, "поток после FIN клиента всё ещё спрашивается");
-        d2k_session_free(s);
+        d2s_session_free(s);
     }
 }
 
@@ -1518,12 +1518,12 @@ static void test_tcp_stall(void) {
  * Поле issue #7 (22.10.2026): план tcp-template-v1 с порчей «метка времени
  * назад» подтверждён зондом, а с ПК репортёра — 13 из 13 «план не применён».
  * Профиль копирует опции потока клиента и сдвигает в них метку; у клиента
- * метки нет, и d2k_wire_build возвращал 0 — тот же ноль, что «не поместилось»,
+ * метки нет, и d2s_wire_build возвращал 0 — тот же ноль, что «не поместилось»,
  * с текстом «буфер отправки кончился» и без кода. Контроллер читал это как
  * «план подтверждён, датапат его не применял» и ничего не перемерял.
  *
  * Требование: датапат проверяет требования плана к потоку ДО сборки и
- * отказывает своей причиной и своим кодом (D2K_REFUSE_FLOW_UNFIT); поток с
+ * отказывает своей причиной и своим кодом (D2S_REFUSE_FLOW_UNFIT); поток с
  * меткой времени план исполняет как прежде. */
 static void put_rec(uint8_t *b, size_t *n, uint16_t type, const uint8_t *v, uint16_t len) {
     b[(*n)++] = (uint8_t)(type >> 8); b[(*n)++] = (uint8_t)type;
@@ -1545,7 +1545,7 @@ static size_t template_ts_plan(uint8_t *plan, size_t cap) {
     size_t hlen = build_hello(hello);
     size_t n = 0;
     if (cap < 64 + hlen) { return 0; }
-    memcpy(plan, "D2KP", 4);
+    memcpy(plan, "D2SP", 4);
     plan[4] = 0; plan[5] = 1;             /* версия 1 */
     plan[6] = 0; plan[7] = 8;             /* minexec 8: tcp-template-v1 */
     plan[8] = 0; plan[9] = 0; plan[10] = 0; plan[11] = 8;
@@ -1561,7 +1561,7 @@ static size_t template_ts_plan(uint8_t *plan, size_t cap) {
     payload[0] = 0; payload[1] = 1;
     memcpy(payload + 2, hello, hlen);
     put_rec(plan, &n, 0x0010, payload, (uint16_t)(2 + hlen));
-    uint8_t poison[8] = {0, 1, 0, D2K_POISON_TCPTS_BACK, 0, 0, 0, 0};
+    uint8_t poison[8] = {0, 1, 0, D2S_POISON_TCPTS_BACK, 0, 0, 0, 0};
     put_rec(plan, &n, 0x0011, poison, sizeof poison);
     uint8_t fake[11] = {0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 3};
     put_rec(plan, &n, 0x0101, fake, sizeof fake);
@@ -1570,62 +1570,62 @@ static size_t template_ts_plan(uint8_t *plan, size_t cap) {
     return n;
 }
 
-static size_t count_refused_code(const d2k_journal *j, uint8_t code) {
-    size_t n = d2k_journal_count(j), k = 0;
+static size_t count_refused_code(const d2s_journal *j, uint8_t code) {
+    size_t n = d2s_journal_count(j), k = 0;
     for (size_t i = 0; i < n; i++) {
-        const d2k_jrn_entry *e = d2k_journal_at(j, i);
-        if (e && e->kind == D2K_JRN_PLAN_REFUSED && e->code == code) { k++; }
+        const d2s_jrn_entry *e = d2s_journal_at(j, i);
+        if (e && e->kind == D2S_JRN_PLAN_REFUSED && e->code == code) { k++; }
     }
     return k;
 }
 
 static void test_template_plan_needs_client_timestamp(void) {
-    d2k_nat_fn saved = d2k_nat_hook;
-    d2k_nat_hook = nat_stub;
+    d2s_nat_fn saved = d2s_nat_hook;
+    d2s_nat_hook = nat_stub;
     uint8_t hello[512], pkt[1024], buf[8192], plan[1024];
     char err[128];
     size_t hlen = build_hello(hello);
     size_t plen = template_ts_plan(plan, sizeof plan);
-    d2k_result r;
+    d2s_result r;
 
-    d2k_session *g = d2k_session_new(8, 8);
-    d2k_plan *p = NULL;
-    CHECK(plen > 0 && d2k_plan_load(plan, plen, &p, err, sizeof err) == 0,
+    d2s_session *g = d2s_session_new(8, 8);
+    d2s_plan *p = NULL;
+    CHECK(plen > 0 && d2s_plan_load(plan, plen, &p, err, sizeof err) == 0,
           "план tcp-template-v1 с меткой времени не разобран");
-    if (!p) { fprintf(stderr, "  %s\n", err); d2k_session_free(g); d2k_nat_hook = saved; return; }
-    d2k_session_set_plan(g, p);
+    if (!p) { fprintf(stderr, "  %s\n", err); d2s_session_free(g); d2s_nat_hook = saved; return; }
+    d2s_session_set_plan(g, p);
     nat_calls = 0;
     nat_miss_first_n = 0;
 
     /* --- клиент без метки времени (ПК репортёра #7) ---------------------- */
     size_t n = build_pkt(pkt, 41400, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 41400, 0x12, NULL, 0);
-    d2k_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
     n = build_pkt(pkt, 41400, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
-    CHECK(r.n_out == 0 && r.verdict == D2K_VERDICT_ACCEPT,
+    d2s_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
+    CHECK(r.n_out == 0 && r.verdict == D2S_VERDICT_ACCEPT,
           "поток без метки: план частично собран или оригинал снят");
     CHECK(r.skipped != NULL && strstr(r.skipped, "метк") != NULL,
           "поток без метки: отказ не назван требованием плана к потоку");
     CHECK(r.skipped == NULL || strstr(r.skipped, "буфер") == NULL,
           "поток без метки: отказ выдан за нехватку буфера");
-    CHECK(count_refused_code(d2k_session_journal(g), D2K_REFUSE_FLOW_UNFIT) == 1,
+    CHECK(count_refused_code(d2s_session_journal(g), D2S_REFUSE_FLOW_UNFIT) == 1,
           "поток без метки: отказ не записан кодом «поток не несёт требуемого»");
-    CHECK(d2k_session_applied(g) == 0, "поток без метки: счётчик применений сдвинулся");
+    CHECK(d2s_session_applied(g) == 0, "поток без метки: счётчик применений сдвинулся");
 
     /* --- клиент с меткой времени: план исполняется ----------------------- */
     n = build_pkt_ts(pkt, 41401, 0x02, NULL, 0);
-    d2k_session_packet(g, pkt, n, 4000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 4000, buf, sizeof buf, &r);
     n = build_rev_pkt(pkt, 41401, 0x12, NULL, 0);
-    d2k_session_packet(g, pkt, n, 5000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 5000, buf, sizeof buf, &r);
     n = build_pkt_ts(pkt, 41401, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 6000, buf, sizeof buf, &r);
+    d2s_session_packet(g, pkt, n, 6000, buf, sizeof buf, &r);
     CHECK(r.n_out > 0 && r.skipped == NULL, "поток с меткой: план не исполнен");
-    CHECK(count_refused_code(d2k_session_journal(g), D2K_REFUSE_FLOW_UNFIT) == 1,
+    CHECK(count_refused_code(d2s_session_journal(g), D2S_REFUSE_FLOW_UNFIT) == 1,
           "поток с меткой: отказ «не несёт требуемого» записан зря");
-    d2k_session_free(g);
-    d2k_nat_hook = saved;
+    d2s_session_free(g);
+    d2s_nat_hook = saved;
 }
 
 /* ЗАМЫСЕЛ 2026-10-23, п. 5.1: СНИМОК ПРИВЕТСТВИЯ НЕСЁТ НАБОР ОПЦИЙ TCP КЛИЕНТА.
@@ -1637,50 +1637,50 @@ static void test_shape_carries_client_tcp_options(void) {
     uint8_t hello[512], pkt[1024], buf[4096];
     size_t hlen = build_hello(hello);
     const uint8_t name[] = "hetzner.com";
-    d2k_result r;
+    d2s_result r;
     size_t olen = 77;
 
     /* Снимка ещё нет — набора тоже. */
-    d2k_session *g = d2k_session_new(8, 8);
-    CHECK(d2k_session_shape_tcp_options_family(g, 4, &olen) == NULL && olen == 0,
+    d2s_session *g = d2s_session_new(8, 8);
+    CHECK(d2s_session_shape_tcp_options_family(g, 4, &olen) == NULL && olen == 0,
           "опции без снимка: не NULL");
 
     /* Ловушка взведена, приветствие с меткой времени: набор 12 байт, вид 8. */
-    CHECK(d2k_session_want_shape(g, name, sizeof name - 1, 6) == 0, "ловушка не взвелась");
+    CHECK(d2s_session_want_shape(g, name, sizeof name - 1, 6) == 0, "ловушка не взвелась");
     size_t n = build_pkt_ts(pkt, 41500, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-    CHECK(d2k_session_shape(g, 6, &olen) != NULL, "снимок с меткой не снят");
-    const uint8_t *o = d2k_session_shape_tcp_options_family(g, 4, &olen);
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    CHECK(d2s_session_shape(g, 6, &olen) != NULL, "снимок с меткой не снят");
+    const uint8_t *o = d2s_session_shape_tcp_options_family(g, 4, &olen);
     CHECK(o != NULL && olen == 12 && o[2] == 8 && o[3] == 10,
           "опции снимка с меткой: не те байты");
-    d2k_session_free(g);
+    d2s_session_free(g);
 
     /* Приветствие без опций: набор известен и пуст. */
-    g = d2k_session_new(8, 8);
-    CHECK(d2k_session_want_shape(g, name, sizeof name - 1, 6) == 0, "ловушка не взвелась");
+    g = d2s_session_new(8, 8);
+    CHECK(d2s_session_want_shape(g, name, sizeof name - 1, 6) == 0, "ловушка не взвелась");
     n = build_pkt(pkt, 41501, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-    CHECK(d2k_session_shape(g, 6, &olen) != NULL, "снимок без опций не снят");
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    CHECK(d2s_session_shape(g, 6, &olen) != NULL, "снимок без опций не снят");
     olen = 77;
-    o = d2k_session_shape_tcp_options_family(g, 4, &olen);
+    o = d2s_session_shape_tcp_options_family(g, 4, &olen);
     CHECK(o != NULL && olen == 0, "опции снимка без опций: не пустой известный набор");
-    d2k_session_free(g);
+    d2s_session_free(g);
 
     /* Снимок отдан из последнего приветствия (ловушка после пакета): набор с ним. */
-    g = d2k_session_new(8, 8);
+    g = d2s_session_new(8, 8);
     n = build_pkt_ts(pkt, 41502, 0x18, hello, hlen);
-    d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-    CHECK(d2k_session_want_shape(g, name, sizeof name - 1, 6) == 1, "последнее приветствие не отдано");
+    d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+    CHECK(d2s_session_want_shape(g, name, sizeof name - 1, 6) == 1, "последнее приветствие не отдано");
     olen = 77;
-    o = d2k_session_shape_tcp_options_family(g, 4, &olen);
+    o = d2s_session_shape_tcp_options_family(g, 4, &olen);
     CHECK(o != NULL && olen == 12 && o[2] == 8, "опции последнего приветствия не отданы со снимком");
     /* IPv6-слот чужой: там ничего нет. */
-    CHECK(d2k_session_shape_tcp_options_family(g, 6, &olen) == NULL, "IPv6-слот отдал чужие опции");
-    d2k_session_free(g);
+    CHECK(d2s_session_shape_tcp_options_family(g, 6, &olen) == NULL, "IPv6-слот отдал чужие опции");
+    d2s_session_free(g);
 }
 
 int main(void) {
-    D2K_TEST_NAT_NO_TABLE();
+    D2S_TEST_NAT_NO_TABLE();
     test_template_plan_needs_client_timestamp();
     test_shape_carries_client_tcp_options();
     test_tcp_stall();
@@ -1690,7 +1690,7 @@ int main(void) {
     test_routed_client_gets_no_plan_tcp();
     test_reply_hidden_by_accelerator();
     {
-        d2k_session *v6 = d2k_session_new(32, 32);
+        d2s_session *v6 = d2s_session_new(32, 32);
         uint8_t hello6[512], ip4[1024], ip6[1044] = {0}, output6[8192];
         size_t h6 = build_hello(hello6);
         size_t n4 = build_pkt(ip4, 47701, 0x18, hello6, h6);
@@ -1700,47 +1700,47 @@ int main(void) {
         ip6[8] = ip6[24] = 0x20; ip6[9] = ip6[25] = 1;
         ip6[23] = 1; ip6[39] = 2;
         memcpy(ip6 + 40, ip4 + 20, n4 - 20);
-        d2k_result r6;
-        d2k_session_want_shape_family(v6, NULL, 0, 6, 6);
-        d2k_session_packet(v6, ip6, n6, 1, output6, sizeof output6, &r6);
-        CHECK(r6.verdict == D2K_VERDICT_ACCEPT, "IPv6 observation dropped traffic");
-        CHECK(count_kind(v6, D2K_JRN_HELLO_SNI) == 1, "IPv6 TLS hello not observed");
+        d2s_result r6;
+        d2s_session_want_shape_family(v6, NULL, 0, 6, 6);
+        d2s_session_packet(v6, ip6, n6, 1, output6, sizeof output6, &r6);
+        CHECK(r6.verdict == D2S_VERDICT_ACCEPT, "IPv6 observation dropped traffic");
+        CHECK(count_kind(v6, D2S_JRN_HELLO_SNI) == 1, "IPv6 TLS hello not observed");
         size_t snaplen = 0;
-        const uint8_t *snap = d2k_session_shape_family(v6, 6, 6, &snaplen);
+        const uint8_t *snap = d2s_session_shape_family(v6, 6, 6, &snaplen);
         CHECK(snap && snaplen == h6 && !memcmp(snap, hello6, h6), "IPv6 live snapshot missing");
-        CHECK(d2k_session_shape(v6, 6, &snaplen) == NULL, "IPv6 polluted IPv4 snapshot");
-        d2k_plan *p6 = NULL; char why6[128];
-        CHECK(d2k_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p6,
+        CHECK(d2s_session_shape(v6, 6, &snaplen) == NULL, "IPv6 polluted IPv4 snapshot");
+        d2s_plan *p6 = NULL; char why6[128];
+        CHECK(d2s_plan_load(plan_owns_payload, sizeof plan_owns_payload, &p6,
                              why6, sizeof why6) == 0, "IPv6 execution fixture plan");
-        CHECK(d2k_plantab_set_addr_family(d2k_session_plans(v6), ip6 + 24, 6, 2, p6) == 0,
+        CHECK(d2s_plantab_set_addr_family(d2s_session_plans(v6), ip6 + 24, 6, 2, p6) == 0,
               "IPv6 execution address binding");
         wr16(ip6 + 40, 47702);
-        d2k_session_packet(v6, ip6, n6, 3, output6, sizeof output6, &r6);
+        d2s_session_packet(v6, ip6, n6, 3, output6, sizeof output6, &r6);
         CHECK(r6.applied && r6.n_out > 0 && (output6[0] >> 4) == 6,
               "IPv6 plan did not produce native IPv6 packets");
-        d2k_session_free(v6);
+        d2s_session_free(v6);
     }
     test_suspect_tells_planned();
     test_late_rst_after_tls_appdata();
     test_silent_cut_fin_retry();
     test_silent_cut_round1();
     test_tcp_silent_lifecycle();
-    d2k_session *s = d2k_session_new(64, 32);
+    d2s_session *s = d2s_session_new(64, 32);
     CHECK(s != NULL, "сессия не создалась");
     if (!s) {
         return 1;
     }
 
-    d2k_plan *p = NULL;
+    d2s_plan *p = NULL;
     char err[160];
-    CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &p, err, sizeof err) == 0,
+    CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &p, err, sizeof err) == 0,
           "план не загрузился");
-    d2k_session_set_plan(s, p);
+    d2s_session_set_plan(s, p);
 
     uint8_t hello[512];
     size_t hlen = build_hello(hello);
     uint8_t pkt[1024], buf[4096];
-    d2k_result r;
+    d2s_result r;
 
     /* --- СБОРКА НЕ ВЛЕЗЛА: отказ целиком, оригинал нетронут -------------
      *
@@ -1756,61 +1756,61 @@ int main(void) {
     {
         uint8_t tiny[8];
         size_t nn = build_pkt(pkt, 40001, 0x18, hello, hlen);
-        d2k_result rt;
-        d2k_session_packet(s, pkt, nn, 900, tiny, sizeof tiny, &rt);
+        d2s_result rt;
+        d2s_session_packet(s, pkt, nn, 900, tiny, sizeof tiny, &rt);
         CHECK(rt.n_out == 0, "несобранный план выдан как частично исполненный");
-        CHECK(rt.verdict == D2K_VERDICT_ACCEPT,
+        CHECK(rt.verdict == D2S_VERDICT_ACCEPT,
               "оригинал снят, хотя на провод не ушло ни байта");
         CHECK(rt.skipped != NULL, "отказ сборки не назван причиной");
     }
 
     /* --- ClientHello: план применяется ---------------------------------- */
     size_t n = build_pkt(pkt, 40000, 0x18, hello, hlen);
-    d2k_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 1000, buf, sizeof buf, &r);
     CHECK(r.n_out == 2, "ожидались две копии фальшивки");
     CHECK(r.skipped == NULL, "план не применён, хотя должен был");
-    CHECK(r.verdict == D2K_VERDICT_ACCEPT, "оригинал обязан пройти: нагрузку не трогали");
+    CHECK(r.verdict == D2S_VERDICT_ACCEPT, "оригинал обязан пройти: нагрузку не трогали");
     if (r.n_out == 2) {
         CHECK(r.out[0].delay_us == 0, "первая копия не должна ждать");
         CHECK(r.out[1].delay_us == 78000, "пауза между копиями потеряна");
         CHECK(r.out[0].len == 20 + 20 + 3, "длина собранного пакета неверна");
     }
-    CHECK(d2k_session_applied(s) == 1, "счётчик применений не сдвинулся");
+    CHECK(d2s_session_applied(s) == 1, "счётчик применений не сдвинулся");
 
     /* --- тот же поток второй раз: план НЕ применяется -------------------- */
-    d2k_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 2000, buf, sizeof buf, &r);
     CHECK(r.n_out == 0, "план применён к потоку повторно");
     CHECK(r.skipped != NULL, "повторное применение не объяснено");
-    CHECK(d2k_session_applied(s) == 1, "счётчик применений вырос повторно");
+    CHECK(d2s_session_applied(s) == 1, "счётчик применений вырос повторно");
 
     /* --- не ClientHello: пропускаем -------------------------------------- */
     {
         uint8_t junk[] = {'G', 'E', 'T', ' ', '/', '\r', '\n'};
         n = build_pkt(pkt, 40001, 0x18, junk, sizeof junk);
-        d2k_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, 3000, buf, sizeof buf, &r);
         CHECK(r.n_out == 0, "план применён к не-TLS");
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "не-TLS обязан пройти как есть");
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "не-TLS обязан пройти как есть");
     }
 
     /* --- пустая нагрузка --------------------------------------------------- */
     n = build_pkt(pkt, 40002, 0x10, NULL, 0);
-    d2k_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
+    d2s_session_packet(s, pkt, n, 4000, buf, sizeof buf, &r);
     CHECK(r.n_out == 0, "план применён к пакету без нагрузки");
 
     /* --- сброс убирает поток ---------------------------------------------- */
     {
-        size_t before = d2k_session_flows(s);
+        size_t before = d2s_session_flows(s);
         n = build_pkt(pkt, 40001, 0x14, NULL, 0);  /* RST|ACK */
-        d2k_session_packet(s, pkt, n, 5000, buf, sizeof buf, &r);
-        CHECK(d2k_session_flows(s) < before, "сброс не освободил поток");
+        d2s_session_packet(s, pkt, n, 5000, buf, sizeof buf, &r);
+        CHECK(d2s_session_flows(s) < before, "сброс не освободил поток");
     }
 
     /* --- мусор вместо пакета: пропускаем и объясняем ------------------------ */
     {
         uint8_t garbage[8];
         memset(garbage, 0xFF, sizeof garbage);
-        d2k_session_packet(s, garbage, sizeof garbage, 6000, buf, sizeof buf, &r);
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "мусор обязан проходить как есть");
+        d2s_session_packet(s, garbage, sizeof garbage, 6000, buf, sizeof buf, &r);
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "мусор обязан проходить как есть");
         CHECK(r.skipped != NULL, "пропуск мусора не объяснён");
     }
 
@@ -1818,17 +1818,17 @@ int main(void) {
     {
         n = build_pkt(pkt, 40010, 0x18, hello, hlen);
         wr16(pkt + 2, (uint16_t)(n + 500));   /* объявляем больше, чем есть */
-        d2k_session_packet(s, pkt, n, 7000, buf, sizeof buf, &r);
+        d2s_session_packet(s, pkt, n, 7000, buf, sizeof buf, &r);
         CHECK(r.n_out == 0, "пакет с врущей длиной обработан");
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "пакет с врущей длиной обязан пройти");
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "пакет с врущей длиной обязан пройти");
     }
 
     /* --- крошечный буфер отправки ------------------------------------------- */
     {
         n = build_pkt(pkt, 40011, 0x18, hello, hlen);
-        d2k_session_packet(s, pkt, n, 8000, buf, 10, &r);
+        d2s_session_packet(s, pkt, n, 8000, buf, 10, &r);
         CHECK(r.n_out == 0, "в крошечный буфер что-то поместилось");
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT,
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT,
               "ничего не выпустив, оригинал обязаны пропустить");
         CHECK(r.skipped != NULL, "нехватка буфера не объяснена");
     }
@@ -1839,113 +1839,113 @@ int main(void) {
      * §2.4 запрещает выводить из них устройство механизма, и ни одна на диск
      * не идёт (§2.3).                                                       */
     {
-        d2k_session *z = d2k_session_new(64, 64);
+        d2s_session *z = d2s_session_new(64, 64);
 
         /* 1. Сброс в ответ на приветствие. */
         n = build_pkt(pkt, 41000, 0x18, hello, hlen);
-        d2k_session_packet(z, pkt, n, 1000, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 0, "приветствие само по себе — подозрение");
+        d2s_session_packet(z, pkt, n, 1000, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 0, "приветствие само по себе — подозрение");
         n = build_rev_pkt(pkt, 41000, 0x14, NULL, 0);   /* RST|ACK от сервера */
-        d2k_session_packet(z, pkt, n, 2000, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 1, "сброс после приветствия не замечен");
+        d2s_session_packet(z, pkt, n, 2000, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 1, "сброс после приветствия не замечен");
 
         /* Сброс БЕЗ предшествующего приветствия подозрением не является:
            соединение могло закрыться по любой причине. */
         n = build_pkt(pkt, 41001, 0x02, NULL, 0);       /* SYN */
-        d2k_session_packet(z, pkt, n, 3000, buf, sizeof buf, &r);
+        d2s_session_packet(z, pkt, n, 3000, buf, sizeof buf, &r);
         n = build_rev_pkt(pkt, 41001, 0x14, NULL, 0);
-        d2k_session_packet(z, pkt, n, 3100, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 1, "сброс без приветствия сочтён подозрением");
+        d2s_session_packet(z, pkt, n, 3100, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 1, "сброс без приветствия сочтён подозрением");
 
         /* 2. Повтор приветствия. Один повтор — ещё не улика: пакет мог
            потеряться на линии. */
         n = build_pkt(pkt, 41002, 0x18, hello, hlen);
-        d2k_session_packet(z, pkt, n, 4000, buf, sizeof buf, &r);
-        d2k_session_packet(z, pkt, n, 4500, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 1, "один повтор уже объявлен подозрением");
-        d2k_session_packet(z, pkt, n, 5000, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 2, "два повтора не замечены");
+        d2s_session_packet(z, pkt, n, 4000, buf, sizeof buf, &r);
+        d2s_session_packet(z, pkt, n, 4500, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 1, "один повтор уже объявлен подозрением");
+        d2s_session_packet(z, pkt, n, 5000, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 2, "два повтора не замечены");
 
         /* Тот же поток дальше не должен множить подозрения. */
-        d2k_session_packet(z, pkt, n, 5500, buf, sizeof buf, &r);
-        CHECK(d2k_session_suspects(z) == 2, "подозрение отмечено по одному потоку дважды");
+        d2s_session_packet(z, pkt, n, 5500, buf, sizeof buf, &r);
+        CHECK(d2s_session_suspects(z) == 2, "подозрение отмечено по одному потоку дважды");
 
         /* 3. Видимость другого потока не доказывает, что обратное правило
            работало на этом: поток истекает без собственного SYN-ACK. */
         n = build_pkt(pkt, 41003, 0x18, hello, hlen);
-        d2k_session_packet(z, pkt, n, 6000, buf, sizeof buf, &r);
-        uint64_t before = d2k_session_suspects(z);
-        d2k_session_expire(z, 6000 + 2000000000ull, 50000);
-        CHECK(d2k_session_suspects(z) == before,
+        d2s_session_packet(z, pkt, n, 6000, buf, sizeof buf, &r);
+        uint64_t before = d2s_session_suspects(z);
+        d2s_session_expire(z, 6000 + 2000000000ull, 50000);
+        CHECK(d2s_session_suspects(z) == before,
               "обратная видимость другого потока засчитана как SYN-ACK этого потока");
 
         /* Поток, на приветствие которого ответили, подозрения не вызывает. */
-        d2k_session *w = d2k_session_new(64, 64);
+        d2s_session *w = d2s_session_new(64, 64);
         n = build_pkt(pkt, 41004, 0x18, hello, hlen);
-        d2k_session_packet(w, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(w, pkt, n, 1000, buf, sizeof buf, &r);
         {
             uint8_t data[8] = {0x16, 0x03, 0x03, 0, 3, 2, 0, 0};
             n = build_rev_pkt(pkt, 41004, 0x18, data, sizeof data);
-            d2k_session_packet(w, pkt, n, 1100, buf, sizeof buf, &r);
+            d2s_session_packet(w, pkt, n, 1100, buf, sizeof buf, &r);
         }
-        d2k_session_expire(w, 1100 + 100000, 50000);
-        CHECK(d2k_session_suspects(w) == 0,
+        d2s_session_expire(w, 1100 + 100000, 50000);
+        CHECK(d2s_session_suspects(w) == 0,
               "поток с ответом на приветствие сочтён подозрительным");
-        d2k_session_free(w);
-        d2k_session_free(z);
+        d2s_session_free(w);
+        d2s_session_free(z);
     }
 
     /* --- защита от чужого сброса ------------------------------------------
      * Ориентир берётся из САМОГО потока: TTL первого пакета, пришедшего с той
      * стороны. Сброс с другим TTL послан не тем, кто до этого отвечал.       */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_guard, sizeof plan_guard, &gp, err, sizeof err) == 0,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_guard, sizeof plan_guard, &gp, err, sizeof err) == 0,
               "план с защитой не загрузился");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
 
         /* Рукопожатие: SYN клиента, затем SYN-ACK сервера с TTL 124 —
            он и задаёт ориентир для защиты. */
         n = build_pkt(pkt, 42000, 0x02, NULL, 0);
-        d2k_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
         n = build_rev_pkt_ttl(pkt, 42000, 0x12, NULL, 0, 124);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
 
         /* Приветствие: план применяется, защита назначается потоку. */
         n = build_pkt(pkt, 42000, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
-        CHECK(d2k_session_applied(g) == 1, "план с защитой не применился");
+        d2s_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
+        CHECK(d2s_session_applied(g) == 1, "план с защитой не применился");
 
         /* Сброс с ЧУЖИМ TTL — снимается. */
         n = build_rev_pkt_ttl(pkt, 42000, 0x14, NULL, 0, 127);
-        d2k_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
-        CHECK(r.verdict == D2K_VERDICT_DROP, "чужой сброс не снят");
-        CHECK(d2k_session_rst_dropped(g) == 1, "снятый сброс не посчитан");
-        CHECK(d2k_session_flows(g) > 0,
+        d2s_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
+        CHECK(r.verdict == D2S_VERDICT_DROP, "чужой сброс не снят");
+        CHECK(d2s_session_rst_dropped(g) == 1, "снятый сброс не посчитан");
+        CHECK(d2s_session_flows(g) > 0,
               "поток удалён вместе со снятым сбросом: сервер ещё отвечает");
 
         /* Сброс с ТЕМ ЖЕ TTL — настоящий, проходит и закрывает поток.
            Это и есть цена ошибки в обратную сторону, и она обязана быть
            маленькой: настоящий сброс мы не трогаем. */
-        size_t before_flows = d2k_session_flows(g);
+        size_t before_flows = d2s_session_flows(g);
         n = build_rev_pkt_ttl(pkt, 42000, 0x14, NULL, 0, 124);
-        d2k_session_packet(g, pkt, n, 1300, buf, sizeof buf, &r);
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "настоящий сброс снят защитой");
-        CHECK(d2k_session_rst_dropped(g) == 1, "настоящий сброс посчитан снятым");
-        CHECK(d2k_session_flows(g) < before_flows, "настоящий сброс не закрыл поток");
+        d2s_session_packet(g, pkt, n, 1300, buf, sizeof buf, &r);
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "настоящий сброс снят защитой");
+        CHECK(d2s_session_rst_dropped(g) == 1, "настоящий сброс посчитан снятым");
+        CHECK(d2s_session_flows(g) < before_flows, "настоящий сброс не закрыл поток");
 
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- план выбирается по цели, а не один на всех ------------------------
      * §2.6: план закрепляется за контекстом, на котором подтверждён. Имя
      * точнее адреса, поэтому ищется первым.                                  */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *by_name = NULL, *by_addr = NULL;
-        d2k_plan_load(plan_bytes, sizeof plan_bytes, &by_name, err, sizeof err);
-        d2k_plan_load(plan_guard, sizeof plan_guard, &by_addr, err, sizeof err);
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *by_name = NULL, *by_addr = NULL;
+        d2s_plan_load(plan_bytes, sizeof plan_bytes, &by_name, err, sizeof err);
+        d2s_plan_load(plan_guard, sizeof plan_guard, &by_addr, err, sizeof err);
 
         /* Приветствие в наших пакетах несёт имя hetzner.com, а адрес цели —
            1.2.3.4. Ставим планы на оба ключа и проверяем, что берётся тот,
@@ -1953,25 +1953,25 @@ int main(void) {
         uint8_t dst[4] = {1, 2, 3, 4};
         uint32_t dst_be;
         memcpy(&dst_be, dst, 4);
-        d2k_plantab_set_addr(d2k_session_plans(g), dst_be, 1, by_addr);
-        d2k_plantab_set_name(d2k_session_plans(g),
+        d2s_plantab_set_addr(d2s_session_plans(g), dst_be, 1, by_addr);
+        d2s_plantab_set_name(d2s_session_plans(g),
                              (const uint8_t *)"hetzner.com", 11, 1, by_name);
 
         n = build_pkt(pkt, 43000, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.n_out == 2, "план по имени не применился");
-        CHECK(d2k_session_applied(g) == 1, "применение не посчитано");
+        CHECK(d2s_session_applied(g) == 1, "применение не посчитано");
 
         /* Цель без своего плана и без запасного — пропуск с объяснением. */
-        d2k_session *w = d2k_session_new(64, 64);
+        d2s_session *w = d2s_session_new(64, 64);
         n = build_pkt(pkt, 43001, 0x18, hello, hlen);
-        d2k_session_packet(w, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(w, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.n_out == 0, "план взялся ниоткуда");
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "цель без плана не пропущена");
-        CHECK(d2k_session_hellos(w) == 1,
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "цель без плана не пропущена");
+        CHECK(d2s_session_hellos(w) == 1,
               "приветствие не узнано из-за отсутствия плана");
-        d2k_session_free(w);
-        d2k_session_free(g);
+        d2s_session_free(w);
+        d2s_session_free(g);
     }
 
     /* --- одно имя, две формы: клиент TLS 1.2 получает план своей формы ----
@@ -1982,30 +1982,30 @@ int main(void) {
     {
         const uint8_t *nm = (const uint8_t *)"hetzner.com";
         for (int with_legacy = 0; with_legacy <= 1; with_legacy++) {
-            d2k_session *g = d2k_session_new(64, 64);
-            d2k_plan *modern = NULL, *legacy = NULL;
-            d2k_plan_load(plan_bytes, sizeof plan_bytes, &modern, err, sizeof err);
-            CHECK(modern && d2k_plantab_set_name_family(d2k_session_plans(g), nm, 11, 1,
-                      modern, D2K_PLAN_SHAPE_MODERN, 0, 4) == 0, "две формы: план TLS 1.3");
+            d2s_session *g = d2s_session_new(64, 64);
+            d2s_plan *modern = NULL, *legacy = NULL;
+            d2s_plan_load(plan_bytes, sizeof plan_bytes, &modern, err, sizeof err);
+            CHECK(modern && d2s_plantab_set_name_family(d2s_session_plans(g), nm, 11, 1,
+                      modern, D2S_PLAN_SHAPE_MODERN, 0, 4) == 0, "две формы: план TLS 1.3");
             if (with_legacy) {
-                d2k_plan_load(plan_bytes, sizeof plan_bytes, &legacy, err, sizeof err);
-                CHECK(legacy && d2k_plantab_set_name_family(d2k_session_plans(g), nm, 11, 1,
-                          legacy, D2K_PLAN_SHAPE_LEGACY, 0, 4) == 0, "две формы: план TLS 1.2");
+                d2s_plan_load(plan_bytes, sizeof plan_bytes, &legacy, err, sizeof err);
+                CHECK(legacy && d2s_plantab_set_name_family(d2s_session_plans(g), nm, 11, 1,
+                          legacy, D2S_PLAN_SHAPE_LEGACY, 0, 4) == 0, "две формы: план TLS 1.2");
             }
             n = build_pkt(pkt, (uint16_t)(43010 + with_legacy), 0x18, hello, hlen);
-            d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+            d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
             if (with_legacy) {
-                CHECK(r.n_out == 2 && d2k_session_applied(g) == 1,
+                CHECK(r.n_out == 2 && d2s_session_applied(g) == 1,
                       "две формы: клиенту TLS 1.2 не применён план его формы");
-                CHECK(d2k_plantab_shape_misses(d2k_session_plans(g)) == 0,
+                CHECK(d2s_plantab_shape_misses(d2s_session_plans(g)) == 0,
                       "две формы: приветствие TLS 1.2 посчитано отказом по форме");
             } else {
-                CHECK(r.n_out == 0 && d2k_session_applied(g) == 0,
+                CHECK(r.n_out == 0 && d2s_session_applied(g) == 0,
                       "одна форма: клиенту TLS 1.2 применён план формы TLS 1.3");
-                CHECK(d2k_plantab_shape_misses(d2k_session_plans(g)) >= 1,
+                CHECK(d2s_plantab_shape_misses(d2s_session_plans(g)) >= 1,
                       "одна форма: отказ по форме не посчитан");
             }
-            d2k_session_free(g);
+            d2s_session_free(g);
         }
     }
 
@@ -2020,7 +2020,7 @@ int main(void) {
      * получили 5, у остальных 18 не было ни ответа, ни сброса).
      *
      * Упиралось это в потолок снимка: приветствие длиннее него отвергалось
-     * целиком (capture.c, «total > D2K_CAPTURE_BYTES»), и сборка не
+     * целиком (capture.c, «total > D2S_CAPTURE_BYTES»), и сборка не
      * начиналась вовсе. */
     {
         const char *bnm = "hetzner.com";
@@ -2076,40 +2076,40 @@ int main(void) {
             1,8, 0,4, 0,0,5,120,           /* segment 1400 */
             1,9, 0,1, 1                    /* detect-tcp-v1 */
         };
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_hold *bh = d2k_hold_new();
-        d2k_plan *bp = NULL;
-        CHECK(g && bh && d2k_plan_load(named_plan, sizeof named_plan, &bp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_hold *bh = d2s_hold_new();
+        d2s_plan *bp = NULL;
+        CHECK(g && bh && d2s_plan_load(named_plan, sizeof named_plan, &bp,
                                        err, sizeof err) == 0,
               "крупное приветствие: план не разобран");
-        CHECK(bp && d2k_plantab_set_name_family(d2k_session_plans(g),
+        CHECK(bp && d2s_plantab_set_name_family(d2s_session_plans(g),
                   (const uint8_t *)bnm, 11, 1, bp,
-                  D2K_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
+                  D2S_PLAN_SHAPE_GRANDFATHER, 0, 4) == 0,
               "крупное приветствие: привязка не встала");
         static uint8_t bpkt[8192], bbuf[65536];
         size_t bn = build_pkt(bpkt, 43060, 0x02, NULL, 0);
-        d2k_session_packet(g, bpkt, bn, 1000, bbuf, sizeof bbuf, &r);
+        d2s_session_packet(g, bpkt, bn, 1000, bbuf, sizeof bbuf, &r);
         bn = build_pkt(bpkt, 43060, 0x10, big, SEG);
         wr32(bpkt + 24, 1001);
-        int allow = d2k_session_hold_candidate(g, bpkt, bn);
+        int allow = d2s_session_hold_candidate(g, bpkt, bn);
         CHECK(allow, "крупное приветствие: голову удержать не разрешили");
-        d2k_hold_batch bb;
+        d2s_hold_batch bb;
         memset(&bb, 0, sizeof bb);
-        CHECK(d2k_hold_feed(bh, 200, bpkt, bn, 2000, d2k_session_plan_revision(g),
+        CHECK(d2s_hold_feed(bh, 200, bpkt, bn, 2000, d2s_session_plan_revision(g),
                             allow, 1001, 1, hold_release, g, &bb) == 1,
               "крупное приветствие: голова не удержана — потолок снимка мал");
         bn = build_pkt(bpkt, 43060, 0x18, big + SEG, blen - SEG);
         wr32(bpkt + 24, 1001 + (uint32_t)SEG);
-        CHECK(d2k_hold_feed(bh, 201, bpkt, bn, 2100, d2k_session_plan_revision(g),
+        CHECK(d2s_hold_feed(bh, 201, bpkt, bn, 2100, d2s_session_plan_revision(g),
                             0, 1001, 1, hold_release, g, &bb) == 2 && bb.count == 2,
               "крупное приветствие: хвост не присоединился к голове");
         if (bb.count == 2) {
-            d2k_session_packet(g, bb.packet, bb.len, 2200, bbuf, sizeof bbuf, &r);
+            d2s_session_packet(g, bb.packet, bb.len, 2200, bbuf, sizeof bbuf, &r);
             CHECK(r.applied == 1 && r.n_out > 0,
                   "крупное приветствие: собрано, а план не применён");
         }
-        d2k_hold_free(bh);
-        d2k_session_free(g);
+        d2s_hold_free(bh);
+        d2s_session_free(g);
     }
 
     /* --- ОТКАЗ ИСПОЛНИТЕЛЯ НА ПОТОКЕ СВОЕГО ЗОНДА ВИДЕН КОНТРОЛЛЕРУ -------
@@ -2122,7 +2122,7 @@ int main(void) {
      * такого события не появлялось вовсе (в поле 10 отказов за 15 минут — ни
      * одного события), а контроллер после одного повтора судил кандидата.
      *
-     * Код обязан быть D2K_REFUSE_NOT_APPLIED, а не ноль: ноль значит «плана
+     * Код обязан быть D2S_REFUSE_NOT_APPLIED, а не ноль: ноль значит «плана
      * для цели нет», случается на каждом транзитном потоке, и контроллер его
      * намеренно пропускает (on_refused). Запись GRANDFATHER — чтобы в опыте
      * проверялся отказ исполнителя, а не подбор формы. */
@@ -2136,14 +2136,14 @@ int main(void) {
             1,9, 0,1, 1                    /* detect-tcp-v1 */
         };
         const uint8_t *nm = (const uint8_t *)"hetzner.com";
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *ap = NULL;
-        CHECK(g && d2k_plan_load(anchored_plan, sizeof anchored_plan, &ap,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *ap = NULL;
+        CHECK(g && d2s_plan_load(anchored_plan, sizeof anchored_plan, &ap,
                                  err, sizeof err) == 0 && ap,
               "отказ зонда: план с якорем по имени не разобран");
         uint16_t pport = 43040;
-        CHECK(ap && d2k_plantab_set_name_probe(d2k_session_plans(g), nm, 11, 1, ap,
-                  D2K_PLAN_SHAPE_GRANDFATHER, htons16(pport)) == 0,
+        CHECK(ap && d2s_plantab_set_name_probe(d2s_session_plans(g), nm, 11, 1, ap,
+                  D2S_PLAN_SHAPE_GRANDFATHER, htons16(pport)) == 0,
               "отказ зонда: пробная запись не встала");
         uint8_t bad[2048];
         memcpy(bad, hello, hlen);
@@ -2152,23 +2152,23 @@ int main(void) {
         bad[3] = (uint8_t)((hlen - 5 + 7) >> 8);
         bad[4] = (uint8_t)(hlen - 5 + 7);
         n = build_pkt(pkt, pport, 0x02, NULL, 0);
-        d2k_session_packet_probe(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet_probe(g, pkt, n, 1000, buf, sizeof buf, &r);
         n = build_pkt(pkt, pport, 0x18, bad, hlen);
-        d2k_session_packet_probe(g, pkt, n, 1100, buf, sizeof buf, &r);
+        d2s_session_packet_probe(g, pkt, n, 1100, buf, sizeof buf, &r);
         CHECK(r.applied == 0 && r.n_out == 0,
               "отказ зонда: план всё-таки применился — проверять нечего");
         CHECK(r.skipped != NULL && strstr(r.skipped, "не сходятся") != NULL,
               "отказ зонда: причина отказа не названа дословно");
-        const d2k_journal *jr = d2k_session_journal(g);
-        size_t jn = d2k_journal_count(jr), coded = 0;
+        const d2s_journal *jr = d2s_session_journal(g);
+        size_t jn = d2s_journal_count(jr), coded = 0;
         for (size_t i = 0; i < jn; i++) {
-            const d2k_jrn_entry *e = d2k_journal_at(jr, i);
-            if (e && e->kind == D2K_JRN_PLAN_REFUSED &&
-                e->code == D2K_REFUSE_NOT_APPLIED) { coded++; }
+            const d2s_jrn_entry *e = d2s_journal_at(jr, i);
+            if (e && e->kind == D2S_JRN_PLAN_REFUSED &&
+                e->code == D2S_REFUSE_NOT_APPLIED) { coded++; }
         }
         CHECK(coded == 1,
               "отказ исполнителя на потоке зонда не уехал контроллеру с кодом");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- постквантовое приветствие в двух сегментах -------------------------
@@ -2210,26 +2210,26 @@ int main(void) {
             wr16(pq + 3, (uint16_t)(b - 5));
             pq[6] = 0; wr16(pq + 7, (uint16_t)(b - 9));
 
-            d2k_session *g = d2k_session_new(64, 64);
-            d2k_plan *modern = NULL;
-            d2k_plan_load(plan_bytes, sizeof plan_bytes, &modern, err, sizeof err);
-            CHECK(modern && d2k_plantab_set_name_family(d2k_session_plans(g), nm, 11, 1,
-                      modern, D2K_PLAN_SHAPE_MODERN, 0, 4) == 0, "PQ: план TLS 1.3");
+            d2s_session *g = d2s_session_new(64, 64);
+            d2s_plan *modern = NULL;
+            d2s_plan_load(plan_bytes, sizeof plan_bytes, &modern, err, sizeof err);
+            CHECK(modern && d2s_plantab_set_name_family(d2s_session_plans(g), nm, 11, 1,
+                      modern, D2S_PLAN_SHAPE_MODERN, 0, 4) == 0, "PQ: план TLS 1.3");
             /* Первый сегмент: обрыв посреди тела key_share. */
             n = build_pkt(pkt, (uint16_t)(43020 + with_key_share), 0x18, pq, 600);
-            d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+            d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
             if (with_key_share) {
-                CHECK(r.n_out > 0 && d2k_session_applied(g) == 1,
+                CHECK(r.n_out > 0 && d2s_session_applied(g) == 1,
                       "PQ: план TLS 1.3 не применён к приветствию с key_share в первом сегменте");
-                CHECK(d2k_plantab_shape_misses(d2k_session_plans(g)) == 0,
+                CHECK(d2s_plantab_shape_misses(d2s_session_plans(g)) == 0,
                       "PQ: приветствие с key_share посчитано отказом по форме");
             } else {
-                CHECK(r.n_out == 0 && d2k_session_applied(g) == 0,
+                CHECK(r.n_out == 0 && d2s_session_applied(g) == 0,
                       "PQ-контроль: без признака TLS 1.3 применён план TLS 1.3");
-                CHECK(d2k_plantab_shape_misses(d2k_session_plans(g)) >= 1,
+                CHECK(d2s_plantab_shape_misses(d2s_session_plans(g)) >= 1,
                       "PQ-контроль: отказ по форме не посчитан");
             }
-            d2k_session_free(g);
+            d2s_session_free(g);
         }
     }
 
@@ -2238,35 +2238,35 @@ int main(void) {
      * не гарантирован. Раньше такой поток получал направления наоборот, и
      * приветствие клиента не разбиралось вовсе.                             */
     {
-        d2k_session *g = d2k_session_new(64, 64);
+        d2s_session *g = d2s_session_new(64, 64);
         n = build_rev_pkt_ttl(pkt, 42002, 0x12, NULL, 0, 124);   /* SYN-ACK первым */
-        d2k_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
         n = build_pkt(pkt, 42002, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-        CHECK(d2k_session_hellos(g) == 1,
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        CHECK(d2s_session_hellos(g) == 1,
               "приветствие потеряно, когда SYN-ACK пришёл раньше SYN");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- без защиты чужой сброс проходит ------------------------------------
      * Проверка, что защита не включается сама собой: план без guard обязан
      * оставлять поведение прежним.                                          */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err);
-        d2k_session_set_plan(g, gp);
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err);
+        d2s_session_set_plan(g, gp);
         n = build_pkt(pkt, 42001, 0x02, NULL, 0);
-        d2k_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 900, buf, sizeof buf, &r);
         n = build_rev_pkt_ttl(pkt, 42001, 0x12, NULL, 0, 124);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         n = build_pkt(pkt, 42001, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
         n = build_rev_pkt_ttl(pkt, 42001, 0x14, NULL, 0, 127);
-        d2k_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "защита сработала без плана с защитой");
-        CHECK(d2k_session_rst_dropped(g) == 0, "снятие посчитано там, где защиты нет");
-        d2k_session_free(g);
+        d2s_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "защита сработала без плана с защитой");
+        CHECK(d2s_session_rst_dropped(g) == 0, "снятие посчитано там, где защиты нет");
+        d2s_session_free(g);
     }
 
     /* Segmented measured fake: 7 * ceil(4096/1400) + truth = 22 packets.
@@ -2282,19 +2282,19 @@ int main(void) {
             0x01,0x08,0,4, 0,0,0x05,0x78
         };
         memcpy(tlv + z, tail, sizeof tail); z += sizeof tail;
-        uint8_t bigbuf[D2K_RESULT_MAX * 1600];
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(tlv, z, &gp, err, sizeof err) == 0, "segmented plan rejected");
-        CHECK(d2k_plan_max_emit(gp) == 1440, "MTU check ignores segmentation");
-        d2k_session_set_plan(g, gp);
+        uint8_t bigbuf[D2S_RESULT_MAX * 1600];
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(tlv, z, &gp, err, sizeof err) == 0, "segmented plan rejected");
+        CHECK(d2s_plan_max_emit(gp) == 1440, "MTU check ignores segmentation");
+        d2s_session_set_plan(g, gp);
         n = build_pkt(pkt, 43098, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-        CHECK(r.n_out == 0 && !r.applied && r.verdict == D2K_VERDICT_ACCEPT,
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        CHECK(r.n_out == 0 && !r.applied && r.verdict == D2S_VERDICT_ACCEPT,
               "small buffer produced partial measured execution");
         n = build_pkt(pkt, 43099, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 2000, bigbuf, sizeof bigbuf, &r);
-        CHECK(r.n_out == 22 && r.applied && r.verdict == D2K_VERDICT_DROP,
+        d2s_session_packet(g, pkt, n, 2000, bigbuf, sizeof bigbuf, &r);
+        CHECK(r.n_out == 22 && r.applied && r.verdict == D2S_VERDICT_DROP,
               "long measured fake does not fit real session");
         if (r.n_out == 22) {
             for (size_t k = 0; k < 21; k++) {
@@ -2305,28 +2305,28 @@ int main(void) {
             CHECK(r.out[21].len == hlen + 40, "truth length changed");
             CHECK(memcmp(bigbuf + r.out[21].off + 40, hello, hlen) == 0, "truth bytes changed");
         }
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- план с repeats больше вместимости out[] отвергается целиком -------
        Ревью задачи 4, круг 2: repeats берётся из TLV байтом без потолка (до
-       255), d2k_result.out[] ограничен D2K_RESULT_MAX. Раньше n тихо
+       255), d2s_result.out[] ограничен D2S_RESULT_MAX. Раньше n тихо
        обрезался до 16, на провод уходило меньше посылок, чем описывал план,
        а plan_done/applied++/PLAN_APPLIED ставились как за полное исполнение.
        Честный исход — отказ целиком: ни одной посылки, план не применён. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_too_many_repeats, sizeof plan_too_many_repeats, &gp, err, sizeof err) == 0,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_too_many_repeats, sizeof plan_too_many_repeats, &gp, err, sizeof err) == 0,
               "план с лишним повтором не загрузился");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
         n = build_pkt(pkt, 43100, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.n_out == 0, "план с лишним повтором отправил посылку вместо отказа");
-        CHECK(r.verdict == D2K_VERDICT_ACCEPT, "ничего не отправив, оригинал обязаны пропустить");
+        CHECK(r.verdict == D2S_VERDICT_ACCEPT, "ничего не отправив, оригинал обязаны пропустить");
         CHECK(r.skipped != NULL, "отказ по переполнению out[] не объяснён вызывающему");
-        CHECK(d2k_session_applied(g) == 0, "план с лишним повтором засчитан применённым");
-        d2k_session_free(g);
+        CHECK(d2s_session_applied(g) == 0, "план с лишним повтором засчитан применённым");
+        d2s_session_free(g);
     }
 
     /* --- молчание замечается по измеренному RTT, а не через две минуты ---
@@ -2335,31 +2335,31 @@ int main(void) {
      * не начинался вовсе — подозрение рождалось только при забвении потока, а
      * это 120 секунд. Человек перед пустой страницей столько не ждёт. */
     {
-        d2k_session *q = d2k_session_new(16, 32);
+        d2s_session *q = d2s_session_new(16, 32);
         CHECK(q != NULL, "сессия для молчания не создалась");
         const uint64_t ms = 1000000ull;
         uint8_t qp[1024], qb[4096];
-        d2k_result qr;
+        d2s_result qr;
 
         /* SYN и SYN-ACK с интервалом 20 мс — вот и измеренный RTT. */
         size_t qn = build_pkt(qp, 41000, 0x02, NULL, 0);
-        d2k_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
         qn = build_rev_pkt(qp, 41000, 0x12, NULL, 0);
-        d2k_session_packet(q, qp, qn, 20 * ms, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 20 * ms, qb, sizeof qb, &qr);
 
         uint8_t qh[512];
         size_t qhl = build_hello(qh);
         qn = build_pkt(qp, 41000, 0x18, qh, qhl);
-        d2k_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
-        CHECK(d2k_session_suspects(q) == 0, "подозрение сразу после приветствия");
+        d2s_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
+        CHECK(d2s_session_suspects(q) == 0, "подозрение сразу после приветствия");
 
-        CHECK(d2k_session_sweep(q, 530 * ms) == 0,
+        CHECK(d2s_session_sweep(q, 530 * ms) == 0,
               "полсекунды молчания объявлены блокировкой");
-        CHECK(d2k_session_sweep(q, 1530 * ms) == 1,
+        CHECK(d2s_session_sweep(q, 1530 * ms) == 1,
               "молчание не замечено на второй секунде");
-        CHECK(d2k_session_suspects(q) == 1, "подозрение о молчании не отмечено");
-        CHECK(d2k_session_sweep(q, 9000 * ms) == 0, "подозрение продублировано");
-        d2k_session_free(q);
+        CHECK(d2s_session_suspects(q) == 1, "подозрение о молчании не отмечено");
+        CHECK(d2s_session_sweep(q, 9000 * ms) == 0, "подозрение продублировано");
+        d2s_session_free(q);
     }
 
     /* --- без видимости обратной стороны молчания не бывает ---------------
@@ -2368,47 +2368,47 @@ int main(void) {
      * невидим, и каждый поток выглядел бы молчащим: это подмена «не смотрели»
      * на «нет ответа». */
     {
-        d2k_session *q = d2k_session_new(16, 32);
+        d2s_session *q = d2s_session_new(16, 32);
         const uint64_t ms = 1000000ull;
         uint8_t qp[1024], qb[4096];
-        d2k_result qr;
+        d2s_result qr;
 
         /* Только исходящее: SYN и приветствие. Ответов не видим вовсе. */
         size_t qn = build_pkt(qp, 43000, 0x02, NULL, 0);
-        d2k_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
         uint8_t qh[512];
         size_t qhl = build_hello(qh);
         qn = build_pkt(qp, 43000, 0x18, qh, qhl);
-        d2k_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
 
-        CHECK(d2k_session_sweep(q, 9000 * ms) == 0,
+        CHECK(d2s_session_sweep(q, 9000 * ms) == 0,
               "невидимая обратная сторона объявлена молчащей");
-        d2k_session_free(q);
+        d2s_session_free(q);
     }
 
     /* --- ответивший сервер не молчит, сколько ни выжидай ----------------- */
     {
-        d2k_session *q = d2k_session_new(16, 32);
+        d2s_session *q = d2s_session_new(16, 32);
         const uint64_t ms = 1000000ull;
         uint8_t qp[1024], qb[4096];
-        d2k_result qr;
+        d2s_result qr;
 
         size_t qn = build_pkt(qp, 42000, 0x02, NULL, 0);
-        d2k_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 0, qb, sizeof qb, &qr);
         qn = build_rev_pkt(qp, 42000, 0x12, NULL, 0);
-        d2k_session_packet(q, qp, qn, 20 * ms, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 20 * ms, qb, sizeof qb, &qr);
 
         uint8_t qh[512];
         size_t qhl = build_hello(qh);
         qn = build_pkt(qp, 42000, 0x18, qh, qhl);
-        d2k_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 30 * ms, qb, sizeof qb, &qr);
 
         uint8_t sh[8] = { 0x16, 0x03, 0x03, 0x00, 0x03, 0x02, 0x00, 0x00 };
         qn = build_rev_pkt(qp, 42000, 0x18, sh, sizeof sh);
-        d2k_session_packet(q, qp, qn, 50 * ms, qb, sizeof qb, &qr);
+        d2s_session_packet(q, qp, qn, 50 * ms, qb, sizeof qb, &qr);
 
-        CHECK(d2k_session_sweep(q, 9000 * ms) == 0, "ответивший сервер объявлен молчащим");
-        d2k_session_free(q);
+        CHECK(d2s_session_sweep(q, 9000 * ms) == 0, "ответивший сервер объявлен молчащим");
+        d2s_session_free(q);
     }
 
     /* --- отказ «плана для этой цели нет» доходит до журнала и не чаще
@@ -2416,9 +2416,9 @@ int main(void) {
      *
      * Раньше session.c просто выставлял out->skipped и возвращался: refuse()
      * не звался, в журнал ничего не попадало, на провод ничего не уходило —
-     * единственным следом оставался счётчик в сводке d2kd. Управляющий сокет
+     * единственным следом оставался счётчик в сводке d2sd. Управляющий сокет
      * — единственное, что видит контроллер, а вытеснение из таблицы планов
-     * теперь штатный путь (см. d2k_plans.h): однажды выпавшая подтверждённая
+     * теперь штатный путь (см. d2s_plans.h): однажды выпавшая подтверждённая
      * цель терялась бы НАВСЕГДА без единого сигнала об этом.
      *
      * Ловушка, которую эта проверка обязана ловить: наивная правка звала бы
@@ -2428,11 +2428,11 @@ int main(void) {
      * нашли). На потоке без всякого плана КАЖДЫЙ пакет после SYN подпадал бы
      * под то же условие — событие на каждый пакет вместо события на промах. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        /* Ни глобального плана (d2k_session_set_plan не звался), ни записи в
+        d2s_session *g = d2s_session_new(64, 64);
+        /* Ни глобального плана (d2s_session_set_plan не звался), ни записи в
            таблице планов — это и есть «плана для этой цели нет» по-настоящему. */
         uint8_t pkt[1024], buf[4096];
-        d2k_result r;
+        d2s_result r;
 
         /* Мусор вместо приветствия на СВОЁМ потоке, план для которого тоже
            не встал: use == NULL здесь по причине "не приветствие", а не
@@ -2440,17 +2440,17 @@ int main(void) {
            появиться ложно. */
         uint8_t junk[] = {'G', 'E', 'T', ' ', '/', '\r', '\n'};
         size_t n = build_pkt(pkt, 45000, 0x18, junk, sizeof junk);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(count_plan_refused(g) == 0,
               "не-приветствие без всякого плана ложно засчитано отказом плана");
 
-        /* Настоящее приветствие на ДРУГОМ потоке: d2k_plantab_find и s->plan
+        /* Настоящее приветствие на ДРУГОМ потоке: d2s_plantab_find и s->plan
            оба ничего не дают — вот теперь это по-настоящему «плана для этой
            цели нет», и событие обязано дойти до журнала. */
         uint8_t hello[512];
         size_t hlen = build_hello(hello);
         n = build_pkt(pkt, 45001, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 2000, buf, sizeof buf, &r);
         CHECK(r.n_out == 0, "план взялся ниоткуда для цели без плана");
         size_t after_hello = count_plan_refused(g);
         CHECK(after_hello == 1,
@@ -2465,11 +2465,11 @@ int main(void) {
            провал предыдущей, если та уже упала. */
         uint8_t appdata[] = {0x17, 0x03, 0x03, 0x00, 0x01, 0xAA};
         n = build_pkt(pkt, 45001, 0x18, appdata, sizeof appdata);
-        d2k_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 3000, buf, sizeof buf, &r);
         CHECK(count_plan_refused(g) == after_hello,
               "пакет после рукопожатия на том же потоке размножил отказ плана");
 
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- результат исполнения доезжает до контроллера ---------------------
@@ -2486,15 +2486,15 @@ int main(void) {
      * доисполнен» с кодом причины, и поздняя удача остатка НЕ превращает это
      * обратно в «доисполнен». */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
                             err, sizeof err) == 0,
               "план с идентификатором не загрузился");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
 
         n = build_pkt(pkt, 46000, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.n_out == 2, "план с идентификатором не дал двух посылок");
         CHECK(r.applied == 1, "результат не объявил план применённым");
         /* Ключ канонический: низкий конец пары — не обязательно клиент.
@@ -2506,28 +2506,28 @@ int main(void) {
               "идентификатор плана не доехал до точки отправки");
 
         /* Все посылки ушли — «план доисполнен». */
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 0,
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 0,
               "«доисполнен» записан до единой отправки");
-        d2k_session_sent(g, 1100, &r.key, r.execution_id);
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 0,
+        d2s_session_sent(g, 1100, &r.key, r.execution_id);
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 0,
               "«доисполнен» записан на половине посылок");
-        d2k_session_sent(g, 1200, &r.key, r.execution_id);
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 0,
+        d2s_session_sent(g, 1200, &r.key, r.execution_id);
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 0,
               "отправки завершены, но судьба оригинала ещё не подтверждена");
-        d2k_session_sent(g, 1250, &r.key, r.execution_id);
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 1,
+        d2s_session_sent(g, 1250, &r.key, r.execution_id);
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 1,
               "все посылки ушли, а «доисполнен» не записан");
-        CHECK(count_kind(g, D2K_JRN_PLAN_UNSENT) == 0,
+        CHECK(count_kind(g, D2S_JRN_PLAN_UNSENT) == 0,
               "успешная отправка записана недоисполнением");
 
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- ДЛИНА ПОСЫЛКИ И ОБЪЯВЛЕННАЯ В НЕЙ ДЛИНА — ОДНО ЧИСЛО -----------
      *
      * Приёмка U3 просит опыт на разных опциях TCP и на перекрытии ПОЛНОГО
      * сегмента. Проверяемое утверждение здесь одно, зато оно держит всю
-     * проверку предела отправки: число, по которому d2kd сверяет посылку с
+     * проверку предела отправки: число, по которому d2sd сверяет посылку с
      * пределом (out[].len), обязано совпадать с числом, по которому её
      * нарежет ядро (поле длины в заголовке IPv4). Разойдись они — проверка
      * предела сверяла бы не то, и EMSGSIZE приходил бы посреди исполнения,
@@ -2545,13 +2545,13 @@ int main(void) {
            больше её самой. */
         uint8_t big[2048], bpkt[2048], bbuf[16384];
         size_t blen = build_hello_pad(big, sizes[oi]);
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_owns_payload, sizeof plan_owns_payload, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_owns_payload, sizeof plan_owns_payload, &gp,
                             err, sizeof err) == 0, "план для опыта с опциями");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
         n = build_pkt_opt(bpkt, (uint16_t)(46200 + oi), 0x18, big, blen, opts[oi]);
-        d2k_session_packet(g, bpkt, n, 1000, bbuf, sizeof bbuf, &r);
+        d2s_session_packet(g, bpkt, n, 1000, bbuf, sizeof bbuf, &r);
         CHECK(r.applied == 1, "план не применился при опциях TCP");
         CHECK(r.n_out > 0, "посылок не собралось — сверять нечего");
         for (size_t k = 0; k < r.n_out; k++) {
@@ -2562,7 +2562,7 @@ int main(void) {
                   "объявленная длина посылки расходится с её размером — "
                   "предел отправки сверяется не по тому числу");
         }
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* --- ОБЩИЙ ИСХОД ОТКАЗА ИСПОЛНЕНИЯ (0009, U3) ----------------------
@@ -2575,58 +2575,58 @@ int main(void) {
      * Чистый выход существует ровно в одном случае: ни один кусок нагрузки не
      * ушёл И вердикт ещё не отправлен. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_owns_payload, sizeof plan_owns_payload, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_owns_payload, sizeof plan_owns_payload, &gp,
                             err, sizeof err) == 0, "план для проверки отказа");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
         n = build_pkt(pkt, 46010, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.applied == 1, "план не применился");
-        d2k_key key0 = r.key;
+        d2s_key key0 = r.key;
         uint64_t exec0 = r.execution_id;
 
         /* Нагрузка не ушла, вердикт не отправлен — оригинал ещё наш. */
-        CHECK(d2k_session_exec_failed(g, 1100, &r.key, r.plan_id, D2K_REFUSE_QUEUE,
+        CHECK(d2s_session_exec_failed(g, 1100, &r.key, r.plan_id, D2S_REFUSE_QUEUE,
                                       r.execution_id, 0, 0) == 1,
               "оригинал не отпущен, хотя на провод не ушло ни байта нагрузки");
-        CHECK(count_kind(g, D2K_JRN_PLAN_UNSENT) == 1, "отказ не записан");
+        CHECK(count_kind(g, D2S_JRN_PLAN_UNSENT) == 1, "отказ не записан");
 
         /* Вторая неудача той же попытки не удваивает запись: «ошибка посылки,
            затем ошибка вердикта» — один несостоявшийся опыт, а не два. */
-        CHECK(d2k_session_exec_failed(g, 1150, &r.key, r.plan_id, D2K_REFUSE_SEND,
+        CHECK(d2s_session_exec_failed(g, 1150, &r.key, r.plan_id, D2S_REFUSE_SEND,
                                       r.execution_id, 0, 1) == 0,
               "вердикт уже ушёл, а оригинал объявлен отпускаемым");
-        CHECK(count_kind(g, D2K_JRN_PLAN_UNSENT) == 1,
+        CHECK(count_kind(g, D2S_JRN_PLAN_UNSENT) == 1,
               "двойной отказ одной попытки записан дважды");
 
         /* Защиты сняты вместе с планом: держать испорченный поток живым,
            снимая подделанный сброс, значит заставлять человека ждать таймаута
            вместо быстрой переустановки соединения клиентом. */
-        CHECK(d2k_session_guards(g, &key0) == 0,
+        CHECK(d2s_session_guards(g, &key0) == 0,
               "защиты остались на испорченном потоке");
 
         /* Факт повреждения записан В МОМЕНТ установления, а не при следующем
            пакете: замолчавший поток второго пакета мог бы и не прислать. */
-        CHECK(count_kind(g, D2K_JRN_PLAN_DAMAGED) == 1,
+        CHECK(count_kind(g, D2S_JRN_PLAN_DAMAGED) == 1,
               "повреждение не записано в момент установления");
-        CHECK(d2k_session_exec_failed(g, 1160, &key0, r.plan_id, D2K_REFUSE_SEND,
+        CHECK(d2s_session_exec_failed(g, 1160, &key0, r.plan_id, D2S_REFUSE_SEND,
                                       exec0, 1, 0) == 0,
               "повторный отказ той же попытки вернул «оригинал ещё наш»");
-        CHECK(count_kind(g, D2K_JRN_PLAN_DAMAGED) == 1,
+        CHECK(count_kind(g, D2S_JRN_PLAN_DAMAGED) == 1,
               "повреждение записано дважды за одну попытку");
 
         /* Повреждение стало НАБЛЮДАЕМЫМ: следующее приветствие того же потока
            получает именно его, а не «план уже применён». */
         /* Другой ПОРТ — тот же поток? Нет: ключ другой. Берём тот же порт,
            но проверяем через send_pending, что поток жив и это он. */
-        CHECK(!d2k_session_send_pending(g, &key0, exec0),
+        CHECK(!d2s_session_send_pending(g, &key0, exec0),
               "после отказа поток всё ещё принимает посылки этой попытки");
         n = build_pkt(pkt, 46010, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
         CHECK(r.skipped != NULL && strstr(r.skipped, "испорчен") != NULL,
               "повреждение потока не наблюдаемо — флаг остался write-only");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     {
@@ -2634,118 +2634,118 @@ int main(void) {
            посылки по такому плану поток НЕ портит: байты клиента целы, и
            единственный факт — воздействие неполно. Слишком широкая политика
            «отложенный отказ = всегда порча» этот случай завалит. */
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
               "план из одних фальшивок не загрузился");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
         n = build_pkt(pkt, 46011, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-        CHECK(r.applied == 1 && r.verdict == D2K_VERDICT_ACCEPT,
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        CHECK(r.applied == 1 && r.verdict == D2S_VERDICT_ACCEPT,
               "план из одних фальшивок забрал оригинал");
         CHECK(r.first_payload == 0xFF, "у плана без нагрузки объявлен номер её посылки");
 
-        CHECK(d2k_session_exec_failed(g, 1100, &r.key, r.plan_id, D2K_REFUSE_SEND,
+        CHECK(d2s_session_exec_failed(g, 1100, &r.key, r.plan_id, D2S_REFUSE_SEND,
                                       r.execution_id, 0, 1) == 1,
               "поток объявлен испорченным, хотя оригинал не наш и байты клиента целы");
         n = build_pkt(pkt, 46011, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
         CHECK(r.skipped != NULL && strstr(r.skipped, "испорчен") == NULL,
               "целый поток объявлен испорченным");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* A new SYN must not erase the binding of still queued old sends. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(!d2k_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(!d2s_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
                             err, sizeof err), "pending SYN fixture plan");
-        CHECK(!d2k_plantab_set_name(d2k_session_plans(g),
+        CHECK(!d2s_plantab_set_name(d2s_session_plans(g),
             (const uint8_t *)"hetzner.com", 11, 1, gp), "pending SYN binding");
         n = build_pkt(pkt, 46003, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
-        d2k_result pending = r;
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_result pending = r;
         CHECK(pending.applied && pending.binding.generation,
               "pending SYN fixture did not select a binding");
         n = build_pkt(pkt, 46003, 0x02, NULL, 0);
-        d2k_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
         CHECK(!r.applied, "bare SYN unexpectedly applied a plan");
         for (size_t i = 0; i <= pending.n_out; i++)
-            d2k_session_sent(g, 1200 + i, &pending.key, pending.execution_id);
-        const d2k_jrn_entry *e = last_of_kind(g, D2K_JRN_PLAN_DONE);
+            d2s_session_sent(g, 1200 + i, &pending.key, pending.execution_id);
+        const d2s_jrn_entry *e = last_of_kind(g, D2S_JRN_PLAN_DONE);
         CHECK(e && e->execution_id == pending.execution_id &&
               !memcmp(&e->binding, &pending.binding, sizeof e->binding),
               "new SYN erased the binding of pending execution DONE");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* One 5-tuple may be reused while old delayed packets still exist. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
                             err, sizeof err) == 0, "план для повторного ключа");
-        CHECK(!d2k_plantab_set_name(d2k_session_plans(g),
+        CHECK(!d2s_plantab_set_name(d2s_session_plans(g),
             (const uint8_t *)"hetzner.com", 11, 1, gp), "bound execution fixture");
         n = build_pkt(pkt, 46002, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         uint64_t old = r.execution_id;
-        d2k_key key = r.key;
+        d2s_key key = r.key;
         n = build_pkt(pkt, 46002, 0x11, NULL, 0);
-        d2k_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1100, buf, sizeof buf, &r);
         n = build_pkt(pkt, 46002, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
-        d2k_binding_context selected = r.binding;
-        CHECK(selected.generation && selected.kind == D2K_BIND_NAME,
+        d2s_session_packet(g, pkt, n, 1200, buf, sizeof buf, &r);
+        d2s_binding_context selected = r.binding;
+        CHECK(selected.generation && selected.kind == D2S_BIND_NAME,
               "execution lost selected binding identity");
-        d2k_plan *replacement = NULL;
-        CHECK(!d2k_plan_load(plan_with_send_id, sizeof plan_with_send_id, &replacement,
+        d2s_plan *replacement = NULL;
+        CHECK(!d2s_plan_load(plan_with_send_id, sizeof plan_with_send_id, &replacement,
                             err, sizeof err), "same-hash replacement fixture");
-        CHECK(!d2k_plantab_set_name(d2k_session_plans(g),
+        CHECK(!d2s_plantab_set_name(d2s_session_plans(g),
             (const uint8_t *)"hetzner.com", 11, 1201, replacement), "same-hash replace while sends pending");
-        d2k_binding_context current = {0};
-        CHECK(d2k_plantab_binding(d2k_session_plans(g), replacement, &current) &&
+        d2s_binding_context current = {0};
+        CHECK(d2s_plantab_binding(d2s_session_plans(g), replacement, &current) &&
               current.generation != selected.generation, "replacement has a new generation");
         CHECK(r.applied && r.execution_id != old, "повторный поток наследовал номер исполнения");
-        CHECK(!d2k_session_send_pending(g, &key, old), "старый пакет разрешён к отправке");
-        d2k_session_sent(g, 1300, &key, old);
-        d2k_session_unsent(g, 1301, &key, NULL, D2K_REFUSE_SEND, old);
-        CHECK(d2k_session_send_pending(g, &r.key, r.execution_id), "старый отказ отменил новое исполнение");
+        CHECK(!d2s_session_send_pending(g, &key, old), "старый пакет разрешён к отправке");
+        d2s_session_sent(g, 1300, &key, old);
+        d2s_session_unsent(g, 1301, &key, NULL, D2S_REFUSE_SEND, old);
+        CHECK(d2s_session_send_pending(g, &r.key, r.execution_id), "старый отказ отменил новое исполнение");
         for (size_t i = 0; i < r.n_out; i++) {
-            d2k_session_sent(g, 1400 + i, &r.key, r.execution_id);
+            d2s_session_sent(g, 1400 + i, &r.key, r.execution_id);
         }
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 0, "чужая отправка зачтена новому потоку");
-        d2k_session_sent(g, 1500, &r.key, r.execution_id);
-        const d2k_jrn_entry *e = last_of_kind(g, D2K_JRN_PLAN_DONE);
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 0, "чужая отправка зачтена новому потоку");
+        d2s_session_sent(g, 1500, &r.key, r.execution_id);
+        const d2s_jrn_entry *e = last_of_kind(g, D2S_JRN_PLAN_DONE);
         CHECK(e && memcmp(e->plan_id, want_send_id, 16) == 0, "DONE потерял ID плана");
         CHECK(e && e->execution_id == r.execution_id &&
               e->binding.generation == selected.generation && e->binding.generation != current.generation,
               "late DONE borrowed the replacement binding instead of its snapshot");
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
     /* Отказ отправки: «план не доисполнен» с кодом, и поздняя удача остатка
        не отменяет отказ. Отдельная сессия — иначе счётчики предыдущей
        смешались бы с этими. */
     {
-        d2k_session *g = d2k_session_new(64, 64);
-        d2k_plan *gp = NULL;
-        CHECK(d2k_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
+        d2s_session *g = d2s_session_new(64, 64);
+        d2s_plan *gp = NULL;
+        CHECK(d2s_plan_load(plan_with_send_id, sizeof plan_with_send_id, &gp,
                             err, sizeof err) == 0,
               "план с идентификатором не загрузился (вторая сессия)");
-        d2k_session_set_plan(g, gp);
+        d2s_session_set_plan(g, gp);
 
         n = build_pkt(pkt, 46001, 0x18, hello, hlen);
-        d2k_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
+        d2s_session_packet(g, pkt, n, 1000, buf, sizeof buf, &r);
         CHECK(r.applied == 1, "план не применился во второй сессии");
 
-        d2k_session_unsent(g, 1100, &r.key, r.plan_id, D2K_REFUSE_TOO_LONG, r.execution_id);
-        CHECK(count_kind(g, D2K_JRN_PLAN_UNSENT) == 1,
+        d2s_session_unsent(g, 1100, &r.key, r.plan_id, D2S_REFUSE_TOO_LONG, r.execution_id);
+        CHECK(count_kind(g, D2S_JRN_PLAN_UNSENT) == 1,
               "отказ отправки не записан в журнал");
         {
-            const d2k_jrn_entry *e = last_of_kind(g, D2K_JRN_PLAN_UNSENT);
-            CHECK(e != NULL && e->code == D2K_REFUSE_TOO_LONG,
+            const d2s_jrn_entry *e = last_of_kind(g, D2S_JRN_PLAN_UNSENT);
+            CHECK(e != NULL && e->code == D2S_REFUSE_TOO_LONG,
                   "у недоисполнения нет кода причины");
             CHECK(e != NULL && memcmp(e->plan_id, want_send_id, 16) == 0,
                   "недоисполнение не названо идентификатором плана");
@@ -2755,15 +2755,15 @@ int main(void) {
 
         /* Остаток плана уходит успешно — «доисполнен» всё равно не пишется:
            план исполнен НЕ полностью, и поздняя удача этого не меняет. */
-        d2k_session_sent(g, 1200, &r.key, r.execution_id);
-        d2k_session_sent(g, 1300, &r.key, r.execution_id);
-        CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == 0,
+        d2s_session_sent(g, 1200, &r.key, r.execution_id);
+        d2s_session_sent(g, 1300, &r.key, r.execution_id);
+        CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == 0,
               "поздняя удача остатка объявила недоисполненный план доисполненным");
 
-        d2k_session_free(g);
+        d2s_session_free(g);
     }
 
-    d2k_session_free(s);
+    d2s_session_free(s);
 
     /* Snapshot assembly is observation, never a packet verdict/byte change.
        SNI can cross a boundary or be in the first segment. Neither case may
@@ -2773,7 +2773,7 @@ int main(void) {
         size_t whole_len = build_hello_pad(whole, 1544);
         /* РЕЖЕМ ДО ИМЕНИ. Удержание существует ровно для куска, в котором
            имени ещё нет: когда имя в первом сегменте, план применяется к нему
-           сразу и ждать остатка незачем (см. d2k_session_hold_candidate).
+           сразу и ждать остатка незачем (см. d2s_session_hold_candidate).
            Сорок байт — заведомо меньше, чем смещение server_name у любого
            приветствия: до него одних только записи, заголовка, версии и
            random больше сорока. */
@@ -2781,69 +2781,69 @@ int main(void) {
         const size_t cuts[] = {1, 4, 8, 60, 64, 70, 1448, 1544};
         const uint8_t name[] = "hetzner.com";
         for (size_t j = 0; j < sizeof cuts / sizeof cuts[0]; j++) {
-            d2k_session *g = d2k_session_new(64, 64);
+            d2s_session *g = d2s_session_new(64, 64);
             CHECK(g != NULL, "capture session allocation");
             if (!g) { continue; }
-            CHECK(d2k_session_want_shape(g, name, sizeof name - 1, 6) == 0,
+            CHECK(d2s_session_want_shape(g, name, sizeof name - 1, 6) == 0,
                   "empty capture was ready");
             size_t cut = cuts[j];
             size_t pn = build_pkt(part, 47000, 0x18, whole, cut);
             memcpy(saved, part, pn);
-            d2k_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
-            CHECK(r.verdict == D2K_VERDICT_ACCEPT && !r.applied && !r.n_out,
+            d2s_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
+            CHECK(r.verdict == D2S_VERDICT_ACCEPT && !r.applied && !r.n_out,
                   "capture changed first packet verdict");
             CHECK(!memcmp(saved, part, pn), "capture changed first packet bytes");
             size_t got_len = 0;
             if (cut < whole_len) {
-                CHECK(d2k_session_shape(g, 6, &got_len) == NULL,
+                CHECK(d2s_session_shape(g, 6, &got_len) == NULL,
                       "partial hello published as SHAPE");
-                CHECK(count_kind(g, D2K_JRN_SHAPE) == 0, "partial SHAPE event");
-                CHECK(count_kind(g, D2K_JRN_HELLO_NONAME) == 0,
+                CHECK(count_kind(g, D2S_JRN_SHAPE) == 0, "partial SHAPE event");
+                CHECK(count_kind(g, D2S_JRN_HELLO_NONAME) == 0,
                       "incomplete SNI was called nameless");
                 pn = build_pkt(part, 47000, 0x18, whole + cut, whole_len - cut);
                 wr32(part + 24, 1000 + (uint32_t)cut);
                 memcpy(saved, part, pn);
-                d2k_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
-                CHECK(r.verdict == D2K_VERDICT_ACCEPT && !r.applied && !r.n_out,
+                d2s_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
+                CHECK(r.verdict == D2S_VERDICT_ACCEPT && !r.applied && !r.n_out,
                       "capture changed tail verdict");
                 CHECK(!memcmp(saved, part, pn), "capture changed tail bytes");
             }
-            const uint8_t *got = d2k_session_shape(g, 6, &got_len);
+            const uint8_t *got = d2s_session_shape(g, 6, &got_len);
             CHECK(got && got_len == whole_len && !memcmp(got, whole, whole_len),
                   "assembled snapshot differs from original hello");
-            CHECK(count_kind(g, D2K_JRN_SHAPE) == 1, "expected one SHAPE event");
-            CHECK(count_kind(g, D2K_JRN_HELLO_SNI) == 1, "expected one SNI event");
-            CHECK(d2k_session_want_shape(g, name, sizeof name - 1, 6) == 1,
+            CHECK(count_kind(g, D2S_JRN_SHAPE) == 1, "expected one SHAPE event");
+            CHECK(count_kind(g, D2S_JRN_HELLO_SNI) == 1, "expected one SNI event");
+            CHECK(d2s_session_want_shape(g, name, sizeof name - 1, 6) == 1,
                   "full hello not available to later search");
-            CHECK(d2k_session_shape(g, 17, &got_len) == NULL, "TCP polluted QUIC snapshot");
-            CHECK(d2k_session_want_shape_family(g, name, sizeof name - 1, 6, 6) == 0,
+            CHECK(d2s_session_shape(g, 17, &got_len) == NULL, "TCP polluted QUIC snapshot");
+            CHECK(d2s_session_want_shape_family(g, name, sizeof name - 1, 6, 6) == 0,
                   "IPv6 request reused IPv4 snapshot");
-            CHECK(d2k_session_shape_family(g, 6, 6, &got_len) == NULL,
+            CHECK(d2s_session_shape_family(g, 6, 6, &got_len) == NULL,
                   "IPv6 snapshot contains IPv4 hello");
-            CHECK(d2k_session_shape_family(g, 6, 4, &got_len) != NULL,
+            CHECK(d2s_session_shape_family(g, 6, 4, &got_len) != NULL,
                   "IPv6 request destroyed IPv4 snapshot");
             pn = build_pkt(part, 47000, 0x18, whole, whole_len);
-            d2k_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
-            d2k_payload_stats ps;
-            d2k_session_payload_stats(g, &ps);
+            d2s_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
+            d2s_payload_stats ps;
+            d2s_session_payload_stats(g, &ps);
             CHECK(ps.capture_complete == 1, "retransmit duplicated completed capture");
-            d2k_session_free(g);
+            d2s_session_free(g);
         }
         /* Fast successful flows must release slots, not fill all 64 slots
            for five seconds and starve the next incomplete ClientHello. */
         {
-            d2k_session *g = d2k_session_new(256, 64);
+            d2s_session *g = d2s_session_new(256, 64);
             CHECK(g != NULL, "capture pressure allocation");
             if (g) {
                 for (uint16_t port = 48000; port < 48080; port++) {
                     size_t pn = build_pkt(part, port, 0x18, whole, whole_len);
-                    d2k_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
+                    d2s_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
                 }
-                d2k_payload_stats ps;
-                d2k_session_payload_stats(g, &ps);
+                d2s_payload_stats ps;
+                d2s_session_payload_stats(g, &ps);
                 CHECK(ps.capture_complete == 80 && ps.capture_full == 0,
                       "completed captures starved new flows");
-                d2k_session_free(g);
+                d2s_session_free(g);
             }
         }
         {
@@ -2861,66 +2861,66 @@ int main(void) {
                 1,5, 0,4, 0,0,46,224,          /* pace 12000 */
                 1,9, 0,1, 1                    /* detect-tcp-v1 */
             };
-            d2k_session *g = d2k_session_new(64, 64);
-            d2k_plan *gp = NULL;
+            d2s_session *g = d2s_session_new(64, 64);
+            d2s_plan *gp = NULL;
             CHECK(g != NULL, "strict capture allocation");
-            CHECK(d2k_plan_load(strict_plan, sizeof strict_plan, &gp,
+            CHECK(d2s_plan_load(strict_plan, sizeof strict_plan, &gp,
                                 err, sizeof err) == 0, "strict capture plan parse");
             if (g && gp) {
-                d2k_session_set_plan(g, gp);
+                d2s_session_set_plan(g, gp);
                 gp = NULL;
                 size_t pn = build_pkt(part, 47500, 0x18, whole, 1448);
-                d2k_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
+                d2s_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
                 /* Имя в сегменте есть — план применяется к нему, а остаток
                    уйдёт следом сам. Ждать остаток нельзя: пока сегмент лежит
                    в очереди без вердикта, ядро его не выпускает (поле
                    18.09.2026). */
-                CHECK(r.applied && r.n_out > 0 && r.verdict == D2K_VERDICT_DROP,
+                CHECK(r.applied && r.n_out > 0 && r.verdict == D2S_VERDICT_DROP,
                       "план не применён к первому сегменту составного приветствия");
                 pn = build_pkt(part, 47500, 0x18, whole + 1448, whole_len - 1448);
                 wr32(part + 24, 2448);
-                d2k_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
-                CHECK(!r.applied && !r.n_out && r.verdict == D2K_VERDICT_ACCEPT,
+                d2s_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
+                CHECK(!r.applied && !r.n_out && r.verdict == D2S_VERDICT_ACCEPT,
                       "observation executed full plan on passed-through tail");
                 pn = build_pkt(part, 47501, 0x18, whole, whole_len);
-                d2k_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
-                CHECK(r.applied && r.n_out > 0 && r.verdict == D2K_VERDICT_DROP,
+                d2s_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
+                CHECK(r.applied && r.n_out > 0 && r.verdict == D2S_VERDICT_DROP,
                       "capture prevented whole-packet plan execution");
 
                 /* Port 80 does not turn TLS into HTTP, in either arrival order. */
                 for (int tail_first = 0; tail_first < 2; tail_first++) {
-                    d2k_hold *hp = d2k_hold_new();
-                    d2k_hold_batch bp;
+                    d2s_hold *hp = d2s_hold_new();
+                    d2s_hold_batch bp;
                     uint16_t port = (uint16_t)(47800 + tail_first);
                     pn = build_pkt(part, port, 0x02, NULL, 0);
                     wr16(part + 22, 80);
-                    d2k_session_packet(g, part, pn, 4, buf, sizeof buf, &r);
+                    d2s_session_packet(g, part, pn, 4, buf, sizeof buf, &r);
                     for (int step = 0; step < 2; step++) {
                         int tail = step ^ tail_first;
                         pn = build_pkt(part, port, 0x18, whole + (tail ? HEAD1 : 0),
                                        tail ? whole_len - HEAD1 : HEAD1);
                         wr16(part + 22, 80); wr32(part + 24, 1001 + (tail ? HEAD1 : 0));
-                        int mode = d2k_session_hold_candidate(g, part, pn);
-                        if (!step) CHECK(mode == D2K_HOLD_TLS,
+                        int mode = d2s_session_hold_candidate(g, part, pn);
+                        if (!step) CHECK(mode == D2S_HOLD_TLS,
                             "TLS on port 80 retains TLS readiness, including tail-first");
-                        int rc = d2k_hold_feed(hp, 100 + (uint32_t)step, part, pn, 5 + step,
-                            d2k_session_plan_revision(g), mode, 1001, 1, hold_release, g, &bp);
+                        int rc = d2s_hold_feed(hp, 100 + (uint32_t)step, part, pn, 5 + step,
+                            d2s_session_plan_revision(g), mode, 1001, 1, hold_release, g, &bp);
                         CHECK(rc == (step ? 2 : 1), "split TLS on port 80 is assembled");
                         if (rc == 2) {
                             CHECK(bp.count == 2 && bp.len == 40 + whole_len &&
                                   !memcmp(bp.packet + 40, whole, whole_len),
                                   "TLS on port 80 preserves full assembled bytes");
-                            d2k_session_packet(g, bp.packet, bp.len, 8, buf, sizeof buf, &r);
+                            d2s_session_packet(g, bp.packet, bp.len, 8, buf, sizeof buf, &r);
                             CHECK(r.applied, "assembled TLS on port 80 executes its TLS plan");
                         }
                     }
-                    d2k_hold_flush(hp, 9, d2k_session_plan_revision(g), 1, hold_release, g);
-                    d2k_hold_free(hp);
+                    d2s_hold_flush(hp, 9, d2s_session_plan_revision(g), 1, hold_release, g);
+                    d2s_hold_free(hp);
                 }
 
                 /* ХВОСТ ПРИВЕТСТВИЯ ПРИШЁЛ ПЕРВЫМ — ЕГО ТОЖЕ НАДО УДЕРЖАТЬ.
                  *
-                 * Поле 17.09.2026, живая линия, зонд подтверждения d2k:
+                 * Поле 17.09.2026, живая линия, зонд подтверждения d2s:
                  *   пакет 51359->443 seq=3909908605 нагрузка=146   <- ХВОСТ
                  *   пакет 51359->443 seq=3909907217 нагрузка=1388  <- голова
                  * Разница ровно 1388 — второй сегмент пришёл раньше первого.
@@ -2933,31 +2933,31 @@ int main(void) {
                  * есть (capture.c собирает по seq) — не хватало права НАЧАТЬ
                  * удержание не с первого куска. */
                 {
-                    d2k_hold *h2 = d2k_hold_new();
-                    d2k_hold_batch b2;
+                    d2s_hold *h2 = d2s_hold_new();
+                    d2s_hold_batch b2;
                     CHECK(h2 != NULL, "hold allocation for out-of-order case");
                     if (h2) {
                         pn = build_pkt(part, 47503, 0x02, NULL, 0);
-                        d2k_session_packet(g, part, pn, 7, buf, sizeof buf, &r);
+                        d2s_session_packet(g, part, pn, 7, buf, sizeof buf, &r);
 
                         /* Хвост. Записи TLS он не начинает (первый байт не 22)
                            и стоит не сразу за SYN — по прежнему правилу не
                            кандидат. */
                         pn = build_pkt(part, 47503, 0x18, whole + HEAD1, whole_len - HEAD1);
                         wr32(part + 24, 1001 + HEAD1);
-                        int a2 = d2k_session_hold_candidate(g, part, pn);
+                        int a2 = d2s_session_hold_candidate(g, part, pn);
                         CHECK(a2, "хвост приветствия, пришедший первым, не удержан — "
                                   "он уйдёт голым в коробку");
-                        CHECK(d2k_hold_feed(h2, 90, part, pn, 8,
-                                            d2k_session_plan_revision(g), a2, 1001, 1,
+                        CHECK(d2s_hold_feed(h2, 90, part, pn, 8,
+                                            d2s_session_plan_revision(g), a2, 1001, 1,
                                             hold_release, g, &b2) == 1,
                               "хвост не взят в удержание");
 
                         /* Голова. Слот уже есть, и она обязана его дособрать. */
                         pn = build_pkt(part, 47503, 0x18, whole, HEAD1);
                         wr32(part + 24, 1001);
-                        CHECK(d2k_hold_feed(h2, 91, part, pn, 9,
-                                            d2k_session_plan_revision(g), 0, 1001, 1,
+                        CHECK(d2s_hold_feed(h2, 91, part, pn, 9,
+                                            d2s_session_plan_revision(g), 0, 1001, 1,
                                             hold_release, g, &b2) == 2,
                               "приветствие не собралось из кусков, пришедших в обратном порядке");
                         CHECK(b2.count == 2,
@@ -2969,7 +2969,7 @@ int main(void) {
                            и сервер выбросил бы их как уже полученные. */
                         CHECK(rd32(b2.packet + 24) == 1001,
                               "в собранном пакете номер последовательности хвоста, а не головы");
-                        d2k_hold_free(h2);
+                        d2s_hold_free(h2);
                     }
                 }
 
@@ -2982,40 +2982,40 @@ int main(void) {
                  * это просто байт данных. Начало обязано браться из известной
                  * позиции потока (сразу за SYN), а не угадываться. */
                 {
-                    d2k_hold *h3 = d2k_hold_new();
-                    d2k_hold_batch b3;
+                    d2s_hold *h3 = d2s_hold_new();
+                    d2s_hold_batch b3;
                     CHECK(h3 != NULL, "hold allocation for permutation case");
                     if (h3) {
                         pn = build_pkt(part, 47504, 0x02, NULL, 0);
-                        d2k_session_packet(g, part, pn, 10, buf, sizeof buf, &r);
+                        d2s_session_packet(g, part, pn, 10, buf, sizeof buf, &r);
                         size_t a = 600, b = 1200;   /* три куска: 0..a, a..b, b..конец */
                         int rc3 = 0;
                         /* третий */
                         pn = build_pkt(part, 47504, 0x18, whole + b, whole_len - b);
                         wr32(part + 24, (uint32_t)(1001 + b));
-                        rc3 = d2k_hold_feed(h3, 92, part, pn, 11,
-                                            d2k_session_plan_revision(g),
-                                            d2k_session_hold_candidate(g, part, pn), 1001, 1,
+                        rc3 = d2s_hold_feed(h3, 92, part, pn, 11,
+                                            d2s_session_plan_revision(g),
+                                            d2s_session_hold_candidate(g, part, pn), 1001, 1,
                                             hold_release, g, &b3);
                         CHECK(rc3 == 1, "третий кусок, пришедший первым, не удержан");
                         /* второй */
                         pn = build_pkt(part, 47504, 0x18, whole + a, b - a);
                         wr32(part + 24, (uint32_t)(1001 + a));
-                        rc3 = d2k_hold_feed(h3, 93, part, pn, 12,
-                                            d2k_session_plan_revision(g), 0, 1001, 1,
+                        rc3 = d2s_hold_feed(h3, 93, part, pn, 12,
+                                            d2s_session_plan_revision(g), 0, 1001, 1,
                                             hold_release, g, &b3);
                         CHECK(rc3 == 1, "средний кусок не принят");
                         /* первый */
                         pn = build_pkt(part, 47504, 0x18, whole, a);
                         wr32(part + 24, 1001);
-                        rc3 = d2k_hold_feed(h3, 94, part, pn, 13,
-                                            d2k_session_plan_revision(g), 0, 1001, 1,
+                        rc3 = d2s_hold_feed(h3, 94, part, pn, 13,
+                                            d2s_session_plan_revision(g), 0, 1001, 1,
                                             hold_release, g, &b3);
                         CHECK(rc3 == 2, "три куска в обратном порядке не собрались");
                         CHECK(b3.count == 3, "собраны не все три куска");
                         CHECK(rd32(b3.packet + 24) == 1001,
                               "номер последовательности взят не у головы");
-                        d2k_hold_free(h3);
+                        d2s_hold_free(h3);
                     }
                 }
 
@@ -3023,8 +3023,8 @@ int main(void) {
                    и принять его за голову значит собрать приветствие со
                    сдвигом — то есть отправить мусор. */
                 {
-                    d2k_hold *h4 = d2k_hold_new();
-                    d2k_hold_batch b4;
+                    d2s_hold *h4 = d2s_hold_new();
+                    d2s_hold_batch b4;
                     CHECK(h4 != NULL, "hold allocation for 0x16 tail case");
                     if (h4) {
                         static uint8_t tricky[2048];
@@ -3032,32 +3032,32 @@ int main(void) {
                         memcpy(tricky, whole, tw);
                         tricky[1448] = 0x16;   /* хвост теперь начинается с 0x16 */
                         pn = build_pkt(part, 47505, 0x02, NULL, 0);
-                        d2k_session_packet(g, part, pn, 14, buf, sizeof buf, &r);
+                        d2s_session_packet(g, part, pn, 14, buf, sizeof buf, &r);
                         pn = build_pkt(part, 47505, 0x18, tricky + 1448, tw - 1448);
                         /* Здесь разрез свой, 1448: набор про БАЙТ 0x16 в
                            начале хвоста, а не про место имени. */
                         wr32(part + 24, 1001 + 1448);
-                        int a4 = d2k_session_hold_candidate(g, part, pn);
-                        int rc4 = d2k_hold_feed(h4, 95, part, pn, 15,
-                                                d2k_session_plan_revision(g), a4, 1001, 1,
+                        int a4 = d2s_session_hold_candidate(g, part, pn);
+                        int rc4 = d2s_hold_feed(h4, 95, part, pn, 15,
+                                                d2s_session_plan_revision(g), a4, 1001, 1,
                                                 hold_release, g, &b4);
                         CHECK(rc4 == 1, "хвост с байтом 0x16 не удержан");
                         pn = build_pkt(part, 47505, 0x18, tricky, 1448);
                         wr32(part + 24, 1001);
-                        rc4 = d2k_hold_feed(h4, 96, part, pn, 16,
-                                            d2k_session_plan_revision(g), 0, 1001, 1,
+                        rc4 = d2s_hold_feed(h4, 96, part, pn, 16,
+                                            d2s_session_plan_revision(g), 0, 1001, 1,
                                             hold_release, g, &b4);
                         CHECK(rc4 == 2,
                               "хвост с 0x16 принят за голову — приветствие собрано со сдвигом");
                         CHECK(rd32(b4.packet + 24) == 1001,
                               "номер последовательности взят у хвоста с 0x16");
-                        d2k_hold_free(h4);
+                        d2s_hold_free(h4);
                     }
                 }
 
                 /* КУСКИ ПРИВЕТСТВИЯ В ЛЮБОМ ПОРЯДКЕ, И ЗАГОЛОВОК — У ГОЛОВЫ.
                  *
-                 * Живая линия 18.09, зонд подтверждения d2k. На проводе оба
+                 * Живая линия 18.09, зонд подтверждения d2s. На проводе оба
                  * сегмента, а в датапат попадал только первый: он уходил в
                  * удержание и ТУТ ЖЕ разбирался сессией как приветствие, на
                  * потоке взводился saw_hello — и второй кусок отсекался
@@ -3065,23 +3065,23 @@ int main(void) {
                  * отпускало взятое по таймауту, план не применялся, и рабочий
                  * обход выбрасывался собственным подтверждением. */
                 {
-                    d2k_hold *h2 = d2k_hold_new();
-                    d2k_hold_batch b2;
+                    d2s_hold *h2 = d2s_hold_new();
+                    d2s_hold_batch b2;
                     CHECK(h2 != NULL, "hold allocation for out-of-order case");
                     if (h2) {
                         pn = build_pkt(part, 47503, 0x02, NULL, 0);
-                        d2k_session_packet(g, part, pn, 7, buf, sizeof buf, &r);
+                        d2s_session_packet(g, part, pn, 7, buf, sizeof buf, &r);
 
                         /* Голова уходит в удержание — и сессии НЕ отдаётся:
-                           d2kd на удержанном пакете обрывает обработку
+                           d2sd на удержанном пакете обрывает обработку
                            (hr == 1 → continue). Отдать его здесь значило бы
                            проверять поведение, которого у службы нет. */
                         pn = build_pkt(part, 47503, 0x18, whole, HEAD1);
                         wr32(part + 24, 1001);
-                        int a1 = d2k_session_hold_candidate(g, part, pn);
+                        int a1 = d2s_session_hold_candidate(g, part, pn);
                         CHECK(a1, "голова составного приветствия не удержана");
-                        CHECK(d2k_hold_feed(h2, 90, part, pn, 8,
-                                            d2k_session_plan_revision(g), a1, 1001, 1,
+                        CHECK(d2s_hold_feed(h2, 90, part, pn, 8,
+                                            d2s_session_plan_revision(g), a1, 1001, 1,
                                             hold_release, g, &b2) == 1,
                               "голова не взята в удержание");
 
@@ -3092,10 +3092,10 @@ int main(void) {
                            «заводить ли слот». */
                         pn = build_pkt(part, 47503, 0x18, whole + HEAD1, whole_len - HEAD1);
                         wr32(part + 24, 1001 + HEAD1);
-                        int a2 = d2k_session_hold_candidate(g, part, pn);
+                        int a2 = d2s_session_hold_candidate(g, part, pn);
                         CHECK(!a2, "хвост открыл ВТОРОЕ удержание того же потока");
-                        CHECK(d2k_hold_feed(h2, 91, part, pn, 9,
-                                            d2k_session_plan_revision(g), a2, 1001, 1,
+                        CHECK(d2s_hold_feed(h2, 91, part, pn, 9,
+                                            d2s_session_plan_revision(g), a2, 1001, 1,
                                             hold_release, g, &b2) == 2,
                               "приветствие не собралось из двух кусков");
                         CHECK(b2.count == 2,
@@ -3105,35 +3105,35 @@ int main(void) {
                            полученные. */
                         CHECK(rd32(b2.packet + 24) == 1001,
                               "в собранном пакете номер последовательности не головы");
-                        d2k_hold_free(h2);
+                        d2s_hold_free(h2);
                     }
                 }
 
                 /* Тот же поток, но куски приходят В ОБРАТНОМ ПОРЯДКЕ. */
                 {
-                    d2k_hold *h3 = d2k_hold_new();
-                    d2k_hold_batch b3;
+                    d2s_hold *h3 = d2s_hold_new();
+                    d2s_hold_batch b3;
                     CHECK(h3 != NULL, "hold allocation for reversed case");
                     if (h3) {
                         pn = build_pkt(part, 47504, 0x02, NULL, 0);
-                        d2k_session_packet(g, part, pn, 10, buf, sizeof buf, &r);
+                        d2s_session_packet(g, part, pn, 10, buf, sizeof buf, &r);
                         pn = build_pkt(part, 47504, 0x18, whole + HEAD1, whole_len - HEAD1);
                         wr32(part + 24, 1001 + HEAD1);
-                        int a3 = d2k_session_hold_candidate(g, part, pn);
+                        int a3 = d2s_session_hold_candidate(g, part, pn);
                         CHECK(a3, "хвост, пришедший первым, не удержан — он уйдёт голым");
-                        CHECK(d2k_hold_feed(h3, 92, part, pn, 11,
-                                            d2k_session_plan_revision(g), a3, 1001, 1,
+                        CHECK(d2s_hold_feed(h3, 92, part, pn, 11,
+                                            d2s_session_plan_revision(g), a3, 1001, 1,
                                             hold_release, g, &b3) == 1,
                               "хвост не взят в удержание");
                         pn = build_pkt(part, 47504, 0x18, whole, HEAD1);
                         wr32(part + 24, 1001);
-                        CHECK(d2k_hold_feed(h3, 93, part, pn, 12,
-                                            d2k_session_plan_revision(g), 0, 1001, 1,
+                        CHECK(d2s_hold_feed(h3, 93, part, pn, 12,
+                                            d2s_session_plan_revision(g), 0, 1001, 1,
                                             hold_release, g, &b3) == 2,
                               "приветствие не собралось из кусков в обратном порядке");
                         CHECK(b3.count == 2 && rd32(b3.packet + 24) == 1001,
                               "обратный порядок: собрано не всё или номер не головы");
-                        d2k_hold_free(h3);
+                        d2s_hold_free(h3);
                     }
                 }
 
@@ -3144,14 +3144,14 @@ int main(void) {
                    «добавлено к голове=0»). */
                 {
                     pn = build_pkt(part, 47511, 0x02, NULL, 0);
-                    d2k_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
+                    d2s_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
                     pn = build_pkt(part, 47511, 0x18, whole, 1448);
                     wr32(part + 24, 1001);
-                    d2k_tls_info t1;
-                    d2k_tls_parse(whole, 1448, &t1);
+                    d2s_tls_info t1;
+                    d2s_tls_parse(whole, 1448, &t1);
                     CHECK(t1.have_sni && !t1.have_record_end,
                           "набор испорчен: в голове 1448 байт нет имени или запись целая");
-                    CHECK(!d2k_session_hold_candidate(g, part, pn),
+                    CHECK(!d2s_session_hold_candidate(g, part, pn),
                           "кусок с именем ушёл в удержание — остаток за ним не выйдет");
                 }
 
@@ -3164,40 +3164,40 @@ int main(void) {
                    навсегда. */
                 pn = build_pkt(part, 47504, 0x02, NULL, 0);
                 wr32(part + 24, 5000);
-                d2k_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
+                d2s_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
                 pn = build_pkt(part, 47504, 0x18, whole, HEAD1);
                 wr32(part + 24, 5001);
                 uint32_t anc = 0;
-                CHECK(d2k_session_stream_anchor(g, part, pn, &anc) && anc == 5001,
+                CHECK(d2s_session_stream_anchor(g, part, pn, &anc) && anc == 5001,
                       "новое соединение взяло начало потока от прошлого");
-                CHECK(d2k_session_hold_candidate(g, part, pn),
+                CHECK(d2s_session_hold_candidate(g, part, pn),
                       "новое соединение закрыто отметками прошлого");
 
                 /* The explicit owning path is allowed to execute the WHOLE
                    held hello, once, using its first seq/ACK and normal NAT. */
-                d2k_hold *h = d2k_hold_new();
-                d2k_hold_batch batch;
+                d2s_hold *h = d2s_hold_new();
+                d2s_hold_batch batch;
                 CHECK(h != NULL, "owning hold allocation");
                 if (h) {
                     pn = build_pkt(part, 47502, 0x02, NULL, 0);
-                    d2k_session_packet(g, part, pn, 4, buf, sizeof buf, &r);
+                    d2s_session_packet(g, part, pn, 4, buf, sizeof buf, &r);
                     pn = build_pkt(part, 47502, 0x18, whole, HEAD1);
                     wr32(part + 24, 1001);
-                    int allow = d2k_session_hold_candidate(g, part, pn);
+                    int allow = d2s_session_hold_candidate(g, part, pn);
                     CHECK(allow, "installed measured plan did not enable hold");
-                    CHECK(d2k_hold_feed(h, 80, part, pn, 5, d2k_session_plan_revision(g),
+                    CHECK(d2s_hold_feed(h, 80, part, pn, 5, d2s_session_plan_revision(g),
                         allow, 0, 0, hold_release, g, &batch) == 1, "first piece not owned");
                     pn = build_pkt(part, 47502, 0x18, whole + HEAD1, whole_len - HEAD1);
                     wr32(part + 24, 1001 + HEAD1);
-                    CHECK(d2k_hold_feed(h, 81, part, pn, 6, d2k_session_plan_revision(g),
+                    CHECK(d2s_hold_feed(h, 81, part, pn, 6, d2s_session_plan_revision(g),
                         0, 0, 0, hold_release, g, &batch) == 2, "held hello not completed");
                     CHECK(batch.count == 2 && batch.ids[0] == 80 && batch.ids[1] == 81,
                           "original ownership lost");
-                    d2k_session_packet(g, batch.packet, batch.len, 7, buf, sizeof buf, &r);
-                    CHECK(r.applied && r.verdict == D2K_VERDICT_DROP && r.n_out == 4,
+                    d2s_session_packet(g, batch.packet, batch.len, 7, buf, sizeof buf, &r);
+                    CHECK(r.applied && r.verdict == D2S_VERDICT_DROP && r.n_out == 4,
                           "whole held disorder was not applied");
-                    d2k_tls_info ti;
-                    d2k_tls_parse(whole, whole_len, &ti);
+                    d2s_tls_info ti;
+                    d2s_tls_parse(whole, whole_len, &ti);
                     size_t middle = ti.sni_off + ti.sni_len / 2;
                     size_t offsets[] = {middle, middle + 1400, 1, 0};
                     size_t lengths[] = {1400, whole_len - middle - 1400, middle - 1, 1};
@@ -3213,34 +3213,34 @@ int main(void) {
                               "held disorder payload differs");
                         CHECK(r.out[k].delay_us == (k < 2 ? 0u : 12000u),
                               "held disorder timing differs");
-                        d2k_session_sent(g, 8 + k, &r.key, r.execution_id);
+                        d2s_session_sent(g, 8 + k, &r.key, r.execution_id);
                     }
-                    size_t done = count_kind(g, D2K_JRN_PLAN_DONE);
+                    size_t done = count_kind(g, D2S_JRN_PLAN_DONE);
                     CHECK(done == 0, "DONE before all originals acknowledged");
                     /* One logical acknowledgement, only AFTER both IDs. */
-                    d2k_session_sent(g, 12, &r.key, r.execution_id);
-                    CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == done + 1,
+                    d2s_session_sent(g, 12, &r.key, r.execution_id);
+                    CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == done + 1,
                           "group acknowledgement failed to finish Plan");
 
                     /* Change/delete the installed plan while waiting: release
                        unmodified originals, no synthetic application. */
                     pn = build_pkt(part, 47503, 0x02, NULL, 0);
-                    d2k_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
+                    d2s_session_packet(g, part, pn, 13, buf, sizeof buf, &r);
                     pn = build_pkt(part, 47503, 0x18, whole, HEAD1);
                     wr32(part + 24, 1001);
-                    allow = d2k_session_hold_candidate(g, part, pn);
+                    allow = d2s_session_hold_candidate(g, part, pn);
                     CHECK(allow, "second hold not enabled");
-                    CHECK(d2k_hold_feed(h, 82, part, pn, 14, d2k_session_plan_revision(g),
+                    CHECK(d2s_hold_feed(h, 82, part, pn, 14, d2s_session_plan_revision(g),
                         allow, 0, 0, hold_release, g, &batch) == 1, "revision test not held");
-                    d2k_session_set_plan(g, NULL);
-                    d2k_hold_flush(h, 15, d2k_session_plan_revision(g), 0, hold_release, g);
-                    CHECK(hold_released == 1 && d2k_hold_next(h) == 0,
+                    d2s_session_set_plan(g, NULL);
+                    d2s_hold_flush(h, 15, d2s_session_plan_revision(g), 0, hold_release, g);
+                    CHECK(hold_released == 1 && d2s_hold_next(h) == 0,
                           "plan revision did not release originals");
-                    CHECK(count_kind(g, D2K_JRN_PLAN_DONE) == done + 1,
+                    CHECK(count_kind(g, D2S_JRN_PLAN_DONE) == done + 1,
                           "rollback observation acknowledged a plan");
-                    CHECK(!d2k_session_hold_candidate(g, part, pn),
+                    CHECK(!d2s_session_hold_candidate(g, part, pn),
                           "released head was eligible to hold again");
-                    d2k_hold_free(h);
+                    d2s_hold_free(h);
                 }
                 /* A probe plan never causes a different source port to be
                    held, even when SNI is still in a later segment. */
@@ -3276,56 +3276,56 @@ int main(void) {
                             wr16(late + 3, (uint16_t)(((unsigned)late[3] << 8 | late[4]) + sizeof ech));
                         }
                     }
-                    d2k_session *v = d2k_session_new(64, 64);
-                    d2k_hold *vh = d2k_hold_new();
+                    d2s_session *v = d2s_session_new(64, 64);
+                    d2s_hold *vh = d2s_hold_new();
                     CHECK(v && vh, "late TLS version fixture allocation");
-                    if (!v || !vh) { d2k_session_free(v); d2k_hold_free(vh); continue; }
+                    if (!v || !vh) { d2s_session_free(v); d2s_hold_free(vh); continue; }
                     uint16_t port = (uint16_t)(47540 + scenario);
-                    d2k_plan *vp = NULL;
+                    d2s_plan *vp = NULL;
                     if (scenario != 3) {
-                        CHECK(d2k_plan_load(strict_plan, sizeof strict_plan, &vp,
+                        CHECK(d2s_plan_load(strict_plan, sizeof strict_plan, &vp,
                                             err, sizeof err) == 0, "late version plan parse");
                         if (scenario >= 6) {
-                            CHECK(d2k_plantab_set_suffix_family(d2k_session_plans(v), name,
-                                sizeof name - 1, 1, vp, scenario == 7 ? D2K_PLAN_SHAPE_LEGACY :
-                                scenario == 8 ? D2K_PLAN_SHAPE_ECH_TCP : D2K_PLAN_SHAPE_MODERN, 4) == 0,
+                            CHECK(d2s_plantab_set_suffix_family(d2s_session_plans(v), name,
+                                sizeof name - 1, 1, vp, scenario == 7 ? D2S_PLAN_SHAPE_LEGACY :
+                                scenario == 8 ? D2S_PLAN_SHAPE_ECH_TCP : D2S_PLAN_SHAPE_MODERN, 4) == 0,
                                 "fragmented learned area install");
-                            CHECK(d2k_plantab_count(d2k_session_plans(v)) == 0, "area creates no exact host");
-                        } else CHECK(d2k_plantab_set_name_probe(d2k_session_plans(v), name,
-                            sizeof name - 1, 1, vp, scenario >= 4 ? D2K_PLAN_SHAPE_ECH_TCP : D2K_PLAN_SHAPE_MODERN,
+                            CHECK(d2s_plantab_count(d2s_session_plans(v)) == 0, "area creates no exact host");
+                        } else CHECK(d2s_plantab_set_name_probe(d2s_session_plans(v), name,
+                            sizeof name - 1, 1, vp, scenario >= 4 ? D2S_PLAN_SHAPE_ECH_TCP : D2S_PLAN_SHAPE_MODERN,
                             scenario == 2 ? htons16(port) : 0) == 0, "late version plan install");
                     }
                     pn = build_pkt(part, port, 0x02, NULL, 0);
-                    if (scenario == 2) d2k_session_packet_probe(v, part, pn, 1, buf, sizeof buf, &r);
-                    else d2k_session_packet(v, part, pn, 1, buf, sizeof buf, &r);
-                    d2k_tls_info prefix;
-                    d2k_tls_parse(late, 1388, &prefix);
+                    if (scenario == 2) d2s_session_packet_probe(v, part, pn, 1, buf, sizeof buf, &r);
+                    else d2s_session_packet(v, part, pn, 1, buf, sizeof buf, &r);
+                    d2s_tls_info prefix;
+                    d2s_tls_parse(late, 1388, &prefix);
                     CHECK(prefix.have_sni && prefix.exts_truncated &&
                           prefix.is_tls13 == (scenario == 4 || scenario == 5 || scenario == 8) && !prefix.ech_offer,
                           "late TLS version not hidden in tail");
                     pn = build_pkt(part, port, 0x18, late, 1388);
                     wr32(part + 24, 1001);
-                    int owns = d2k_session_hold_candidate(v, part, pn);
+                    int owns = d2s_session_hold_candidate(v, part, pn);
                     CHECK(owns == (scenario < 2 || scenario >= 4), "named partial TLS shape released or own probe held");
                     if (owns) {
-                        d2k_hold_batch vb;
-                        CHECK(d2k_hold_feed(vh, 100, part, pn, 2,
-                            d2k_session_plan_revision(v), owns, 1001, 1,
+                        d2s_hold_batch vb;
+                        CHECK(d2s_hold_feed(vh, 100, part, pn, 2,
+                            d2s_session_plan_revision(v), owns, 1001, 1,
                             hold_release, v, &vb) == 1, "ambiguous head not owned");
                         pn = build_pkt(part, port, 0x18, late + 1388, late_len - 1388);
                         wr32(part + 24, 2389);
-                        CHECK(d2k_hold_feed(vh, 101, part, pn, 3,
-                            d2k_session_plan_revision(v), 0, 1001, 1,
+                        CHECK(d2s_hold_feed(vh, 101, part, pn, 3,
+                            d2s_session_plan_revision(v), 0, 1001, 1,
                             hold_release, v, &vb) == 2 && vb.count == 2,
                             "late version assembly lost original IDs");
-                        d2k_session_packet(v, vb.packet, vb.len, 4, buf, sizeof buf, &r);
+                        d2s_session_packet(v, vb.packet, vb.len, 4, buf, sizeof buf, &r);
                         CHECK(r.applied == (scenario == 0 || scenario == 4 || scenario >= 6), "late version/ECH applied wrong TLS plan");
-                        CHECK(scenario != 0 || r.verdict == D2K_VERDICT_DROP,
+                        CHECK(scenario != 0 || r.verdict == D2S_VERDICT_DROP,
                               "assembled modern hello sent unchanged");
-                        CHECK(scenario != 1 || r.verdict == D2K_VERDICT_ACCEPT,
+                        CHECK(scenario != 1 || r.verdict == D2S_VERDICT_ACCEPT,
                               "legacy hello received modern plan");
                     }
-                    d2k_hold_free(vh); d2k_session_free(v);
+                    d2s_hold_free(vh); d2s_session_free(v);
                 }
                 /* ПОЛЕ 17.10.2026, LR-rx1/rx2: Chrome переставляет расширения,
                    и ECH уезжает во второй сегмент. Без планов голова идёт
@@ -3351,119 +3351,119 @@ int main(void) {
                     wr16(late + q, (uint16_t)(((unsigned)late[q] << 8 | late[q + 1]) + grow));
                     wr16(late + 7, (uint16_t)(((unsigned)late[7] << 8 | late[8]) + grow));
                     wr16(late + 3, (uint16_t)(((unsigned)late[3] << 8 | late[4]) + grow));
-                    d2k_session *v = d2k_session_new(64, 64);
+                    d2s_session *v = d2s_session_new(64, 64);
                     CHECK(v != NULL, "не выделена сессия для проверки формы ECH");
                     if (v) {
                         if (installed) {
-                            d2k_plan *selected = NULL;
-                            CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &selected,
+                            d2s_plan *selected = NULL;
+                            CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &selected,
                                                err, sizeof err) == 0, "разбор плана для позднего ECH");
-                            CHECK(selected && d2k_plantab_set_name_family(d2k_session_plans(v),
+                            CHECK(selected && d2s_plantab_set_name_family(d2s_session_plans(v),
                                 name, sizeof name - 1, 1, selected,
-                                D2K_PLAN_SHAPE_MODERN, 0, 4) == 0, "не удалось установить план MODERN для позднего ECH");
+                                D2S_PLAN_SHAPE_MODERN, 0, 4) == 0, "не удалось установить план MODERN для позднего ECH");
                         }
                         uint16_t port = 47560;
                         pn = build_pkt(part, port, 0x02, NULL, 0);
-                        d2k_session_packet(v, part, pn, 1, buf, sizeof buf, &r);
+                        d2s_session_packet(v, part, pn, 1, buf, sizeof buf, &r);
                         pn = build_pkt(part, port, 0x18, late, 1388);
                         wr32(part + 24, 1001);
-                        d2k_session_packet(v, part, pn, 2, buf, sizeof buf, &r);
-                        CHECK(d2k_session_applied(v) == (unsigned)installed,
+                        d2s_session_packet(v, part, pn, 2, buf, sizeof buf, &r);
+                        CHECK(d2s_session_applied(v) == (unsigned)installed,
                               "план не применился к первому сегменту ECH");
-                        d2k_key fk;
-                        CHECK(d2k_key_make(&fk, 6, part + 12, part + 16, part + 20, part + 22) == 0,
+                        d2s_key fk;
+                        CHECK(d2s_key_make(&fk, 6, part + 12, part + 16, part + 20, part + 22) == 0,
                               "не извлечён ключ потока с фрагментированным ECH");
-                        CHECK(d2k_session_client_shape(v, &fk) == D2K_PLAN_SHAPE_MODERN,
+                        CHECK(d2s_session_client_shape(v, &fk) == D2S_PLAN_SHAPE_MODERN,
                               "первый фрагмент ECH не получил быструю предварительную форму MODERN");
                         pn = build_pkt(part, port, 0x18, late + 1388, late_len - 1388);
                         wr32(part + 24, 2389);
-                        d2k_session_packet(v, part, pn, 3, buf, sizeof buf, &r);
-                        CHECK(d2k_session_client_shape(v, &fk) == D2K_PLAN_SHAPE_ECH_TCP,
+                        d2s_session_packet(v, part, pn, 3, buf, sizeof buf, &r);
+                        CHECK(d2s_session_client_shape(v, &fk) == D2S_PLAN_SHAPE_ECH_TCP,
                               "полный ClientHello с ECH не заменил предварительную форму MODERN");
-                        CHECK(d2k_session_applied(v) == (unsigned)installed && !r.applied,
+                        CHECK(d2s_session_applied(v) == (unsigned)installed && !r.applied,
                               "исправление формы ECH повторно применило план");
-                        d2k_session_free(v);
+                        d2s_session_free(v);
                     }
                 }
-                CHECK(d2k_plan_load(strict_plan, sizeof strict_plan, &gp,
+                CHECK(d2s_plan_load(strict_plan, sizeof strict_plan, &gp,
                                     err, sizeof err) == 0, "probe hold plan parse");
-                CHECK(d2k_plantab_set_name_probe(d2k_session_plans(g), name,
-                        sizeof name - 1, 30, gp, D2K_PLAN_SHAPE_LEGACY,
+                CHECK(d2s_plantab_set_name_probe(d2s_session_plans(g), name,
+                        sizeof name - 1, 30, gp, D2S_PLAN_SHAPE_LEGACY,
                         htons16(47504)) == 0, "probe hold plan install");
                 gp = NULL;
                 for (uint16_t port = 47504; port <= 47505; port++) {
                     pn = build_pkt(part, port, 0x02, NULL, 0);
-                    d2k_session_packet_probe(g, part, pn, 31, buf, sizeof buf, &r);
+                    d2s_session_packet_probe(g, part, pn, 31, buf, sizeof buf, &r);
                     pn = build_pkt(part, port, 0x18, whole, 1);
                     wr32(part + 24, 1001);
-                    CHECK(d2k_session_hold_candidate(g, part, pn) == (port == 47504),
+                    CHECK(d2s_session_hold_candidate(g, part, pn) == (port == 47504),
                           "probe hold source-port isolation failed");
                 }
             }
-            d2k_plan_free(gp);
-            d2k_session_free(g);
+            d2s_plan_free(gp);
+            d2s_session_free(g);
         }
 
         /* Reset between pieces: neither FIN nor SYN can join two incarnations. */
         const uint8_t reset_flags[] = {0x11, 0x14, 0x02};
         for (size_t j = 0; j < sizeof reset_flags; j++) {
-            d2k_session *g = d2k_session_new(64, 64);
+            d2s_session *g = d2s_session_new(64, 64);
             CHECK(g != NULL, "reset capture session allocation");
             if (!g) { continue; }
-            d2k_session_want_shape(g, name, sizeof name - 1, 6);
+            d2s_session_want_shape(g, name, sizeof name - 1, 6);
             size_t pn = build_pkt(part, 47000, 0x18, whole, 1448);
-            d2k_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
+            d2s_session_packet(g, part, pn, 1, buf, sizeof buf, &r);
             pn = build_pkt(part, 47000, reset_flags[j], NULL, 0);
-            d2k_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
+            d2s_session_packet(g, part, pn, 2, buf, sizeof buf, &r);
             pn = build_pkt(part, 47000, 0x18, whole + 1448, whole_len - 1448);
             wr32(part + 24, 2448);
-            d2k_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
+            d2s_session_packet(g, part, pn, 3, buf, sizeof buf, &r);
             size_t got_len = 0;
-            CHECK(d2k_session_shape(g, 6, &got_len) == NULL, "reset mixed captures");
-            d2k_session_free(g);
+            CHECK(d2s_session_shape(g, 6, &got_len) == NULL, "reset mixed captures");
+            d2s_session_free(g);
         }
     }
 
     /* --- ПРОМАХ CONNTRACK (см. пояснение у nat_stub) --------------------- */
     {
-        d2k_nat_fn saved = d2k_nat_hook;
-        d2k_nat_hook = nat_stub;
+        d2s_nat_fn saved = d2s_nat_hook;
+        d2s_nat_hook = nat_stub;
 
         /* ГОНКА: первый ответ «нет», сразу следом «есть». План обязан
            примениться — запись существует, её просто не увидели с первого
            раза. Без перепроверки здесь теряется и клиент, и зонд. */
         {
-            d2k_session *g = d2k_session_new(8, 4);
-            d2k_plan *gp = NULL;
-            CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
+            d2s_session *g = d2s_session_new(8, 4);
+            d2s_plan *gp = NULL;
+            CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
                   "план гонки не загрузился");
-            d2k_session_set_plan(g, gp);
+            d2s_session_set_plan(g, gp);
             nat_calls = 0;
             nat_miss_first_n = 1;
             size_t nn = build_pkt(pkt, 41100, 0x18, hello, hlen);
-            d2k_result rr;
-            d2k_session_packet(g, pkt, nn, 1000, buf, sizeof buf, &rr);
+            d2s_result rr;
+            d2s_session_packet(g, pkt, nn, 1000, buf, sizeof buf, &rr);
             CHECK(rr.skipped == NULL,
                   "промах conntrack принят с первого ответа — клиент и зонд остаются без обхода");
             CHECK(rr.n_out > 0, "план не исполнен, хотя запись conntrack существует");
             CHECK(nat_calls >= 2, "перепроверки не было вовсе");
-            d2k_session_free(g);
+            d2s_session_free(g);
         }
 
         /* ЗАПИСИ ДЕЙСТВИТЕЛЬНО НЕТ: сколько ни спрашивай, ответ один. План
            обязан быть отвергнут — иначе посылки уйдут с локальным адресом
            мимо NAT, и это ровно тот дефект, ради которого проверка заведена. */
         {
-            d2k_session *g = d2k_session_new(8, 4);
-            d2k_plan *gp = NULL;
-            CHECK(d2k_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
+            d2s_session *g = d2s_session_new(8, 4);
+            d2s_plan *gp = NULL;
+            CHECK(d2s_plan_load(plan_bytes, sizeof plan_bytes, &gp, err, sizeof err) == 0,
                   "план отсутствия не загрузился");
-            d2k_session_set_plan(g, gp);
+            d2s_session_set_plan(g, gp);
             nat_calls = 0;
             nat_miss_first_n = 1000;
             size_t nn = build_pkt(pkt, 41200, 0x18, hello, hlen);
-            d2k_result rr;
-            d2k_session_packet(g, pkt, nn, 1000, buf, sizeof buf, &rr);
+            d2s_result rr;
+            d2s_session_packet(g, pkt, nn, 1000, buf, sizeof buf, &rr);
             CHECK(rr.skipped != NULL,
                   "план применён без записи conntrack — посылки уйдут мимо NAT");
             CHECK(rr.n_out == 0, "посылки собраны, хотя уйдут с локальным адресом");
@@ -3471,10 +3471,10 @@ int main(void) {
                каждой — чтение таблицы в сотни строк, и платит за неё пакетный
                путь. */
             CHECK(nat_calls <= 8, "перепроверок слишком много — цена каждой чтение всей таблицы");
-            d2k_session_free(g);
+            d2s_session_free(g);
         }
 
-        d2k_nat_hook = saved;
+        d2s_nat_hook = saved;
     }
 
     if (fails) {

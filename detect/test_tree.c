@@ -12,7 +12,7 @@
  * заканчивается одним и тем же opaque, только с честной оговоркой, что про
  * отравление вывода нет.
  */
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -43,8 +43,8 @@ static void fail(const char *fmt, ...)
     fails++;
 }
 
-int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
-                         const d2k_opts *opt);
+int d2s_resp_handshake12(const char *host, const char *port, const char *sni,
+                         const d2s_opts *opt);
 
 typedef enum { M_PREFIX, M_WHOLE, M_REASM, M_CLEAR, M_DEAF,
                 M_RST_AFTER_FIRST, M_RST_AT_ONCE } dpi_mode;
@@ -147,7 +147,7 @@ static void *conn_thread(void *arg)
     }
     if (blocked) {
         /* Блокировка — это молчание, а не отказ. */
-        d2k_sleep_ms(2000);
+        d2s_sleep_ms(2000);
         close(c);
         return NULL;
     }
@@ -240,7 +240,7 @@ static void fake_dpi_stop(fake_dpi *d)
     close(d->fd);
 }
 
-static void fast_opts(d2k_opts *o)
+static void fast_opts(d2s_opts *o)
 {
     memset(o, 0, sizeof(*o));
     /* Поддельная коробка живёт на loopback — защиту от неверно
@@ -253,30 +253,30 @@ static void fast_opts(d2k_opts *o)
     o->no_raw = 1;
 }
 
-static void trig(d2k_trigger *t)
+static void trig(d2s_trigger *t)
 {
     memset(t, 0, sizeof(*t));
     snprintf(t->name, sizeof(t->name), "test");
     memcpy(t->payload, PAYLOAD, PAYLOAD_LEN);
     t->len = PAYLOAD_LEN;
-    t->accept = D2K_ACCEPT_ANY;
+    t->accept = D2S_ACCEPT_ANY;
 }
 
-static void ctl_trig(d2k_trigger *t)
+static void ctl_trig(d2s_trigger *t)
 {
     static const char ctl[] = "BENIGN-CONTROL-PAYLOAD";
     memset(t, 0, sizeof(*t));
     snprintf(t->name, sizeof(t->name), "ctl");
     memcpy(t->payload, ctl, sizeof(ctl) - 1);
     t->len = sizeof(ctl) - 1;
-    t->accept = D2K_ACCEPT_ANY;
+    t->accept = D2S_ACCEPT_ANY;
 }
 
-static void run_on(dpi_mode mode, int sig_len, d2k_opts *opt, d2k_result *res)
+static void run_on(dpi_mode mode, int sig_len, d2s_opts *opt, d2s_result *res)
 {
     fake_dpi d;
     char addr[64];
-    d2k_trigger t;
+    d2s_trigger t;
 
     trig(&t);
     if (fake_dpi_start(&d, mode, sig_len, addr, sizeof(addr)) != 0) {
@@ -284,11 +284,11 @@ static void run_on(dpi_mode mode, int sig_len, d2k_opts *opt, d2k_result *res)
         memset(res, 0, sizeof(*res));
         return;
     }
-    d2k_classify_run(addr, &t, opt, res);
+    d2s_classify_run(addr, &t, opt, res);
     fake_dpi_stop(&d);
 }
 
-static void dump_trace(const d2k_result *res)
+static void dump_trace(const d2s_result *res)
 {
     int i;
     for (i = 0; i < res->ntrace; i++) {
@@ -301,12 +301,12 @@ static void dump_trace(const d2k_result *res)
 
 static void test_prefix_matcher_finds_boundary(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     run_on(M_PREFIX, 4, &opt, &res);
-    if (res.verdict != D2K_DV_PREFIX) {
-        fail("вердикт = %s (%s), ждали prefix", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_PREFIX) {
+        fail("вердикт = %s (%s), ждали prefix", d2s_verdict_name(res.verdict), res.reason);
         dump_trace(&res);
         return;
     }
@@ -324,12 +324,12 @@ static void test_prefix_matcher_finds_boundary(void)
 
 static void test_prefix_boundary_deeper_signature(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     run_on(M_PREFIX, 9, &opt, &res);
-    if (res.verdict != D2K_DV_PREFIX) {
-        fail("вердикт = %s (%s), ждали prefix", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_PREFIX) {
+        fail("вердикт = %s (%s), ждали prefix", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (res.boundary != 9) {
@@ -339,12 +339,12 @@ static void test_prefix_boundary_deeper_signature(void)
 
 static void test_whole_packet_matcher(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     run_on(M_WHOLE, 0, &opt, &res);
-    if (res.verdict != D2K_DV_WHOLE_PACKET) {
-        fail("вердикт = %s (%s), ждали whole_packet", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_WHOLE_PACKET) {
+        fail("вердикт = %s (%s), ждали whole_packet", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (res.split_pos != 1) {
@@ -354,12 +354,12 @@ static void test_whole_packet_matcher(void)
 
 static void test_reassembling_box_is_opaque(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     run_on(M_REASM, 4, &opt, &res);
-    if (res.verdict != D2K_DV_OPAQUE) {
-        fail("вердикт = %s (%s), ждали opaque", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_OPAQUE) {
+        fail("вердикт = %s (%s), ждали opaque", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (res.strategy[0] != '\0') {
@@ -370,24 +370,24 @@ static void test_reassembling_box_is_opaque(void)
 
 static void test_clear_tls_without_sni_says_unchecked(void)
 {
-    d2k_opts opt;
-    d2k_result res;
-    d2k_trigger t;
+    d2s_opts opt;
+    d2s_result res;
+    d2s_trigger t;
     fake_dpi d;
     char addr[64];
 
     fast_opts(&opt);
     trig(&t);
     t.name[0] = '\0';
-    t.accept = D2K_ACCEPT_SERVERHELLO;
+    t.accept = D2S_ACCEPT_SERVERHELLO;
     if (fake_dpi_start(&d, M_CLEAR, 0, addr, sizeof(addr)) != 0) {
         fail("стенд не поднялся");
         return;
     }
-    d2k_classify_run(addr, &t, &opt, &res);
+    d2s_classify_run(addr, &t, &opt, &res);
     fake_dpi_stop(&d);
-    if (res.verdict != D2K_DV_CLEAR) {
-        fail("вердикт = %s (%s), ждали clear", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_CLEAR) {
+        fail("вердикт = %s (%s), ждали clear", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (!strstr(res.reason, "ответное направление не проверено: нет SNI")) {
@@ -397,12 +397,12 @@ static void test_clear_tls_without_sni_says_unchecked(void)
 
 static void test_clear_target_stops_early(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     run_on(M_CLEAR, 0, &opt, &res);
-    if (res.verdict != D2K_DV_CLEAR) {
-        fail("вердикт = %s (%s), ждали clear", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_CLEAR) {
+        fail("вердикт = %s (%s), ждали clear", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     /* Смысл ранней остановки: если резать нечего, дерево дальше не идёт.
@@ -415,14 +415,14 @@ static void test_clear_target_stops_early(void)
 
 static void test_unreachable_target(void)
 {
-    d2k_opts opt;
-    d2k_result res;
-    d2k_trigger t;
+    d2s_opts opt;
+    d2s_result res;
+    d2s_trigger t;
     fast_opts(&opt);
     trig(&t);
-    d2k_classify_run("127.0.0.1:1", &t, &opt, &res);
-    if (res.verdict != D2K_DV_UNREACHABLE) {
-        fail("вердикт = %s (%s), ждали unreachable", d2k_verdict_name(res.verdict), res.reason);
+    d2s_classify_run("127.0.0.1:1", &t, &opt, &res);
+    if (res.verdict != D2S_DV_UNREACHABLE) {
+        fail("вердикт = %s (%s), ждали unreachable", d2s_verdict_name(res.verdict), res.reason);
     }
 }
 
@@ -448,19 +448,19 @@ static void test_our_dial_deadline_is_not_unreachable(void)
        линии — для него unreachable как раз верен. Стенд, который на этой
        машине не воспроизводит нужное явление, доказывал бы не то; поэтому
        правило вынесено отдельной функцией и спрашивается напрямую. */
-    if (!d2k_dial_deadline_err("dial tcp 179.43.150.83:443: i/o timeout")) {
+    if (!d2s_dial_deadline_err("dial tcp 179.43.150.83:443: i/o timeout")) {
         fail("истёкший срок подключения не узнан как НАШ");
     }
-    if (d2k_dial_deadline_err("dial tcp 127.0.0.1:1: Connection refused")) {
+    if (d2s_dial_deadline_err("dial tcp 127.0.0.1:1: Connection refused")) {
         fail("отказ порта принят за наш срок — это ОТВЕТ линии");
     }
-    if (d2k_dial_deadline_err("dial tcp 127.0.0.1:1: Connection reset by peer")) {
+    if (d2s_dial_deadline_err("dial tcp 127.0.0.1:1: Connection reset by peer")) {
         fail("сброс принят за наш срок — это ОТВЕТ линии");
     }
-    if (d2k_dial_deadline_err("dial tcp: Name or service not known")) {
+    if (d2s_dial_deadline_err("dial tcp: Name or service not known")) {
         fail("отказ разрешения имени принят за наш срок");
     }
-    if (d2k_dial_deadline_err("") || d2k_dial_deadline_err(NULL)) {
+    if (d2s_dial_deadline_err("") || d2s_dial_deadline_err(NULL)) {
         fail("пустая ошибка принята за наш срок");
     }
     /* И ОТВЕТ ЛИНИИ ПО-ПРЕЖНЕМУ unreachable: 127.0.0.1:1 отвечает отказом
@@ -470,14 +470,14 @@ static void test_our_dial_deadline_is_not_unreachable(void)
 
 static void test_reassembling_box_with_control_stays_opaque(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     int i, saw_control = 0;
     fast_opts(&opt);
     ctl_trig(&opt.control);
     run_on(M_REASM, 4, &opt, &res);
-    if (res.verdict != D2K_DV_OPAQUE) {
-        fail("вердикт = %s (%s), ждали opaque", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_OPAQUE) {
+        fail("вердикт = %s (%s), ждали opaque", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     for (i = 0; i < res.ntrace; i++) {
@@ -497,16 +497,16 @@ static void test_reassembling_box_with_control_stays_opaque(void)
  * чём, и предлагать стратегию тут — врать человеку. */
 static void test_address_block_is_not_called_opaque(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     ctl_trig(&opt.control);
     /* За контрольное имя ручается оператор — только тогда молчание контроля
      * означает блок по адресу, а не «сервер не отдаёт это имя». */
     opt.control_vouched = 1;
     run_on(M_DEAF, 0, &opt, &res);
-    if (res.verdict != D2K_DV_ADDRESS) {
-        fail("вердикт = %s (%s), ждали address", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_ADDRESS) {
+        fail("вердикт = %s (%s), ждали address", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (res.strategy[0] != '\0') {
@@ -520,13 +520,13 @@ static void test_address_block_is_not_called_opaque(void)
  * отдавал ServerHello за 292 мс. Утверждение было противоположно правде. */
 static void test_address_needs_vouched_control(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     fast_opts(&opt);
     ctl_trig(&opt.control);
     run_on(M_DEAF, 0, &opt, &res);
-    if (res.verdict != D2K_DV_INCONCLUSIVE) {
-        fail("вердикт = %s (%s), ждали inconclusive", d2k_verdict_name(res.verdict), res.reason);
+    if (res.verdict != D2S_DV_INCONCLUSIVE) {
+        fail("вердикт = %s (%s), ждали inconclusive", d2s_verdict_name(res.verdict), res.reason);
         return;
     }
     if (res.strategy[0] != '\0') {
@@ -543,8 +543,8 @@ static void test_neutral_ack_on_real_socket(void)
     fake_dpi d;
     char addr[64], host[64], *colon;
     char err[160];
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     int rc, i, seen = 0;
     fast_opts(&opt);
     if (fake_dpi_start(&d, M_DEAF, 0, addr, sizeof(addr)) != 0) {
@@ -554,7 +554,7 @@ static void test_neutral_ack_on_real_socket(void)
     snprintf(host, sizeof(host), "%s", addr);
     colon = strrchr(host, ':');
     *colon = '\0';
-    rc = d2k_probe_data_ack(host, colon + 1, &opt, err, sizeof(err));
+    rc = d2s_probe_data_ack(host, colon + 1, &opt, err, sizeof(err));
     if (rc != 1) {
         fail("нейтральный байт на петле не подтверждён: rc=%d (%s)", rc, err);
     }
@@ -562,9 +562,9 @@ static void test_neutral_ack_on_real_socket(void)
      * (без поручительства «блок адреса» не утверждается), вопрос в трассе. */
     ctl_trig(&opt.control);
     {
-        d2k_trigger t;
+        d2s_trigger t;
         trig(&t);
-        d2k_classify_run(addr, &t, &opt, &res);
+        d2s_classify_run(addr, &t, &opt, &res);
     }
     for (i = 0; i < res.ntrace; i++) {
         if (strcmp(res.trace[i].probe, "neutral-ack") == 0 && res.trace[i].pass == 1 &&
@@ -576,12 +576,12 @@ static void test_neutral_ack_on_real_socket(void)
         fail("в трассе нет подтверждённого нейтрального байта");
         dump_trace(&res);
     }
-    if (res.verdict != D2K_DV_INCONCLUSIVE) {
-        fail("подтверждённый байт: вердикт %s, ждали inconclusive", d2k_verdict_name(res.verdict));
+    if (res.verdict != D2S_DV_INCONCLUSIVE) {
+        fail("подтверждённый байт: вердикт %s, ждали inconclusive", d2s_verdict_name(res.verdict));
     }
     fake_dpi_stop(&d);
     /* Никто не слушает — нет TCP: это ошибка зонда, не тишина адреса. */
-    rc = d2k_probe_data_ack("127.0.0.1", "1", &opt, err, sizeof(err));
+    rc = d2s_probe_data_ack("127.0.0.1", "1", &opt, err, sizeof(err));
     if (rc != -1) {
         fail("закрытый порт: rc=%d, ждали -1", rc);
     }
@@ -599,8 +599,8 @@ static int stop_now(void *ctx) { return *(int *)ctx; }
 
 static void test_stopped_run_is_marked_and_short(void)
 {
-    d2k_opts opt;
-    d2k_result res, full;
+    d2s_opts opt;
+    d2s_result res, full;
     int flag = 1;
 
     /* Сперва — сколько зондов стоит ПОЛНЫЙ прогон на этой же коробке, чтобы
@@ -634,8 +634,8 @@ static int stop_after_base(void *ctx)
 
 static void test_stop_midway_keeps_what_was_measured(void)
 {
-    d2k_opts opt;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_result res;
     int seen = 0;
     int i, saw_whole = 0;
 
@@ -658,15 +658,15 @@ static void test_stop_midway_keeps_what_was_measured(void)
 
 static void test_loopback_guard_rejects_misresolved_target(void)
 {
-    d2k_opts opt;
-    d2k_result res;
-    d2k_trigger t;
+    d2s_opts opt;
+    d2s_result res;
+    d2s_trigger t;
     memset(&opt, 0, sizeof(opt));
     opt.repeats = 1;
     trig(&t);
-    d2k_classify_run("127.0.0.1:443", &t, &opt, &res);
-    if (res.verdict != D2K_DV_FLAKY) {
-        fail("вердикт = %s (%s), ждали flaky", d2k_verdict_name(res.verdict), res.reason);
+    d2s_classify_run("127.0.0.1:443", &t, &opt, &res);
+    if (res.verdict != D2S_DV_FLAKY) {
+        fail("вердикт = %s (%s), ждали flaky", d2s_verdict_name(res.verdict), res.reason);
     }
 }
 
@@ -677,9 +677,9 @@ static void test_epipe_survives_at_real_send_sites(void)
     fake_dpi d;
     char addr[64], host[64];
     const char *colon;
-    d2k_opts opt;
-    d2k_result res;
-    d2k_trigger t;
+    d2s_opts opt;
+    d2s_result res;
+    d2s_trigger t;
     int i;
     void (*old)(int) = signal(SIGPIPE, SIG_DFL);
 
@@ -689,8 +689,8 @@ static void test_epipe_survives_at_real_send_sites(void)
         fail("стенд не поднялся");
         return;
     }
-    d2k_classify_run(addr, &t, &opt, &res); /* многосегментные разрезы */
-    if (res.verdict == D2K_DV_CLEAR)
+    d2s_classify_run(addr, &t, &opt, &res); /* многосегментные разрезы */
+    if (res.verdict == D2S_DV_CLEAR)
         fail("сброс после первого сегмента не может быть CLEAR");
     fake_dpi_stop(&d);
 
@@ -701,9 +701,9 @@ static void test_epipe_survives_at_real_send_sites(void)
     colon = strrchr(addr, ':');
     snprintf(host, sizeof host, "%.*s", (int)(colon - addr), addr);
     for (i = 0; i < 100; i++) {
-        if (d2k_resp_handshake12(host, colon + 1, "example.com", &opt) != 0)
+        if (d2s_resp_handshake12(host, colon + 1, "example.com", &opt) != 0)
             fail("сброшенный пир не может дать ServerHelloDone");
-        d2k_sleep_ms(1);
+        d2s_sleep_ms(1);
     }
     fake_dpi_stop(&d);
     signal(SIGPIPE, old);
@@ -718,29 +718,29 @@ static void test_epipe_and_fresh_neutral(void)
         fail("socketpair");
     close(sv[1]);
     /* без SIG_IGN в тесте: гибель процесса от SIGPIPE и есть провал */
-    w = d2k_send_nosig(sv[0], "x", 1);
-    w = d2k_send_nosig(sv[0], "x", 1);
+    w = d2s_send_nosig(sv[0], "x", 1);
+    w = d2s_send_nosig(sv[0], "x", 1);
     if (w >= 0)
         fail("send на закрытый пир обязан вернуть ошибку");
     close(sv[0]);
-    d2k_neutral_sni(a, sizeof a);
-    d2k_neutral_sni(b, sizeof b);
+    d2s_neutral_sni(a, sizeof a);
+    d2s_neutral_sni(b, sizeof b);
     if (strcmp(a, b) == 0)
         fail("нейтральное имя обязано быть свежим: %s", a);
     if (strlen(a) != strlen("z0123456789.example.com") || a[0] != 'z')
         fail("формат нейтрального имени: %s", a);
 }
 
-/* Ответ базы, уже снятый отдельно (задача 32 d2k): полный прогон не задаёт
+/* Ответ базы, уже снятый отдельно (задача 32 d2s): полный прогон не задаёт
  * "whole" второй раз, а вердикт и граница — те же, что без подсказки. */
 static void test_seeded_base_matches_unseeded(void)
 {
     static const dpi_mode modes[] = {M_PREFIX, M_WHOLE, M_CLEAR};
     size_t i;
     for (i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
-        d2k_opts opt, seeded;
-        d2k_result a, b;
-        const d2k_obs *wa = NULL, *wb = NULL;
+        d2s_opts opt, seeded;
+        d2s_result a, b;
+        const d2s_obs *wa = NULL, *wb = NULL;
         int k;
         fast_opts(&opt);
         run_on(modes[i], 4, &opt, &a);
@@ -756,7 +756,7 @@ static void test_seeded_base_matches_unseeded(void)
         for (k = 0; k < b.ntrace; k++) if (!strcmp(b.trace[k].probe, "whole")) { wb = &b.trace[k]; break; }
         if (b.verdict != a.verdict || b.boundary != a.boundary)
             fail("seed: вердикт %s/граница %d расходится с прогоном без подсказки (%s/%d)",
-                 d2k_verdict_name(b.verdict), b.boundary, d2k_verdict_name(a.verdict), a.boundary);
+                 d2s_verdict_name(b.verdict), b.boundary, d2s_verdict_name(a.verdict), a.boundary);
         if (b.probes != a.probes - opt.repeats)
             fail("seed: зондов %d, ждали %d — база спрошена второй раз", b.probes,
                  a.probes - opt.repeats);
@@ -772,18 +772,18 @@ int main(void)
     {
         fake_dpi d;
         char addr[64];
-        d2k_trigger t;
-        d2k_opts opt;
-        d2k_result res;
+        d2s_trigger t;
+        d2s_opts opt;
+        d2s_result res;
         trig(&t); fast_opts(&opt);
         if (fake_dpi_start_family(&d, M_CLEAR, 0, addr, sizeof addr, AF_INET6) != 0)
             return 1;
-        d2k_classify_run(addr, &t, &opt, &res);
-        if (res.verdict != D2K_DV_CLEAR || res.probes != 2)
+        d2s_classify_run(addr, &t, &opt, &res);
+        if (res.verdict != D2S_DV_CLEAR || res.probes != 2)
             fail("IPv6 clear target must follow the same two-probe baseline");
         opt.allow_loopback = 0;
-        d2k_classify_run(addr, &t, &opt, &res);
-        if (res.verdict != D2K_DV_FLAKY || res.probes != 0)
+        d2s_classify_run(addr, &t, &opt, &res);
+        if (res.verdict != D2S_DV_FLAKY || res.probes != 0)
             fail("IPv6 loopback guard must reject before probing");
         fake_dpi_stop(&d);
     }

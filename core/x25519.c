@@ -23,7 +23,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "d2k_crypto.h"
+#include "d2s_crypto.h"
 
 typedef int64_t gf[16];
 
@@ -116,7 +116,7 @@ static void inv25519(gf o, const gf i) {
     memcpy(o, c, sizeof c);
 }
 
-int d2k_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]) {
+int d2s_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32]) {
     if (!out || !scalar || !point) { return -1; }
     uint8_t z[32];
     gf x, a, b, c, d, e, f;
@@ -167,13 +167,13 @@ int d2k_x25519(uint8_t out[32], const uint8_t scalar[32], const uint8_t point[32
     return acc == 0 ? -1 : 0;
 }
 
-int d2k_x25519_base(uint8_t out[32], const uint8_t scalar[32]) {
+int d2s_x25519_base(uint8_t out[32], const uint8_t scalar[32]) {
     static const uint8_t base[32] = { 9 };
     if (!out || !scalar) { return -1; }
     uint8_t z[32];
     memcpy(z, scalar, 32);
     /* Умножение на базовую точку не может дать ноль при прижатом скаляре,
-       поэтому проверка из d2k_x25519 здесь не применима — и её отсутствие
+       поэтому проверка из d2s_x25519 здесь не применима — и её отсутствие
        названо, а не забыто. */
     gf x, a, b, c, d, e, f;
     z[31] = (uint8_t)((z[31] & 127) | 64);

@@ -1,8 +1,8 @@
 # Полевой прогон 11.10.2026 (j): что взято замером, что перебором, где уходит время
 
 Разбор журнала полного прогона 19 целей на `main bbd8dca` (пустой каталог,
-`/opt/d2k/field-1011j-bbd8dca`, откат на прод 65e7488 выполнен). Источник —
-`scratchpad/run-j/d2kc.log` (391 КБ, 10:30–10:46). Считано по строкам журнала,
+`/opt/d2s/field-1011j-bbd8dca`, откат на прод 65e7488 выполнен). Источник —
+`scratchpad/run-j/d2sc.log` (391 КБ, 10:30–10:46). Считано по строкам журнала,
 не по виду страниц. Повод: замечание владельца — «rutracker/katz/nnmclub и на
 проде открываются перебором; буквального улучшения замером не видно».
 
@@ -56,7 +56,7 @@
 ```
 
 Тот же след у fost.club (10:31:17 → 10:41:29). Коробка не ответила SYN-ACK на
-зонд разреза. Код (`core/sched.c:9004-9029`) трактует любой `D2K_V_FLAKY`
+зонд разреза. Код (`core/sched.c:9004-9029`) трактует любой `D2S_V_FLAKY`
 («измерению верить нельзя», сюда же `detect/raw.c:1029` «SYN-ACK не пришёл»)
 как «результат неубедителен» → `cooldown_record(…,2)` → `SCHED_INCOMPLETE_BACKOFF_MS`
 = 10 мин. При повторе план нашёлся за 3–4 с. Штраф за неуверенность в 10 мин
@@ -75,7 +75,7 @@ SYN-ACK на зонд при живом прямом трафике браузе
 
 В журнале нет ни одной итоговой строки «доля без перебора / зондов / время».
 `core/sched.c:993` считает `r.probes` для конкретного прогона, но сводки по
-прогону d2kc не выдаёт. Таблицы выше собраны вручную grep'ом. Пока сводки нет,
+прогону d2sc не выдаёт. Таблицы выше собраны вручную grep'ом. Пока сводки нет,
 прогресс «замер вместо перебора» невидим ни владельцу, ни ревью.
 
 ## Что следует отдать в код (корневые вопросы, без предписания решения)
@@ -103,7 +103,7 @@ SYN-ACK на зонд при живом прямом трафике браузе
 Подтверждение зондом не равно живому успеху: колонка live = unknown.
 
 ```
-scripts/field-table.py d2kc.log --sites rutracker.org rutracker.cc fost.club nnmclub.to lostfilm.tv kinozal.me bible-center.ru numista.com rua.gr enimerosi.com romfea.gr katzauction.com spzh.news spzh.eu flibusta.is facebook.com adguard.com mailsuite.com cloudflare.com fast-torrent.ru
+scripts/field-table.py d2sc.log --sites rutracker.org rutracker.cc fost.club nnmclub.to lostfilm.tv kinozal.me bible-center.ru numista.com rua.gr enimerosi.com romfea.gr katzauction.com spzh.news spzh.eu flibusta.is facebook.com adguard.com mailsuite.com cloudflare.com fast-torrent.ru
 ```
 
 | Цель | Протокол | Первое | Подтверждено зондом | Время | Путь | План | Поисков | Ед. зондов | QUIC-перебор (провал/всего, опытов) | Штрафов 10 мин (цель) | Исходы | live |

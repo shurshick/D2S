@@ -1,5 +1,5 @@
-#ifndef D2K_TG_CF_DOMAINS_H
-#define D2K_TG_CF_DOMAINS_H
+#ifndef D2S_TG_CF_DOMAINS_H
+#define D2S_TG_CF_DOMAINS_H
 
 #include <stddef.h>
 #include <stdint.h>

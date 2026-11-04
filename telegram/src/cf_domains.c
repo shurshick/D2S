@@ -155,7 +155,7 @@ static int parse_timestamp(const char *text, uint64_t *timestamp) {
 static int load_cache(const char *path,
                       char domains[TG_CF_REMOTE_MAX][TG_CF_DOMAIN_LEN],
                       size_t *count, uint64_t *fetched_at) {
-    static const char header[] = "D2K-CF-DOMAINS 1\n";
+    static const char header[] = "D2S-CF-DOMAINS 1\n";
     char data[TG_CF_CACHE_FILE_MAX + 1u];
     int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return -1;
@@ -241,7 +241,7 @@ static int write_cache(const tg_cf_domain_pool *pool,
     int fd = open(temporary, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0) return -1;
     char header[64];
-    n = snprintf(header, sizeof(header), "D2K-CF-DOMAINS 1\nfetched_at=%llu\n",
+    n = snprintf(header, sizeof(header), "D2S-CF-DOMAINS 1\nfetched_at=%llu\n",
                  (unsigned long long)fetched_at);
     int result = n > 0 && (size_t)n < sizeof(header)
         ? write_all(fd, header, (size_t)n) : -1;

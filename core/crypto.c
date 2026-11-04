@@ -10,7 +10,7 @@
  * любого входа, к классу «кэш утекает секрет через индекс» отношения не
  * имеет) и aes_sbox[256] (индекс — байт состояния AES). Вторая — сознательное
  * отступление от общего правила «без таблиц, зависящих от секрета»: см.
- * большой комментарий у d2k_aes_sbox_byte в d2k_crypto.h про измеренную цену
+ * большой комментарий у d2s_aes_sbox_byte в d2s_crypto.h про измеренную цену
  * формулы (3,5 мс на разбор одного QUIC Initial) и про то, почему именно
  * здесь секрета за этим индексом фактически нет. MixColumns и ключевое
  * расписание — арифметикой через xtime (одна операция, не S-box-подобная
@@ -20,7 +20,7 @@
  */
 #include <string.h>
 
-#include "d2k_crypto.h"
+#include "d2s_crypto.h"
 
 /* ===================== GF(2^8): xtime и S-box AES ===================== */
 
@@ -28,7 +28,7 @@
  * по значению a: перенос гасится маской, а не if'ом. Нужна MixColumns и
  * ключевому расписанию (Rcon) — обе обходятся одним xtime, без S-box-подобной
  * цены, поэтому таблицы для них не заводились и не понадобились (см. большой
- * комментарий у d2k_aes_sbox_byte в d2k_crypto.h про то, откуда взялась цена,
+ * комментарий у d2s_aes_sbox_byte в d2s_crypto.h про то, откуда взялась цена,
  * которую заводить таблицу стоило). */
 static uint8_t xtime(uint8_t a) {
     uint8_t hi_mask = (uint8_t)(-(int)(a >> 7));
@@ -40,8 +40,8 @@ static uint8_t xtime(uint8_t a) {
  * непроверенного источника: test_crypto.c независимо пересчитывает эти же
  * 256 значений формулой (обратный элемент GF(2^8) через x^254, затем
  * аффинное преобразование) и сверяет побайтно — см. там же. Почему таблица,
- * а не формула на каждый вызов — большой комментарий у d2k_aes_sbox_byte в
- * d2k_crypto.h: формула стоила 13 умножений в GF(2^8) на байт, замеренная
+ * а не формула на каждый вызов — большой комментарий у d2s_aes_sbox_byte в
+ * d2s_crypto.h: формула стоила 13 умножений в GF(2^8) на байт, замеренная
  * цена — 51 мкс/блок AES и 3,5 мс на разбор одного QUIC Initial на роутере
  * (aarch64), и это неприемлемо для горячего пути. Секрет, который защищала
  * бы constant-time формула, здесь и так открыт (DCID в заголовке пакета) —
@@ -65,9 +65,9 @@ static const uint8_t aes_sbox[256] = {
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 };
 
-/* Экспортирована ради test_crypto.c (см. d2k_crypto.h) — сама она уже
+/* Экспортирована ради test_crypto.c (см. d2s_crypto.h) — сама она уже
  * тривиальна, вся работа сделана таблицей выше. */
-uint8_t d2k_aes_sbox_byte(uint8_t x) {
+uint8_t d2s_aes_sbox_byte(uint8_t x) {
     return aes_sbox[x];
 }
 
@@ -91,10 +91,10 @@ static void aes128_key_expand(const uint8_t key[16], aes128_ks *ks) {
         memcpy(temp, w[i - 1], 4);
         if (i % 4 == 0) {
             uint8_t t0 = temp[0];
-            temp[0] = d2k_aes_sbox_byte(temp[1]); /* RotWord, затем SubWord */
-            temp[1] = d2k_aes_sbox_byte(temp[2]);
-            temp[2] = d2k_aes_sbox_byte(temp[3]);
-            temp[3] = d2k_aes_sbox_byte(t0);
+            temp[0] = d2s_aes_sbox_byte(temp[1]); /* RotWord, затем SubWord */
+            temp[1] = d2s_aes_sbox_byte(temp[2]);
+            temp[2] = d2s_aes_sbox_byte(temp[3]);
+            temp[3] = d2s_aes_sbox_byte(t0);
             temp[0] = (uint8_t)(temp[0] ^ rcon);
             rcon = xtime(rcon);
         }
@@ -111,7 +111,7 @@ static void aes128_key_expand(const uint8_t key[16], aes128_ks *ks) {
 
 static void sub_bytes(uint8_t st[16]) {
     for (int i = 0; i < 16; i++) {
-        st[i] = d2k_aes_sbox_byte(st[i]);
+        st[i] = d2s_aes_sbox_byte(st[i]);
     }
 }
 
@@ -146,7 +146,7 @@ static void add_round_key(uint8_t st[16], const uint8_t rk[16]) {
 }
 
 /* Cipher() из FIPS-197 §5.1: только прямой шифр, обратный (InvSubBytes и
- * т.д.) этому модулю не нужен нигде — см. d2k_crypto.h про CTR и защиту
+ * т.д.) этому модулю не нужен нигде — см. d2s_crypto.h про CTR и защиту
  * заголовка. */
 static void aes128_encrypt_block(const aes128_ks *ks, const uint8_t in[16], uint8_t out[16]) {
     uint8_t st[16];
@@ -164,7 +164,7 @@ static void aes128_encrypt_block(const aes128_ks *ks, const uint8_t in[16], uint
     memcpy(out, st, 16);
 }
 
-void d2k_aes128_ecb(const uint8_t key[16], const uint8_t in[16], uint8_t out[16]) {
+void d2s_aes128_ecb(const uint8_t key[16], const uint8_t in[16], uint8_t out[16]) {
     aes128_ks ks;
     aes128_key_expand(key, &ks);
     aes128_encrypt_block(&ks, in, out);
@@ -289,7 +289,7 @@ static void sha256_final(sha256_ctx *ctx, uint8_t out[32]) {
     }
 }
 
-void d2k_sha256(const uint8_t *in, size_t n, uint8_t out[32]) {
+void d2s_sha256(const uint8_t *in, size_t n, uint8_t out[32]) {
     sha256_ctx ctx;
     sha256_init(&ctx);
     sha256_update(&ctx, in, n);
@@ -298,12 +298,12 @@ void d2k_sha256(const uint8_t *in, size_t n, uint8_t out[32]) {
 
 /* ===================== HMAC-SHA256 (RFC 2104 / FIPS 198-1) ===================== */
 
-void d2k_hmac_sha256(const uint8_t *key, size_t klen,
+void d2s_hmac_sha256(const uint8_t *key, size_t klen,
                       const uint8_t *msg, size_t mlen, uint8_t out[32]) {
     uint8_t k0[64];
     memset(k0, 0, sizeof k0);
     if (klen > 64) {
-        d2k_sha256(key, klen, k0); /* длинный ключ сжимается хэшем; хвост k0 остаётся нулевым */
+        d2s_sha256(key, klen, k0); /* длинный ключ сжимается хэшем; хвост k0 остаётся нулевым */
     } else if (klen) {
         memcpy(k0, key, klen); /* пустой ключ приходит как NULL */
     }
@@ -328,48 +328,48 @@ void d2k_hmac_sha256(const uint8_t *key, size_t klen,
 
 /* ===================== HKDF (RFC 5869) и HKDF-Expand-Label (RFC 8446 §7.1) ===================== */
 
-void d2k_hkdf_extract(const uint8_t *salt, size_t slen,
+void d2s_hkdf_extract(const uint8_t *salt, size_t slen,
                        const uint8_t *ikm, size_t ilen, uint8_t out[32]) {
     /* PRK = HMAC-Hash(salt, IKM): соль — КЛЮЧ HMAC, а не сообщение (RFC 5869
      * §2.2). Пустая соль (slen==0) сама по себе даёт корректный результат:
      * HMAC дополняет короткий ключ нулями до блока, и ноль байт нулями даёт
      * ту же дополненную строку, что и HashLen явных нулей — отдельной ветки
      * не нужно. */
-    d2k_hmac_sha256(salt, slen, ikm, ilen, out);
+    d2s_hmac_sha256(salt, slen, ikm, ilen, out);
 }
 
 /* Префикс HkdfLabel.label (RFC 8446 §7.1) — "tls13 ", ровно 6 байт. Именованная
  * величина вместо литерала "6" в трёх разных объявлениях буферов ниже:
  * full_label/info/buf иначе могли бы разъехаться друг с другом при следующей
- * правке точно так же, как чуть не разъехались размер D2K_HKDF_LABEL_MAX и
+ * правке точно так же, как чуть не разъехались размер D2S_HKDF_LABEL_MAX и
  * буфер под него, — sizeof(строка)-1 гарантированно синхронен с самой
  * строкой, ручного удержания в уме не требует. */
 #define HKDF_LABEL_PREFIX     "tls13 "
 #define HKDF_LABEL_PREFIX_LEN (sizeof(HKDF_LABEL_PREFIX) - 1)
 
-int d2k_hkdf_expand_label(const uint8_t secret[32], const char *label,
+int d2s_hkdf_expand_label(const uint8_t secret[32], const char *label,
                            uint8_t *out, size_t out_len) {
-    return d2k_hkdf_expand_label_ctx(secret, label, NULL, 0, out, out_len);
+    return d2s_hkdf_expand_label_ctx(secret, label, NULL, 0, out, out_len);
 }
 
-int d2k_hkdf_expand_label_ctx(const uint8_t secret[32], const char *label,
+int d2s_hkdf_expand_label_ctx(const uint8_t secret[32], const char *label,
                               const uint8_t *ctx, size_t ctx_len,
                               uint8_t *out, size_t out_len) {
     /* HkdfLabel (RFC 8446 §7.1): length(2, big-endian) || len(full_label)(1)
      * || full_label || len(context)(1)=0. Контекст в этом модуле всегда пуст
      * (QUIC Initial его не использует, RFC 9001 §5.1). label — короткий
      * ASCII-литерал нашего же кода, но проверка длины — не на честном слове
-     * вызывающего (ревью 2026-09-06: без неё strlen(label) > D2K_HKDF_LABEL_MAX
+     * вызывающего (ревью 2026-09-06: без неё strlen(label) > D2S_HKDF_LABEL_MAX
      * переполняет full_label ниже; воспроизведено меткой в 110 байт под
      * санитайзерами). Нарушение контракта — сразу отказ, ДО первого memcpy:
      * ни один из буферов ниже ещё не тронут. Почему это проверка времени
-     * выполнения, а не сборки, — см. d2k_crypto.h у объявления. */
+     * выполнения, а не сборки, — см. d2s_crypto.h у объявления. */
     size_t label_len = strlen(label);
-    if (label_len > D2K_HKDF_LABEL_MAX) {
+    if (label_len > D2S_HKDF_LABEL_MAX) {
         return -1;
     }
 
-    uint8_t full_label[HKDF_LABEL_PREFIX_LEN + D2K_HKDF_LABEL_MAX];
+    uint8_t full_label[HKDF_LABEL_PREFIX_LEN + D2S_HKDF_LABEL_MAX];
     memcpy(full_label, HKDF_LABEL_PREFIX, HKDF_LABEL_PREFIX_LEN);
     memcpy(full_label + HKDF_LABEL_PREFIX_LEN, label, label_len);
     size_t full_len = HKDF_LABEL_PREFIX_LEN + label_len;
@@ -382,7 +382,7 @@ int d2k_hkdf_expand_label_ctx(const uint8_t secret[32], const char *label,
     if (ctx_len > 32) {
         return -1;
     }
-    uint8_t info[2 + 1 + (HKDF_LABEL_PREFIX_LEN + D2K_HKDF_LABEL_MAX) + 1 + 32];
+    uint8_t info[2 + 1 + (HKDF_LABEL_PREFIX_LEN + D2S_HKDF_LABEL_MAX) + 1 + 32];
     info[0] = (uint8_t)(out_len >> 8);
     info[1] = (uint8_t)(out_len);
     info[2] = (uint8_t)full_len;
@@ -401,7 +401,7 @@ int d2k_hkdf_expand_label_ctx(const uint8_t secret[32], const char *label,
     size_t written = 0;
     uint8_t counter = 1;
     while (written < out_len) {
-        uint8_t buf[32 + (2 + 1 + (HKDF_LABEL_PREFIX_LEN + D2K_HKDF_LABEL_MAX) + 1) + 1];
+        uint8_t buf[32 + (2 + 1 + (HKDF_LABEL_PREFIX_LEN + D2S_HKDF_LABEL_MAX) + 1) + 1];
         size_t buf_len = 0;
         memcpy(buf, t_prev, t_prev_len);
         buf_len += t_prev_len;
@@ -410,7 +410,7 @@ int d2k_hkdf_expand_label_ctx(const uint8_t secret[32], const char *label,
         buf[buf_len++] = counter;
 
         uint8_t t_cur[32];
-        d2k_hmac_sha256(secret, 32, buf, buf_len, t_cur);
+        d2s_hmac_sha256(secret, 32, buf, buf_len, t_cur);
 
         size_t take = out_len - written;
         if (take > 32) {
@@ -534,8 +534,8 @@ static void ghash(const uint8_t h[16], const uint8_t *aad, size_t aad_len,
     memcpy(out, prod, 16);
 }
 
-/* Экспортирована ради test_crypto.c (см. d2k_crypto.h) — сама тривиальна. */
-void d2k_ghash_for_test(const uint8_t h[16], const uint8_t *aad, size_t aad_len,
+/* Экспортирована ради test_crypto.c (см. d2s_crypto.h) — сама тривиальна. */
+void d2s_ghash_for_test(const uint8_t h[16], const uint8_t *aad, size_t aad_len,
                         const uint8_t *c, size_t c_len, uint8_t out[16]) {
     ghash(h, aad, aad_len, c, c_len, out);
 }
@@ -556,7 +556,7 @@ static void inc32(uint8_t block[16]) {
 /* GCTR_K(icb, in) — поток AES-CTR: keystream = CIPH_K(текущий счётчик),
  * счётчик увеличивается inc32 после каждого блока. Вызывающий передаёт
  * ровно тот счётчик, с которого начинать (SP 800-38D различает J0 для тега и
- * inc32(J0) для данных — см. d2k_aes128_gcm_decrypt). */
+ * inc32(J0) для данных — см. d2s_aes128_gcm_decrypt). */
 static void gctr(const aes128_ks *ks, const uint8_t icb[16],
                   const uint8_t *in, size_t n, uint8_t *out) {
     uint8_t cb[16];
@@ -593,7 +593,7 @@ static int consttime_eq16(const uint8_t a[16], const uint8_t b[16]) {
  * счётчика 2, потом считаем GHASH ПО ШИФРОТЕКСТУ и накрываем его J0. Порядок
  * важен: GHASH берётся именно от шифротекста (SP 800-38D §7.1), и посчитать
  * его до шифрования было бы просто другой функцией. */
-int d2k_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
+int d2s_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
                            const uint8_t *aad, size_t aad_len,
                            const uint8_t *in, size_t n,
                            uint8_t *out, uint8_t tag[16]) {
@@ -624,7 +624,7 @@ int d2k_aes128_gcm_encrypt(const uint8_t key[16], const uint8_t iv[12],
     return 0;
 }
 
-int d2k_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
+int d2s_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
                             const uint8_t *aad, size_t aad_len,
                             const uint8_t *ct, size_t ct_len, uint8_t *out) {
     if (ct_len < 16) {
@@ -659,7 +659,7 @@ int d2k_aes128_gcm_decrypt(const uint8_t key[16], const uint8_t iv[12],
     if (!consttime_eq16(t, tag_in)) {
         /* Тег не сошёлся: out не трогаем вовсе, чтобы у вызывающего не было
          * способа случайно использовать непроверенный текст, забыв про код
-         * возврата (см. контракт в d2k_crypto.h). */
+         * возврата (см. контракт в d2s_crypto.h). */
         return -1;
     }
 

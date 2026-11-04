@@ -1,5 +1,5 @@
 /* httpsearch.c — поиск обхода открытого HTTP (задача 51, шаг 4), см.
- * d2k_httpsearch.h. */
+ * d2s_httpsearch.h. */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #include <arpa/inet.h>
@@ -17,13 +17,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_httpsearch.h"
-#include "d2k_httpup.h"
-#include "d2k_verify.h"
-#include "d2k_plantlv.h"
+#include "d2s_httpsearch.h"
+#include "d2s_httpup.h"
+#include "d2s_verify.h"
+#include "d2s_plantlv.h"
 
-uint16_t d2k_hs_probe_port = 80;
-int d2k_hs_probe_ms = 6000;
+uint16_t d2s_hs_probe_port = 80;
+int d2s_hs_probe_ms = 6000;
 
 /* Приманка — то же имя, что у TLS-поиска (SCHED_DECOY, core/sched.c):
    заведомо не связанное с целью и реально обслуживаемое. */
@@ -41,58 +41,58 @@ static int64_t mono_ms(void) {
     return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
-const char *d2k_hs_answer_name(d2k_hs_answer a) {
+const char *d2s_hs_answer_name(d2s_hs_answer a) {
     switch (a) {
-    case D2K_HS_REAL:         return "ответ сервера";
-    case D2K_HS_INJECTED:     return "вставка провайдера";
-    case D2K_HS_EARLY:        return "ответ раньше RTT/2 (не сервер)";
-    case D2K_HS_GARBAGE:      return "не ответ HTTP";
-    case D2K_HS_SILENT:       return "тишина";
-    case D2K_HS_RESET:        return "сброс";
-    case D2K_HS_CLOSED:       return "закрытие без ответа";
-    case D2K_HS_CONNECT_FAIL: return "соединение не установилось";
-    case D2K_HS_DECOY:        return "ответ на приманку, не на запрос цели";
-    case D2K_HS_CUT:          return "обрыв тела ответа";
+    case D2S_HS_REAL:         return "ответ сервера";
+    case D2S_HS_INJECTED:     return "вставка провайдера";
+    case D2S_HS_EARLY:        return "ответ раньше RTT/2 (не сервер)";
+    case D2S_HS_GARBAGE:      return "не ответ HTTP";
+    case D2S_HS_SILENT:       return "тишина";
+    case D2S_HS_RESET:        return "сброс";
+    case D2S_HS_CLOSED:       return "закрытие без ответа";
+    case D2S_HS_CONNECT_FAIL: return "соединение не установилось";
+    case D2S_HS_DECOY:        return "ответ на приманку, не на запрос цели";
+    case D2S_HS_CUT:          return "обрыв тела ответа";
     default:                  return "нет";
     }
 }
 
 /* --- суждение ---------------------------------------------------------------- */
 
-d2k_hs_answer d2k_hs_judge(const char *host, const char *head, size_t n,
+d2s_hs_answer d2s_hs_judge(const char *host, const char *head, size_t n,
                            int64_t rtt_us, int64_t reply_us) {
     if (!head || n < 12 || memcmp(head, "HTTP/1.", 7) != 0 ||
         (head[7] != '0' && head[7] != '1') || head[8] != ' ' ||
         head[9] < '1' || head[9] > '5' || head[10] < '0' || head[10] > '9' ||
         head[11] < '0' || head[11] > '9') {
-        return D2K_HS_GARBAGE;
+        return D2S_HS_GARBAGE;
     }
     size_t end=0;
     for(size_t i=0;i+3<n;i++) if(!memcmp(head+i,"\r\n\r\n",4)) { end=i+4; break; }
-    if(!end) return D2K_HS_GARBAGE; /* status alone can precede a portal Location */
+    if(!end) return D2S_HS_GARBAGE; /* status alone can precede a portal Location */
     char portal[256];
-    if (host && d2k_httpup_portal_location(host, head, n, portal, sizeof portal)) {
-        return D2K_HS_INJECTED;
+    if (host && d2s_httpup_portal_location(host, head, n, portal, sizeof portal)) {
+        return D2S_HS_INJECTED;
     }
     /* ПРИМАНКА ДОШЛА ДО СЕРВЕРА (повторное ревью I-A): сервер принял её
        байты за начало запроса и ответил на склейку — 400/421 или ответ про
        имя приманки. Это не ответ цели, и подтверждать по нему план нельзя:
        такой план отдавал бы серверу приманку вместо каждого запроса. */
     int code = (head[9] - '0') * 100 + (head[10] - '0') * 10 + (head[11] - '0');
-    if (code == 400 || code == 421) { return D2K_HS_DECOY; }
+    if (code == 400 || code == 421) { return D2S_HS_DECOY; }
     {
         static const char decoy[] = HS_DECOY;
         const size_t dl = sizeof decoy - 1;
         for (size_t i = 0; i + dl <= n; i++) {
-            if (!strncasecmp(head + i, decoy, dl)) { return D2K_HS_DECOY; }
+            if (!strncasecmp(head + i, decoy, dl)) { return D2S_HS_DECOY; }
         }
     }
     /* То же правило, что у датапата (http80.c): сервер не может ответить
        раньше, чем запрос дошёл до него и вернулся. */
     if (rtt_us > 0 && reply_us >= 0 && reply_us * 2 < rtt_us) {
-        return D2K_HS_EARLY;
+        return D2S_HS_EARLY;
     }
-    return D2K_HS_REAL;
+    return D2S_HS_REAL;
 }
 
 /* --- зонд -------------------------------------------------------------------- */
@@ -130,14 +130,14 @@ static long hs_read(void *ctx, uint8_t *buf, size_t cap, int wait_ms, char *err,
     }
 }
 
-void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
+void d2s_hs_probe_run(const d2s_hs_job *job, d2s_hs_result *r) {
     memset(r, 0, sizeof *r);
-    r->answer = D2K_HS_CONNECT_FAIL;
+    r->answer = D2S_HS_CONNECT_FAIL;
     r->fd = job ? job->fd : -1;
     r->seq = job ? job->seq : 0;
     if (!job || job->fd < 0) { snprintf(r->why, sizeof r->why, "нет сокета"); return; }
     if(job->repeat_path[0]&&!hs_path_ok(job->repeat_path)) {
-        r->answer=D2K_HS_GARBAGE;snprintf(r->why,sizeof r->why,"unsupported observed HTTP path");return;
+        r->answer=D2S_HS_GARBAGE;snprintf(r->why,sizeof r->why,"unsupported observed HTTP path");return;
     }
     int fd = job->fd;
 #ifdef SO_NOSIGPIPE
@@ -149,13 +149,13 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
     if (job->family == 6) {
         struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
         a->sin6_family = AF_INET6;
-        a->sin6_port = htons(d2k_hs_probe_port);
+        a->sin6_port = htons(d2s_hs_probe_port);
         memcpy(&a->sin6_addr, job->addr, 16);
         sl = sizeof *a;
     } else {
         struct sockaddr_in *a = (struct sockaddr_in *)&ss;
         a->sin_family = AF_INET;
-        a->sin_port = htons(d2k_hs_probe_port);
+        a->sin_port = htons(d2s_hs_probe_port);
         memcpy(&a->sin_addr, job->addr, 4);
         sl = sizeof *a;
     }
@@ -164,7 +164,7 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
         snprintf(r->why, sizeof r->why, "fcntl: %s", strerror(errno));
         return;
     }
-    int64_t t0 = mono_ms(), deadline = t0 + d2k_hs_probe_ms;
+    int64_t t0 = mono_ms(), deadline = t0 + d2s_hs_probe_ms;
     struct timespec c0, c1;
     clock_gettime(CLOCK_MONOTONIC, &c0);
     int err = 0;
@@ -176,7 +176,7 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
             int rc;
             do { rc = poll(&p, 1, (int)(deadline - mono_ms())); } while (rc < 0 && errno == EINTR);
             if (rc <= 0) {
-                snprintf(r->why, sizeof r->why, "80 молчит %d мс", d2k_hs_probe_ms);
+                snprintf(r->why, sizeof r->why, "80 молчит %d мс", d2s_hs_probe_ms);
                 return;
             }
             socklen_t el = sizeof err;
@@ -205,9 +205,9 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
     for(unsigned request=0;request<2;request++) {
         const char *path=(request||job->cut)&&job->repeat_path[0]?job->repeat_path:"/";
         int rl=snprintf(req,sizeof req,"GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: keep-alive\r\n\r\n",path,job->host);
-        if(rl<=0||(size_t)rl>=sizeof req){r->answer=D2K_HS_GARBAGE;return;}
+        if(rl<=0||(size_t)rl>=sizeof req){r->answer=D2S_HS_GARBAGE;return;}
         hs_reader reader={0};reader.fd=fd;clock_gettime(CLOCK_MONOTONIC,&reader.sent);
-        int64_t until=mono_ms()+d2k_hs_probe_ms;size_t sent=0;
+        int64_t until=mono_ms()+d2s_hs_probe_ms;size_t sent=0;
         while(sent<(size_t)rl) {
             ssize_t n=send(fd,req+sent,(size_t)rl-sent,
 #ifdef MSG_NOSIGNAL
@@ -223,21 +223,21 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
             }
             break;
         }
-        if(sent!=(size_t)rl){r->answer=D2K_HS_CLOSED;snprintf(r->why,sizeof r->why,"HTTP request %u not sent",request+1);return;}
+        if(sent!=(size_t)rl){r->answer=D2S_HS_CLOSED;snprintf(r->why,sizeof r->why,"HTTP request %u not sent",request+1);return;}
         r->requests_sent++;
-        d2k_http_read_result response;
-        d2k_http_read_response(hs_read,&reader,d2k_hs_probe_ms,&response,r->why,sizeof r->why);
+        d2s_http_read_result response;
+        d2s_http_read_response(hs_read,&reader,d2s_hs_probe_ms,&response,r->why,sizeof r->why);
         r->reply_us=reader.first_us;
-        if(!reader.used){r->answer=strstr(r->why,"timeout")?D2K_HS_SILENT:D2K_HS_CLOSED;return;}
-        r->answer=d2k_hs_judge(job->host,reader.head,reader.used,r->rtt_us,r->reply_us);
-        if(response.reply.outcome==D2K_HTTP_BLOCKED)r->answer=D2K_HS_INJECTED;
+        if(!reader.used){r->answer=strstr(r->why,"timeout")?D2S_HS_SILENT:D2S_HS_CLOSED;return;}
+        r->answer=d2s_hs_judge(job->host,reader.head,reader.used,r->rtt_us,r->reply_us);
+        if(response.reply.outcome==D2S_HTTP_BLOCKED)r->answer=D2S_HS_INJECTED;
         snprintf(r->status,sizeof r->status,"HTTP/1.1 %d",response.status);
         const char *eol=strstr(reader.head,"\r\n");
         if(eol){size_t n=(size_t)(eol-reader.head);if(n>=sizeof r->status)n=sizeof r->status-1;memcpy(r->status,reader.head,n);r->status[n]=0;}
-        if(r->answer!=D2K_HS_REAL)return;
+        if(r->answer!=D2S_HS_REAL)return;
         if(!response.complete) {
             /* Заголовки настоящего ответа пришли, тело — нет: обрыв, не мусор. */
-            r->answer=D2K_HS_CUT;return;
+            r->answer=D2S_HS_CUT;return;
         }
         r->complete_responses++;
         if(response.connection_close) {
@@ -251,8 +251,8 @@ void d2k_hs_probe_run(const d2k_hs_job *job, d2k_hs_result *r) {
 static const char *const CANDS[] = {"split", "disorder", "fake-badsum", "fake-seqshift"};
 #define N_CANDS (sizeof CANDS / sizeof CANDS[0])
 
-size_t d2k_hs_candidate_count(void) { return N_CANDS; }
-const char *d2k_hs_candidate_key(size_t i) { return i < N_CANDS ? CANDS[i] : NULL; }
+size_t d2s_hs_candidate_count(void) { return N_CANDS; }
+const char *d2s_hs_candidate_key(size_t i) { return i < N_CANDS ? CANDS[i] : NULL; }
 
 /* Ключ измеренной порчи: «fake:» + признаки через «+» в порядке ttl,
    badsum, seqshift. Пишет строку признаков для плана в spec (через пробел). */
@@ -294,11 +294,11 @@ static int known_key(const char *k) {
     return poison_key_spec(k, spec, sizeof spec) == 0;
 }
 
-int d2k_hs_candidate_text(const char *key, const uint8_t id[16], char *buf, size_t cap) {
+int d2s_hs_candidate_text(const char *key, const uint8_t id[16], char *buf, size_t cap) {
     if (!key || !buf || !known_key(key)) { return -1; }
     char idhex[33];
     for (int i = 0; i < 16; i++) { snprintf(idhex + 2 * i, 3, "%02x", id ? id[i] : 0); }
-    int n = snprintf(buf, cap, "d2k-plan 1 11\nid %s\nproto tcp http\n", idhex);
+    int n = snprintf(buf, cap, "d2s-plan 1 11\nid %s\nproto tcp http\n", idhex);
     if (n < 0 || (size_t)n >= cap) { return -1; }
     size_t pos = (size_t)n;
 #define ADD(...) do { int k_ = snprintf(buf + pos, cap - pos, __VA_ARGS__); \
@@ -319,7 +319,7 @@ int d2k_hs_candidate_text(const char *key, const uint8_t id[16], char *buf, size
     if(strcmp(key,"fake-badsum-whole")) ADD("split sni_middle +0\n");
     if (!strcmp(key, "disorder")) {
         /* Та же пауза между кусками, что у вопроса порядка в TLS-поиске
-           (D2K_PACE_PIECE_US, compose.h). */
+           (D2S_PACE_PIECE_US, compose.h). */
         ADD("order reverse\npace 12000\n");
     }
 #undef ADD
@@ -329,7 +329,7 @@ int d2k_hs_candidate_text(const char *key, const uint8_t id[16], char *buf, size
 /* Постоянный план кандидата — свой устойчивый идентификатор. */
 static void stable_id(const char *key, uint8_t id[16]) {
     uint64_t h = 1469598103934665603ull;
-    for (const char *p = "d2k-http:"; *p; p++) { h = (h ^ (uint8_t)*p) * 1099511628211ull; }
+    for (const char *p = "d2s-http:"; *p; p++) { h = (h ^ (uint8_t)*p) * 1099511628211ull; }
     for (const char *p = key; *p; p++) { h = (h ^ (uint8_t)*p) * 1099511628211ull; }
     for (int i = 0; i < 16; i++) { h = (h ^ (uint64_t)i) * 1099511628211ull; id[i] = (uint8_t)(h >> 56); }
 }
@@ -364,7 +364,7 @@ static void fresh_id(uint8_t id[16]) {
 typedef struct {
     char key[40];
     uint8_t addr[16];
-    d2k_binding_context binding;
+    d2s_binding_context binding;
     uint64_t execution;
     int64_t request_ms;
 } live_failure;
@@ -380,7 +380,7 @@ typedef struct {
     size_t n_failures;
     int64_t installed_ms; /* diagnostic timestamp, never installation identity */
     uint8_t install_id[16], pending_plan_id[16], installed_plan_id[16];
-    d2k_binding_context binding;
+    d2s_binding_context binding;
     int revoked;          /* old key is only a hypothesis, not saved success */
     uint64_t seq;          /* порядок подтверждения: свежие — первыми */
     int64_t no_before_ms;  /* раньше этого новый поиск/перепроверка не начинается */
@@ -392,11 +392,11 @@ typedef struct { char host[256]; uint8_t family, addr[16]; } pend;
 enum { PH_IDLE = 0, PH_BASE, PH_ACK, PH_RUN, PH_APPLIED };
 enum { HQ_OWN=0, HQ_SPLIT, HQ_CHECKSUM, HQ_PRODUCT, HQ_FALLBACK, HQ_END };
 
-struct d2k_httpsearch {
-    d2k_diag_observer diagnostic;
+struct d2s_httpsearch {
+    d2s_diag_observer diagnostic;
     void *diagnostic_ctx;
     uint64_t diagnostic_seq;
-    d2k_hs_ops ops;
+    d2s_hs_ops ops;
     rec *recs; size_t n_recs, cap_recs;
     char measured[8][40]; size_t n_measured;   /* ключи измеренной порчи */
     uint32_t job_seq;
@@ -432,14 +432,14 @@ struct d2k_httpsearch {
         uint16_t proof_sport;
         uint8_t proof_client[16];
         uint64_t executions[2];
-        d2k_binding_context proof_binding;
+        d2s_binding_context proof_binding;
         int64_t deadline;
-        d2k_hs_result pending;
+        d2s_hs_result pending;
     } cur;
 };
 
-static void say(d2k_httpsearch *hs, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
-static void say(d2k_httpsearch *hs, const char *fmt, ...) {
+static void say(d2s_httpsearch *hs, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void say(d2s_httpsearch *hs, const char *fmt, ...) {
     if (!hs->ops.say) { return; }
     char line[600];
     va_list ap;
@@ -465,7 +465,7 @@ static int host_ok(const char *h) {
     return 0;
 }
 
-static rec *rec_find(const d2k_httpsearch *hs, const char *host, uint8_t family) {
+static rec *rec_find(const d2s_httpsearch *hs, const char *host, uint8_t family) {
     for (size_t i = 0; i < hs->n_recs; i++) {
         if (hs->recs[i].family == family && !strcasecmp(hs->recs[i].host, host)) {
             return &hs->recs[i];
@@ -474,7 +474,7 @@ static rec *rec_find(const d2k_httpsearch *hs, const char *host, uint8_t family)
     return NULL;
 }
 
-static rec *rec_get(d2k_httpsearch *hs, const char *host, uint8_t family) {
+static rec *rec_get(d2s_httpsearch *hs, const char *host, uint8_t family) {
     rec *r = rec_find(hs, host, family);
     if (r) { return r; }
     if (hs->n_recs == hs->cap_recs) {
@@ -496,10 +496,10 @@ static rec *rec_get(d2k_httpsearch *hs, const char *host, uint8_t family) {
 static int same_program(const char *a,const char *b) {
     if(!strcmp(a,b))return 1;
     char text[2048],err[160];uint8_t left[2048],right[2048];size_t ln=0,rn=0;
-    if(d2k_hs_candidate_text(a,NULL,text,sizeof text) ||
-       d2k_plan_text_to_tlv(text,left,sizeof left,&ln,err,sizeof err) ||
-       d2k_hs_candidate_text(b,NULL,text,sizeof text) ||
-       d2k_plan_text_to_tlv(text,right,sizeof right,&rn,err,sizeof err))return -1;
+    if(d2s_hs_candidate_text(a,NULL,text,sizeof text) ||
+       d2s_plan_text_to_tlv(text,left,sizeof left,&ln,err,sizeof err) ||
+       d2s_hs_candidate_text(b,NULL,text,sizeof text) ||
+       d2s_plan_text_to_tlv(text,right,sizeof right,&rn,err,sizeof err))return -1;
     return ln==rn && !memcmp(left,right,ln);
 }
 
@@ -514,7 +514,7 @@ static const live_failure *failed_live(rec *r,const char *key,const uint8_t *add
     return NULL;
 }
 static int remember_live_failure(rec *r,const uint8_t *addr,
-    const d2k_binding_context *binding,uint64_t execution,int64_t request_ms) {
+    const d2s_binding_context *binding,uint64_t execution,int64_t request_ms) {
     if(failed_live(r,r->key,addr))return 0;
     if(r->evidence_lost)return -1;
     live_failure *v=realloc(r->failures,(r->n_failures+1)*sizeof *v);
@@ -527,7 +527,7 @@ static int remember_live_failure(rec *r,const uint8_t *addr,
     return 0;
 }
 
-int d2k_httpsearch_measured_poison(d2k_httpsearch *hs, const char *spec) {
+int d2s_httpsearch_measured_poison(d2s_httpsearch *hs, const char *spec) {
     if (!hs || !spec) { return -1; }
     /* Строка признаков → канонический ключ. */
     char buf[64], key[48] = "fake:";
@@ -556,7 +556,7 @@ int d2k_httpsearch_measured_poison(d2k_httpsearch *hs, const char *spec) {
     return 0;
 }
 
-size_t d2k_hs_plan_poisons(const char *text, char out[][64], size_t cap) {
+size_t d2s_hs_plan_poisons(const char *text, char out[][64], size_t cap) {
     size_t n = 0;
     if (!text || !strstr(text, "\nproto tcp tls\n")) { return 0; }
     for (const char *ln = text; ln && *ln && n < cap;) {
@@ -592,29 +592,29 @@ size_t d2k_hs_plan_poisons(const char *text, char out[][64], size_t cap) {
     return n;
 }
 
-d2k_httpsearch *d2k_httpsearch_new(const d2k_hs_ops *ops) {
-    d2k_httpsearch *hs = calloc(1, sizeof *hs);
+d2s_httpsearch *d2s_httpsearch_new(const d2s_hs_ops *ops) {
+    d2s_httpsearch *hs = calloc(1, sizeof *hs);
     if (!hs) { return NULL; }
     if (ops) { hs->ops = *ops; }
     hs->cur.fd = -1;
     return hs;
 }
 
-static void drop_socket(d2k_httpsearch *hs) {
+static void drop_socket(d2s_httpsearch *hs) {
     if (hs->cur.fd >= 0) {
         if (hs->ops.close_port) { hs->ops.close_port(hs->ops.ctx, hs->cur.fd); }
         hs->cur.fd = -1;
     }
 }
 
-static void drop_probe(d2k_httpsearch *hs) {
+static void drop_probe(d2s_httpsearch *hs) {
     if (hs->cur.sport && hs->ops.del_probe) {
         hs->ops.del_probe(hs->ops.ctx, hs->cur.host, hs->cur.family, hs->cur.sport);
     }
     hs->cur.sport = 0;
 }
 
-void d2k_httpsearch_free(d2k_httpsearch *hs) {
+void d2s_httpsearch_free(d2s_httpsearch *hs) {
     if (!hs) { return; }
     if (hs->cur.phase == PH_ACK || hs->cur.phase == PH_RUN) { drop_probe(hs); }
     drop_socket(hs);
@@ -624,28 +624,28 @@ void d2k_httpsearch_free(d2k_httpsearch *hs) {
     free(hs);
 }
 
-int d2k_httpsearch_busy(const d2k_httpsearch *hs) {
+int d2s_httpsearch_busy(const d2s_httpsearch *hs) {
     return hs && hs->cur.phase != PH_IDLE;
 }
 
-const char *d2k_httpsearch_plan_of(const d2k_httpsearch *hs, const char *host, uint8_t family) {
+const char *d2s_httpsearch_plan_of(const d2s_httpsearch *hs, const char *host, uint8_t family) {
     const rec *r = hs && host ? rec_find(hs, host, family) : NULL;
     return r && r->key[0] && !r->revoked ? r->key : NULL;
 }
 
-static void start_next(d2k_httpsearch *hs, int64_t now);
+static void start_next(d2s_httpsearch *hs, int64_t now);
 
-void d2k_httpsearch_diagnostic_counts(d2k_httpsearch *hs,d2k_diag_counts *c) {
+void d2s_httpsearch_diagnostic_counts(d2s_httpsearch *hs,d2s_diag_counts *c) {
     if(hs && c){c->http_records=hs->n_recs;c->http_queued=hs->n_q;}
 }
-void d2k_httpsearch_diagnostics(d2k_httpsearch *hs,d2k_diag_observer fn,void *ctx) {
+void d2s_httpsearch_diagnostics(d2s_httpsearch *hs,d2s_diag_observer fn,void *ctx) {
     if(hs){hs->diagnostic=fn;hs->diagnostic_ctx=ctx;}
 }
-static void diagnostic_end(d2k_httpsearch *hs,int64_t now,const char *outcome,const char *reason) {
+static void diagnostic_end(d2s_httpsearch *hs,int64_t now,const char *outcome,const char *reason) {
     if(hs->diagnostic && hs->cur.diagnostic_id) {
         char ip[INET6_ADDRSTRLEN]="";
         (void)inet_ntop(hs->cur.family==6?AF_INET6:AF_INET,hs->cur.addr,ip,sizeof ip);
-        d2k_diag_event e={.id=hs->cur.diagnostic_id,.target=hs->cur.host,.protocol="http",
+        d2s_diag_event e={.id=hs->cur.diagnostic_id,.target=hs->cur.host,.protocol="http",
             .family=hs->cur.family,.outcome=outcome,.reason=reason,
             .elapsed_ms=now-hs->cur.diagnostic_start,.queue_ms=-1,.probe_units=-1,
             .ip=ip,.path="httpsearch",.kind="name"};
@@ -653,7 +653,7 @@ static void diagnostic_end(d2k_httpsearch *hs,int64_t now,const char *outcome,co
     }
     hs->cur.diagnostic_id=0;
 }
-static void finish(d2k_httpsearch *hs, int64_t now,const char *outcome,const char *reason) {
+static void finish(d2s_httpsearch *hs, int64_t now,const char *outcome,const char *reason) {
     diagnostic_end(hs,now,outcome,reason);
     drop_socket(hs);
     hs->cur.phase = PH_IDLE;
@@ -661,7 +661,7 @@ static void finish(d2k_httpsearch *hs, int64_t now,const char *outcome,const cha
     start_next(hs, now);
 }
 
-static int open_job(d2k_httpsearch *hs, d2k_hs_job *job) {
+static int open_job(d2s_httpsearch *hs, d2s_hs_job *job) {
     memset(job, 0, sizeof *job);
     int fd = -1;
     uint16_t sport = 0;
@@ -681,27 +681,27 @@ static int open_job(d2k_httpsearch *hs, d2k_hs_job *job) {
     return 0;
 }
 
-static void next_candidate(d2k_httpsearch *hs, int64_t now);
+static void next_candidate(d2s_httpsearch *hs, int64_t now);
 
-static void revoke_owned(d2k_httpsearch *hs,rec *r) {
+static void revoke_owned(d2s_httpsearch *hs,rec *r) {
     /* Keep the snapshot even after a failed write or a lost delete ACK.
        Repeating this conditional command cannot remove a replacement. */
-    if(d2k_binding_known(&r->binding) && hs->ops.del_plan)
+    if(d2s_binding_known(&r->binding) && hs->ops.del_plan)
         (void)hs->ops.del_plan(hs->ops.ctx,r->host,r->family,&r->binding);
 }
 
-static void all_failed(d2k_httpsearch *hs, int64_t now) {
+static void all_failed(d2s_httpsearch *hs, int64_t now) {
     rec *r = rec_get(hs, hs->cur.host, hs->cur.family);
     if (!hs->cur.judged) {
         /* Ни одного судимого испытания (ревью I-2): исполнение не
            подтвердилось, датапат отказал или не ответил. О коробке это
            ничего не говорит — план, если был, остаётся. */
-        if (r) { r->no_before_ms = now + D2K_HS_INCONCLUSIVE_MS; }
+        if (r) { r->no_before_ms = now + D2S_HS_INCONCLUSIVE_MS; }
         say(hs, "HTTP %s: поиск не измерен — ни один вопрос не дал исполненного опыта "
                 "(нет APPLIED, отказ или молчание датапата)%s; повтор не раньше чем через "
                 "%lld мин", hs->cur.host,
             r && r->key[0] && !r->revoked ? ", подтверждённый план оставлен" : "",
-            (long long)(D2K_HS_INCONCLUSIVE_MS / 60000));
+            (long long)(D2S_HS_INCONCLUSIVE_MS / 60000));
         finish(hs,now,"inconclusive","no-executed-trial");
         return;
     }
@@ -714,28 +714,28 @@ static void all_failed(d2k_httpsearch *hs, int64_t now) {
         if (hs->ops.changed) { hs->ops.changed(hs->ops.ctx); }
     }
     if(hs->cur.conflicts) {
-        if (r) { r->no_before_ms = now + D2K_HS_RETRY_MS; }
+        if (r) { r->no_before_ms = now + D2S_HS_RETRY_MS; }
         say(hs,"HTTP %s: поиск завершён без принятого плана: %zu кандидатов прошли зонд, "
                "но имеют живой отказ в области привязки имени; воспроизведение не объясняет живой поток",
             hs->cur.host,hs->cur.conflicts);
         finish(hs,now,"inconclusive","live-conflict");return;
     }
     if (hs->cur.any_had_real) {
-        if (r) { r->no_before_ms = now + D2K_HS_INCONCLUSIVE_MS; }
+        if (r) { r->no_before_ms = now + D2S_HS_INCONCLUSIVE_MS; }
         say(hs, "HTTP %s: поиск завершён без подтверждения — ответ сервера был получен, "
                 "но устойчивость не подтверждена; следующая попытка не раньше чем через %lld мин",
-            hs->cur.host, (long long)(D2K_HS_INCONCLUSIVE_MS / 60000));
+            hs->cur.host, (long long)(D2S_HS_INCONCLUSIVE_MS / 60000));
         finish(hs,now,"inconclusive","unstable-response");
         return;
     }
-    if (r) { r->no_before_ms = now + D2K_HS_RETRY_MS; }
+    if (r) { r->no_before_ms = now + D2S_HS_RETRY_MS; }
     say(hs, "HTTP %s: обход не найден — ни один вопрос не дал ответа сервера; "
             "следующая попытка не раньше чем через %lld мин", hs->cur.host,
-        (long long)(D2K_HS_RETRY_MS / 60000));
+        (long long)(D2S_HS_RETRY_MS / 60000));
     finish(hs,now,"failed","no-server-response");
 }
 
-static int install(d2k_httpsearch *hs,rec *r,const char *text,const uint8_t plan_id[16],int64_t now) {
+static int install(d2s_httpsearch *hs,rec *r,const char *text,const uint8_t plan_id[16],int64_t now) {
     uint8_t token[16];fresh_id(token);
     if(!hs->ops.set_plan || hs->ops.set_plan(hs->ops.ctx,r->host,r->family,text,token))return -1;
     static const uint8_t none[16];
@@ -749,8 +749,8 @@ static int install(d2k_httpsearch *hs,rec *r,const char *text,const uint8_t plan
     r->installed_ms=now;return 0;
 }
 
-void d2k_httpsearch_install_ack(d2k_httpsearch *hs,const uint8_t token[16],int ok,
-    const d2k_binding_context *binding) {
+void d2s_httpsearch_install_ack(d2s_httpsearch *hs,const uint8_t token[16],int ok,
+    const d2s_binding_context *binding) {
     static const uint8_t zero[16];
     if(!hs || !token || !memcmp(token,zero,16))return;
     for(size_t i=0;i<hs->n_recs;i++) {
@@ -760,21 +760,21 @@ void d2k_httpsearch_install_ack(d2k_httpsearch *hs,const uint8_t token[16],int o
         if(ok) {
             memset(&r->binding,0,sizeof r->binding);
             memset(r->installed_plan_id,0,16);
-            if(d2k_binding_known(binding) && binding->kind==D2K_BIND_NAME &&
-               !binding->temporary && binding->family==r->family && binding->shape==D2K_PLAN_SHAPE_HTTP) {
+            if(d2s_binding_known(binding) && binding->kind==D2S_BIND_NAME &&
+               !binding->temporary && binding->family==r->family && binding->shape==D2S_PLAN_SHAPE_HTTP) {
                 r->binding=*binding;
                 memcpy(r->installed_plan_id,r->pending_plan_id,16);
             }
         }
         memset(r->pending_plan_id,0,16);
-        if(!ok || !d2k_binding_known(&r->binding))
+        if(!ok || !d2s_binding_known(&r->binding))
             say(hs,"HTTP %s: новая установка не подтверждена известной привязкой — живая приёмка неизвестна",r->host);
         if(r->revoked)revoke_owned(hs,r);
         return;
     }
 }
 
-static void confirmed(d2k_httpsearch *hs, int64_t now) {
+static void confirmed(d2s_httpsearch *hs, int64_t now) {
     const char *key = hs->cur.cands[hs->cur.idx];
     uint8_t id[16];
     char text[2048];
@@ -798,7 +798,7 @@ static void confirmed(d2k_httpsearch *hs, int64_t now) {
         else if(hs->cur.question==HQ_CHECKSUM)hs->cur.next_question=HQ_PRODUCT;
         next_candidate(hs,now);return;
     }
-    if (d2k_hs_candidate_text(key, id, text, sizeof text) != 0 || !r ||
+    if (d2s_hs_candidate_text(key, id, text, sizeof text) != 0 || !r ||
         install(hs,r,text,id,now) != 0) {
         say(hs, "HTTP %s: план «%s» подтверждён, но не поставлен датапату", hs->cur.host, key);
         finish(hs,now,"local-abort","plan-install-failed");
@@ -809,7 +809,7 @@ static void confirmed(d2k_httpsearch *hs, int64_t now) {
     r->revoked = 0;
     r->seq = ++hs->seq;
     r->wall = 0;
-    r->no_before_ms = now + D2K_HS_RECHECK_MS;
+    r->no_before_ms = now + D2S_HS_RECHECK_MS;
     if (hs->ops.changed) { hs->ops.changed(hs->ops.ctx); }
     if(hs->cur.question>=HQ_SPLIT && hs->cur.question<=HQ_PRODUCT)
         say(hs,"HTTP %s: путь: свойство — %s; тот же запрос, APPLIED и два опыта с повтором keep-alive без вставки",
@@ -822,10 +822,10 @@ static void confirmed(d2k_httpsearch *hs, int64_t now) {
     finish(hs,now,"probe-confirmed","probe-confirmed-live-unknown");
 }
 
-static void add_cand(d2k_httpsearch *, const char *);
-static void build_fallback(d2k_httpsearch *);
+static void add_cand(d2s_httpsearch *, const char *);
+static void build_fallback(d2s_httpsearch *);
 
-static int trial_executed(const d2k_httpsearch *hs,const d2k_hs_result *r) {
+static int trial_executed(const d2s_httpsearch *hs,const d2s_hs_result *r) {
     return r->requests_sent>0 && r->requests_sent<=2 &&
         r->complete_responses<=r->requests_sent &&
         (unsigned)hs->cur.applied>=r->requests_sent &&
@@ -833,7 +833,7 @@ static int trial_executed(const d2k_httpsearch *hs,const d2k_hs_result *r) {
         !memcmp(r->local_ip,hs->cur.proof_client,hs->cur.family==6?16:4);
 }
 
-static void judge_trial(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now) {
+static void judge_trial(d2s_httpsearch *hs, const d2s_hs_result *r, int64_t now) {
     const char *key = hs->cur.cands[hs->cur.idx];
     if (!trial_executed(hs,r)) {
         say(hs, "HTTP %s: «%s» — исполнение каждого запроса на потоке зонда не подтверждено "
@@ -844,9 +844,9 @@ static void judge_trial(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now)
         next_candidate(hs, now);
         return;
     }
-    if ((r->answer == D2K_HS_REAL && r->complete_responses >= 2) || r->answer == D2K_HS_INJECTED ||
-        r->answer == D2K_HS_CUT) { hs->cur.judged++; }
-    if (r->answer == D2K_HS_REAL && r->complete_responses >= 2) {
+    if ((r->answer == D2S_HS_REAL && r->complete_responses >= 2) || r->answer == D2S_HS_INJECTED ||
+        r->answer == D2S_HS_CUT) { hs->cur.judged++; }
+    if (r->answer == D2S_HS_REAL && r->complete_responses >= 2) {
         hs->cur.cand_had_real = 1;
         hs->cur.any_had_real = 1;
         hs->cur.ok++;
@@ -856,7 +856,7 @@ static void judge_trial(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now)
         next_candidate(hs, now);     /* тот же кандидат ещё раз */
         return;
     }
-    if (r->answer == D2K_HS_CUT && hs->cur.cand_had_real && !hs->cur.cand_retried_cut) {
+    if (r->answer == D2S_HS_CUT && hs->cur.cand_had_real && !hs->cur.cand_retried_cut) {
         hs->cur.cand_retried_cut = 1;
         hs->cur.ok = 0;
         say(hs, "HTTP %s: «%s» — обрыв тела после ответа сервера "
@@ -865,17 +865,17 @@ static void judge_trial(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now)
         next_candidate(hs, now);
         return;
     }
-    if(r->answer==D2K_HS_REAL)
+    if(r->answer==D2S_HS_REAL)
         say(hs,"HTTP %s: одиночный ответ без подтверждения keep-alive — кандидат не подтверждён",hs->cur.host);
-    if (r->answer == D2K_HS_CUT) {
+    if (r->answer == D2S_HS_CUT) {
         say(hs, "HTTP %s: «%s» — %s (запросов %u, полных ответов %u)%s%s",
-            hs->cur.host, key, d2k_hs_answer_name(r->answer), r->requests_sent,
+            hs->cur.host, key, d2s_hs_answer_name(r->answer), r->requests_sent,
             r->complete_responses, r->why[0] ? ": " : "", r->why);
     } else {
-        say(hs, "HTTP %s: «%s» — %s%s%s", hs->cur.host, key, d2k_hs_answer_name(r->answer),
+        say(hs, "HTTP %s: «%s» — %s%s%s", hs->cur.host, key, d2s_hs_answer_name(r->answer),
             r->why[0] ? ": " : "", r->why);
     }
-    if(r->answer!=D2K_HS_REAL && r->answer!=D2K_HS_CONNECT_FAIL && r->answer!=D2K_HS_NONE) {
+    if(r->answer!=D2S_HS_REAL && r->answer!=D2S_HS_CONNECT_FAIL && r->answer!=D2S_HS_NONE) {
         if(!strcmp(key,"split")) hs->cur.split_no=1;
         if(!strcmp(key,"fake-badsum-whole")) hs->cur.checksum_no=1;
         if(hs->cur.question==HQ_SPLIT) hs->cur.next_question=HQ_CHECKSUM;
@@ -886,7 +886,7 @@ static void judge_trial(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now)
     next_candidate(hs, now);
 }
 
-static void next_candidate(d2k_httpsearch *hs, int64_t now) {
+static void next_candidate(d2s_httpsearch *hs, int64_t now) {
     drop_socket(hs);
     hs->cur.sport = 0;
     while(hs->cur.idx>=hs->cur.n_cands) {
@@ -910,14 +910,14 @@ static void next_candidate(d2k_httpsearch *hs, int64_t now) {
     }
     const char *key = hs->cur.cands[hs->cur.idx];
     char text[2048];
-    d2k_hs_job job;
+    d2s_hs_job job;
     fresh_id(hs->cur.plan_id);
     fresh_id(hs->cur.trial);
     hs->cur.applied = 0;
     memset(hs->cur.executions,0,sizeof hs->cur.executions);
     memset(&hs->cur.proof_binding,0,sizeof hs->cur.proof_binding);
     memset(hs->cur.proof_client,0,sizeof hs->cur.proof_client);
-    if (d2k_hs_candidate_text(key, hs->cur.plan_id, text, sizeof text) != 0 ||
+    if (d2s_hs_candidate_text(key, hs->cur.plan_id, text, sizeof text) != 0 ||
         open_job(hs, &job) != 0) {
         say(hs, "HTTP %s: «%s» — сокет зонда не открылся, поиск остановлен", hs->cur.host, key);
         finish(hs,now,"local-abort","probe-build-or-socket");
@@ -936,14 +936,14 @@ static void next_candidate(d2k_httpsearch *hs, int64_t now) {
     hs->cur.deadline = now + HS_ACK_MS;
 }
 
-static void add_cand(d2k_httpsearch *hs, const char *key) {
+static void add_cand(d2s_httpsearch *hs, const char *key) {
     for (size_t i = 0; i < hs->cur.n_cands; i++) { if (!strcmp(hs->cur.cands[i], key)) return; }
     if (hs->cur.n_cands < sizeof hs->cur.cands / sizeof hs->cur.cands[0]) {
         snprintf(hs->cur.cands[hs->cur.n_cands++], sizeof hs->cur.cands[0], "%s", key);
     }
 }
 
-static void build_cands(d2k_httpsearch *hs) {
+static void build_cands(d2s_httpsearch *hs) {
     hs->cur.n_cands = 0;
     hs->cur.idx = 0;
     hs->cur.ok = 0;
@@ -972,7 +972,7 @@ static void build_cands(d2k_httpsearch *hs) {
     hs->cur.next_question=HQ_SPLIT;
 }
 
-static void build_fallback(d2k_httpsearch *hs) {
+static void build_fallback(d2s_httpsearch *hs) {
     add_cand(hs, "split");
     add_cand(hs, "disorder");
     if (hs->n_measured) {
@@ -985,7 +985,7 @@ static void build_fallback(d2k_httpsearch *hs) {
     }
 }
 
-static void start(d2k_httpsearch *hs, const char *host, uint8_t family, const uint8_t *addr,
+static void start(d2s_httpsearch *hs, const char *host, uint8_t family, const uint8_t *addr,
                   int recheck, int64_t now) {
     memset(&hs->cur, 0, sizeof hs->cur);
     hs->cur.cand_idx_seen = (size_t)-1;
@@ -1002,7 +1002,7 @@ static void start(d2k_httpsearch *hs, const char *host, uint8_t family, const ui
     }
     if(context)snprintf(hs->cur.repeat_path,sizeof hs->cur.repeat_path,"%s",context->repeat_path);
     if(context)hs->cur.cut=context->cut;
-    d2k_hs_job job;
+    d2s_hs_job job;
     hs->cur.job_seq = ++hs->job_seq;
     int opened = open_job(hs, &job) == 0;
     job.seq = hs->cur.job_seq;
@@ -1016,7 +1016,7 @@ static void start(d2k_httpsearch *hs, const char *host, uint8_t family, const ui
     /* База — без пробного плана: проба на этом порту не ставилась. */
     hs->cur.sport = 0;
     hs->cur.phase = PH_BASE;
-    hs->cur.deadline = now + (int64_t)d2k_hs_probe_ms * 3;
+    hs->cur.deadline = now + (int64_t)d2s_hs_probe_ms * 3;
     say(hs, "HTTP %s: %s — база: тот же запрос своим зондом без плана", host,
         hs->cur.cut ? (recheck ? "обрыв ответа при подтверждённом плане, перепроверка"
                                : "обрыв ответа без портала — поиск обхода HTTP")
@@ -1024,7 +1024,7 @@ static void start(d2k_httpsearch *hs, const char *host, uint8_t family, const ui
                   : "вставка провайдера, HTTPS у имени нет — поиск обхода HTTP");
 }
 
-static void start_next(d2k_httpsearch *hs, int64_t now) {
+static void start_next(d2s_httpsearch *hs, int64_t now) {
     while (hs->cur.phase == PH_IDLE && hs->n_q) {
         pend p = hs->q[0];
         memmove(hs->q, hs->q + 1, (hs->n_q - 1) * sizeof *hs->q);
@@ -1034,18 +1034,18 @@ static void start_next(d2k_httpsearch *hs, int64_t now) {
     }
 }
 
-static rec *live_owner(d2k_httpsearch *hs,const char *host,uint8_t family,
-    const uint8_t plan_id[16],const d2k_binding_context *binding,uint64_t execution_id,int64_t request_ms) {
+static rec *live_owner(d2s_httpsearch *hs,const char *host,uint8_t family,
+    const uint8_t plan_id[16],const d2s_binding_context *binding,uint64_t execution_id,int64_t request_ms) {
     static const uint8_t no_pending[16];
     if(!hs || !plan_id || !execution_id || request_ms<=0 || !host_ok(host) || (family!=4 && family!=6))return NULL;
     rec *r=rec_find(hs,host,family);
-    if(!r || !r->key[0] || r->revoked || !d2k_binding_equal(&r->binding,binding) ||
+    if(!r || !r->key[0] || r->revoked || !d2s_binding_equal(&r->binding,binding) ||
        memcmp(r->install_id,no_pending,16) || memcmp(r->installed_plan_id,plan_id,16))return NULL;
     return r;
 }
 
-int d2k_httpsearch_bound_failure(d2k_httpsearch *hs, const char *host, uint8_t family,
-                                const uint8_t *addr, const uint8_t plan_id[16], const d2k_binding_context *binding, uint64_t execution_id, int64_t request_ms, const char *path, int64_t now) {
+int d2s_httpsearch_bound_failure(d2s_httpsearch *hs, const char *host, uint8_t family,
+                                const uint8_t *addr, const uint8_t plan_id[16], const d2s_binding_context *binding, uint64_t execution_id, int64_t request_ms, const char *path, int64_t now) {
     if(!addr)return 0;
     rec *r=live_owner(hs,host,family,plan_id,binding,execution_id,request_ms);
     if(!r)return 0;
@@ -1060,16 +1060,16 @@ int d2k_httpsearch_bound_failure(d2k_httpsearch *hs, const char *host, uint8_t f
     if(hs->cur.phase!=PH_IDLE&&hs->cur.family==family&&!strcasecmp(hs->cur.host,host)) {
         drop_probe(hs);finish(hs,now,"cancelled","context-changed");
     }
-    d2k_httpsearch_portal(hs,host,family,addr,now);
+    d2s_httpsearch_portal(hs,host,family,addr,now);
     return 1;
 }
 
-int d2k_httpsearch_control(d2k_httpsearch *hs,const d2k_ev *ev,int64_t now) {
+int d2s_httpsearch_control(d2s_httpsearch *hs,const d2s_ev *ev,int64_t now) {
     if(!hs || !ev)return 0;
-    if(ev->kind==D2K_EV_APPLIED)return d2k_httpsearch_applied(hs,ev);
-    if(ev->kind==D2K_EV_ACK && ev->code==D2K_CMD_SET_NAME_BOUND)
-        d2k_httpsearch_install_ack(hs,ev->trial_id,((ev->num>>8)&0xffu)==1u,&ev->execution_binding);
-    if(ev->kind==D2K_EV_HTTP_RESPONSE && (ev->code==1 || ev->code==2) &&
+    if(ev->kind==D2S_EV_APPLIED)return d2s_httpsearch_applied(hs,ev);
+    if(ev->kind==D2S_EV_ACK && ev->code==D2S_CMD_SET_NAME_BOUND)
+        d2s_httpsearch_install_ack(hs,ev->trial_id,((ev->num>>8)&0xffu)==1u,&ev->execution_binding);
+    if(ev->kind==D2S_EV_HTTP_RESPONSE && (ev->code==1 || ev->code==2) &&
        ev->transport==6 && ev->high_port==80 && ev->live_request_no) {
         static const uint8_t zero[16];
         rec *r=live_owner(hs,ev->name,ev->family,ev->plan_id,&ev->execution_binding,
@@ -1082,15 +1082,15 @@ int d2k_httpsearch_control(d2k_httpsearch *hs,const d2k_ev *ev,int64_t now) {
             ev->code==2?"unknown":"response-complete",(unsigned)ev->live_http_status,(unsigned long long)ev->live_body_bytes);
         return 1;
     }
-    if(ev->kind==D2K_EV_HTTP_RESPONSE && ev->code==4 && ev->transport==6 && ev->high_port==80) {
-        d2k_httpsearch_cut(hs,ev->name,ev->family,ev->high_ip,ev->live_http_path,ev->live_body_bytes,now);
+    if(ev->kind==D2S_EV_HTTP_RESPONSE && ev->code==4 && ev->transport==6 && ev->high_port==80) {
+        d2s_httpsearch_cut(hs,ev->name,ev->family,ev->high_ip,ev->live_http_path,ev->live_body_bytes,now);
         return 1;
     }
-    if(((ev->kind==D2K_EV_HTTP_PORTAL && !ev->code) ||
-        (ev->kind==D2K_EV_HTTP_RESPONSE && ev->code==3)) && ev->transport==6 && ev->high_port==80) {
+    if(((ev->kind==D2S_EV_HTTP_PORTAL && !ev->code) ||
+        (ev->kind==D2S_EV_HTTP_RESPONSE && ev->code==3)) && ev->transport==6 && ev->high_port==80) {
         static const uint8_t zero[16];
         if(!memcmp(ev->trial_id,zero,16))
-            return d2k_httpsearch_bound_failure(hs,ev->name,ev->family,ev->high_ip,ev->plan_id,
+            return d2s_httpsearch_bound_failure(hs,ev->name,ev->family,ev->high_ip,ev->plan_id,
                 &ev->execution_binding,ev->live_execution,ev->live_request_ms,ev->live_http_path,now);
     }
     return 0;
@@ -1101,7 +1101,7 @@ int d2k_httpsearch_control(d2k_httpsearch *hs,const d2k_ev *ev,int64_t now) {
    сообщил ответ с заявленной длиной, вставший раньше конца (код 4). Поиск —
    тем же путём, что у портала, но база и кандидаты мерят ресурс клиента, и
    «не взят» значит обрыв тела, а успех — два полных тела подряд. */
-void d2k_httpsearch_cut(d2k_httpsearch *hs, const char *host, uint8_t family,
+void d2s_httpsearch_cut(d2s_httpsearch *hs, const char *host, uint8_t family,
                         const uint8_t *addr, const char *path, uint64_t got, int64_t now) {
     if (!hs || !addr || (family != 4 && family != 6) || !host_ok(host)) { return; }
     if (!hs_path_ok(path)) {
@@ -1118,10 +1118,10 @@ void d2k_httpsearch_cut(d2k_httpsearch *hs, const char *host, uint8_t family,
     r->repro_gap = 0;
     say(hs, "HTTP %s: обрыв ответа на %s после %llu байт тела — до заявленной длины не дошло",
         host, path, (unsigned long long)got);
-    d2k_httpsearch_portal(hs, host, family, addr, now);
+    d2s_httpsearch_portal(hs, host, family, addr, now);
 }
 
-void d2k_httpsearch_portal(d2k_httpsearch *hs, const char *host, uint8_t family,
+void d2s_httpsearch_portal(d2s_httpsearch *hs, const char *host, uint8_t family,
                            const uint8_t *addr, int64_t now) {
     if (!hs || !addr || (family != 4 && family != 6) || !host_ok(host)) { return; }
     if (hs->cur.phase != PH_IDLE && hs->cur.family == family && !strcasecmp(hs->cur.host, host)) {
@@ -1153,7 +1153,7 @@ void d2k_httpsearch_portal(d2k_httpsearch *hs, const char *host, uint8_t family,
     memcpy(p->addr, addr, family == 6 ? 16 : 4);
 }
 
-void d2k_httpsearch_ack(d2k_httpsearch *hs, const uint8_t trial[16], int ok, int64_t now) {
+void d2s_httpsearch_ack(d2s_httpsearch *hs, const uint8_t trial[16], int ok, int64_t now) {
     if (!hs || hs->cur.phase != PH_ACK || memcmp(trial, hs->cur.trial, 16) != 0) { return; }
     const char *key = hs->cur.cands[hs->cur.idx];
     if (!ok) {
@@ -1166,7 +1166,7 @@ void d2k_httpsearch_ack(d2k_httpsearch *hs, const uint8_t trial[16], int ok, int
         next_candidate(hs, now);
         return;
     }
-    d2k_hs_job job;
+    d2s_hs_job job;
     memset(&job, 0, sizeof job);
     hs->cur.job_seq = ++hs->job_seq;
     job.seq = hs->cur.job_seq;
@@ -1183,23 +1183,23 @@ void d2k_httpsearch_ack(d2k_httpsearch *hs, const uint8_t trial[16], int ok, int
         return;
     }
     hs->cur.phase = PH_RUN;
-    hs->cur.deadline = now + (int64_t)d2k_hs_probe_ms * 3;
+    hs->cur.deadline = now + (int64_t)d2s_hs_probe_ms * 3;
 }
 
-int d2k_httpsearch_applied(d2k_httpsearch *hs, const d2k_ev *ev) {
-    if (!hs || !ev || ev->kind!=D2K_EV_APPLIED ||
+int d2s_httpsearch_applied(d2s_httpsearch *hs, const d2s_ev *ev) {
+    if (!hs || !ev || ev->kind!=D2S_EV_APPLIED ||
         (hs->cur.phase != PH_RUN && hs->cur.phase != PH_APPLIED) ||
         ev->transport!=6 || ev->family!=hs->cur.family || !ev->execution_id ||
         memcmp(ev->plan_id,hs->cur.plan_id,16) || memcmp(ev->trial_id,hs->cur.trial,16) ||
-        !d2k_binding_known(&ev->execution_binding) ||
-        ev->execution_binding.kind!=D2K_BIND_NAME || !ev->execution_binding.temporary ||
-        ev->execution_binding.family!=hs->cur.family || ev->execution_binding.shape!=D2K_PLAN_SHAPE_HTTP) return 0;
+        !d2s_binding_known(&ev->execution_binding) ||
+        ev->execution_binding.kind!=D2S_BIND_NAME || !ev->execution_binding.temporary ||
+        ev->execution_binding.family!=hs->cur.family || ev->execution_binding.shape!=D2S_PLAN_SHAPE_HTTP) return 0;
     size_t n=hs->cur.family==6?16:4;
     const uint8_t *client=NULL;
     if(ev->high_port==80 && ev->low_port==hs->cur.proof_sport && !memcmp(ev->high_ip,hs->cur.addr,n))client=ev->low_ip;
     else if(ev->low_port==80 && ev->high_port==hs->cur.proof_sport && !memcmp(ev->low_ip,hs->cur.addr,n))client=ev->high_ip;
     if(!client)return 0;
-    if(hs->cur.applied && (!d2k_binding_equal(&hs->cur.proof_binding,&ev->execution_binding) ||
+    if(hs->cur.applied && (!d2s_binding_equal(&hs->cur.proof_binding,&ev->execution_binding) ||
                            memcmp(client,hs->cur.proof_client,n)))return 0;
     for(int i=0;i<hs->cur.applied;i++)if(hs->cur.executions[i]==ev->execution_id)return 0;
     if(hs->cur.applied>=2)return 0;
@@ -1207,13 +1207,13 @@ int d2k_httpsearch_applied(d2k_httpsearch *hs, const d2k_ev *ev) {
     memcpy(hs->cur.proof_client,client,n);
     hs->cur.executions[hs->cur.applied++]=ev->execution_id;
     if (hs->cur.phase == PH_APPLIED && trial_executed(hs,&hs->cur.pending)) {
-        d2k_hs_result r = hs->cur.pending;
+        d2s_hs_result r = hs->cur.pending;
         judge_trial(hs, &r, hs->cur.deadline - HS_APPLIED_MS);
     }
     return 1;
 }
 
-void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t now) {
+void d2s_httpsearch_result(d2s_httpsearch *hs, const d2s_hs_result *r, int64_t now) {
     if (!hs || !r) { return; }
     if ((hs->cur.phase != PH_BASE && hs->cur.phase != PH_RUN) || r->seq != hs->cur.job_seq) {
         /* Ответ не текущего запуска (ревью M-7): не судит опыт; его сокет
@@ -1229,7 +1229,7 @@ void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t n
            а свой запрос роутера — тишину. Тишина на свой GET — та же
            блокировка в другой форме, а не «блока нет»: поиск начинается.
            Успех кандидата по-прежнему — только полный ответ под планом. */
-        if (!hs->cur.cut && r->answer == D2K_HS_SILENT) {
+        if (!hs->cur.cut && r->answer == D2S_HS_SILENT) {
             build_cands(hs);
             say(hs, "HTTP %s: база — тишина на свой запрос после заглушки у клиента: "
                     "блокировка в другой форме; своих планов %zu, затем вопросы разреза "
@@ -1237,7 +1237,7 @@ void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t n
             next_candidate(hs, now);
             return;
         }
-        if (r->answer == (hs->cur.cut ? D2K_HS_CUT : D2K_HS_INJECTED)) {
+        if (r->answer == (hs->cur.cut ? D2S_HS_CUT : D2S_HS_INJECTED)) {
             build_cands(hs);
             say(hs, "HTTP %s: база — %s воспроизведён%s; своих планов %zu, затем вопросы разреза и checksum-приманки",
                 hs->cur.host, hs->cur.cut ? "обрыв тела ответа" : "вставка провайдера",
@@ -1260,8 +1260,8 @@ void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t n
            вердиктом «не воспроизводится», которого никто не измерял.
            Повторяем базу; повторная тишина — сигнал, и поиск начинается
            (ниже, тем же правилом, что у портала). */
-        if (r->answer == D2K_HS_SILENT && hs->cur.cut &&
-            hs->cur.base_retries >= D2K_HS_BASE_RETRIES) {
+        if (r->answer == D2S_HS_SILENT && hs->cur.cut &&
+            hs->cur.base_retries >= D2S_HS_BASE_RETRIES) {
             build_cands(hs);
             say(hs, "HTTP %s: база — тишина на свой запрос ДВАЖДЫ при обрыве у "
                     "клиента: ответа нет вовсе, значит это отсутствие замера, а не "
@@ -1270,45 +1270,45 @@ void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t n
             next_candidate(hs, now);
             return;
         }
-        if ((r->answer == D2K_HS_CONNECT_FAIL ||
-             (r->answer == D2K_HS_SILENT && hs->cur.cut)) &&
-            hs->cur.base_retries < D2K_HS_BASE_RETRIES) {
+        if ((r->answer == D2S_HS_CONNECT_FAIL ||
+             (r->answer == D2S_HS_SILENT && hs->cur.cut)) &&
+            hs->cur.base_retries < D2S_HS_BASE_RETRIES) {
             hs->cur.base_retries++;
-            d2k_hs_job job;
+            d2s_hs_job job;
             hs->cur.job_seq = ++hs->job_seq;
             int opened = open_job(hs, &job) == 0;
             job.seq = hs->cur.job_seq;
             if (opened && hs->ops.start_probe && hs->ops.start_probe(hs->ops.ctx, &job) == 0) {
                 hs->cur.sport = 0;
                 hs->cur.phase = PH_BASE;
-                hs->cur.deadline = now + (int64_t)d2k_hs_probe_ms * 3;
+                hs->cur.deadline = now + (int64_t)d2s_hs_probe_ms * 3;
                 say(hs, "HTTP %s: база — %s (попытка %d из %d): ответа о коробке "
                         "здесь нет — повторяю базу", hs->cur.host,
-                    r->answer == D2K_HS_SILENT ? "тишина на свой запрос"
+                    r->answer == D2S_HS_SILENT ? "тишина на свой запрос"
                                                : "соединение своего зонда не установилось",
-                    hs->cur.base_retries + 1, D2K_HS_BASE_RETRIES + 1);
+                    hs->cur.base_retries + 1, D2S_HS_BASE_RETRIES + 1);
                 return;
             }
             drop_socket(hs);
         }
         rec *rr = rec_get(hs, hs->cur.host, hs->cur.family);
-        int local = r->answer == D2K_HS_CONNECT_FAIL;
+        int local = r->answer == D2S_HS_CONNECT_FAIL;
         if (rr) {
-            rr->no_before_ms = now + (local ? D2K_HS_INCONCLUSIVE_MS : D2K_HS_RECHECK_MS);
+            rr->no_before_ms = now + (local ? D2S_HS_INCONCLUSIVE_MS : D2S_HS_RECHECK_MS);
         }
         if (local) {
             say(hs, "HTTP %s: база не измерена — соединение своего зонда не "
                     "установилось %d раза подряд; о коробке это не говорит ничего, "
                     "повтор не раньше чем через %lld мин", hs->cur.host,
-                D2K_HS_BASE_RETRIES + 1, (long long)(D2K_HS_INCONCLUSIVE_MS / 60000));
+                D2S_HS_BASE_RETRIES + 1, (long long)(D2S_HS_INCONCLUSIVE_MS / 60000));
             finish(hs,now,"inconclusive","baseline-local-failure");
             return;
         }
         say(hs, "HTTP %s: база — %s%s%s: %s с роутера не воспроизводится, поиск HTTP "
                 "не начат (подозрение не равно блокировке)", hs->cur.host,
-            d2k_hs_answer_name(r->answer), r->status[0] ? ", " : "", r->status,
+            d2s_hs_answer_name(r->answer), r->status[0] ? ", " : "", r->status,
             hs->cur.cut ? "обрыв" : "вставка");
-        finish(hs,now,r->answer==D2K_HS_REAL && r->complete_responses>=2 ?
+        finish(hs,now,r->answer==D2S_HS_REAL && r->complete_responses>=2 ?
             "probe-direct":"inconclusive","baseline-not-reproduced");
         return;
     }
@@ -1321,7 +1321,7 @@ void d2k_httpsearch_result(d2k_httpsearch *hs, const d2k_hs_result *r, int64_t n
     hs->cur.deadline = now + HS_APPLIED_MS;
 }
 
-void d2k_httpsearch_tick(d2k_httpsearch *hs, int64_t now) {
+void d2s_httpsearch_tick(d2s_httpsearch *hs, int64_t now) {
     if (!hs || hs->cur.phase == PH_IDLE || now < hs->cur.deadline) { return; }
     switch (hs->cur.phase) {
     case PH_ACK:
@@ -1333,7 +1333,7 @@ void d2k_httpsearch_tick(d2k_httpsearch *hs, int64_t now) {
         next_candidate(hs, now);
         break;
     case PH_APPLIED: {
-        d2k_hs_result r = hs->cur.pending;
+        d2s_hs_result r = hs->cur.pending;
         judge_trial(hs, &r, now);
         break;
     }
@@ -1353,7 +1353,7 @@ void d2k_httpsearch_tick(d2k_httpsearch *hs, int64_t now) {
     }
 }
 
-void d2k_httpsearch_push_all(d2k_httpsearch *hs) {
+void d2s_httpsearch_push_all(d2s_httpsearch *hs) {
     if (!hs || !hs->ops.set_plan) { return; }
     for (size_t i = 0; i < hs->n_recs; i++) {
         rec *r = &hs->recs[i];
@@ -1362,13 +1362,13 @@ void d2k_httpsearch_push_all(d2k_httpsearch *hs) {
         uint8_t id[16];
         char text[2048];
         stable_id(r->key, id);
-        if (d2k_hs_candidate_text(r->key, id, text, sizeof text) == 0) {
+        if (d2s_hs_candidate_text(r->key, id, text, sizeof text) == 0) {
             (void)install(hs,r,text,id,mono_ms());
         }
     }
 }
 
-int d2k_httpsearch_save(d2k_httpsearch *hs, const char *path, int64_t wall_s,
+int d2s_httpsearch_save(d2s_httpsearch *hs, const char *path, int64_t wall_s,
                         char *err, size_t cap) {
     if (!hs || !path) { return -1; }
     char tmp[1100];
@@ -1378,7 +1378,7 @@ int d2k_httpsearch_save(d2k_httpsearch *hs, const char *path, int64_t wall_s,
     }
     FILE *f = fopen(tmp, "w");
     if (!f) { snprintf(err, cap, "%s: %s", tmp, strerror(errno)); return -1; }
-    fprintf(f, "d2k-http-plans 1\n");
+    fprintf(f, "d2s-http-plans 1\n");
     for (size_t i = 0; i < hs->n_recs; i++) {
         rec *r = &hs->recs[i];
         if (!r->key[0] || r->revoked) { continue; }
@@ -1397,7 +1397,7 @@ int d2k_httpsearch_save(d2k_httpsearch *hs, const char *path, int64_t wall_s,
     return 0;
 }
 
-int d2k_httpsearch_load(d2k_httpsearch *hs, const char *path, size_t *n_loaded,
+int d2s_httpsearch_load(d2s_httpsearch *hs, const char *path, size_t *n_loaded,
                         char *err, size_t cap) {
     if (n_loaded) { *n_loaded = 0; }
     if (!hs || !path) { return -1; }
@@ -1408,9 +1408,9 @@ int d2k_httpsearch_load(d2k_httpsearch *hs, const char *path, size_t *n_loaded,
         return -1;
     }
     char line[512];
-    if (!fgets(line, sizeof line, f) || strcmp(line, "d2k-http-plans 1\n") != 0) {
+    if (!fgets(line, sizeof line, f) || strcmp(line, "d2s-http-plans 1\n") != 0) {
         fclose(f);
-        snprintf(err, cap, "%s: не планы HTTP d2k (нет заголовка «d2k-http-plans 1»)", path);
+        snprintf(err, cap, "%s: не планы HTTP d2s (нет заголовка «d2s-http-plans 1»)", path);
         return -1;
     }
     while (fgets(line, sizeof line, f)) {
@@ -1429,7 +1429,7 @@ int d2k_httpsearch_load(d2k_httpsearch *hs, const char *path, size_t *n_loaded,
         uint8_t id[16];
         char text[2048];
         stable_id(key, id);
-        if (d2k_hs_candidate_text(key, id, text, sizeof text) == 0 && hs->ops.set_plan) {
+        if (d2s_hs_candidate_text(key, id, text, sizeof text) == 0 && hs->ops.set_plan) {
             (void)install(hs,r,text,id,mono_ms());
         }
         if (n_loaded) { (*n_loaded)++; }
@@ -1440,19 +1440,19 @@ int d2k_httpsearch_load(d2k_httpsearch *hs, const char *path, size_t *n_loaded,
 
 /* --- рабочий поток ------------------------------------------------------------ */
 
-struct d2k_hs_runner {
+struct d2s_hs_runner {
     pthread_mutex_t mu;
     pthread_t th;
     int running, joinable, ready;
-    d2k_hs_job job;
-    d2k_hs_result res;
+    d2s_hs_job job;
+    d2s_hs_result res;
     int wake[2];
 };
 
 static void *runner_main(void *arg) {
-    d2k_hs_runner *r = arg;
-    d2k_hs_result res;
-    d2k_hs_probe_run(&r->job, &res);
+    d2s_hs_runner *r = arg;
+    d2s_hs_result res;
+    d2s_hs_probe_run(&r->job, &res);
     pthread_mutex_lock(&r->mu);
     r->res = res;
     r->ready = 1;
@@ -1463,12 +1463,12 @@ static void *runner_main(void *arg) {
     return NULL;
 }
 
-d2k_hs_runner *d2k_hs_runner_new(void) {
-    d2k_hs_runner *r = calloc(1, sizeof *r);
+d2s_hs_runner *d2s_hs_runner_new(void) {
+    d2s_hs_runner *r = calloc(1, sizeof *r);
     if (!r) { return NULL; }
     /* `< 0`, а не `!= 0`: системный pipe на MIPS возвращает первый дескриптор
        в v0 (второй в v1), и обёртка musl отдаёт это значение как есть — успех
-       там положительный. Та же ловушка разобрана у d2k_sched_new (sched.c);
+       там положительный. Та же ловушка разобрана у d2s_sched_new (sched.c);
        проверка — test_mips_pipe. */
     if (pipe(r->wake) < 0) { free(r); return NULL; }
     for (int i = 0; i < 2; i++) {
@@ -1479,7 +1479,7 @@ d2k_hs_runner *d2k_hs_runner_new(void) {
     return r;
 }
 
-void d2k_hs_runner_free(d2k_hs_runner *r) {
+void d2s_hs_runner_free(d2s_hs_runner *r) {
     if (!r) { return; }
     if (r->joinable) { pthread_join(r->th, NULL); }
     close(r->wake[0]);
@@ -1488,9 +1488,9 @@ void d2k_hs_runner_free(d2k_hs_runner *r) {
     free(r);
 }
 
-int d2k_hs_runner_wake_fd(const d2k_hs_runner *r) { return r ? r->wake[0] : -1; }
+int d2s_hs_runner_wake_fd(const d2s_hs_runner *r) { return r ? r->wake[0] : -1; }
 
-int d2k_hs_runner_start(d2k_hs_runner *r, const d2k_hs_job *job) {
+int d2s_hs_runner_start(d2s_hs_runner *r, const d2s_hs_job *job) {
     if (!r || !job) { return -1; }
     pthread_mutex_lock(&r->mu);
     int busy = r->running;
@@ -1505,7 +1505,7 @@ int d2k_hs_runner_start(d2k_hs_runner *r, const d2k_hs_job *job) {
     return 0;
 }
 
-int d2k_hs_runner_done(d2k_hs_runner *r, d2k_hs_result *out) {
+int d2s_hs_runner_done(d2s_hs_runner *r, d2s_hs_result *out) {
     if (!r || !out) { return 0; }
     char drain[16];
     while (read(r->wake[0], drain, sizeof drain) > 0) { }

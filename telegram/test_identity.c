@@ -16,7 +16,7 @@ static void bytes(const char *path, unsigned char out[88]) {
     assert(fclose(f) == 0);
 }
 int main(void) {
-    char dir[] = "/tmp/d2k-identity-XXXXXX", path[256], link[256];
+    char dir[] = "/tmp/d2s-identity-XXXXXX", path[256], link[256];
     unsigned char before[88], after[88];
     tg_identity first, second;
     assert(mkdtemp(dir));

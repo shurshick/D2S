@@ -75,7 +75,7 @@ done:
 }
 
 static int identity_error(const char *path, const char *reason, int reset) {
-    fprintf(stderr, "d2ktg: %s: %s. ", path, reason);
+    fprintf(stderr, "d2stg: %s: %s. ", path, reason);
     if (reset)
         fprintf(stderr, "Восстановите файл из резервной копии или удалите его для новой регистрации (install_id изменится).\n");
     else

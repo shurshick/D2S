@@ -4,25 +4,25 @@
  * исполнитель разреза CRYPTO обязан отказать на первой датаграмме — имени
  * в ней нет, а такой разрез никто не мерил.
  *
- * Только для тестов: собирается модулем провода (d2k_quicwire.h) с общим
+ * Только для тестов: собирается модулем провода (d2s_quicwire.h) с общим
  * DCID, номера пакетов 0 и 1, каждая датаграмма добита до 1200 байт. */
-#ifndef D2K_TEST_QUIC_PQ_H
-#define D2K_TEST_QUIC_PQ_H
+#ifndef D2S_TEST_QUIC_PQ_H
+#define D2S_TEST_QUIC_PQ_H
 
 #include <stdint.h>
 #include <string.h>
-#include "d2k_quicwire.h"
+#include "d2s_quicwire.h"
 
-#define D2K_TEST_PQ_CUT 1000u /* где кончается CRYPTO первой датаграммы */
+#define D2S_TEST_PQ_CUT 1000u /* где кончается CRYPTO первой датаграммы */
 
 /* sni_first — server_name ПЕРВЫМ, key_share последним: Chrome переставляет
    расширения, и имя бывает в первой датаграмме при неполном приветствии. */
-static inline size_t d2k_test_pq_hello_order(uint8_t *ch, size_t cap, const char *name,
+static inline size_t d2s_test_pq_hello_order(uint8_t *ch, size_t cap, const char *name,
                                       int sni_first);
-static inline size_t d2k_test_pq_hello(uint8_t *ch, size_t cap, const char *name) {
-    return d2k_test_pq_hello_order(ch, cap, name, 0);
+static inline size_t d2s_test_pq_hello(uint8_t *ch, size_t cap, const char *name) {
+    return d2s_test_pq_hello_order(ch, cap, name, 0);
 }
-static inline size_t d2k_test_pq_hello_order(uint8_t *ch, size_t cap, const char *name,
+static inline size_t d2s_test_pq_hello_order(uint8_t *ch, size_t cap, const char *name,
                                       int sni_first) {
     size_t m = strlen(name), n = 0;
     size_t ks = 1220; /* key_share X25519MLKEM768: 1216 байт ключа + заголовки */
@@ -56,17 +56,17 @@ static inline size_t d2k_test_pq_hello_order(uint8_t *ch, size_t cap, const char
 }
 
 /* Одна Initial-датаграмма с кадром CRYPTO [off, off+len), добитая до 1200. */
-static inline size_t d2k_test_pq_dgram(const uint8_t dcid[8], uint64_t pn, uint64_t off,
+static inline size_t d2s_test_pq_dgram(const uint8_t dcid[8], uint64_t pn, uint64_t off,
                                 const uint8_t *data, size_t len, uint8_t *out, size_t cap) {
     uint8_t sec[32], body[1200], hdr[64];
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(D2K_QW_V1, dcid, 8, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(D2K_QW_V1, sec, &k) != 0) return 0;
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(D2S_QW_V1, dcid, 8, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(D2S_QW_V1, sec, &k) != 0) return 0;
     size_t b = 0;
     memset(body, 0, sizeof body);
     body[b++] = 0x06;
-    b += d2k_qw_varint_write(body + b, sizeof body - b, off);
-    b += d2k_qw_varint_write(body + b, sizeof body - b, len);
+    b += d2s_qw_varint_write(body + b, sizeof body - b, off);
+    b += d2s_qw_varint_write(body + b, sizeof body - b, len);
     if (b + len > sizeof body) return 0;
     memcpy(body + b, data, len);
     b += len;
@@ -75,35 +75,35 @@ static inline size_t d2k_test_pq_dgram(const uint8_t dcid[8], uint64_t pn, uint6
     size_t plain = 1200 - 46;
     if (b > plain) return 0;
     static const uint8_t scid[8] = {7, 7, 7, 7, 7, 7, 7, 7};
-    size_t hl = d2k_qw_long_hdr(hdr, sizeof hdr, D2K_QW_V1, D2K_QW_LT_INITIAL, dcid, 8,
+    size_t hl = d2s_qw_long_hdr(hdr, sizeof hdr, D2S_QW_V1, D2S_QW_LT_INITIAL, dcid, 8,
                                 scid, 8, 4, plain);
     if (!hl) return 0;
-    return d2k_qw_seal(&k, 1, hdr, hl, pn, 4, body, plain, out, cap);
+    return d2s_qw_seal(&k, 1, hdr, hl, pn, 4, body, plain, out, cap);
 }
 
-static inline int d2k_test_pq_initials_order(const char *name, int sni_first,
+static inline int d2s_test_pq_initials_order(const char *name, int sni_first,
                                       uint8_t *d1, size_t *l1,
                                       uint8_t *d2, size_t *l2);
 /* Обе датаграммы: первая без имени, вторая с ним. 0 — собрано. */
-static inline int d2k_test_pq_initials(const char *name, uint8_t *d1, size_t *l1,
+static inline int d2s_test_pq_initials(const char *name, uint8_t *d1, size_t *l1,
                                 uint8_t *d2, size_t *l2) {
-    return d2k_test_pq_initials_order(name, 0, d1, l1, d2, l2);
+    return d2s_test_pq_initials_order(name, 0, d1, l1, d2, l2);
 }
 /* Имя в ПЕРВОЙ датаграмме, приветствие целиком — только с обеими. */
-static inline int d2k_test_pq_initials_sni_first(const char *name, uint8_t *d1, size_t *l1,
+static inline int d2s_test_pq_initials_sni_first(const char *name, uint8_t *d1, size_t *l1,
                                           uint8_t *d2, size_t *l2) {
-    return d2k_test_pq_initials_order(name, 1, d1, l1, d2, l2);
+    return d2s_test_pq_initials_order(name, 1, d1, l1, d2, l2);
 }
-static inline int d2k_test_pq_initials_order(const char *name, int sni_first,
+static inline int d2s_test_pq_initials_order(const char *name, int sni_first,
                                       uint8_t *d1, size_t *l1,
                                       uint8_t *d2, size_t *l2) {
     static const uint8_t dcid[8] = {0xd1, 0x2a, 3, 4, 5, 6, 7, 8};
     uint8_t ch[2048];
-    size_t chl = d2k_test_pq_hello_order(ch, sizeof ch, name, sni_first);
-    if (chl <= D2K_TEST_PQ_CUT) return -1;
-    *l1 = d2k_test_pq_dgram(dcid, 0, 0, ch, D2K_TEST_PQ_CUT, d1, 1500);
-    *l2 = d2k_test_pq_dgram(dcid, 1, D2K_TEST_PQ_CUT, ch + D2K_TEST_PQ_CUT,
-                            chl - D2K_TEST_PQ_CUT, d2, 1500);
+    size_t chl = d2s_test_pq_hello_order(ch, sizeof ch, name, sni_first);
+    if (chl <= D2S_TEST_PQ_CUT) return -1;
+    *l1 = d2s_test_pq_dgram(dcid, 0, 0, ch, D2S_TEST_PQ_CUT, d1, 1500);
+    *l2 = d2s_test_pq_dgram(dcid, 1, D2S_TEST_PQ_CUT, ch + D2S_TEST_PQ_CUT,
+                            chl - D2S_TEST_PQ_CUT, d2, 1500);
     return (*l1 && *l2) ? 0 : -1;
 }
 

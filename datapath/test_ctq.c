@@ -1,4 +1,4 @@
-/* test_ctq.c — запрос счётчиков conntrack по кортежу (d2k_ctq.h).
+/* test_ctq.c — запрос счётчиков conntrack по кортежу (d2s_ctq.h).
  *
  * 1. Запрос CT_GET собран по формату ядра (байты сверены с тем, что принял
  *    и на что ответил ctnetlink роутера KN-1811 04.10.2026).
@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
-#include "d2k_ctq.h"
+#include "d2s_ctq.h"
 
 static int fails;
 #define CHECK(c, m) do { if (!(c)) { printf("ПРОВАЛ: %s\n", m); fails++; } } while (0)
@@ -36,7 +36,7 @@ static double now_ms(void) {
 }
 
 int main(void) {
-    d2k_ct_tuple t;
+    d2s_ct_tuple t;
     memset(&t, 0, sizeof t);
     t.family = 4; t.proto = 17;
     inet_pton(AF_INET, "192.168.1.67", t.src);
@@ -46,7 +46,7 @@ int main(void) {
 
     /* 1. Запрос. */
     uint8_t req[128], want[128];
-    size_t n = d2k_ct_get_req(req, sizeof req, 7, &t);
+    size_t n = d2s_ct_get_req(req, sizeof req, 7, &t);
     size_t wn = unhex("48000000" "0101" "0100" "07000000" "00000000"  /* nlmsghdr */
                       "02000000"                                       /* nfgenmsg AF_INET */
                       "34000180"                                       /* CTA_TUPLE_ORIG */
@@ -56,7 +56,7 @@ int main(void) {
                       want, sizeof want);
     CHECK(n == 72 && n == wn && memcmp(req, want, n) == 0,
           "запрос CT_GET собран не так, как его принимает ядро");
-    CHECK(d2k_ct_get_req(req, 40, 7, &t) == 0, "запрос в маленький буфер собрался");
+    CHECK(d2s_ct_get_req(req, 40, 7, &t) == 0, "запрос в маленький буфер собрался");
 
     /* 2. Ответ ядра роутера (обрезан до счётчиков и статуса). */
     uint8_t rsp[400];
@@ -70,15 +70,15 @@ int main(void) {
     /* Длина сообщения — по собранному. */
     rsp[0] = (uint8_t)rn; rsp[1] = (uint8_t)(rn >> 8);
     uint64_t o = 0, r = 0;
-    CHECK(d2k_ct_counters_parse(rsp, rn, 7, &o, &r) == 0 && o == 14 && r == 7,
+    CHECK(d2s_ct_counters_parse(rsp, rn, 7, &o, &r) == 0 && o == 14 && r == 7,
           "ответ ядра со счётчиками не разобран (ждали 14/7)");
-    CHECK(d2k_ct_counters_parse(rsp, rn, 8, &o, &r) == -1, "ответ на чужой запрос принят");
+    CHECK(d2s_ct_counters_parse(rsp, rn, 8, &o, &r) == -1, "ответ на чужой запрос принят");
     /* Без счётчиков (accounting выключен) — не знаем. */
     {
         uint8_t no[64];
         memcpy(no, rsp, 20);
         no[0] = 20; no[1] = 0;
-        CHECK(d2k_ct_counters_parse(no, 20, 7, &o, &r) == 2, "запись без счётчиков дала числа");
+        CHECK(d2s_ct_counters_parse(no, 20, 7, &o, &r) == 2, "запись без счётчиков дала числа");
     }
     /* 3. Ошибка ядра: записи нет (-ENOENT). */
     {
@@ -88,7 +88,7 @@ int main(void) {
         er[8] = 9;             /* seq */
         int32_t e = -2;
         memcpy(er + 16, &e, 4);
-        CHECK(d2k_ct_counters_parse(er, 36, 9, &o, &r) == 1, "ошибка ядра не распознана");
+        CHECK(d2s_ct_counters_parse(er, 36, 9, &o, &r) == 1, "ошибка ядра не распознана");
     }
 
     /* 4. Неотвечающий сокет: возврат сразу, без ожидания. */
@@ -97,7 +97,7 @@ int main(void) {
     fcntl(sv[0], F_SETFL, fcntl(sv[0], F_GETFL, 0) | O_NONBLOCK);
     double a = now_ms();
     for (int i = 0; i < 100; i++) {
-        CHECK(d2k_ct_query_fd(sv[0], (uint32_t)(100 + i), &t, &o, &r) == -1,
+        CHECK(d2s_ct_query_fd(sv[0], (uint32_t)(100 + i), &t, &o, &r) == -1,
               "молчащий сокет дал счётчики");
         char drain[256];
         while (recv(sv[1], drain, sizeof drain, MSG_DONTWAIT) > 0) { }
@@ -114,10 +114,10 @@ int main(void) {
         mine[8] = 200; mine[9] = mine[10] = mine[11] = 0;
         CHECK(send(sv[1], mine, rn, 0) == (ssize_t)rn, "mine send");
         o = r = 0;
-        CHECK(d2k_ct_query_fd(sv[0], 200, &t, &o, &r) == 0 && o == 14 && r == 7,
+        CHECK(d2s_ct_query_fd(sv[0], 200, &t, &o, &r) == 0 && o == 14 && r == 7,
               "свой ответ за устаревшим чужим не найден");
     }
-    /* Запись без счётчиков (accounting выключен) — свой код: d2kd скажет об
+    /* Запись без счётчиков (accounting выключен) — свой код: d2sd скажет об
        этом один раз (раунд 4, M-n2). */
     {
         uint8_t no[64];
@@ -125,10 +125,10 @@ int main(void) {
         no[0] = 20; no[1] = 0;
         no[8] = 201; no[9] = no[10] = no[11] = 0;
         CHECK(send(sv[1], no, 20, 0) == 20, "no-acct send");
-        CHECK(d2k_ct_query_fd(sv[0], 201, &t, &o, &r) == 2, "запись без счётчиков не отличена");
+        CHECK(d2s_ct_query_fd(sv[0], 201, &t, &o, &r) == 2, "запись без счётчиков не отличена");
     }
     close(sv[0]); close(sv[1]);
-    CHECK(d2k_ct_query_fd(-1, 1, &t, &o, &r) == -1, "запрос без сокета");
+    CHECK(d2s_ct_query_fd(-1, 1, &t, &o, &r) == -1, "запрос без сокета");
 
     /* 5. Раунд 4, N2: проба доступности при старте. Ответ ядра на GET
        несуществующей записи: ENOENT — ctnetlink есть; EOPNOTSUPP,
@@ -150,7 +150,7 @@ int main(void) {
             memcpy(er + 8, &seq, 4);
             memcpy(er + 16, &cases[i].err, 4);
             CHECK(send(p[1], er, sizeof er, 0) == (ssize_t)sizeof er, "err send");
-            int got = d2k_ct_probe_fd(p[0], 77, 50);
+            int got = d2s_ct_probe_fd(p[0], 77, 50);
             if (got != cases[i].want) {
                 printf("ПРОВАЛ: проба при %s дала %d\n", cases[i].what, got); fails++;
             }
@@ -161,10 +161,10 @@ int main(void) {
         CHECK(socketpair(AF_UNIX, SOCK_DGRAM, 0, p) == 0, "socketpair");
         fcntl(p[0], F_SETFL, fcntl(p[0], F_GETFL, 0) | O_NONBLOCK);
         double a0 = now_ms();
-        CHECK(d2k_ct_probe_fd(p[0], 78, 50) == 0, "молчание ядра принято за доступный ctnetlink");
+        CHECK(d2s_ct_probe_fd(p[0], 78, 50) == 0, "молчание ядра принято за доступный ctnetlink");
         CHECK(now_ms() - a0 < 500.0, "проба ждала дольше своего срока");
         close(p[0]); close(p[1]);
-        CHECK(d2k_ct_probe_fd(-1, 1, 50) == 0, "проба без сокета");
+        CHECK(d2s_ct_probe_fd(-1, 1, 50) == 0, "проба без сокета");
     }
 
     /* 6. Задача 56: TCP — счётчики и СОСТОЯНИЕ одним ответом. Ответ ядра
@@ -184,15 +184,15 @@ int main(void) {
             "0000000000000008000100000000000c000200000000000000000005000300000000000500040000000000050"
             "005000000000008000c008acddbed08000b0000000002", tr, sizeof tr);
         CHECK(tn == 372, "фикстура TCP-ответа ядра собрана не той длины");
-        d2k_ct_info ti;
+        d2s_ct_info ti;
         memset(&ti, 0xee, sizeof ti);
-        CHECK(d2k_ct_info_parse(tr, tn, 7, &ti) == 0 && ti.orig_pkts == 12 && ti.reply_pkts == 1,
+        CHECK(d2s_ct_info_parse(tr, tn, 7, &ti) == 0 && ti.orig_pkts == 12 && ti.reply_pkts == 1,
               "TCP-ответ ядра: счётчики не разобраны (ждали 12/1)");
-        CHECK(ti.tcp_state_known && ti.tcp_state == D2K_CT_TCP_ESTABLISHED,
+        CHECK(ti.tcp_state_known && ti.tcp_state == D2S_CT_TCP_ESTABLISHED,
               "TCP-ответ ядра: состояние ESTABLISHED не прочитано");
         /* У UDP-ответа состояния TCP нет — «не сказано», а не ESTABLISHED. */
         memset(&ti, 0xee, sizeof ti);
-        CHECK(d2k_ct_info_parse(rsp, rn, 7, &ti) == 0 && !ti.tcp_state_known,
+        CHECK(d2s_ct_info_parse(rsp, rn, 7, &ti) == 0 && !ti.tcp_state_known,
               "у записи без CTA_PROTOINFO выдумано состояние TCP");
         /* Неотвечающий сокет: и этот запрос не ждёт. */
         int q[2];
@@ -200,7 +200,7 @@ int main(void) {
         fcntl(q[0], F_SETFL, fcntl(q[0], F_GETFL, 0) | O_NONBLOCK);
         double b = now_ms();
         for (int i = 0; i < 100; i++) {
-            CHECK(d2k_ct_query_info_fd(q[0], (uint32_t)(300 + i), &t, &ti) == -1,
+            CHECK(d2s_ct_query_info_fd(q[0], (uint32_t)(300 + i), &t, &ti) == -1,
                   "молчащий сокет дал состояние");
             char drain[256];
             while (recv(q[1], drain, sizeof drain, MSG_DONTWAIT) > 0) { }
@@ -209,8 +209,8 @@ int main(void) {
         tr[8] = 44; tr[9] = tr[10] = tr[11] = 0;
         CHECK(send(q[1], tr, tn, 0) == (ssize_t)tn, "tcp send");
         memset(&ti, 0, sizeof ti);
-        CHECK(d2k_ct_query_info_fd(q[0], 44, &t, &ti) == 0 && ti.tcp_state_known &&
-              ti.tcp_state == D2K_CT_TCP_ESTABLISHED && ti.reply_pkts == 1,
+        CHECK(d2s_ct_query_info_fd(q[0], 44, &t, &ti) == 0 && ti.tcp_state_known &&
+              ti.tcp_state == D2S_CT_TCP_ESTABLISHED && ti.reply_pkts == 1,
               "запрос по сокету не вернул состояние TCP");
         close(q[0]); close(q[1]);
     }

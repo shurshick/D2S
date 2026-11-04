@@ -12,7 +12,7 @@
  * Здесь сперва задаются ВОПРОСЫ, по одному на свойство, а стратегия
  * СОБИРАЕТСЯ из ответов. Перебор остаётся, но уже запасным путём.
  */
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -37,7 +37,7 @@ typedef enum {
 
 typedef struct {
     const char *label;
-    d2k_poison  p;
+    d2s_poison  p;
     prop_set    set;
 } prop_probe;
 
@@ -166,7 +166,7 @@ static int prop_probes(prop_probe *out, int cap)
      *
      * Приманка — ECH-шаблон, а НЕ имя контроля: имя контроля коробка прочитает
      * и срежет. opt->white всегда несёт ECH-шаблон (планировщик строит его из
-     * net.name либо из семени hcaptcha.com, см. core/sched.c, d2k_white_decoy_hello),
+     * net.name либо из семени hcaptcha.com, см. core/sched.c, d2s_white_decoy_hello),
      * поэтому вопрос работает и с пустым каталогом. Задаётся ТОЛЬКО при наличии
      * ECH-приманки (opt->white). Это СЛОЙ РУКОПОЖАТИЯ; объёмный слой 16 КБ
      * (SNI-whitelist, «белое имя сети») снимает отдельный путь — RX-лестница,
@@ -195,50 +195,50 @@ static int prop_probes(prop_probe *out, int cap)
     return k <= PROP_QUESTIONS ? k : 0;
 }
 
-static void apply_set(d2k_dprops *pr, prop_set s, int ok, const d2k_poison *p)
+static void apply_set(d2s_dprops *pr, prop_set s, int ok, const d2s_poison *p)
 {
     switch (s) {
     case SET_LEFT_OVERLAP:
-        pr->tolerates_left_overlap = ok ? D2K_TRI_FALSE : D2K_TRI_TRUE;
+        pr->tolerates_left_overlap = ok ? D2S_TRI_FALSE : D2S_TRI_TRUE;
         break;
     case SET_REORDER:
-        pr->tolerates_reorder = ok ? D2K_TRI_FALSE : D2K_TRI_TRUE;
+        pr->tolerates_reorder = ok ? D2S_TRI_FALSE : D2S_TRI_TRUE;
         break;
     case SET_CHECKSUM:
         if (ok) {
-            pr->validates_checksum = D2K_TRI_FALSE;
+            pr->validates_checksum = D2S_TRI_FALSE;
         }
         break;
     case SET_PARSES_L7:
         if (ok) {
-            pr->parses_l7 = D2K_TRI_TRUE;
-            pr->validates_checksum = D2K_TRI_FALSE;
+            pr->parses_l7 = D2S_TRI_TRUE;
+            pr->validates_checksum = D2S_TRI_FALSE;
         }
         break;
     case SET_DUPLICATES:
         if (ok) {
-            pr->counts_duplicates = D2K_TRI_TRUE;
+            pr->counts_duplicates = D2S_TRI_TRUE;
         }
         break;
     case SET_SYN:
         if (ok) {
-            pr->inspects_syn = D2K_TRI_FALSE;
+            pr->inspects_syn = D2S_TRI_FALSE;
         }
         break;
     case SET_MD5:
-        if (ok) { pr->validates_md5 = D2K_TRI_FALSE; }
+        if (ok) { pr->validates_md5 = D2S_TRI_FALSE; }
         break;
     case SET_SEQ_WINDOW:
-        if (ok) { pr->validates_seq_window = D2K_TRI_FALSE; }
+        if (ok) { pr->validates_seq_window = D2S_TRI_FALSE; }
         break;
     case SET_TIMESTAMPS:
-        if (ok) { pr->validates_timestamps = D2K_TRI_FALSE; }
+        if (ok) { pr->validates_timestamps = D2S_TRI_FALSE; }
         break;
     case SET_OVERLAP_SNI:
-        if (ok) { pr->overlap_covers_sni = D2K_TRI_TRUE; }
+        if (ok) { pr->overlap_covers_sni = D2S_TRI_TRUE; }
         break;
     case SET_DUP_DENSE:
-        if (ok) { pr->counts_duplicates = D2K_TRI_TRUE; }
+        if (ok) { pr->counts_duplicates = D2S_TRI_TRUE; }
         break;
     case SET_WHITE_TS:
         /* Проход: коробка разобрала фальшивое ECH-приветствие (разбирает L7),
@@ -248,9 +248,9 @@ static void apply_set(d2k_dprops *pr, prop_set s, int ok, const d2k_poison *p)
          * выдумка о коробке (§2.4, замысел 2026-10-23 п. 5.2). Все выводы —
          * только по проходу. */
         if (ok) {
-            pr->parses_l7 = D2K_TRI_TRUE;
-            if (p && p->tcp_ts) { pr->validates_timestamps = D2K_TRI_FALSE; }
-            if (p && p->badsum) { pr->validates_checksum = D2K_TRI_FALSE; }
+            pr->parses_l7 = D2S_TRI_TRUE;
+            if (p && p->tcp_ts) { pr->validates_timestamps = D2S_TRI_FALSE; }
+            if (p && p->badsum) { pr->validates_checksum = D2S_TRI_FALSE; }
         }
         break;
     }
@@ -258,15 +258,15 @@ static void apply_set(d2k_dprops *pr, prop_set s, int ok, const d2k_poison *p)
 
 /* runProperties задаёт вопросы и заполняет вектор. Возвращает первую
  * гипотезу, которая сама по себе сработала, если такая была. */
-int d2k_run_properties(const uint8_t ip4[4], uint16_t port,
-    const d2k_trigger *tr, const d2k_opts *opt, d2k_result *res, d2k_poison *hit)
+int d2s_run_properties(const uint8_t ip4[4], uint16_t port,
+    const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit)
 {
-    return d2k_run_properties_family(ip4, 4, port, tr, opt, res, hit);
+    return d2s_run_properties_family(ip4, 4, port, tr, opt, res, hit);
 }
 
-int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
-                       const d2k_trigger *tr, const d2k_opts *opt,
-                       d2k_result *res, d2k_poison *hit)
+int d2s_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
+                       const d2s_trigger *tr, const d2s_opts *opt,
+                       d2s_result *res, d2s_poison *hit)
 {
     prop_probe pp[PROP_QUESTIONS];
     int n = prop_probes(pp, PROP_QUESTIONS);
@@ -274,16 +274,16 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
     char err[160];
 
     for (i = 0; i < n; i++) {
-        d2k_poison p = pp[i].p;
-        d2k_obs *obs;
+        d2s_poison p = pp[i].p;
+        d2s_obs *obs;
         char label[200];
         int pass = 0, done = 0, local_err = 0, got;
         int decoy_cloned = 0;
 
-        if (d2k_detect_stopped(&opt->cancel)) {
+        if (d2s_detect_stopped(&opt->cancel)) {
             break;
         }
-        if (d2k_opts_skipped(opt, p.name)) {
+        if (d2s_opts_skipped(opt, p.name)) {
             continue;
         }
         /* ВОПРОС ЗАДАЁТСЯ КАК КЛИЕНТ (замысел 2026-10-23, п. 5.1 и 5.2).
@@ -297,7 +297,7 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
          * СОСТАВНОЙ ВОПРОС СЕМЕЙСТВА C при этом НЕ ПРОПАДАЕТ, А СОБИРАЕТСЯ:
          * множители (приманка ECH, серия ×8, разрез +2) остаются, а порча
          * берётся из того, что уже измерено, — тем же правилом, которым
-         * d2k_compose_from_props берёт битую сумму (пробуем, пока коробка не
+         * d2s_compose_from_props берёт битую сумму (пробуем, пока коробка не
          * доказала, что сумму сверяет): нечем сделать фальшивку отвергаемой
          * сервером — вопрос не задаётся, потому что приём, который примет и
          * сервер, обходом не является.
@@ -308,12 +308,12 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
          * оставлено как страховка на случай, когда появится источник такого
          * доказательства; сегодня подстановка битой суммы безусловна, и это
          * безопасно: сервер такую фальшивку бракует по построению. */
-        if (p.tcp_ts && !d2k_trigger_offers_ts(tr)) {
+        if (p.tcp_ts && !d2s_trigger_offers_ts(tr)) {
             if (pp[i].set != SET_WHITE_TS) {
                 continue;
             }
             p.tcp_ts = 0;
-            if (res->props.validates_checksum == D2K_TRI_TRUE) {
+            if (res->props.validates_checksum == D2S_TRI_TRUE) {
                 continue;
             }
             p.badsum = 1;
@@ -338,7 +338,7 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
             p.decoy = opt->white.payload;
             p.decoy_len = opt->white.len;
         } else if (p.decoy_hello) {
-            const d2k_trigger *d = d2k_opts_decoy(opt);
+            const d2s_trigger *d = d2s_opts_decoy(opt);
             p.decoy = d->payload;
             p.decoy_len = d->len;
             decoy_cloned = d == &opt->decoy;
@@ -363,10 +363,10 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
         } else {
             snprintf(label, sizeof(label), "свойство:%s", pp[i].label);
         }
-        obs = d2k_trace_add(res, label);
+        obs = d2s_trace_add(res, label);
         obs->delay_ms = p.gap_ms;
         /* ОТВЕТ — БОЛЬШИНСТВОМ ПОВТОРОВ (поле 14.10.2026, fost.club с роутера,
-         * d2k-detect с меткой замера): «ECH-приветствие под меткой» к одному
+         * d2s-detect с меткой замера): «ECH-приветствие под меткой» к одному
          * адресу дало 3/3, 0/1, 2/3, 1/2 — приём срабатывает в ~2 попытках из
          * 3 при любой приманке, и тот же план (680fbe00) через датапат сайт
          * открывал весь день. Прежнее единогласие с выходом на первом провале
@@ -375,11 +375,11 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
          * приёма, а не случайность сервера. Повторы кончаются, как только исход
          * решён: большинство набрано или уже недостижимо. */
         for (j = 0; j < opt->repeats; j++) {
-            int rc = d2k_raw_probe_poison_family(ip4, family, port, tr, &p, opt->timeout_ms, opt->mark,
+            int rc = d2s_raw_probe_poison_family(ip4, family, port, tr, &p, opt->timeout_ms, opt->mark,
                                           &opt->cancel, err, sizeof(err));
             res->probes++;
             done++;
-            d2k_raw_note_rc(res, family, rc);
+            d2s_raw_note_rc(res, family, rc);
             if (rc < 0) {
                 local_err = 1;
                 /* Локальная ошибка — в трассу: иначе «0/3» читается как
@@ -390,24 +390,24 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
                 break;
             }
             if (rc > 0) { pass++; }
-            if (d2k_prop_majority(pass, opt->repeats) ||
-                !d2k_prop_majority(pass + (opt->repeats - done), opt->repeats)) {
+            if (d2s_prop_majority(pass, opt->repeats) ||
+                !d2s_prop_majority(pass + (opt->repeats - done), opt->repeats)) {
                 break;
             }
         }
-        if (!local_err && res->nanswered < D2K_ANSWERED_MAX) {
+        if (!local_err && res->nanswered < D2S_ANSWERED_MAX) {
             res->answered[res->nanswered++] = p;
         }
         obs->pass = pass;
         obs->fail = done - pass;
         if (opt->on_obs) { opt->on_obs(opt->on_obs_ctx, obs); }
-        got = d2k_prop_majority(pass, opt->repeats);
+        got = d2s_prop_majority(pass, opt->repeats);
         /* A local compile/apply/send refusal is not an answer from the box. */
         if (!local_err) apply_set(&res->props, pp[i].set, got, &p);
-        /* Находку, которую план не выражает (фильтр дерева, d2k_opts.accept),
+        /* Находку, которую план не выражает (фильтр дерева, d2s_opts.accept),
          * не берём и не останавливаемся: ответ уже в векторе, а следующие
          * вопросы могут найти выразимый приём — в переборе их может не быть. */
-        if (got && d2k_opts_acceptable(opt, &p)) {
+        if (got && d2s_opts_acceptable(opt, &p)) {
             *hit = p;
             return 1;
         }
@@ -415,18 +415,18 @@ int d2k_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
     return 0;
 }
 
-static int tri_no(d2k_tri t)  { return t == D2K_TRI_FALSE; }
-static int tri_yes(d2k_tri t) { return t == D2K_TRI_TRUE; }
+static int tri_no(d2s_tri t)  { return t == D2S_TRI_FALSE; }
+static int tri_yes(d2s_tri t) { return t == D2S_TRI_TRUE; }
 
 /* composeFromProps строит кандидатов ИЗ ВЕКТОРА, а не берёт из списка.
  *
  * Правила размещения взяты из дампов боевых плеч, а не из головы: фальшивка
  * идёт отдельной посылкой ПЕРЕД перекрытием, приманкой служит целое
  * приветствие, а не огрызок, и число копий имеет порог. */
-int d2k_compose_from_props(const d2k_dprops *pr, const uint8_t *ctl, size_t ctl_len,
-                           d2k_poison *out, int cap)
+int d2s_compose_from_props(const d2s_dprops *pr, const uint8_t *ctl, size_t ctl_len,
+                           d2s_poison *out, int cap)
 {
-    d2k_poison base;
+    d2s_poison base;
     int n = 0, i;
 
     memset(&base, 0, sizeof(base));

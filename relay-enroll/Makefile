@@ -6,8 +6,8 @@ SOURCES = ../telegram/src/identity.c ../telegram/src/net.c
 OUT = ../build/relay-enroll
 
 .PHONY: all test
-all: $(OUT)/d2k-enroll
-$(OUT)/d2k-enroll: main.c $(SOURCES)
+all: $(OUT)/d2s-enroll
+$(OUT)/d2s-enroll: main.c $(SOURCES)
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) -I../telegram/include $(OPENSSL_CFLAGS) -o $@ main.c $(SOURCES) $(OPENSSL_LIBS)
 

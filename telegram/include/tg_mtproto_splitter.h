@@ -1,5 +1,5 @@
-#ifndef D2K_TG_MTPROTO_SPLITTER_H
-#define D2K_TG_MTPROTO_SPLITTER_H
+#ifndef D2S_TG_MTPROTO_SPLITTER_H
+#define D2S_TG_MTPROTO_SPLITTER_H
 
 #include "tg_mtproto.h"
 #include "tg_memory_budget.h"

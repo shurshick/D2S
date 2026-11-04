@@ -1,5 +1,5 @@
 #!/bin/sh
-# files/S99d2k on OpenWrt without Entware: firewall rules through nftables.
+# files/S99d2s on OpenWrt without Entware: firewall rules through nftables.
 # 25.12 ships no iptables at all (07.10.2026: no iptables/ip6tables package
 # for aarch64, arm, mipsel, x86_64). Stateful nft double: one file per table,
 # a transaction from `nft -f` applies whole or not at all. The real syntax is
@@ -7,7 +7,7 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-S99=$ROOT/files/S99d2k
+S99=$ROOT/files/S99d2s
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -78,19 +78,19 @@ chmod +x "$TMP/bin/iptables"
 ln -s iptables "$TMP/bin/ip6tables"
 printf "DISTRIB_ID='OpenWrt'\n" > "$TMP/openwrt_release"
 
-# shellcheck disable=SC2016  # literal text searched for in S99d2k
+# shellcheck disable=SC2016  # literal text searched for in S99d2s
 CASE_LINE=$(grep -n '^case "$1" in' "$S99" | head -1 | cut -d: -f1)
-[ -n "$CASE_LINE" ] || fail "S99d2k layout changed"
+[ -n "$CASE_LINE" ] || fail "S99d2s layout changed"
 # The backend is chosen while the file is sourced: keep the doubles on PATH.
 head -n "$((CASE_LINE - 1))" "$S99" | sed '/^PATH=/d' > "$TMP/s99funcs.sh"
 
-# The S99d2k functions with the doubles first on PATH. $1 — PATH directory
+# The S99d2s functions with the doubles first on PATH. $1 — PATH directory
 # with the doubles (iptables can be hidden), then env, the snippet last.
 s99() {
     bindir=$1; shift
     # shellcheck disable=SC2016  # expanded by the inner shell
-    env FW_STATE="$TMP/fw" NFT_STATE="$TMP/nft" D2K_OPENWRT_RELEASE="$TMP/openwrt_release" \
-        D2K_DIR="$TMP/d2k" "$@" sh -c '
+    env FW_STATE="$TMP/fw" NFT_STATE="$TMP/nft" D2S_OPENWRT_RELEASE="$TMP/openwrt_release" \
+        D2S_DIR="$TMP/d2s" "$@" sh -c '
         PATH="$2:/usr/bin:/bin"
         . "$1/s99funcs.sh"
         RUN=$1/run; FW_V4ONLY=$RUN/fw-ipv4-only; FW_LOCK=$1/fw.lock; PROC_DIR=$1/proc
@@ -104,17 +104,17 @@ table() { cat "$TMP/nft/inet_$1" 2>/dev/null; }
 
 # --- backend selection -------------------------------------------------------
 # shellcheck disable=SC2016  # expanded by the inner shell
-S99_SNIPPET='echo "$FW_BACKEND $D2K_FW"'
-[ "$(s99 "$TMP/nftonly")" = "nft nft" ] || fail "OpenWrt with nft must pick nft and export D2K_FW for d2kc"
+S99_SNIPPET='echo "$FW_BACKEND $D2S_FW"'
+[ "$(s99 "$TMP/nftonly")" = "nft nft" ] || fail "OpenWrt with nft must pick nft and export D2S_FW for d2sc"
 [ "$(s99 "$TMP/bin")" = "nft nft" ] || fail "OpenWrt with Entware iptables must still pick nft"
-[ "$(s99 "$TMP/bin" D2K_OPENWRT_RELEASE="$TMP/none")" = "iptables iptables" ] || fail "Keenetic must stay on iptables"
+[ "$(s99 "$TMP/bin" D2S_OPENWRT_RELEASE="$TMP/none")" = "iptables iptables" ] || fail "Keenetic must stay on iptables"
 [ "$(s99 "$TMP/bin" FW_BACKEND=iptables)" = "iptables iptables" ] || fail "explicit FW_BACKEND=iptables ignored"
 ok "OpenWrt picks nftables, Keenetic stays on iptables, explicit choice wins"
 
 # --- the ruleset ------------------------------------------------------------
 S99_SNIPPET='fw_up && fw_installed' s99 "$TMP/nftonly" || fail "nft fw_up failed"
-r=$(table d2k)
-[ -n "$r" ] || fail "table inet d2k not loaded"
+r=$(table d2s)
+[ -n "$r" ] || fail "table inet d2s not loaded"
 for c in 'chain out {' 'chain in_rules {' 'chain in_forward {' 'chain in_input {' 'chain nat_post {'; do
     printf '%s\n' "$r" | grep -qF "$c" || fail "missing $c"
 done
@@ -158,10 +158,10 @@ for c in out in_rules; do
         /queue num/ { q = 1 }
         END { exit !seen }' || fail "chain $c: no 'ct status dnat return' before the first queue rule"
 done
-# The VPS install gate is D2K's own channel (field 14.10.2026): RETURN in
-# both chains before the first queue rule; an empty D2K_GATE removes it.
-S99_SNIPPET='fw_up' s99 "$TMP/nftonly" D2K_GATE=http://192.0.2.44:9444 || fail "explicit proxy not applied"
-r=$(table d2k)
+# The VPS install gate is D2S's own channel (field 14.10.2026): RETURN in
+# both chains before the first queue rule; an empty D2S_GATE removes it.
+S99_SNIPPET='fw_up' s99 "$TMP/nftonly" D2S_GATE=http://192.0.2.44:9444 || fail "explicit proxy not applied"
+r=$(table d2s)
 want 'ip daddr 192.0.2.44 tcp dport 9444 return'
 want 'ip saddr 192.0.2.44 tcp sport 9444 return'
 for c in out in_rules; do
@@ -170,13 +170,13 @@ for c in out in_rules; do
         /queue num/ { q = 1 }
         END { exit !seen }' || fail "chain $c: no gate return before the first queue rule"
 done
-S99_SNIPPET='fw_up' s99 "$TMP/nftonly" D2K_GATE= || fail "nft fw_up without a gate failed"
-if table d2k | grep -q 9444; then fail "empty D2K_GATE must leave no gate rule in nft"; fi
+S99_SNIPPET='fw_up' s99 "$TMP/nftonly" D2S_GATE= || fail "nft fw_up without a gate failed"
+if table d2s | grep -q 9444; then fail "empty D2S_GATE must leave no gate rule in nft"; fi
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly" || fail "nft fw_up (restore) failed"
-rst=$(table d2k_rst)
+rst=$(table d2s_rst)
 # Ключ — кортеж зонда (порт . цель . порт цели), не один порт (ревью 07.10).
-printf '%s\n' "$rst" | grep -qF 'set rst4 { type inet_service . ipv4_addr . inet_service; flags timeout; }' || fail "inet d2k_rst rst4 set"
-printf '%s\n' "$rst" | grep -qF 'set rst6 { type inet_service . ipv6_addr . inet_service; flags timeout; }' || fail "inet d2k_rst rst6 set"
+printf '%s\n' "$rst" | grep -qF 'set rst4 { type inet_service . ipv4_addr . inet_service; flags timeout; }' || fail "inet d2s_rst rst4 set"
+printf '%s\n' "$rst" | grep -qF 'set rst6 { type inet_service . ipv6_addr . inet_service; flags timeout; }' || fail "inet d2s_rst rst6 set"
 printf '%s\n' "$rst" | grep -qF 'type filter hook output priority filter - 1; policy accept;' || fail "rst chain hook"
 printf '%s\n' "$rst" | grep -qF 'meta nfproto ipv4 tcp flags & rst == rst tcp sport . ip daddr . tcp dport @rst4 drop' || fail "rst4 drop rule"
 printf '%s\n' "$rst" | grep -qF 'meta nfproto ipv6 tcp flags & rst == rst tcp sport . ip6 daddr . tcp dport @rst6 drop' || fail "rst6 drop rule"
@@ -184,56 +184,56 @@ printf '%s\n' "$rst" | grep -qF 'meta nfproto ipv6 tcp flags & rst == rst tcp sp
 # nf_conntrack_acct=0, до загрузки таблицы) nft читает счётчик как 0, и окно
 # 0-N держало бы его в очереди всю жизнь; connbytes такой поток не берёт.
 ! printf '%s\n' "$r" | grep -q 'packets 0-' || fail "a window starts at 0: uncounted flows would be queued whole"
-ok "inet d2k mirrors the iptables rules; inet d2k_rst holds the probe RST sets"
+ok "inet d2s mirrors the iptables rules; inet d2s_rst holds the probe RST sets"
 
 # Custom ports from the config reach nft syntax.
 S99_SNIPPET='PORTS=443,8443:8445; CONNBYTES=0:5; fw_up' s99 "$TMP/nftonly" || fail "custom ports"
-table d2k | grep -qF 'th dport { 443, 8443-8445 } ct original packets 1-5 queue' || fail "PORTS/CONNBYTES not converted"
-table d2k | grep -qF 'ct original packets 6-18446744073709551615 tcp flags & rst' || fail "late window from CONNBYTES"
+table d2s | grep -qF 'th dport { 443, 8443-8445 } ct original packets 1-5 queue' || fail "PORTS/CONNBYTES not converted"
+table d2s | grep -qF 'ct original packets 6-18446744073709551615 tcp flags & rst' || fail "late window from CONNBYTES"
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly"
 ok "PORTS and CONNBYTES from the config are converted to nft ranges"
 
 # --- replace atomically, keep the RST sets ----------------------------------
-printf '\t# live probe element\n' >> "$TMP/nft/inet_d2k_rst"
+printf '\t# live probe element\n' >> "$TMP/nft/inet_d2s_rst"
 : > "$TMP/nft/calls"
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly" || fail "second fw_up"
-grep -q 'live probe element' "$TMP/nft/inet_d2k_rst" || fail "fw_up rebuilt inet d2k_rst and dropped live probe elements"
+grep -q 'live probe element' "$TMP/nft/inet_d2s_rst" || fail "fw_up rebuilt inet d2s_rst and dropped live probe elements"
 loads=$(grep -c '^-f ' "$TMP/nft/calls")
-[ "$loads" -eq 1 ] || fail "rebuild of inet d2k is not one transaction ($loads loads)"
-ok "rebuild replaces inet d2k in one transaction and keeps live RST elements"
+[ "$loads" -eq 1 ] || fail "rebuild of inet d2s is not one transaction ($loads loads)"
+ok "rebuild replaces inet d2s in one transaction and keeps live RST elements"
 
 # --- the watchdog notices a loss --------------------------------------------
 S99_SNIPPET='fw_installed' s99 "$TMP/nftonly" || fail "installed rules not recognised"
-sed '/icmpv6 type time-exceeded/d' "$TMP/nft/inet_d2k" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2k"
+sed '/icmpv6 type time-exceeded/d' "$TMP/nft/inet_d2s" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2s"
 if S99_SNIPPET='fw_installed' s99 "$TMP/nftonly"; then fail "a lost queue rule went unnoticed"; fi
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly"
-rm -f "$TMP/nft/inet_d2k_rst"
-if S99_SNIPPET='fw_installed' s99 "$TMP/nftonly"; then fail "a lost inet d2k_rst went unnoticed"; fi
+rm -f "$TMP/nft/inet_d2s_rst"
+if S99_SNIPPET='fw_installed' s99 "$TMP/nftonly"; then fail "a lost inet d2s_rst went unnoticed"; fi
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly"
-sed 's/queue num 2000/queue num 2001/' "$TMP/nft/inet_d2k" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2k"
+sed 's/queue num 2000/queue num 2001/' "$TMP/nft/inet_d2s" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2s"
 if S99_SNIPPET='fw_installed' s99 "$TMP/nftonly"; then fail "rules for another queue taken as ours"; fi
 S99_SNIPPET='fw_up' s99 "$TMP/nftonly"
-rm -f "$TMP/nft/inet_d2k"
+rm -f "$TMP/nft/inet_d2s"
 if S99_SNIPPET='fw_installed' s99 "$TMP/nftonly"; then fail "a deleted table went unnoticed"; fi
 S99_SNIPPET='fw_up && fw_installed' s99 "$TMP/nftonly" || fail "fw_up did not restore the table"
 ok "fw_installed sees a lost rule, table, RST table or a foreign queue number"
 
 # --- stop -------------------------------------------------------------------
 S99_SNIPPET='fw_down' s99 "$TMP/nftonly"
-[ ! -e "$TMP/nft/inet_d2k" ] || fail "fw_down left inet d2k"
-[ -e "$TMP/nft/inet_d2k_rst" ] || fail "fw_down (engine restart) removed a running probe's RST table"
+[ ! -e "$TMP/nft/inet_d2s" ] || fail "fw_down left inet d2s"
+[ -e "$TMP/nft/inet_d2s_rst" ] || fail "fw_down (engine restart) removed a running probe's RST table"
 S99_SNIPPET='rst_rules_down dead' s99 "$TMP/nftonly"
-[ -e "$TMP/nft/inet_d2k_rst" ] || fail "engine stop removed RST elements of a live search"
+[ -e "$TMP/nft/inet_d2s_rst" ] || fail "engine stop removed RST elements of a live search"
 S99_SNIPPET='rst_rules_down all' s99 "$TMP/nftonly"
-[ ! -e "$TMP/nft/inet_d2k_rst" ] || fail "service stop left inet d2k_rst"
+[ ! -e "$TMP/nft/inet_d2s_rst" ] || fail "service stop left inet d2s_rst"
 printf 'table inet fw4 {\n}\n' > "$TMP/nft/inet_fw4"
 S99_SNIPPET='fw_up; fw_down; rst_rules_down all' s99 "$TMP/nftonly"
 [ -e "$TMP/nft/inet_fw4" ] || fail "a foreign table was removed"
-ok "stop removes only D2K's own tables"
+ok "stop removes only D2S's own tables"
 
 # --- a failed load leaves nothing -------------------------------------------
 if S99_SNIPPET='fw_up' s99 "$TMP/nftonly" STUB_NFT_FAIL=1 2>/dev/null; then fail "fw_up ignored an nft failure"; fi
-[ ! -e "$TMP/nft/inet_d2k" ] || fail "failed fw_up left a table"
+[ ! -e "$TMP/nft/inet_d2s" ] || fail "failed fw_up left a table"
 ok "a failed nft transaction is reported"
 
 # --- migration from an Entware-era install ----------------------------------
@@ -242,20 +242,20 @@ S99_SNIPPET='fw_up' s99 "$TMP/bin" FW_BACKEND=iptables || fail "iptables setup f
 grep -rq NFQUEUE "$TMP/fw/iptables/mangle" || fail "migration fixture has no iptables rules"
 out=$(S99_SNIPPET='fw_up && fw_installed && echo INSTALLED' s99 "$TMP/bin" 2>&1) || { echo "$out" >&2; fail "nft fw_up over iptables rules"; }
 printf '%s\n' "$out" | grep -q INSTALLED || fail "migrated rules not recognised"
-! grep -rqs 'D2K\|NFQUEUE\|MASQUERADE' "$TMP/fw/iptables" "$TMP/fw/ip6tables" || fail "iptables D2K rules survived the switch to nft"
+! grep -rqs 'D2S\|NFQUEUE\|MASQUERADE' "$TMP/fw/iptables" "$TMP/fw/ip6tables" || fail "iptables D2S rules survived the switch to nft"
 ! printf '%s\n' "$out" | grep -q PPE || fail "PPE (KeeneticOS) touched under nft: $out"
 ok "switching an Entware install to nft removes its iptables rules"
 
 # status: the KeeneticOS PPE accelerator lines do not belong on OpenWrt.
-out=$(S99_SNIPPET='d2k_ppe_status() { echo PPE-LINE; }; status' s99 "$TMP/nftonly" 2>&1 || true)
+out=$(S99_SNIPPET='d2s_ppe_status() { echo PPE-LINE; }; status' s99 "$TMP/nftonly" 2>&1 || true)
 ! printf '%s\n' "$out" | grep -q PPE-LINE || fail "status prints PPE lines under nft"
-out=$(S99_SNIPPET='d2k_ppe_status() { echo PPE-LINE; }; status' s99 "$TMP/bin" FW_BACKEND=iptables 2>&1 || true)
+out=$(S99_SNIPPET='d2s_ppe_status() { echo PPE-LINE; }; status' s99 "$TMP/bin" FW_BACKEND=iptables 2>&1 || true)
 printf '%s\n' "$out" | grep -q PPE-LINE || fail "status lost the PPE lines on Keenetic"
 ok "status shows PPE only on the iptables (Keenetic) path"
 
 # --- fw4 flow offloading (лаборатория 07.10, 25.12.5) ------------------------
 # С ним поток уходит в flowtable после рукопожатия: в очередь попадало 4-5
-# пакетов вместо 17-18, ClientHello клиента D2K не видел. Как ускоритель NAT
+# пакетов вместо 17-18, ClientHello клиента D2S не видел. Как ускоритель NAT
 # Keenetic: выключается на время работы, прежнее значение возвращается.
 cat > "$TMP/nftonly/uci" <<'EOF'
 #!/bin/sh
@@ -284,7 +284,7 @@ S99_SNIPPET='flowoffload_restore' s99 "$TMP/nftonly"
 # Выключенное владельцем не трогается и не «возвращается» включённым.
 echo 0 > "$TMP/nft/uci-flow"; : > "$TMP/nft/calls"
 S99_SNIPPET='flowoffload_off; flowoffload_restore' s99 "$TMP/nftonly"
-[ "$(cat "$TMP/nft/uci-flow")" = 0 ] || fail "flow offloading switched on by D2K"
+[ "$(cat "$TMP/nft/uci-flow")" = 0 ] || fail "flow offloading switched on by D2S"
 ! grep -q 'set\|fw4' "$TMP/nft/calls" || fail "untouched setting was rewritten"
 # Keenetic (iptables): uci не трогается.
 echo 1 > "$TMP/nft/uci-flow"; : > "$TMP/nft/calls"
@@ -292,6 +292,6 @@ S99_SNIPPET='flowoffload_off' s99 "$TMP/nftonly" FW_BACKEND=iptables
 [ "$(cat "$TMP/nft/uci-flow")" = 1 ] || fail "iptables path changed fw4 settings"
 grep -q 'flowoffload_off' "$S99" || fail "engine start does not switch flow offloading off"
 grep -q 'flowoffload_restore' "$S99" || fail "engine stop does not restore flow offloading"
-ok "fw4 flow offloading is off while D2K runs and the owner's value comes back"
+ok "fw4 flow offloading is off while D2S runs and the owner's value comes back"
 
-echo "S99d2k nftables (stub): all checks passed"
+echo "S99d2s nftables (stub): all checks passed"

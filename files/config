@@ -1,24 +1,24 @@
-# Конфигурация d2k. Файл принадлежит владельцу: установщик его не
+# Конфигурация d2s. Файл принадлежит владельцу: установщик его не
 # перезаписывает при обновлении.
 SCHEMA=1
 AUTOUPDATE=1
 MODE=apply
 PANEL_LISTEN=127.0.0.1:8090
-STATE_DIR=/opt/d2k/state
+STATE_DIR=/opt/d2s/state
 QUEUE_NUM=2000
-CONTROL_SOCKET=/opt/d2k/run/d2kd.sock
+CONTROL_SOCKET=/opt/d2s/run/d2sd.sock
 DECOY_SNI=disk.rzd.ru
 # Keenetic: первые 30 пакетов каждого потока идут мимо аппаратного ускорителя
-# (-j PPE с connskip), иначе d2k не видит ответов. 0 — не ставить.
-D2K_PPE_DEOFFLOAD=1
+# (-j PPE с connskip), иначе d2s не видит ответов. 0 — не ставить.
+D2S_PPE_DEOFFLOAD=1
 # TCP-порты разгрузки; по умолчанию — PORTS очереди (0:65535). UDP — 443 и
-# голосовые VOICE_PORTS (D2K_PPE_UDP_PORTS). Сузить, если окно в 30 пакетов
+# голосовые VOICE_PORTS (D2S_PPE_UDP_PORTS). Сузить, если окно в 30 пакетов
 # на каждый поток слишком дорого процессору:
-# D2K_PPE_TCP_PORTS=80,443
+# D2S_PPE_TCP_PORTS=80,443
 MARK=0x2d
 TG_ENABLED=1
 TG_MODE=local
 # TG_PORT=1443
 
-D2K_REPO=shurshick/D2S
-D2K_RELAY_URL=http://127.0.0.1:9083/resolve
+D2S_REPO=shurshick/D2S
+D2S_RELAY_URL=http://127.0.0.1:9083/resolve

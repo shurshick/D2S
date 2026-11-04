@@ -1,6 +1,6 @@
 # QUIC: первый полный измеренный кандидат завершает поиск
 
-База `8d2da51`, main. Требование — D2K_SPEC §0.1: прошедший вопрос уже
+База `8d2da51`, main. Требование — D2S_SPEC §0.1: прошедший вопрос уже
 доказывает приём в контексте замера; поиск на нём останавливается.
 Это не отменяет последующего испытания плана и живой приёмки.
 
@@ -10,7 +10,7 @@
 показал 42–51 опыт QUIC и занятую очередь. Аудит выявил два независимых
 продолжения **уже успешного** поиска:
 
-1. `quicarms.c:d2k_quic_original_arms` после успешной одиночной приманки
+1. `quicarms.c:d2s_quic_original_arms` после успешной одиночной приманки
    продолжал варианты числа копий, затем TTL и контроль/формы фрагментации.
    `ask_q` уже проверил 3/3 и этап данных. При последующем локальном сбое
    mark кандидат мог стать FLAKY; при исчерпании свежих адресов получал
@@ -47,21 +47,21 @@ not_measured. Нулевой/неизмеренный arm, FLAKY и поиск �
 - `test_quic_original_arms`: первый опыт 3/3 + data PASS, следующий дал бы
   ошибку mark; ожидается ровно один опыт, неизменённая одиночная приманка
   и достоверная метка. Три CHECK упали, make exit 2:
-  `/tmp/d2k-quic-stop-red.log`.
+  `/tmp/d2s-quic-stop-red.log`.
 - `test_quic_run_order`: после успешного вопроса остаточного разрешения
   больше не отправляются диагностические Initial. CHECK упал, make exit 2:
-  `/tmp/d2k-quic-stop-run-red.log`.
+  `/tmp/d2s-quic-stop-run-red.log`.
 
 После правки targeted original-arms/strategy/run-order прошли:
-`/tmp/d2k-quic-stop-green.log`. Свежая отдельная компиляция старого
+`/tmp/d2s-quic-stop-green.log`. Свежая отдельная компиляция старого
 `quicarms.c` из `8d2da51` с новым тестом: compile 0, test 1,
-`/tmp/d2k-quic-stop-baseline.log`; checkout/stale-объектники не использованы.
+`/tmp/d2s-quic-stop-baseline.log`; checkout/stale-объектники не использованы.
 
 Runtime gate на текущем выборе кандидатов: `test_udp_runtime` — exit 0,
 130 full-packet cases / 19 distinct actual questions. Тот же бинарник с
 `--diverge` — exit 1: преднамеренное расхождение пакетов обнаруживается.
-Логи `/tmp/d2k-quic-stop-runtime-green.log` и
-`/tmp/d2k-quic-stop-runtime-mutant.log`. Это IPv4/IPv6, размеры и реальные
+Логи `/tmp/d2s-quic-stop-runtime-green.log` и
+`/tmp/d2s-quic-stop-runtime-mutant.log`. Это IPv4/IPv6, размеры и реальные
 вопросы/выбранные планы в production executor с перехваченным sink;
 физический провод роутера и браузер этим не проверены.
 До раннего выхода было 198 cases / 53 questions: матрица автоматически
@@ -101,15 +101,15 @@ HTTP fast-torrent, mailsuite и живая приёмка всех классо�
 
 ## Финальная локальная проверка
 
-- `make -C core check` — exit 0, `/tmp/d2k-quic-stop-core-check.log`;
+- `make -C core check` — exit 0, `/tmp/d2s-quic-stop-core-check.log`;
   включает release arm64/mipsel во временном каталоге, probe-plan,
   runtime equality и HTTP live/control тесты.
-- `make -C detect check` — exit 0, `/tmp/d2k-quic-stop-detect-check.log`.
-- `make -C datapath check` — exit 0, `/tmp/d2k-quic-stop-datapath-check.log`.
+- `make -C detect check` — exit 0, `/tmp/d2s-quic-stop-detect-check.log`.
+- `make -C datapath check` — exit 0, `/tmp/d2s-quic-stop-datapath-check.log`.
 - `git diff --check` — чисто. Независимое read-only ревью — без
   blocker/important замечаний.
 
-Чужие dirty `builds/d2kc-linux-arm64` и `builds/d2kd-linux-arm64` сохранены
+Чужие dirty `builds/d2sc-linux-arm64` и `builds/d2sd-linux-arm64` сохранены
 и исключены из коммита; SHA-256 соответственно
 `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194` и
 `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.

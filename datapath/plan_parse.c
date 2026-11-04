@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "d2k_plan.h"
+#include "d2s_plan.h"
 #include "plan_internal.h"
 
 #define HEADER_LEN 12
@@ -102,11 +102,11 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
             }
             break;
         case REC_ID:
-            if (ln != D2K_PLAN_ID_LEN) { fail(err, errlen, "id не 16 байт"); return -1; }
+            if (ln != D2S_PLAN_ID_LEN) { fail(err, errlen, "id не 16 байт"); return -1; }
             break;
         case REC_PROTO:
             if (ln != 2) { fail(err, errlen, "proto не 2 байта"); return -1; }
-            if (b[off + 1] == D2K_PLAN_PROTO_HTTP &&
+            if (b[off + 1] == D2S_PLAN_PROTO_HTTP &&
                 (rd16(b + 6) < 11 || b[off] != 6)) {
                 fail(err, errlen, "протокол http требует TCP и minexec=11"); return -1;
             }
@@ -117,7 +117,7 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
             break;
         case REC_POISON:
             if (ln != 8) { fail(err, errlen, "порча не 8 байт"); return -1; }
-            if ((b[off + 3] & D2K_POISON_MD5) && rd16(b + 6) < 12) {
+            if ((b[off + 3] & D2S_POISON_MD5) && rd16(b + 6) < 12) {
                 fail(err, errlen, "md5 требует minexec=12"); return -1;
             }
             c->poisons++;
@@ -141,7 +141,7 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
             if (ln == 11 && rd16(b + 6) < 8) {
                 fail(err, errlen, "tlsmod требует minexec=8"); return -1;
             }
-            if (ln == 11 && (b[off + 10] & ~(D2K_TLS_MOD_RND | D2K_TLS_MOD_DUPSID))) {
+            if (ln == 11 && (b[off + 10] & ~(D2S_TLS_MOD_RND | D2S_TLS_MOD_DUPSID))) {
                 fail(err, errlen, "неизвестный tlsmod"); return -1;
             }
             c->fakes++;
@@ -173,8 +173,8 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
             break;
         case REC_WIRE:
             if (rd16(b + 6) < 4 || ln != 1 ||
-                (b[off] != D2K_WIRE_DETECT_TCP && b[off] != D2K_WIRE_TCP_TEMPLATE) ||
-                (b[off] == D2K_WIRE_TCP_TEMPLATE && rd16(b + 6) < 8)) {
+                (b[off] != D2S_WIRE_DETECT_TCP && b[off] != D2S_WIRE_TCP_TEMPLATE) ||
+                (b[off] == D2S_WIRE_TCP_TEMPLATE && rd16(b + 6) < 8)) {
                 fail(err, errlen, "неподдержанный TCP wire profile или minexec < 4"); return -1;
             }
             break;
@@ -195,7 +195,7 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
             break;
         case REC_GUARD:
             if (ln != 1) { fail(err, errlen, "защита не 1 байт"); return -1; }
-            if (b[off] == 0 || (b[off] & ~(unsigned)D2K_GUARD_RST_ALIEN) != 0) {
+            if (b[off] == 0 || (b[off] & ~(unsigned)D2S_GUARD_RST_ALIEN) != 0) {
                 /* Пустая или незнакомая защита — отказ, а не «ничего не
                    делаем»: план, часть которого исполнитель не понял, не
                    должен исполняться вовсе (§2.5). */
@@ -221,10 +221,10 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
 
 /* Ссылки обязаны разрешаться. Ноль означает «ничего» и висячей ссылкой не
  * является: фальшивка без порчи законна. */
-static int check_refs(const d2k_plan *p, char *err, size_t errlen) {
+static int check_refs(const d2s_plan *p, char *err, size_t errlen) {
     for (size_t i = 0; i < p->n_poisons; i++) {
-        if ((p->poisons[i].flags & D2K_POISON_MD5) &&
-            (p->minexec < 12 || p->transport != 6 || p->wire_profile != D2K_WIRE_DETECT_TCP)) {
+        if ((p->poisons[i].flags & D2S_POISON_MD5) &&
+            (p->minexec < 12 || p->transport != 6 || p->wire_profile != D2S_WIRE_DETECT_TCP)) {
             fail(err, errlen, "md5 требует minexec=12 и wire detect-tcp-v1 TCP");
             return -1;
         }
@@ -270,24 +270,24 @@ static int check_refs(const d2k_plan *p, char *err, size_t errlen) {
     }
     for (size_t i = 0; i < p->n_fakes; i++) {
         if (p->fakes[i].payload_id == 0 ||
-            !d2k_find_payload(p, p->fakes[i].payload_id)) {
+            !d2s_find_payload(p, p->fakes[i].payload_id)) {
             fail(err, errlen, "фальшивка ссылается на несуществующую приманку");
             return -1;
         }
         if (p->fakes[i].poison_id != 0 &&
-            !d2k_find_poison(p, p->fakes[i].poison_id)) {
+            !d2s_find_poison(p, p->fakes[i].poison_id)) {
             fail(err, errlen, "фальшивка ссылается на несуществующую порчу");
             return -1;
         }
     }
     for (size_t i = 0; i < p->n_seqovls; i++) {
         if (p->seqovls[i].payload_id == 0 ||
-            !d2k_find_payload(p, p->seqovls[i].payload_id)) {
+            !d2s_find_payload(p, p->seqovls[i].payload_id)) {
             fail(err, errlen, "перекрытие ссылается на несуществующую приманку");
             return -1;
         }
         if (p->seqovls[i].poison_id != 0 &&
-            !d2k_find_poison(p, p->seqovls[i].poison_id)) {
+            !d2s_find_poison(p, p->seqovls[i].poison_id)) {
             fail(err, errlen, "перекрытие ссылается на несуществующую порчу");
             return -1;
         }
@@ -324,7 +324,7 @@ static int check_refs(const d2k_plan *p, char *err, size_t errlen) {
     return 0;
 }
 
-const struct d2k_payload *d2k_find_payload(const d2k_plan *p, uint16_t id) {
+const struct d2s_payload *d2s_find_payload(const d2s_plan *p, uint16_t id) {
     for (size_t i = 0; i < p->n_payloads; i++) {
         if (p->payloads[i].id == id) {
             return &p->payloads[i];
@@ -333,7 +333,7 @@ const struct d2k_payload *d2k_find_payload(const d2k_plan *p, uint16_t id) {
     return NULL;
 }
 
-const struct d2k_poison *d2k_find_poison(const d2k_plan *p, uint16_t id) {
+const struct d2s_poison *d2s_find_poison(const d2s_plan *p, uint16_t id) {
     for (size_t i = 0; i < p->n_poisons; i++) {
         if (p->poisons[i].id == id) {
             return &p->poisons[i];
@@ -342,8 +342,8 @@ const struct d2k_poison *d2k_find_poison(const d2k_plan *p, uint16_t id) {
     return NULL;
 }
 
-int d2k_plan_load(const uint8_t *buf, size_t len,
-                  d2k_plan **out, char *err, size_t errlen) {
+int d2s_plan_load(const uint8_t *buf, size_t len,
+                  d2s_plan **out, char *err, size_t errlen) {
     if (out) {
         *out = NULL;
     }
@@ -351,17 +351,17 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
         fail(err, errlen, "короче заголовка");
         return -1;
     }
-    if (memcmp(buf, "D2KP", 4) != 0) {
-        fail(err, errlen, "не план d2k");
+    if (memcmp(buf, "D2SP", 4) != 0) {
+        fail(err, errlen, "не план d2s");
         return -1;
     }
     uint16_t schema = rd16(buf + 4);
     uint16_t minexec = rd16(buf + 6);
-    if (schema > D2K_SCHEMA_MAX) {
+    if (schema > D2S_SCHEMA_MAX) {
         fail(err, errlen, "схема новее, чем понимает эта сборка");
         return -1;
     }
-    if (minexec > D2K_EXEC_VERSION) {
+    if (minexec > D2S_EXEC_VERSION) {
         fail(err, errlen, "плану нужен более новый исполнитель");
         return -1;
     }
@@ -381,7 +381,7 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
         return -1;
     }
 
-    d2k_plan *p = calloc(1, sizeof *p);
+    d2s_plan *p = calloc(1, sizeof *p);
     if (!p) {
         fail(err, errlen, "нет памяти");
         return -1;
@@ -397,7 +397,7 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
     if ((c.payloads && !p->payloads) || (c.poisons && !p->poisons) ||
         (c.splits && !p->splits) || (c.fakes && !p->fakes) ||
         (c.seqovls && !p->seqovls)) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         fail(err, errlen, "нет памяти");
         return -1;
     }
@@ -412,25 +412,25 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
         switch (typ) {
         case REC_IPFRAG:
             if (p->ipfrag) {
-                d2k_plan_free(p); fail(err, errlen, "повторная запись ipfrag"); return -1;
+                d2s_plan_free(p); fail(err, errlen, "повторная запись ipfrag"); return -1;
             }
             p->ipfrag = v[0];
             break;
         case REC_UDPLEN:
             if (p->udplen) {
-                d2k_plan_free(p); fail(err, errlen, "повторная запись udplen"); return -1;
+                d2s_plan_free(p); fail(err, errlen, "повторная запись udplen"); return -1;
             }
             p->udplen = rd16(v);
             break;
         case REC_QSPLIT:
             if (p->qsplit) {
-                d2k_plan_free(p); fail(err, errlen, "повторная запись quicsplit"); return -1;
+                d2s_plan_free(p); fail(err, errlen, "повторная запись quicsplit"); return -1;
             }
             p->qsplit = v[0];
             break;
         case REC_QDENY:
             if (p->qdeny) {
-                d2k_plan_free(p); fail(err, errlen, "повторная запись quicdeny"); return -1;
+                d2s_plan_free(p); fail(err, errlen, "повторная запись quicdeny"); return -1;
             }
             p->qdeny = v[0];
             break;
@@ -440,20 +440,20 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             p->oob_byte = v[2];
             break;
         case REC_ID:
-            memcpy(p->id, v, D2K_PLAN_ID_LEN);
+            memcpy(p->id, v, D2S_PLAN_ID_LEN);
             break;
         case REC_PROTO:
             p->transport = v[0];
             p->proto = v[1];
             break;
         case REC_PAYLOAD: {
-            struct d2k_payload *pl = &p->payloads[p->n_payloads++];
+            struct d2s_payload *pl = &p->payloads[p->n_payloads++];
             pl->id = rd16(v);
             pl->len = ln - 2;
             if (pl->len) {
                 pl->bytes = malloc(pl->len);
                 if (!pl->bytes) {
-                    d2k_plan_free(p);
+                    d2s_plan_free(p);
                     fail(err, errlen, "нет памяти под приманку");
                     return -1;
                 }
@@ -462,11 +462,11 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             break;
         }
         case REC_POISON: {
-            struct d2k_poison *po = &p->poisons[p->n_poisons++];
+            struct d2s_poison *po = &p->poisons[p->n_poisons++];
             po->id = rd16(v);
             po->ttl = v[2];
             po->flags = v[3];
-            po->ts_up = (v[3] & D2K_POISON_TS_UP) ? 1 : 0;
+            po->ts_up = (v[3] & D2S_POISON_TS_UP) ? 1 : 0;
             po->seq_shift = (int32_t)rd32(v + 4);
             break;
         }
@@ -474,7 +474,7 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             /* Ссылка на порчу по id: запись идёт ПОСЛЕ своей порчи, как и
                прочие ссылающиеся записи. Висячая ссылка — отказ. */
             uint16_t pid = rd16(v);
-            struct d2k_poison *po = NULL;
+            struct d2s_poison *po = NULL;
             for (size_t k = 0; k < p->n_poisons; k++) {
                 if (p->poisons[k].id == pid) { po = &p->poisons[k]; break; }
             }
@@ -486,13 +486,13 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             break;
         }
         case REC_SPLIT: {
-            struct d2k_split *s = &p->splits[p->n_splits++];
+            struct d2s_split *s = &p->splits[p->n_splits++];
             s->anchor = rd16(v);
             s->offset = (int16_t)rd16(v + 2);
             break;
         }
         case REC_FAKE: {
-            struct d2k_fake *f = &p->fakes[p->n_fakes++];
+            struct d2s_fake *f = &p->fakes[p->n_fakes++];
             f->payload_id = rd16(v);
             f->poison_id = rd16(v + 2);
             f->repeats = v[4];
@@ -502,7 +502,7 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             break;
         }
         case REC_SEQOVL: {
-            struct d2k_seqovl *s = &p->seqovls[p->n_seqovls++];
+            struct d2s_seqovl *s = &p->seqovls[p->n_seqovls++];
             s->payload_id = rd16(v);
             s->poison_id = rd16(v + 2);
             break;
@@ -545,18 +545,18 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
             /* Недостижимо: scan уже отверг бы такой план. Ветка оставлена,
                чтобы добавление кода записи без обновления scan не проходило
                молча. */
-            d2k_plan_free(p);
+            d2s_plan_free(p);
             fail(err, errlen, "неизвестный тип записи");
             return -1;
         }
     }
 
     if (check_refs(p, err, errlen) != 0) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         return -1;
     }
     if (p->transport != 6 && (p->input_len || p->input_tls || p->settle_us || p->segment_size || p->wire_profile)) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         fail(err, errlen, "измеренные TCP-операции требуют явного транспорта TCP");
         return -1;
     }
@@ -565,7 +565,7 @@ int d2k_plan_load(const uint8_t *buf, size_t len,
     return 0;
 }
 
-void d2k_plan_free(d2k_plan *p) {
+void d2s_plan_free(d2s_plan *p) {
     if (!p) {
         return;
     }
@@ -580,7 +580,7 @@ void d2k_plan_free(d2k_plan *p) {
     free(p);
 }
 
-uint8_t d2k_plan_poison_used(const d2k_plan *p) {
+uint8_t d2s_plan_poison_used(const d2s_plan *p) {
     if (!p) {
         return 0;
     }
@@ -591,40 +591,40 @@ uint8_t d2k_plan_poison_used(const d2k_plan *p) {
     return used;
 }
 
-uint8_t d2k_plan_flow_needs(const d2k_plan *p) {
-    if (!p || p->wire_profile != D2K_WIRE_TCP_TEMPLATE) {
+uint8_t d2s_plan_flow_needs(const d2s_plan *p) {
+    if (!p || p->wire_profile != D2S_WIRE_TCP_TEMPLATE) {
         return 0;
     }
-    return (d2k_plan_poison_used(p) & D2K_POISON_TCPTS_BACK) ? D2K_FLOW_NEED_TCPTS : 0;
+    return (d2s_plan_poison_used(p) & D2S_POISON_TCPTS_BACK) ? D2S_FLOW_NEED_TCPTS : 0;
 }
 
-int d2k_plan_quic_deny(const d2k_plan *p) {
+int d2s_plan_quic_deny(const d2s_plan *p) {
     return p && p->qdeny;
 }
 
-uint8_t d2k_plan_guards(const d2k_plan *p) {
+uint8_t d2s_plan_guards(const d2s_plan *p) {
     return p ? p->guards : 0;
 }
 
-uint8_t d2k_plan_transport(const d2k_plan *p) {
+uint8_t d2s_plan_transport(const d2s_plan *p) {
     return p ? p->transport : 0;
 }
 
-uint8_t d2k_plan_proto(const d2k_plan *p) {
+uint8_t d2s_plan_proto(const d2s_plan *p) {
     return p ? p->proto : 0;
 }
 
-int d2k_plan_stream_input(const d2k_plan *p) {
+int d2s_plan_stream_input(const d2s_plan *p) {
     return p && p->transport == 6 &&
-           (p->wire_profile == D2K_WIRE_DETECT_TCP || p->wire_profile == D2K_WIRE_TCP_TEMPLATE) &&
+           (p->wire_profile == D2S_WIRE_DETECT_TCP || p->wire_profile == D2S_WIRE_TCP_TEMPLATE) &&
            (p->input_tls || p->input_len);
 }
 
-const uint8_t *d2k_plan_id(const d2k_plan *p) {
+const uint8_t *d2s_plan_id(const d2s_plan *p) {
     /* Указатель внутрь плана, а не копия: живёт он ровно столько же, сколько
        сам план, а на пакетном пути копировать шестнадцать байт ради возврата
-       незачем. План без записи REC_ID отдаёт нули — calloc в d2k_plan_load
+       незачем. План без записи REC_ID отдаёт нули — calloc в d2s_plan_load
        обнулил поле, и «идентификатора нет» выглядит так же, как «его не
-       прислали» на той стороне провода (см. d2k_plan.h). */
+       прислали» на той стороне провода (см. d2s_plan.h). */
     return p ? p->id : NULL;
 }

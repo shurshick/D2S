@@ -7,7 +7,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_crypto.h"
+#include "d2s_crypto.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -45,8 +45,8 @@ static const uint8_t want_hp[16] = {
 
 /* ---------------------------------------------------------------------
  * Дальше — вектора СВЕРХ примера из брифа. Пример проверяет только цепочку
- * HKDF; d2k_aes128_ecb и d2k_aes128_gcm_decrypt он не вызывает вовсе, а обе
- * функции — часть контракта этого модуля (см. d2k_crypto.h) и обе разбирают
+ * HKDF; d2s_aes128_ecb и d2s_aes128_gcm_decrypt он не вызывает вовсе, а обе
+ * функции — часть контракта этого модуля (см. d2s_crypto.h) и обе разбирают
  * чужой шифротекст на горячем пути. Оставлять их непроверенными байтами
  * противоречило бы собственной шапке этого файла.
  *
@@ -79,7 +79,7 @@ static void check_generic_vectors(void) {
         0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a,
     };
     uint8_t got16[16];
-    d2k_aes128_ecb(fips_key, fips_pt, got16);
+    d2s_aes128_ecb(fips_key, fips_pt, got16);
     CHECK(memcmp(got16, fips_ct, sizeof got16) == 0,
           "AES-128 разошёлся с примером FIPS-197 приложение B");
 
@@ -91,7 +91,7 @@ static void check_generic_vectors(void) {
         0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
     };
     uint8_t got32[32];
-    d2k_sha256((const uint8_t *)"abc", 3, got32);
+    d2s_sha256((const uint8_t *)"abc", 3, got32);
     CHECK(memcmp(got32, want_sha256_abc, sizeof got32) == 0,
           "SHA-256(\"abc\") разошёлся с примером FIPS 180-4");
 
@@ -104,15 +104,15 @@ static void check_generic_vectors(void) {
     };
     uint8_t hkey[20];
     memset(hkey, 0x0b, sizeof hkey);
-    d2k_hmac_sha256(hkey, sizeof hkey, (const uint8_t *)"Hi There", 8, got32);
+    d2s_hmac_sha256(hkey, sizeof hkey, (const uint8_t *)"Hi There", 8, got32);
     CHECK(memcmp(got32, want_hmac_tc1, sizeof got32) == 0,
           "HMAC-SHA256 разошёлся с RFC 4231 Test Case 1");
 }
 
-/* Ревью 2026-09-06: strlen(label) в d2k_hkdf_expand_label копировался в
+/* Ревью 2026-09-06: strlen(label) в d2s_hkdf_expand_label копировался в
  * full_label[] без проверки — ревьюер собрал модуль под санитайзерами
  * проекта, подал метку в 110 байт и воспроизвёл переполнение стека. Правка
- * в crypto.c — ранний отказ (-1) при label_len > D2K_HKDF_LABEL_MAX, ДО
+ * в crypto.c — ранний отказ (-1) при label_len > D2S_HKDF_LABEL_MAX, ДО
  * первого memcpy. Проверяем и точную репродукцию, и границу вплотную с обеих
  * сторон: если бы порог проверялся как ">=" вместо ">", пара
  * over_by_one/at_limit это бы поймала. */
@@ -124,20 +124,20 @@ static void check_hkdf_label_length_guard(void) {
     char reviewer_repro[111];
     memset(reviewer_repro, 'A', 110);
     reviewer_repro[110] = '\0';
-    CHECK(d2k_hkdf_expand_label(secret, reviewer_repro, out, sizeof out) == -1,
+    CHECK(d2s_hkdf_expand_label(secret, reviewer_repro, out, sizeof out) == -1,
           "метка в 110 байт (репродукция ревью) не отклонена");
 
-    char over_by_one[D2K_HKDF_LABEL_MAX + 2];
-    memset(over_by_one, 'B', D2K_HKDF_LABEL_MAX + 1);
-    over_by_one[D2K_HKDF_LABEL_MAX + 1] = '\0';
-    CHECK(d2k_hkdf_expand_label(secret, over_by_one, out, sizeof out) == -1,
-          "метка длиной D2K_HKDF_LABEL_MAX+1 не отклонена");
+    char over_by_one[D2S_HKDF_LABEL_MAX + 2];
+    memset(over_by_one, 'B', D2S_HKDF_LABEL_MAX + 1);
+    over_by_one[D2S_HKDF_LABEL_MAX + 1] = '\0';
+    CHECK(d2s_hkdf_expand_label(secret, over_by_one, out, sizeof out) == -1,
+          "метка длиной D2S_HKDF_LABEL_MAX+1 не отклонена");
 
-    char at_limit[D2K_HKDF_LABEL_MAX + 1];
-    memset(at_limit, 'C', D2K_HKDF_LABEL_MAX);
-    at_limit[D2K_HKDF_LABEL_MAX] = '\0';
-    CHECK(d2k_hkdf_expand_label(secret, at_limit, out, sizeof out) == 0,
-          "метка длиной ровно D2K_HKDF_LABEL_MAX отклонена, хотя обязана пройти");
+    char at_limit[D2S_HKDF_LABEL_MAX + 1];
+    memset(at_limit, 'C', D2S_HKDF_LABEL_MAX);
+    at_limit[D2S_HKDF_LABEL_MAX] = '\0';
+    CHECK(d2s_hkdf_expand_label(secret, at_limit, out, sizeof out) == 0,
+          "метка длиной ровно D2S_HKDF_LABEL_MAX отклонена, хотя обязана пройти");
 }
 
 /* Настоящий клиентский Initial целиком, RFC 9001 Приложение A.2, DCID тот же
@@ -274,20 +274,20 @@ static const uint8_t crypto_frame[245] = {
 
 static void check_rfc9001_a2_packet(void) {
     uint8_t initial_secret[32], cis[32], key[16], iv[12], hp[16];
-    d2k_hkdf_extract(initial_salt, sizeof initial_salt, dcid, sizeof dcid, initial_secret);
+    d2s_hkdf_extract(initial_salt, sizeof initial_salt, dcid, sizeof dcid, initial_secret);
 
-    /* Тот же образец, что и у d2k_aes128_gcm_decrypt ниже: возврат проверен
+    /* Тот же образец, что и у d2s_aes128_gcm_decrypt ниже: возврат проверен
      * и используется как страж, а не отброшен — ревью 2026-09-06 нашло, что
      * смена void на int сама по себе ничего не гарантирует, если ни один
      * вызывающий не смотрит на результат. */
-    int rc_cis = d2k_hkdf_expand_label(initial_secret, "client in", cis, sizeof cis);
+    int rc_cis = d2s_hkdf_expand_label(initial_secret, "client in", cis, sizeof cis);
     CHECK(rc_cis == 0, "HKDF-Expand-Label отказал на валидной метке 'client in'");
     if (rc_cis != 0) {
         return; /* без cis дальше нечего проверять — ключи из него */
     }
-    int rc_key = d2k_hkdf_expand_label(cis, "quic key", key, sizeof key);
-    int rc_iv  = d2k_hkdf_expand_label(cis, "quic iv", iv, sizeof iv);
-    int rc_hp  = d2k_hkdf_expand_label(cis, "quic hp", hp, sizeof hp);
+    int rc_key = d2s_hkdf_expand_label(cis, "quic key", key, sizeof key);
+    int rc_iv  = d2s_hkdf_expand_label(cis, "quic iv", iv, sizeof iv);
+    int rc_hp  = d2s_hkdf_expand_label(cis, "quic hp", hp, sizeof hp);
     CHECK(rc_key == 0, "HKDF-Expand-Label отказал на валидной метке 'quic key'");
     CHECK(rc_iv == 0, "HKDF-Expand-Label отказал на валидной метке 'quic iv'");
     CHECK(rc_hp == 0, "HKDF-Expand-Label отказал на валидной метке 'quic hp'");
@@ -318,7 +318,7 @@ static void check_rfc9001_a2_packet(void) {
         0x00, 0xcd, 0xd1, 0x15, 0xd9, 0xdb, 0x32, 0x41,
     };
     uint8_t mask[16];
-    d2k_aes128_ecb(hp, protected_packet + sample_off, mask);
+    d2s_aes128_ecb(hp, protected_packet + sample_off, mask);
     CHECK(memcmp(mask, want_mask, sizeof mask) == 0,
           "маска защиты заголовка (AES-128-ECB) не сошлась на пакете RFC 9001 A.2");
 
@@ -357,7 +357,7 @@ static void check_rfc9001_a2_packet(void) {
     const uint8_t *ct = protected_packet + sample_off;
     const size_t ct_len = sizeof protected_packet - sample_off; /* 1178 = 1162 + тег */
     uint8_t plain[sizeof crypto_frame + 917]; /* 1162: столько в A.2 занимает CRYPTO-кадр с паддингом */
-    int rc = d2k_aes128_gcm_decrypt(key, nonce, aad, sizeof aad, ct, ct_len, plain);
+    int rc = d2s_aes128_gcm_decrypt(key, nonce, aad, sizeof aad, ct, ct_len, plain);
     CHECK(rc == 0, "AES-128-GCM не расшифровал настоящий клиентский Initial из RFC 9001 A.2");
     if (rc == 0) {
         uint8_t expected[sizeof plain];
@@ -372,12 +372,12 @@ static void check_rfc9001_a2_packet(void) {
  * S-box AES стал табличным поиском (ревью 2026-09-06, круг 2 задачи 4
  * QUIC-вертикали: формула стоила 51 мкс/блок AES, 3,5 мс на один разбор
  * QUIC Initial на роутере Марка — см. отчёт задачи и большой комментарий
- * у d2k_aes_sbox_byte в d2k_crypto.h). Таблица не введена по памяти и не
+ * у d2s_aes_sbox_byte в d2s_crypto.h). Таблица не введена по памяти и не
  * скопирована с непроверенного источника: здесь — НЕЗАВИСИМАЯ реализация
  * той же формулы FIPS-197 §5.1.1 (обратный элемент GF(2^8) через x^254,
  * затем аффинное преобразование), не разделяющая ни строчки кода с
  * production-версией в crypto.c, — и она обязана дать те же 256 значений,
- * что и d2k_aes_sbox_byte. Ровно это раньше доказывал вывод при разработке
+ * что и d2s_aes_sbox_byte. Ровно это раньше доказывал вывод при разработке
  * ("сверено на S(0x01)=0x7c и S(0x00)=0x63"); здесь то же доказательство
  * проверяется на ВСЕХ 256 значениях, а не на двух for-документации ради.
  * ===================================================================*/
@@ -424,7 +424,7 @@ static void check_aes_sbox_table(void) {
     int mismatches = 0;
     for (int x = 0; x < 256; x++) {
         uint8_t want = ref_sbox_byte((uint8_t)x);
-        uint8_t got = d2k_aes_sbox_byte((uint8_t)x);
+        uint8_t got = d2s_aes_sbox_byte((uint8_t)x);
         if (want != got) {
             mismatches++;
         }
@@ -432,8 +432,8 @@ static void check_aes_sbox_table(void) {
     CHECK(mismatches == 0, "таблица aes_sbox разошлась с формулой FIPS-197 хотя бы на одном байте");
     /* Два ориентира из самого FIPS-197 (Приложение B): если ИМЕННО они
        разойдутся, "разошлась на одном байте" выше не укажет, на каком. */
-    CHECK(d2k_aes_sbox_byte(0x00) == 0x63, "S(0x00) не 0x63");
-    CHECK(d2k_aes_sbox_byte(0x01) == 0x7c, "S(0x01) не 0x7c");
+    CHECK(d2s_aes_sbox_byte(0x00) == 0x63, "S(0x00) не 0x63");
+    CHECK(d2s_aes_sbox_byte(0x01) == 0x7c, "S(0x01) не 0x7c");
 }
 
 /* ===================================================================
@@ -528,7 +528,7 @@ static void check_one_ghash_vector(const char *label, const uint8_t *h,
                                    const uint8_t *c, size_t c_len) {
     uint8_t want[16], got[16];
     ref_ghash(h, aad, aad_len, c, c_len, want);
-    d2k_ghash_for_test(h, aad, aad_len, c, c_len, got);
+    d2s_ghash_for_test(h, aad, aad_len, c, c_len, got);
     char msg[160];
     snprintf(msg, sizeof msg, "GHASH разошёлся с независимой формулой: %s", label);
     CHECK(memcmp(want, got, 16) == 0, msg);
@@ -558,24 +558,24 @@ static void check_ghash_fast_path(void) {
 
 int main(void) {
     uint8_t initial_secret[32], cis[32];
-    d2k_hkdf_extract(initial_salt, sizeof initial_salt, dcid, sizeof dcid, initial_secret);
+    d2s_hkdf_extract(initial_salt, sizeof initial_salt, dcid, sizeof dcid, initial_secret);
 
     /* Возврат проверен и используется как страж (см. тот же приём у
-     * d2k_aes128_gcm_decrypt ниже и в check_rfc9001_a2_packet) — ревью
+     * d2s_aes128_gcm_decrypt ниже и в check_rfc9001_a2_packet) — ревью
      * 2026-09-06 указало, что голый вызов делает контракт "не пишем в выход
      * при отказе" бесполезным на практике: сегодняшние метки-литералы
      * никогда не откажут, но образец в тесте — это то, что скопирует
      * следующий вызывающий. */
-    int rc_cis = d2k_hkdf_expand_label(initial_secret, "client in", cis, sizeof cis);
+    int rc_cis = d2s_hkdf_expand_label(initial_secret, "client in", cis, sizeof cis);
     CHECK(rc_cis == 0, "HKDF-Expand-Label отказал на валидной метке 'client in'");
     if (rc_cis == 0) {
         CHECK(memcmp(cis, want_cis, sizeof cis) == 0,
               "client_initial_secret не сошёлся с вектором RFC 9001 A.1");
 
         uint8_t key[16], iv[12], hp[16];
-        int rc_key = d2k_hkdf_expand_label(cis, "quic key", key, sizeof key);
-        int rc_iv  = d2k_hkdf_expand_label(cis, "quic iv",  iv,  sizeof iv);
-        int rc_hp  = d2k_hkdf_expand_label(cis, "quic hp",  hp,  sizeof hp);
+        int rc_key = d2s_hkdf_expand_label(cis, "quic key", key, sizeof key);
+        int rc_iv  = d2s_hkdf_expand_label(cis, "quic iv",  iv,  sizeof iv);
+        int rc_hp  = d2s_hkdf_expand_label(cis, "quic hp",  hp,  sizeof hp);
         CHECK(rc_key == 0, "HKDF-Expand-Label отказал на валидной метке 'quic key'");
         CHECK(rc_iv == 0, "HKDF-Expand-Label отказал на валидной метке 'quic iv'");
         CHECK(rc_hp == 0, "HKDF-Expand-Label отказал на валидной метке 'quic hp'");

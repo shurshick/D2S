@@ -3,7 +3,7 @@
 #include <string.h>
 
 int tg_enroll_proof(const tg_identity *identity, uint8_t out[TG_ENROLL_SIZE]) {
-    static const uint8_t domain[]="d2k-enroll-v1"; /* Including NUL: domain separation. */
+    static const uint8_t domain[]="d2s-enroll-v1"; /* Including NUL: domain separation. */
     uint8_t message[sizeof(domain)+56], digest[SHA256_DIGEST_LENGTH];
     if(!identity||strlen(identity->install_id_hex)!=32)return -1;
     for(size_t i=0;i<16;i++) {

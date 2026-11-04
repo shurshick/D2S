@@ -1,15 +1,15 @@
 #!/bin/sh
-# Полевое наблюдение d2kd на роутере.
+# Полевое наблюдение d2sd на роутере.
 #
 # Собирает службу, кладёт её в tmpfs роутера, ставит правила, ждёт, снимает
 # правила и забирает вывод. В режиме observe ни один пакет не меняется.
 #
 # Устройство и доступ берутся из окружения — репозиторий публичный:
-#   D2K_ROUTER   адрес роутера   (обязательно)
-#   D2K_SSH_PORT порт ssh        (222)
-#   D2K_SSH_PASS пароль root     (если нет ключа)
-#   D2K_SSH_CONTROL существующий SSH control socket (без передачи пароля)
-#   D2K_LOAD     команда нагрузки, выполняется локально
+#   D2S_ROUTER   адрес роутера   (обязательно)
+#   D2S_SSH_PORT порт ssh        (222)
+#   D2S_SSH_PASS пароль root     (если нет ключа)
+#   D2S_SSH_CONTROL существующий SSH control socket (без передачи пароля)
+#   D2S_LOAD     команда нагрузки, выполняется локально
 #
 # Что здесь защищает от уже сделанных ошибок:
 #   * У каждого запуска СВОЙ жетон, и он проставлен комментарием в КАЖДОМ
@@ -28,21 +28,21 @@
 #   * Всё в /tmp роутера (tmpfs). На флеш не пишется ничего.
 set -eu
 
-ROUTER=${D2K_ROUTER:?не задан D2K_ROUTER}
-SSH_PORT=${D2K_SSH_PORT:-222}
-QUEUE=${D2K_QUEUE:-537}
-DUR=${D2K_DUR:-60}
+ROUTER=${D2S_ROUTER:?не задан D2S_ROUTER}
+SSH_PORT=${D2S_SSH_PORT:-222}
+QUEUE=${D2S_QUEUE:-537}
+DUR=${D2S_DUR:-60}
 # Field helper follows the service contract: observe every TCP/UDP destination
-# and let d2kd classify the protocol. Use D2K_PORTS only for an explicitly
+# and let d2sd classify the protocol. Use D2S_PORTS only for an explicitly
 # narrowed diagnostic run.
-PORTS=${D2K_PORTS:-0:65535}
-MODE=${D2K_MODE:-observe}
-CONNBYTES=${D2K_CONNBYTES:-0:8}
+PORTS=${D2S_PORTS:-0:65535}
+MODE=${D2S_MODE:-observe}
+CONNBYTES=${D2S_CONNBYTES:-0:8}
 # Снимать ли аппаратный офлоад. Этап 0 показал, что первые пакеты КАЖДОГО
 # направления доходят до очереди и без этого: железо забирает поток не сразу.
 # Значит для наблюдения за установкой соединения де-оффлоад может быть не
 # нужен — а он стоит 66 % процессора на полном окне. Проверяется замером.
-PPE=${D2K_PPE:-1}
+PPE=${D2S_PPE:-1}
 # Ставить ли зеркальное правило на обратное направление. Оно нужно, чтобы
 # видеть сброс цензора: улику, которую в прямом направлении не видно вовсе.
 # В PREROUTING обратный NAT ещё не отработал и адрес клиента там не виден,
@@ -54,60 +54,60 @@ PPE=${D2K_PPE:-1}
 #
 # При обучении обратная сторона обязательна: контроллер учится на том, что
 # отвечает линия, а без неё учиться не на чем.
-REV=${D2K_REV:-${D2K_LEARN:-0}}
+REV=${D2S_REV:-${D2S_LEARN:-0}}
 # План в канонической форме (локальный путь). Текст плана в байты провода
-# переводит core/plantlv.c; подкоманда `d2k plan compile` удалена вместе с
+# переводит core/plantlv.c; подкоманда `d2s plan compile` удалена вместе с
 # Go-стороной движка 11.09.2026.
-PLAN=${D2K_PLAN:-}
+PLAN=${D2S_PLAN:-}
 # Метка на собственных пакетах. В режиме apply обязательна: без неё
 # собственные пакеты нечем исключить из своей же очереди (§5.5).
-MARK=${D2K_MARK:-0}
+MARK=${D2S_MARK:-0}
 # МЕТКА КОНТРОЛЛЕРА — ОТДЕЛЬНАЯ ОТ МЕТКИ ДАТАПАТА, и это не косметика.
 # У метки датапата одна задача: не пускать его СОБСТВЕННЫЕ сырые посылки
 # обратно в очередь (иначе петля). Правило исключения написано только для
 # этой метки; controller probes получают свою метку и фильтруются datapath
 # как active probes, не как новые пользовательские цели.
 #
-# Но зонд подтверждения от d2kc ходит обычным сокетом, и ему план НУЖЕН: он
+# Но зонд подтверждения от d2sc ходит обычным сокетом, и ему план НУЖЕН: он
 # затем и существует, чтобы проверить план на себе. Одна метка на обоих
 # означает, что зонд исключён из очереди вместе с посылками, пробный план
 # (привязанный к ПОРТУ зонда) не достаётся никому, и рабочий план объявляется
 # негодным. Ровно это и наблюдалось на живой линии 17.09: seqovl-1 пробивает
 # коробку (проверено планом, 3/3), а подтверждение дало «зонд не дошёл до
 # приложения» и план был выброшен.
-CTL_MARK=${D2K_CTL_MARK:-0x2e}
+CTL_MARK=${D2S_CTL_MARK:-0x2e}
 # Марка для собственных измерительных проб классификатора: они должны выйти
 # наружу без повторного попадания в измеряемый datapath. Проверочные пробы
-# d2kc остаются на CTL_MARK и, наоборот, проходят через NFQUEUE.
-MEASURE_MARK=${D2K_MEASURE_MARK:-0x2f}
+# d2sc остаются на CTL_MARK и, наоборот, проходят через NFQUEUE.
+MEASURE_MARK=${D2S_MEASURE_MARK:-0x2f}
 # Сужение опыта. §2.6 требует ограничивать последствия: на роутере живут
 # чужие устройства, и десинк всего 443-го порта — не эксперимент, а авария.
-SRC=${D2K_SRC:-}
-DST=${D2K_DST:-}
+SRC=${D2S_SRC:-}
+DST=${D2S_DST:-}
 # Снимать ли трафик на WAN, чтобы увидеть собственный пакет на проводе.
-DUMP_IF=${D2K_DUMP_IF:-}
-DUMP_N=${D2K_DUMP_N:-40}
+DUMP_IF=${D2S_DUMP_IF:-}
+DUMP_N=${D2S_DUMP_N:-40}
 # Поднимать ли контроллер: он учится на подозрениях и строит каталог коробок.
-LEARN=${D2K_LEARN:-0}
+LEARN=${D2S_LEARN:-0}
 # Необязательный локальный seed/sink для каталога контроллера. Позволяет
 # остановить временный контроллер и запустить новый с тем же знанием, не
 # оставляя каталог на роутере и не записывая его в /opt/flash.
-CATALOG=${D2K_CATALOG:-}
+CATALOG=${D2S_CATALOG:-}
 # Голос Дискорда: UDP на портах боевого профиля discord_udp, только первые
-# пакеты каждого направления (как files/S99d2k). Сужается тем же SRC/DST.
-VOICE=${D2K_VOICE:-0}
+# пакеты каждого направления (как files/S99d2s). Сужается тем же SRC/DST.
+VOICE=${D2S_VOICE:-0}
 # QUIC: UDP на тех же портах PORTS, что и TCP. Туда — первые пакеты потока,
 # оттуда — ответы (транзит на FORWARD, ответы собственному зонду на INPUT).
-QUIC=${D2K_QUIC:-0}
+QUIC=${D2S_QUIC:-0}
 UDP_REVERSE_OPT=
 [ "$QUIC" = 1 ] && UDP_REVERSE_OPT=--udp-reverse-hook
 VOICE_PORTS=50000:50099,1400,3478:3481,5349,19294:19344
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
-TOKEN="d2k$$"
+TOKEN="d2s$$"
 # Путь к сокету мультиплексора ограничен ~104 байтами (sockaddr_un), а
 # TMPDIR на маке длинный. Каталог короткий и имя сокета короткое.
-SCRATCH=$(mktemp -d "/tmp/d2kf.XXXXXX")
+SCRATCH=$(mktemp -d "/tmp/d2sf.XXXXXX")
 STAMP=$(date +%Y%m%d-%H%M%S)
 LOCAL_LOG="$REPO/docs/field/raw/observe-$STAMP.log"
 
@@ -117,18 +117,18 @@ LOCAL_LOG="$REPO/docs/field/raw/observe-$STAMP.log"
 MUX="-o ControlMaster=auto -o ControlPath=$SCRATCH/m -o ControlPersist=180"
 BORROWED_SSH=0
 say() { printf '%s\n' "$*" >&2; }
-if [ -n "${D2K_SSH_CONTROL:-}" ]; then
-    case "$D2K_SSH_CONTROL" in
+if [ -n "${D2S_SSH_CONTROL:-}" ]; then
+    case "$D2S_SSH_CONTROL" in
         *[!a-zA-Z0-9_./-]*) say "недопустимый путь SSH control socket"; exit 2 ;;
     esac
-    [ -S "$D2K_SSH_CONTROL" ] || { echo "нет SSH control socket" >&2; exit 2; }
-    MUX="-o ControlMaster=no -o ControlPath=$D2K_SSH_CONTROL -o BatchMode=yes"
+    [ -S "$D2S_SSH_CONTROL" ] || { echo "нет SSH control socket" >&2; exit 2; }
+    MUX="-o ControlMaster=no -o ControlPath=$D2S_SSH_CONTROL -o BatchMode=yes"
     BORROWED_SSH=1
 fi
 
-if [ -n "${D2K_SSH_PASS:-}" ] && [ "$BORROWED_SSH" = 0 ]; then
+if [ -n "${D2S_SSH_PASS:-}" ] && [ "$BORROWED_SSH" = 0 ]; then
     # Do not put the password in argv (visible to process listings).
-    SSHPASS=$D2K_SSH_PASS
+    SSHPASS=$D2S_SSH_PASS
     export SSHPASS
     SSH="sshpass -e ssh -n $MUX -p $SSH_PORT -o StrictHostKeyChecking=yes root@$ROUTER"
     SSH_IN="sshpass -e ssh $MUX -p $SSH_PORT -o StrictHostKeyChecking=yes root@$ROUTER"
@@ -154,9 +154,9 @@ teardown() {
         # правило с жетоном переживало бы опыт.
         iptables -t nat -S POSTROUTING 2>/dev/null | grep -- '--comment $TOKEN' |
         sed 's/^-A /-D /' | while IFS= read -r r; do eval \"iptables -t nat \$r\"; done
-        [ -f /tmp/d2kd.$TOKEN.pid ] && kill \$(cat /tmp/d2kd.$TOKEN.pid) 2>/dev/null
-        [ -f /tmp/d2k.$TOKEN.pid ] && kill \$(cat /tmp/d2k.$TOKEN.pid) 2>/dev/null
-        [ -f /tmp/d2kd.$TOKEN.tcpdump.pid ] && kill \$(cat /tmp/d2kd.$TOKEN.tcpdump.pid) 2>/dev/null
+        [ -f /tmp/d2sd.$TOKEN.pid ] && kill \$(cat /tmp/d2sd.$TOKEN.pid) 2>/dev/null
+        [ -f /tmp/d2s.$TOKEN.pid ] && kill \$(cat /tmp/d2s.$TOKEN.pid) 2>/dev/null
+        [ -f /tmp/d2sd.$TOKEN.tcpdump.pid ] && kill \$(cat /tmp/d2sd.$TOKEN.tcpdump.pid) 2>/dev/null
         echo \"остаток правил с жетоном: \$(iptables -t mangle -S 2>/dev/null | grep -c -- '--comment $TOKEN') в mangle, \$(iptables -t nat -S 2>/dev/null | grep -c -- '--comment $TOKEN') в nat\"
     " >&2 || true
 }
@@ -172,8 +172,8 @@ cleanup() {
 trap 'cleanup' EXIT INT TERM
 
 say "== сборка =="
-make -C "$REPO/datapath" d2kd-linux-arm64 >/dev/null
-BIN="$REPO/builds/d2kd-linux-arm64"
+make -C "$REPO/datapath" d2sd-linux-arm64 >/dev/null
+BIN="$REPO/builds/d2sd-linux-arm64"
 [ -s "$BIN" ] || { say "бинарник не собрался"; exit 1; }
 LOCAL_SIZE=$(wc -c < "$BIN" | tr -d ' ')
 say "  $LOCAL_SIZE байт"
@@ -181,58 +181,58 @@ say "  $LOCAL_SIZE байт"
 say "== доставка =="
 # Потоком через ssh, а не scp: у dropbear на Keenetic нет sftp-server.
 # Здесь ssh БЕЗ -n — stdin отдаётся намеренно.
-$SSH_IN "cat > /tmp/d2kd.$TOKEN" < "$BIN"
-REMOTE_SIZE=$($SSH "wc -c < /tmp/d2kd.$TOKEN" | tr -d ' \r')
+$SSH_IN "cat > /tmp/d2sd.$TOKEN" < "$BIN"
+REMOTE_SIZE=$($SSH "wc -c < /tmp/d2sd.$TOKEN" | tr -d ' \r')
 [ "$LOCAL_SIZE" = "$REMOTE_SIZE" ] || {
     say "доставка испорчена: у нас $LOCAL_SIZE, на роутере $REMOTE_SIZE"
     exit 1
 }
 say "  доставлено $REMOTE_SIZE байт, размер совпал"
-$SSH "chmod +x /tmp/d2kd.$TOKEN && /tmp/d2kd.$TOKEN --help >/dev/null 2>&1 && echo '  служба запускается'"
+$SSH "chmod +x /tmp/d2sd.$TOKEN && /tmp/d2sd.$TOKEN --help >/dev/null 2>&1 && echo '  служба запускается'"
 
 if [ "$MODE" = apply ]; then
     # План берётся либо из файла, либо у контроллера. Без обоих исполнять
     # нечего.
     if [ -z "$PLAN" ] && [ "$LEARN" != 1 ]; then
-        say "режим apply без D2K_PLAN и без D2K_LEARN ничего не сделал бы"
+        say "режим apply без D2S_PLAN и без D2S_LEARN ничего не сделал бы"
         exit 2
     fi
-    [ "$MARK" != 0 ] || { say "режим apply без D2K_MARK запрещён: см. §5.5"; exit 2; }
+    [ "$MARK" != 0 ] || { say "режим apply без D2S_MARK запрещён: см. §5.5"; exit 2; }
     # Сужение обязательно, но годится любое: по клиенту или по цели. §2.6
     # требует ограничить последствия, а не непременно обе стороны — на
     # роутере живут чужие устройства, и десинк всего 443-го порта был бы не
     # экспериментом, а аварией.
     if [ -z "$SRC" ] && [ -z "$DST" ]; then
-        say "режим apply без D2K_SRC и D2K_DST запрещён: опыт обязан быть узким (§2.6)"
+        say "режим apply без D2S_SRC и D2S_DST запрещён: опыт обязан быть узким (§2.6)"
         exit 2
     fi
     if [ -n "$PLAN" ]; then
         say "== доставка плана =="
-        $SSH_IN "cat > /tmp/d2kd.$TOKEN.plan" < "$PLAN"
-        PSIZE=$($SSH "wc -c < /tmp/d2kd.$TOKEN.plan" | tr -d ' \r')
+        $SSH_IN "cat > /tmp/d2sd.$TOKEN.plan" < "$PLAN"
+        PSIZE=$($SSH "wc -c < /tmp/d2sd.$TOKEN.plan" | tr -d ' \r')
         [ "$PSIZE" = "$(wc -c < "$PLAN" | tr -d ' ')" ] || { say "план доехал испорченным"; exit 1; }
         say "  план $PSIZE байт"
     fi
 fi
 
 if [ -n "$CATALOG" ]; then
-    [ "$LEARN" = 1 ] || { say "D2K_CATALOG требует D2K_LEARN=1"; exit 2; }
+    [ "$LEARN" = 1 ] || { say "D2S_CATALOG требует D2S_LEARN=1"; exit 2; }
     [ ! -e "$CATALOG" ] || [ -f "$CATALOG" ] || {
-        say "D2K_CATALOG должен быть обычным файлом или новым путём"; exit 2;
+        say "D2S_CATALOG должен быть обычным файлом или новым путём"; exit 2;
     }
 fi
 
 if [ "$LEARN" = 1 ]; then
     say "== доставка контроллера =="
-    # Контроллер — d2kc, на C. До 11.09.2026 здесь собирался Go-бинарник и
+    # Контроллер — d2sc, на C. До 11.09.2026 здесь собирался Go-бинарник и
     # запускался подкомандой `control`; и бинарник, и подкоманда удалены
     # вместе с Go-стороной движка, так что эта ветка скрипта просто падала.
-    make -C "$REPO/core" d2kc-linux-arm64 >/dev/null
-    CSIZE=$(wc -c < "$REPO/builds/d2kc-linux-arm64" | tr -d ' ')
-    $SSH_IN "cat > /tmp/d2k.$TOKEN" < "$REPO/builds/d2kc-linux-arm64"
-    RSIZE=$($SSH "wc -c < /tmp/d2k.$TOKEN" | tr -d ' \r')
+    make -C "$REPO/core" d2sc-linux-arm64 >/dev/null
+    CSIZE=$(wc -c < "$REPO/builds/d2sc-linux-arm64" | tr -d ' ')
+    $SSH_IN "cat > /tmp/d2s.$TOKEN" < "$REPO/builds/d2sc-linux-arm64"
+    RSIZE=$($SSH "wc -c < /tmp/d2s.$TOKEN" | tr -d ' \r')
     [ "$CSIZE" = "$RSIZE" ] || { say "контроллер доехал испорченным: $CSIZE против $RSIZE"; exit 1; }
-    $SSH "chmod +x /tmp/d2k.$TOKEN"
+    $SSH "chmod +x /tmp/d2s.$TOKEN"
     say "  контроллер $RSIZE байт"
 fi
 
@@ -254,9 +254,9 @@ CTL_SRC=""
 [ -n "$DST" ] && CTL_SRC="-s $DST"
 NOTSELF=""
 [ "$MARK" != 0 ] && NOTSELF="-m mark ! --mark $MARK"
-[ "$CTL_MARK" != "$MARK" ] || { say "D2K_CTL_MARK должен отличаться от D2K_MARK"; exit 2; }
+[ "$CTL_MARK" != "$MARK" ] || { say "D2S_CTL_MARK должен отличаться от D2S_MARK"; exit 2; }
 { [ "$MEASURE_MARK" != "$MARK" ] && [ "$MEASURE_MARK" != "$CTL_MARK" ]; } || {
-    say "D2K_MEASURE_MARK должен отличаться от D2K_MARK и D2K_CTL_MARK"; exit 2;
+    say "D2S_MEASURE_MARK должен отличаться от D2S_MARK и D2S_CTL_MARK"; exit 2;
 }
 NOTMEASURE="-m mark ! --mark $MEASURE_MARK"
 
@@ -321,7 +321,7 @@ fi
 if [ $VOICE = 1 ] || [ $QUIC = 1 ]; then
     # Свои посылки по UDP уходят с локальным адресом клиента: первая
     # датаграмма и есть приветствие, записи conntrack под неё ещё нет (см.
-    # files/S99d2k). Трансляцию заводит наша первая посылка.
+    # files/S99d2s). Трансляцию заводит наша первая посылка.
     iptables -t nat -I POSTROUTING -p udp -m mark --mark $MARK -m comment --comment $TOKEN -j MASQUERADE
 fi
 for ch in POSTROUTING FORWARD OUTPUT INPUT; do
@@ -342,10 +342,10 @@ $SSH "
   done
   iptables -t nat -S POSTROUTING 2>/dev/null | grep -- '--comment $TOKEN' |
   sed 's/^-A /-D /' | while IFS= read -r r; do eval \"iptables -t nat \$r\"; done
-  [ -f /tmp/d2kd.$TOKEN.pid ] && kill \$(cat /tmp/d2kd.$TOKEN.pid) 2>/dev/null
-  [ -f /tmp/d2k.$TOKEN.pid ] && kill \$(cat /tmp/d2k.$TOKEN.pid) 2>/dev/null
-  [ -f /tmp/d2kd.$TOKEN.tcpdump.pid ] && kill \$(cat /tmp/d2kd.$TOKEN.tcpdump.pid) 2>/dev/null
-  rm -f /tmp/d2kd.$TOKEN /tmp/d2kd.$TOKEN.pid
+  [ -f /tmp/d2sd.$TOKEN.pid ] && kill \$(cat /tmp/d2sd.$TOKEN.pid) 2>/dev/null
+  [ -f /tmp/d2s.$TOKEN.pid ] && kill \$(cat /tmp/d2s.$TOKEN.pid) 2>/dev/null
+  [ -f /tmp/d2sd.$TOKEN.tcpdump.pid ] && kill \$(cat /tmp/d2sd.$TOKEN.tcpdump.pid) 2>/dev/null
+  rm -f /tmp/d2sd.$TOKEN /tmp/d2sd.$TOKEN.pid
 ) >/dev/null 2>&1 &
 echo '  сторож взведён'
 " >&2
@@ -353,41 +353,41 @@ echo '  сторож взведён'
 say "== запуск службы =="
 # nohup на BusyBox нет; start-stop-daemon есть и умеет отвязывать процесс.
 $SSH "
-start-stop-daemon -S -b -m -p /tmp/d2kd.$TOKEN.pid -x /tmp/d2kd.$TOKEN -- \
+start-stop-daemon -S -b -m -p /tmp/d2sd.$TOKEN.pid -x /tmp/d2sd.$TOKEN -- \
     --queue $QUEUE --mode $MODE --stats 15 --duration $DUR --mark $MARK --probe-mark $CTL_MARK \
     $UDP_REVERSE_OPT \
-    ${PLAN:+--plan /tmp/d2kd.$TOKEN.plan} \
-    ${LEARN:+--control /tmp/d2kd.$TOKEN.sock} \
-    --log /tmp/d2kd.$TOKEN.out
+    ${PLAN:+--plan /tmp/d2sd.$TOKEN.plan} \
+    ${LEARN:+--control /tmp/d2sd.$TOKEN.sock} \
+    --log /tmp/d2sd.$TOKEN.out
 sleep 1
-echo \"  pid=\$(cat /tmp/d2kd.$TOKEN.pid 2>/dev/null)\"
+echo \"  pid=\$(cat /tmp/d2sd.$TOKEN.pid 2>/dev/null)\"
 " >&2
 
 if [ "$LEARN" = 1 ]; then
     say "== запуск контроллера =="
     # Каталог кладём в /tmp: это опыт, а не эксплуатация, и на флеш роутера
-    # ради него писать нечего. Конфигурационного файла d2kc не читает вовсе —
-    # всё, что ему нужно, приходит ключами; поэтому прежний блок с D2K_CONFIG
+    # ради него писать нечего. Конфигурационного файла d2sc не читает вовсе —
+    # всё, что ему нужно, приходит ключами; поэтому прежний блок с D2S_CONFIG
     # здесь не нужен, а не «упущен».
-    $SSH "mkdir -p /tmp/d2k.$TOKEN.state"
+    $SSH "mkdir -p /tmp/d2s.$TOKEN.state"
     if [ -n "$CATALOG" ] && [ -f "$CATALOG" ]; then
         say "== восстановление временного каталога =="
-        $SSH_IN "cat > /tmp/d2k.$TOKEN.state/catalog.json" < "$CATALOG"
+        $SSH_IN "cat > /tmp/d2s.$TOKEN.state/catalog.json" < "$CATALOG"
         LOCAL_CATALOG_SIZE=$(wc -c < "$CATALOG" | tr -d ' ')
-        REMOTE_CATALOG_SIZE=$($SSH "wc -c < /tmp/d2k.$TOKEN.state/catalog.json" | tr -d ' \r')
+        REMOTE_CATALOG_SIZE=$($SSH "wc -c < /tmp/d2s.$TOKEN.state/catalog.json" | tr -d ' \r')
         [ "$LOCAL_CATALOG_SIZE" = "$REMOTE_CATALOG_SIZE" ] || {
             say "каталог доставлен с ошибкой: $LOCAL_CATALOG_SIZE против $REMOTE_CATALOG_SIZE"; exit 1;
         }
         say "  каталог доставлен, размер совпал ($REMOTE_CATALOG_SIZE байт)"
     fi
     $SSH "
-    start-stop-daemon -S -b -m -p /tmp/d2k.$TOKEN.pid -x /tmp/d2k.$TOKEN -- \
-        --control /tmp/d2kd.$TOKEN.sock \
-        --catalog /tmp/d2k.$TOKEN.state/catalog.json \
-        --live /tmp/d2k.$TOKEN.state/live.json \
-        --mark $CTL_MARK --measure-mark $MEASURE_MARK --log /tmp/d2k.$TOKEN.out
+    start-stop-daemon -S -b -m -p /tmp/d2s.$TOKEN.pid -x /tmp/d2s.$TOKEN -- \
+        --control /tmp/d2sd.$TOKEN.sock \
+        --catalog /tmp/d2s.$TOKEN.state/catalog.json \
+        --live /tmp/d2s.$TOKEN.state/live.json \
+        --mark $CTL_MARK --measure-mark $MEASURE_MARK --log /tmp/d2s.$TOKEN.out
     sleep 2
-    echo \"  контроллер: \$(head -3 /tmp/d2k.$TOKEN.out 2>/dev/null | tr '\n' ' ')\"
+    echo \"  контроллер: \$(head -3 /tmp/d2s.$TOKEN.out 2>/dev/null | tr '\n' ' ')\"
     " >&2
 fi
 
@@ -396,7 +396,7 @@ say "== проверка привязки очереди =="
 BOUND=$($SSH "awk -v q=$QUEUE '\$1==q{print \$2}' /proc/net/netfilter/nfnetlink_queue 2>/dev/null" | tr -d ' \r')
 if [ -z "$BOUND" ] || [ "$BOUND" = "0" ]; then
     say "ОЧЕРЕДЬ $QUEUE НЕ ПРИВЯЗАНА — нагрузку не подаём"
-    $SSH "cat /tmp/d2kd.$TOKEN.log 2>/dev/null; ls -l /tmp/d2kd.$TOKEN*" >&2 || true
+    $SSH "cat /tmp/d2sd.$TOKEN.log 2>/dev/null; ls -l /tmp/d2sd.$TOKEN*" >&2 || true
     exit 1
 fi
 say "  очередь $QUEUE привязана к процессу $BOUND"
@@ -405,15 +405,15 @@ if [ -n "$DUMP_IF" ]; then
     say "== снимок трафика на $DUMP_IF =="
     # -c ограничивает число пакетов: tcpdump без предела на роутере живёт
     # вечно и пишет, пока не кончится место.
-    $SSH "start-stop-daemon -S -b -m -p /tmp/d2kd.$TOKEN.tcpdump.pid \
-        -x /opt/bin/tcpdump -- -i $DUMP_IF -n -c $DUMP_N -w /tmp/d2kd.$TOKEN.pcap \
+    $SSH "start-stop-daemon -S -b -m -p /tmp/d2sd.$TOKEN.tcpdump.pid \
+        -x /opt/bin/tcpdump -- -i $DUMP_IF -n -c $DUMP_N -w /tmp/d2sd.$TOKEN.pcap \
         ${DST:+host $DST and }tcp port $PORTS 2>/dev/null || echo '  tcpdump не запустился'"
     sleep 1
 fi
 
 say "== нагрузка =="
-if [ -n "${D2K_LOAD:-}" ]; then
-    sh -c "$D2K_LOAD" >&2 || say "  нагрузка вернула $?"
+if [ -n "${D2S_LOAD:-}" ]; then
+    sh -c "$D2S_LOAD" >&2 || say "  нагрузка вернула $?"
     # Нагрузка кончилась — мерить больше нечего. Раньше здесь стояло
     # ожидание всей длительности прогона: служба досиживала свои сорок пять
     # секунд впустую, и человек смотрел в замерший шелл минуты ради замера,
@@ -426,35 +426,35 @@ else
 fi
 
 if [ -n "$DUMP_IF" ]; then
-    $SSH "kill \$(cat /tmp/d2kd.$TOKEN.tcpdump.pid 2>/dev/null) 2>/dev/null; true"
+    $SSH "kill \$(cat /tmp/d2sd.$TOKEN.tcpdump.pid 2>/dev/null) 2>/dev/null; true"
     mkdir -p "$REPO/docs/field/raw"
-    $SSH_IN "cat /tmp/d2kd.$TOKEN.pcap 2>/dev/null" > "$REPO/docs/field/raw/observe-$STAMP.pcap" || true
+    $SSH_IN "cat /tmp/d2sd.$TOKEN.pcap 2>/dev/null" > "$REPO/docs/field/raw/observe-$STAMP.pcap" || true
     say "  снимок: docs/field/raw/observe-$STAMP.pcap ($(wc -c < "$REPO/docs/field/raw/observe-$STAMP.pcap" | tr -d ' ') байт)"
-    $SSH "rm -f /tmp/d2kd.$TOKEN.pcap /tmp/d2kd.$TOKEN.tcpdump.pid"
+    $SSH "rm -f /tmp/d2sd.$TOKEN.pcap /tmp/d2sd.$TOKEN.tcpdump.pid"
 fi
 
 if [ "$LEARN" = 1 ]; then
     say "== контроллер и каталог =="
-    $SSH "kill \$(cat /tmp/d2k.$TOKEN.pid 2>/dev/null) 2>/dev/null; sleep 1; true"
+    $SSH "kill \$(cat /tmp/d2s.$TOKEN.pid 2>/dev/null) 2>/dev/null; sleep 1; true"
     mkdir -p "$REPO/docs/field/raw"
-    $SSH "cat /tmp/d2k.$TOKEN.out 2>/dev/null" > "$REPO/docs/field/raw/control-$STAMP.log" || true
-    $SSH "cat /tmp/d2k.$TOKEN.state/catalog.json 2>/dev/null" > "$REPO/docs/field/raw/catalog-$STAMP.json" || true
+    $SSH "cat /tmp/d2s.$TOKEN.out 2>/dev/null" > "$REPO/docs/field/raw/control-$STAMP.log" || true
+    $SSH "cat /tmp/d2s.$TOKEN.state/catalog.json 2>/dev/null" > "$REPO/docs/field/raw/catalog-$STAMP.json" || true
     if [ -n "$CATALOG" ]; then
         CATALOG_TMP=$(mktemp "${CATALOG}.XXXXXX")
-        $SSH "cat /tmp/d2k.$TOKEN.state/catalog.json 2>/dev/null" > "$CATALOG_TMP"
+        $SSH "cat /tmp/d2s.$TOKEN.state/catalog.json 2>/dev/null" > "$CATALOG_TMP"
         [ -s "$CATALOG_TMP" ] || { rm -f "$CATALOG_TMP"; say "контроллер не сохранил каталог"; exit 1; }
         mv -f "$CATALOG_TMP" "$CATALOG"
         say "каталог опыта сохранён локально: $CATALOG"
     fi
     sed 's/^/  /' "$REPO/docs/field/raw/control-$STAMP.log" >&2 || true
-    $SSH "rm -rf /tmp/d2k.$TOKEN /tmp/d2k.$TOKEN.* " || true
+    $SSH "rm -rf /tmp/d2s.$TOKEN /tmp/d2s.$TOKEN.* " || true
 fi
 
 say "== сбор вывода =="
 mkdir -p "$(dirname "$LOCAL_LOG")"
-$SSH "cat /tmp/d2kd.$TOKEN.out 2>/dev/null" > "$LOCAL_LOG" || true
+$SSH "cat /tmp/d2sd.$TOKEN.out 2>/dev/null" > "$LOCAL_LOG" || true
 teardown
-$SSH "rm -f /tmp/d2kd.$TOKEN /tmp/d2kd.$TOKEN.pid /tmp/d2kd.$TOKEN.out /tmp/d2kd.$TOKEN.plan; ls /tmp/d2kd.* 2>/dev/null || echo '  на роутере чисто'" >&2
+$SSH "rm -f /tmp/d2sd.$TOKEN /tmp/d2sd.$TOKEN.pid /tmp/d2sd.$TOKEN.out /tmp/d2sd.$TOKEN.plan; ls /tmp/d2sd.* 2>/dev/null || echo '  на роутере чисто'" >&2
 trap - EXIT
 # shellcheck disable=SC2086  # MUX — набор ключей, разворачивается намеренно
 if [ "$BORROWED_SSH" = 0 ]; then

@@ -1,10 +1,10 @@
 #!/bin/sh
-# Lint every shell script D2K ships or runs, with shellcheck. One list for CI and
+# Lint every shell script D2S ships or runs, with shellcheck. One list for CI and
 # scripts/check.sh: two hand-kept lists drifted apart once already — CI did not
-# lint files/S99d2k at all, the script that installs the router's firewall.
+# lint files/S99d2s at all, the script that installs the router's firewall.
 #
 # *.sh files are found by glob. The init and service scripts in files/ have no
-# extension by convention (S99d2k, d2k-openwrt-init), so the glob misses them:
+# extension by convention (S99d2s, d2s-openwrt-init), so the glob misses them:
 # every file in files/ that starts with a shebang for sh is linted too.
 set -eu
 

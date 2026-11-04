@@ -22,7 +22,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_wire.h"
+#include "d2s_wire.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -84,7 +84,7 @@ static int verify_udp(const uint8_t *pkt, size_t total) {
     return ones_complement_ok(scratch, 12 + udp_len);
 }
 
-static void conn_init(d2k_conn *c) {
+static void conn_init(d2s_conn *c) {
     memset(c, 0, sizeof *c);
     uint8_t s[4] = {192, 168, 1, 67}, d[4] = {1, 2, 3, 4};
     memcpy(&c->src_ip, s, 4);
@@ -119,17 +119,17 @@ static const uint8_t golden_zero_checksum[] = {
 };
 
 static void check_golden_clean(void) {
-    d2k_conn c;
+    d2s_conn c;
     conn_init(&c);
 
     static const uint8_t body[] = {0xDE, 0xAD, 0xBE, 0xEF, 0x11};
-    d2k_emit e;
+    d2s_emit e;
     memset(&e, 0, sizeof e);
     e.bytes = body;
     e.len = sizeof body;
 
     uint8_t pkt[256];
-    size_t n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    size_t n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(n == sizeof golden_clean, "длина разошлась с эталоном (чистый случай)");
     if (n == sizeof golden_clean) {
         CHECK(memcmp(pkt, golden_clean, n) == 0,
@@ -138,19 +138,19 @@ static void check_golden_clean(void) {
 }
 
 static void check_golden_zero_checksum(void) {
-    d2k_conn c;
+    d2s_conn c;
     conn_init(&c);
 
     /* Подобрано перебором (см. шапку файла): при этих байтах честный подсчёт
        суммы даёт ровно 0x0000 ДО подмены. */
     static const uint8_t body[] = {0x9b, 0xed};
-    d2k_emit e;
+    d2s_emit e;
     memset(&e, 0, sizeof e);
     e.bytes = body;
     e.len = sizeof body;
 
     uint8_t pkt[256];
-    size_t n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    size_t n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(n == sizeof golden_zero_checksum, "длина разошлась с эталоном (нулевая сумма)");
     if (n == sizeof golden_zero_checksum) {
         CHECK(memcmp(pkt, golden_zero_checksum, n) == 0,
@@ -162,13 +162,13 @@ static void check_golden_zero_checksum(void) {
 
 int main(void) {
     {
-        d2k_conn v6 = {.family = 6, .ttl = 49,
+        d2s_conn v6 = {.family = 6, .ttl = 49,
             .src_ip6 = {0x20,1,0xdb,8,0,0,0,0,0,0,0,0,0,0,0,1},
             .dst_ip6 = {0x20,1,0xdb,8,0,0,0,0,0,0,0,0,0,0,0,2}};
         const uint8_t data[] = {1,2,3};
-        d2k_emit emit = {.bytes=data, .len=sizeof data};
+        d2s_emit emit = {.bytes=data, .len=sizeof data};
         uint8_t out[128], check[51] = {0};
-        size_t n6 = d2k_wire_build_udp(&v6, &emit, out, sizeof out);
+        size_t n6 = d2s_wire_build_udp(&v6, &emit, out, sizeof out);
         CHECK(n6 == 51 && out[0] == 0x60 && rd16(out + 4) == 11 &&
               out[6] == 17 && out[7] == 49, "IPv6 UDP header");
         CHECK(!memcmp(out + 8, v6.src_ip6, 16) && !memcmp(out + 24, v6.dst_ip6, 16),
@@ -179,24 +179,24 @@ int main(void) {
         CHECK(rd16(out + 46) != 0 && ones_complement_ok(check, sizeof check),
               "IPv6 UDP mandatory checksum");
         CHECK(!memcmp(out + 48, data, sizeof data), "IPv6 UDP payload");
-        CHECK(d2k_wire_build_udp(&v6, &emit, out, 50) == 0, "IPv6 UDP capacity");
-        emit.poison = D2K_POISON_IPID_ZERO;
-        CHECK(d2k_wire_build_udp(&v6, &emit, out, sizeof out) == 0,
+        CHECK(d2s_wire_build_udp(&v6, &emit, out, 50) == 0, "IPv6 UDP capacity");
+        emit.poison = D2S_POISON_IPID_ZERO;
+        CHECK(d2s_wire_build_udp(&v6, &emit, out, sizeof out) == 0,
               "IPv6 UDP silently ignored IPv4-only poison");
     }
-    d2k_conn c;
+    d2s_conn c;
     conn_init(&c);
 
     static const uint8_t body[] = {0xC0, 0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB};
     uint8_t pkt[256];
 
     /* --- чистая посылка: длина, поля, суммы ------------------------------ */
-    d2k_emit e;
+    d2s_emit e;
     memset(&e, 0, sizeof e);
     e.bytes = body;
     e.len = sizeof body;
 
-    size_t n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    size_t n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(n == 20 + 8 + sizeof body, "длина дейтаграммы не равна заголовкам плюс нагрузка");
     CHECK((pkt[0] >> 4) == 4, "не IPv4");
     CHECK(rd16(pkt + 2) == n, "поле длины IP не совпало с фактической длиной");
@@ -221,15 +221,15 @@ int main(void) {
     /* --- малый TTL --------------------------------------------------------- */
     memset(&e, 0, sizeof e);
     e.bytes = body; e.len = sizeof body; e.ttl = 3;
-    n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(pkt[8] == 3, "TTL порчи не доехал до заголовка IP");
     CHECK(verify_udp(pkt, n), "малый TTL не должен ломать сумму UDP");
 
     /* --- нулевой идентификатор IP ------------------------------------------ */
     memset(&e, 0, sizeof e);
     e.bytes = body; e.len = sizeof body;
-    e.poison = D2K_POISON_IPID_ZERO;
-    n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    e.poison = D2S_POISON_IPID_ZERO;
+    n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(rd16(pkt + 4) == 0, "идентификатор IP не обнулён");
 
     /* Без порчи идентификатор обязан отличаться от исходного — та же
@@ -237,52 +237,52 @@ int main(void) {
        дейтаграммы в один фрагментированный пакет на стороне получателя. */
     memset(&e, 0, sizeof e);
     e.bytes = body; e.len = sizeof body;
-    n = d2k_wire_build_udp(&c, &e, pkt, sizeof pkt);
+    n = d2s_wire_build_udp(&c, &e, pkt, sizeof pkt);
     CHECK(rd16(pkt + 4) != c.ip_id, "идентификатор совпал с исходным");
 
     /* --- приставка перекрытия для UDP смысла не имеет: отказ, не тишина --- */
     {
-        d2k_emit e2;
+        d2s_emit e2;
         memset(&e2, 0, sizeof e2);
         const uint8_t pre[] = {0xAA, 0xBB};
         e2.pre = pre;
         e2.pre_len = sizeof pre;
         e2.bytes = body;
         e2.len = sizeof body;
-        CHECK(d2k_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
+        CHECK(d2s_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
               "приставка перекрытия обязана отвергаться, а не тихо игнорироваться");
     }
 
     /* --- сдвиг номера последовательности — тот же класс, что и приставка -- */
     {
-        d2k_emit e2;
+        d2s_emit e2;
         memset(&e2, 0, sizeof e2);
         e2.bytes = body;
         e2.len = sizeof body;
         e2.seq_shift = -10000;
-        CHECK(d2k_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
+        CHECK(d2s_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
               "сдвиг seq обязан отвергаться для UDP, а не собираться как обычная дейтаграмма");
     }
 
     /* --- метка времени со сдвигом — опция TCP, у UDP опций нет: отказ ----- */
     {
-        d2k_emit e2;
+        d2s_emit e2;
         memset(&e2, 0, sizeof e2);
         e2.bytes = body;
         e2.len = sizeof body;
-        e2.poison = D2K_POISON_TCPTS_BACK;
-        CHECK(d2k_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
+        e2.poison = D2S_POISON_TCPTS_BACK;
+        CHECK(d2s_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
               "метка времени TCP обязана отвергаться для UDP, а не тихо игнорироваться");
     }
 
     /* --- порченая сумма по требованию — эта сборка её не умеет: отказ ----- */
     {
-        d2k_emit e2;
+        d2s_emit e2;
         memset(&e2, 0, sizeof e2);
         e2.bytes = body;
         e2.len = sizeof body;
-        e2.poison = D2K_POISON_BADSUM;
-        CHECK(d2k_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
+        e2.poison = D2S_POISON_BADSUM;
+        CHECK(d2s_wire_build_udp(&c, &e2, pkt, sizeof pkt) == 0,
               "порча суммы обязана отвергаться для UDP, а не собираться с честной суммой молча");
     }
 
@@ -291,18 +291,18 @@ int main(void) {
     e.bytes = body; e.len = sizeof body;
     {
         size_t exact = 20 + 8 + sizeof body;
-        CHECK(d2k_wire_build_udp(&c, &e, pkt, exact - 1) == 0,
+        CHECK(d2s_wire_build_udp(&c, &e, pkt, exact - 1) == 0,
               "сборка обязана отказать, если буфер меньше нужного ровно на байт");
-        CHECK(d2k_wire_build_udp(&c, &e, pkt, exact) == exact,
+        CHECK(d2s_wire_build_udp(&c, &e, pkt, exact) == exact,
               "сборка обязана пройти, если буфер ровно нужного размера");
     }
-    CHECK(d2k_wire_build_udp(&c, &e, pkt, 10) == 0, "сборка в маленький буфер должна отказать");
+    CHECK(d2s_wire_build_udp(&c, &e, pkt, 10) == 0, "сборка в маленький буфер должна отказать");
 
     /* --- нагрузка нулевой длины: заголовок без данных тоже датаграмма ----- */
     {
-        d2k_emit e2;
+        d2s_emit e2;
         memset(&e2, 0, sizeof e2);
-        n = d2k_wire_build_udp(&c, &e2, pkt, sizeof pkt);
+        n = d2s_wire_build_udp(&c, &e2, pkt, sizeof pkt);
         CHECK(n == 20 + 8, "пустая нагрузка должна дать чистые заголовки без данных");
         CHECK(rd16(pkt + 20 + 4) == 8, "поле длины UDP для пустой нагрузки должно быть 8");
         CHECK(verify_udp(pkt, n), "сумма пустой дейтаграммы должна сходиться");

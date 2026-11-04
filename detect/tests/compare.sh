@@ -23,7 +23,7 @@
 # разницу, если бы она когда-нибудь появилась.
 # ЗАДАЧА 49: ТРАССА ПОЛНОГО ПЕРЕБОРА НАМЕРЕННО КОРОЧЕ ЭТАЛОНА. Эталон
 # спрашивает badsum-x2-g20 и badsum-x2-g80 дважды и badsum-x7-g0 вслед за
-# равным ему badsum-x7; d2k — нет (решение владельца 03.10: при единогласии
+# равным ему badsum-x7; d2s — нет (решение владельца 03.10: при единогласии
 # повтор проваленной гипотезы исхода не меняет). Поэтому у эталона повторные
 # строки этих трёх гипотез из трассы вырезаются (norm_ref), а число зондов
 # сверяется только там, где эталон до них не дошёл; где дошёл — разница
@@ -31,7 +31,7 @@
 set -e
 
 Z2K=${Z2K:-/opt/sbin/z2k-detect}
-D2K=${D2K:-/tmp/d2k-detect}
+D2S=${D2S:-/tmp/d2s-detect}
 REPEATS=${REPEATS:-3}
 # Каким приветствием снимать общий триггер. legacy (снятый TLS 1.2, 214 байт)
 # нужен отдельно: на нём фальшивка шага 1 укладывается в один сегмент, то есть
@@ -45,10 +45,10 @@ HELLO=${HELLO:-modern}
 # 14.09 на www.youtube.com разошёлся ровно здесь. Пустое значение допустимо —
 # тогда сверка честно скажет, что контроль не общий.
 CONTROL_HEX=${CONTROL_HEX:-/tmp/ref-control.hex}
-OUT=${OUT:-/tmp/d2k-compare}
+OUT=${OUT:-/tmp/d2s-compare}
 
 [ -x "$Z2K" ] || { echo "нет эталона: $Z2K"; exit 1; }
-[ -x "$D2K" ] || { echo "нет порта: $D2K"; exit 1; }
+[ -x "$D2S" ] || { echo "нет порта: $D2S"; exit 1; }
 
 mkdir -p "$OUT"
 fails=0
@@ -88,7 +88,7 @@ for target in "$@"; do
 	total=$((total + 1))
 	tag=$(echo "$target-$HELLO" | tr ':/' '__')
 	hex="$OUT/$tag.hex"
-	"$D2K" classify "$target" --hello "$HELLO" --dump-trigger > "$hex"
+	"$D2S" classify "$target" --hello "$HELLO" --dump-trigger > "$hex"
 
 	ctl=""
 	if [ -s "$CONTROL_HEX" ]; then
@@ -102,16 +102,16 @@ for target in "$@"; do
 	# другого. Такой прогон врёт молча.
 	"$Z2K" classify -raw "$(cat "$hex")" -repeats "$REPEATS" "$target" > "$OUT/$tag.z2k" 2>&1 || true
 	# shellcheck disable=SC2086
-	"$D2K" classify "$target" --raw "$(cat "$hex")" $ctl --repeats "$REPEATS" > "$OUT/$tag.d2k" 2>&1 || true
+	"$D2S" classify "$target" --raw "$(cat "$hex")" $ctl --repeats "$REPEATS" > "$OUT/$tag.d2s" 2>&1 || true
 
 	norm_ref "$OUT/$tag.z2k" > "$OUT/$tag.z2k.n"
-	norm_port "$OUT/$tag.d2k" "$OUT/$tag.z2k" > "$OUT/$tag.d2k.n"
+	norm_port "$OUT/$tag.d2s" "$OUT/$tag.z2k" > "$OUT/$tag.d2s.n"
 	if grep -q 'Зондов: (сведения)' "$OUT/$tag.z2k.n"; then
 		echo "  сведения: зондов эталон $(sed -n 's/^Зондов: *\([0-9]*\).*/\1/p' "$OUT/$tag.z2k")," \
-		     "порт $(sed -n 's/^Зондов: *\([0-9]*\).*/\1/p' "$OUT/$tag.d2k") (дубли эталона не спрашиваются)"
+		     "порт $(sed -n 's/^Зондов: *\([0-9]*\).*/\1/p' "$OUT/$tag.d2s") (дубли эталона не спрашиваются)"
 	fi
-	if diff -u "$OUT/$tag.z2k.n" "$OUT/$tag.d2k.n" > "$OUT/$tag.diff" 2>&1; then
-		echo "СОВПАЛО   $target — $(sed -n 's/^Вердикт: *//p' "$OUT/$tag.d2k")"
+	if diff -u "$OUT/$tag.z2k.n" "$OUT/$tag.d2s.n" > "$OUT/$tag.diff" 2>&1; then
+		echo "СОВПАЛО   $target — $(sed -n 's/^Вердикт: *//p' "$OUT/$tag.d2s")"
 	else
 		fails=$((fails + 1))
 		echo "РАСХОДИТСЯ $target:"

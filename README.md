@@ -1,4 +1,4 @@
-> Ветка 0.2 пересобрана на t0fox/d2o `fd4e262`. Старый D2S сохранён в `archive/d2s-0.1.3`. Подробности: [аудит](docs/rebase-audit.md).
+> Ветка 0.3 полностью переименована в D2S и пересобрана на t0fox/d2o `fd4e262`. Старый D2S сохранён в `archive/d2s-0.1.3`. Подробности: [аудит](docs/rebase-audit.md).
 
 # D2S
 
@@ -22,7 +22,7 @@ opkg update && opkg install curl ca-bundle && curl -fsSL https://raw.githubuserc
 
 Установщик поставит зависимости, проверит подпись Ed25519 и SHA-256 комплекта, выберет архитектуру и выведет адрес панели. Обычно это **http://адрес-роутера:8090/**. Панель доступна из LAN, не публикуйте её в интернет: аутентификация пока отсутствует.
 
-При миграции с d2o сохраняются конфигурация, каталог и найденные стратегии. Не запускайте параллельно другой DPI-движок для того же трафика. Для первого запуска сохраните настройки роутера.
+Версия 0.3 устанавливается с нуля в `/opt/d2s`. Перед установкой удалите прежний D2S/d2o его штатным деинсталлятором. Автоматическая миграция старого каталога не выполняется. Не запускайте параллельно другой DPI-движок для того же трафика. Для первого запуска сохраните настройки роутера.
 
 ## Что входит
 
@@ -41,10 +41,10 @@ opkg update && opkg install curl ca-bundle && curl -fsSL https://raw.githubuserc
 На новой установке включено по умолчанию. Проверка и начало установки выполняются один раз в сутки **с 02:00 до 03:59 по часовому поясу роутера**. В 04:00 новые автоматические установки не начинаются; уже начатая проверка здоровья/откат может завершиться позже.
 
 ```sh
-/opt/etc/init.d/S99d2k update-check
-/opt/etc/init.d/S99d2k update-install
-/opt/etc/init.d/S99d2k update-auto-on
-/opt/etc/init.d/S99d2k update-auto-off
+/opt/etc/init.d/S99d2s update-check
+/opt/etc/init.d/S99d2s update-install
+/opt/etc/init.d/S99d2s update-auto-on
+/opt/etc/init.d/S99d2s update-auto-off
 ```
 
 Перед заменой создаётся резервная копия; после установки проверяется работа служб. При неудаче выполняется откат. Проверка подписи обязательна. Обновления не берутся из репозитория d2o.
@@ -52,21 +52,21 @@ opkg update && opkg install curl ca-bundle && curl -fsSL https://raw.githubuserc
 ## Управление
 
 ```sh
-/opt/etc/init.d/S99d2k status
-/opt/etc/init.d/S99d2k restart
-/opt/etc/init.d/S99d2k stop
-tail -n 50 /opt/d2k/log/d2kc.log
-tail -n 50 /opt/d2k/log/whatsapp-media-dns.log
+/opt/etc/init.d/S99d2s status
+/opt/etc/init.d/S99d2s restart
+/opt/etc/init.d/S99d2s stop
+tail -n 50 /opt/d2s/log/d2sc.log
+tail -n 50 /opt/d2s/log/whatsapp-media-dns.log
 ```
 
-Основные настройки: `/opt/d2k/config`. Telegram: `TG_ENABLED=1`. Ночной канал: `AUTOUPDATE=1`. Для ограничения политикой Keenetic поддерживается `KEENETIC_POLICY` основного движка; Telegram использует штатные правила d2o.
+Основные настройки: `/opt/d2s/config`. Telegram: `TG_ENABLED=1`. Ночной канал: `AUTOUPDATE=1`. Для ограничения политикой Keenetic поддерживается `KEENETIC_POLICY` основного движка; Telegram использует штатные правила d2o.
 
 Новые медиадомены обрабатываются фоновым циклом до 30 секунд. Старый DNS-кэш приложения может потребовать повторной попытки или перезапуска приложения.
 
 Для удаления с сохранением настроек:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shurshick/D2S/main/scripts/uninstall.sh -o /tmp/d2s-uninstall.sh && D2K_KEEP_STATE=1 sh /tmp/d2s-uninstall.sh
+curl -fsSL https://raw.githubusercontent.com/shurshick/D2S/main/scripts/uninstall.sh -o /tmp/d2s-uninstall.sh && D2S_KEEP_STATE=1 sh /tmp/d2s-uninstall.sh
 ```
 
 Удаление остановится, если не удастся снять собственные DNS-записи. Чужие записи не удаляются.

@@ -1,14 +1,14 @@
 /* test_plantlv.c — перевод текста плана в байты провода.
  *
  * ГЛАВНАЯ ПРОВЕРКА: для КАЖДОЙ формы, которую умеет собирать compose.c, текст,
- * пропущенный через d2k_plan_text_to_tlv, обязан дать РОВНО те же байты, что
+ * пропущенный через d2s_plan_text_to_tlv, обязан дать РОВНО те же байты, что
  * собирает прямой TLV-сборщик рядом. Это не сверка перевода с представлением
  * теста о нём: обе формы одной фигуры уже существуют в дереве и уже проверены
  * planlab'ом (test_compose), поэтому равенство между ними — настоящий эталон.
  *
- * Вторая проверка: план, собранный d2k_compose (тот, что реально едет от
+ * Вторая проверка: план, собранный d2s_compose (тот, что реально едет от
  * планировщика), после перевода принимается НАСТОЯЩИМ исполнителем датапата —
- * planlab гоняет d2k_plan_load + d2k_plan_apply, те же, что в проде. Без неё
+ * planlab гоняет d2s_plan_load + d2s_plan_apply, те же, что в проде. Без неё
  * равенство с сборщиком доказывало бы лишь внутреннюю согласованность. */
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
@@ -16,12 +16,12 @@
 #include <string.h>
 #include <unistd.h>
 
-#include "d2k_compose.h"
-#include "d2k_compose_internal.h"
-#include "d2k_hello.h"
-#include "d2k_plantlv.h"
-#include "d2k_plan.h"
-#include "d2k_wire.h"
+#include "d2s_compose.h"
+#include "d2s_compose_internal.h"
+#include "d2s_hello.h"
+#include "d2s_plantlv.h"
+#include "d2s_plan.h"
+#include "d2s_wire.h"
 
 static int fails;
 #define CHECK(cond, msg) do { if (!(cond)) { printf("ПРОВАЛ: %s\n", (msg)); fails++; } } while (0)
@@ -40,10 +40,10 @@ static void show_diff(const char *what, const uint8_t *a, size_t an,
 
 static void same(const char *what, const char *text,
                  const uint8_t *want, size_t want_len) {
-    uint8_t got[D2K_PLAN_TLV_MAX];
+    uint8_t got[D2S_PLAN_TLV_MAX];
     size_t got_len = 0;
     char err[200];
-    if (d2k_plan_text_to_tlv(text, got, sizeof got, &got_len, err, sizeof err) != 0) {
+    if (d2s_plan_text_to_tlv(text, got, sizeof got, &got_len, err, sizeof err) != 0) {
         printf("ПРОВАЛ: %s: перевод отказал: %s\n", what, err);
         fails++;
         return;
@@ -77,24 +77,24 @@ static int write_file_text(const char *path, const char *s) {
  * считает ДАТАПАТ по TTL ответной стороны, а не контроллер константой. */
 static void autottl_end_to_end(void) {
     static const char text[] =
-        "d2k-plan 1 13\nid 00000000000000000000000000000000\n"
+        "d2s-plan 1 13\nid 00000000000000000000000000000000\n"
         "proto tcp tls\npayload 1 aabbcc\n"
         "poison 1 badsum autottl=1,2-12\n"
         "fake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n";
-    uint8_t tlv[D2K_PLAN_TLV_MAX];
+    uint8_t tlv[D2S_PLAN_TLV_MAX];
     size_t n = 0;
     char err[200];
-    d2k_plan *pl = NULL;
-    CHECK(d2k_plan_text_to_tlv(text, tlv, sizeof tlv, &n, err, sizeof err) == 0,
+    d2s_plan *pl = NULL;
+    CHECK(d2s_plan_text_to_tlv(text, tlv, sizeof tlv, &n, err, sizeof err) == 0,
           "autottl: текст не переведён в TLV");
-    CHECK(d2k_plan_load(tlv, n, &pl, err, sizeof err) == 0 && pl,
+    CHECK(d2s_plan_load(tlv, n, &pl, err, sizeof err) == 0 && pl,
           "autottl: TLV не разобран исполнителем");
     if (!pl) { return; }
     uint8_t hello[64] = {0x16, 3, 1, 0, 5, 1, 0, 0, 1, 0};
-    d2k_pkt in = {0};
+    d2s_pkt in = {0};
     in.payload = hello; in.payload_len = sizeof hello; in.seq = 100;
-    d2k_actions a = {0};
-    CHECK(d2k_plan_apply(pl, NULL, &in, &a) == 0 && a.n >= 1,
+    d2s_actions a = {0};
+    CHECK(d2s_plan_apply(pl, NULL, &in, &a) == 0 && a.n >= 1,
           "autottl: план не применился к приветствию");
     if (a.n >= 1) {
         /* Плечо доехало до посылки. */
@@ -103,29 +103,29 @@ static void autottl_end_to_end(void) {
           "autottl: признак и шаблон не доехали до посылки");
         /* И сборщик считает его по ответу: TTL ответа 57 → путь 7 → +1 = 8. */
         uint8_t wire[256];
-        d2k_conn c = {0};
+        d2s_conn c = {0};
         c.family = 4; c.ttl = 64; c.rev_ttl = 57; c.window = 1024;
-        size_t w = d2k_wire_build(&c, &a.v[0], wire, sizeof wire);
+        size_t w = d2s_wire_build(&c, &a.v[0], wire, sizeof wire);
         CHECK(w > 20 && wire[8] == 8,
           "autottl: сборщик не посчитал TTL по ответу (ждали 8)");
     }
-    d2k_actions_free(&a);
-    d2k_plan_free(pl);
+    d2s_actions_free(&a);
+    d2s_plan_free(pl);
     /* Старый исполнитель такой план НЕ берёт: minexec ниже 13. */
     static const char old_text[] =
-        "d2k-plan 1 12\nid 00000000000000000000000000000000\n"
+        "d2s-plan 1 12\nid 00000000000000000000000000000000\n"
         "proto tcp tls\npayload 1 aabbcc\n"
         "poison 1 badsum autottl=1,2-12\n"
         "fake payload=1 poison=1 repeats=1 gap_us=0 place=before\norder forward\n";
     size_t n2 = 0;
-    CHECK(d2k_plan_text_to_tlv(old_text, tlv, sizeof tlv, &n2, err, sizeof err) != 0 ||
-          d2k_plan_load(tlv, n2, &pl, err, sizeof err) != 0,
+    CHECK(d2s_plan_text_to_tlv(old_text, tlv, sizeof tlv, &n2, err, sizeof err) != 0 ||
+          d2s_plan_load(tlv, n2, &pl, err, sizeof err) != 0,
           "autottl: план с minexec 12 принят старым исполнителем");
-    d2k_plan_free(pl);
+    d2s_plan_free(pl);
     /* Кривой шаблон отвергается с объяснением. */
     size_t n3 = 0;
-    CHECK(d2k_plan_text_to_tlv(
-        "d2k-plan 1 13\nproto tcp tls\npoison 1 autottl=1,20-2\n",
+    CHECK(d2s_plan_text_to_tlv(
+        "d2s-plan 1 13\nproto tcp tls\npoison 1 autottl=1,20-2\n",
         tlv, sizeof tlv, &n3, err, sizeof err) != 0,
           "autottl: кривой шаблон min>max принят");
 }
@@ -178,7 +178,7 @@ int main(void) {
 
     /* --- delay: выдержка перед единственной посылкой ---------------------
      *
-     * Ни pace, ни settle её не выражают (см. d2k_plan_internal.h про
+     * Ни pace, ни settle её не выражают (см. d2s_plan_internal.h про
      * delay_us). Требует minexec=6: старый датапат выдержки не знает, и
      * молча выпустить посылку без паузы значит исполнить не тот план. */
     {
@@ -186,13 +186,13 @@ int main(void) {
         size_t n = 0;
         char err[200];
         static const char *h6 =
-            "d2k-plan 1 6\nid 00000000000000000000000000000000\nproto udp quic\n";
+            "d2s-plan 1 6\nid 00000000000000000000000000000000\nproto udp quic\n";
         static const char *h1 =
-            "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto udp quic\n";
+            "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto udp quic\n";
         char text[1024];
 
         snprintf(text, sizeof text, "%sdelay 15000\n", h6);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) == 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) == 0,
               "выдержка не собралась");
         {
             static const uint8_t want[4] = { 0x01, 0x0b, 0x00, 0x04 };
@@ -209,8 +209,8 @@ int main(void) {
            целиком — «число записей не совпадает с заявленным». Тест, который
            смотрел только на наличие байтов, этого не поймал. */
         {
-            const char *pp = "/tmp/d2k-test-delay.bin";
-            const char *sp = "/tmp/d2k-test-delay.scn";
+            const char *pp = "/tmp/d2s-test-delay.bin";
+            const char *sp = "/tmp/d2s-test-delay.scn";
             CHECK(write_file_bytes(pp, out, n) == 0, "план выдержки не записался");
             CHECK(write_file_text(sp, "pkt 1000 11 17 "
                     "16030100200100001c0303000000000000000000000000000000000000"
@@ -237,19 +237,19 @@ int main(void) {
         }
 
         snprintf(text, sizeof text, "%sdelay 15000\n", h1);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "выдержка принята при minexec=1 — старый датапат исполнит не тот план");
 
         snprintf(text, sizeof text, "%sdelay 0\n", h6);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "delay 0 принят — он неотличим от отсутствия строки");
 
         snprintf(text, sizeof text, "%sdelay 15ms\n", h6);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "delay принял не-число");
 
         snprintf(text, sizeof text, "%sdelay 15000 20000\n", h6);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "delay принял два значения");
     }
 
@@ -259,13 +259,13 @@ int main(void) {
             "ipfrag 1\nipfrag 1\n","ipfrag -1\n","ipfrag 1ms\n",
             "ipfrag 1\nsplit payload_start +1\n","ipfrag 1\norder reverse\n"};
         for(size_t i=0;i<sizeof bad/sizeof bad[0];i++) {
-            snprintf(text,sizeof text,"d2k-plan 1 7\nproto udp quic\n%s",bad[i]);
-            CHECK(d2k_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
+            snprintf(text,sizeof text,"d2s-plan 1 7\nproto udp quic\n%s",bad[i]);
+            CHECK(d2s_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
                   "invalid/conflicting fragment text accepted");
         }
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 6\nproto udp quic\nipfrag 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 6\nproto udp quic\nipfrag 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"fragment with old executor");
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 7\nproto tcp tls\nipfrag 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 7\nproto tcp tls\nipfrag 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"fragment with TCP text");
     }
 
@@ -274,7 +274,7 @@ int main(void) {
        байта, исполнитель 9, только UDP. */
     {
         uint8_t out[256];size_t n=0;char err[200],text[256];
-        int rc=d2k_plan_text_to_tlv("d2k-plan 1 9\nproto udp quic\nudplen 100\n",
+        int rc=d2s_plan_text_to_tlv("d2s-plan 1 9\nproto udp quic\nudplen 100\n",
                                     out,sizeof out,&n,err,sizeof err);
         if(rc)printf("udplen: %s\n",err);
         CHECK(rc==0,"udplen 100 не переведён");
@@ -288,19 +288,19 @@ int main(void) {
             "udplen 100\nipfrag 1\n","udplen 100\nsplit payload_start +1\n",
             "udplen 100\norder reverse\n"};
         for(size_t i=0;i<sizeof bad/sizeof bad[0];i++) {
-            snprintf(text,sizeof text,"d2k-plan 1 9\nproto udp quic\n%s",bad[i]);
-            CHECK(d2k_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
+            snprintf(text,sizeof text,"d2s-plan 1 9\nproto udp quic\n%s",bad[i]);
+            CHECK(d2s_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
                   "invalid/conflicting udplen text accepted");
         }
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 8\nproto udp quic\nudplen 100\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 8\nproto udp quic\nudplen 100\n",
               out,sizeof out,&n,err,sizeof err)!=0,"udplen with old executor");
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 9\nproto tcp tls\nudplen 100\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 9\nproto tcp tls\nudplen 100\n",
               out,sizeof out,&n,err,sizeof err)!=0,"udplen with TCP text");
         /* Комментарий провенанса не меняет байт плана. */
         uint8_t a[256],b[256];size_t an=0,bn=0;
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 9\nproto udp quic\n# PROFILE\nudplen 100\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 9\nproto udp quic\n# PROFILE\nudplen 100\n",
               a,sizeof a,&an,err,sizeof err)==0 &&
-              d2k_plan_text_to_tlv("d2k-plan 1 9\nproto udp quic\nudplen 100\n",
+              d2s_plan_text_to_tlv("d2s-plan 1 9\nproto udp quic\nudplen 100\n",
               b,sizeof b,&bn,err,sizeof err)==0 && an==bn && !memcmp(a,b,an),
               "комментарий провенанса изменил TLV");
     }
@@ -310,7 +310,7 @@ int main(void) {
        первым), исполнитель 10, только UDP, без фрагментации и удлинения. */
     {
         uint8_t out[256];size_t n=0;char err[200],text[256];
-        int rc=d2k_plan_text_to_tlv("d2k-plan 1 10\nproto udp quic\nquicsplit 1\norder forward\n",
+        int rc=d2s_plan_text_to_tlv("d2s-plan 1 10\nproto udp quic\nquicsplit 1\norder forward\n",
                                     out,sizeof out,&n,err,sizeof err);
         if(rc)printf("quicsplit: %s\n",err);
         CHECK(rc==0,"quicsplit 1 не переведён");
@@ -323,13 +323,13 @@ int main(void) {
             "quicsplit 1\nquicsplit 1\n","quicsplit 1\nipfrag 1\n","quicsplit 1\nudplen 100\n",
             "quicsplit 1\nsplit payload_start +1\n","quicsplit 1\norder reverse\n"};
         for(size_t i=0;i<sizeof bad/sizeof bad[0];i++) {
-            snprintf(text,sizeof text,"d2k-plan 1 10\nproto udp quic\n%s",bad[i]);
-            CHECK(d2k_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
+            snprintf(text,sizeof text,"d2s-plan 1 10\nproto udp quic\n%s",bad[i]);
+            CHECK(d2s_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
                   "invalid/conflicting quicsplit text accepted");
         }
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 9\nproto udp quic\nquicsplit 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 9\nproto udp quic\nquicsplit 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"quicsplit with old executor");
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 10\nproto tcp tls\nquicsplit 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 10\nproto tcp tls\nquicsplit 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"quicsplit with TCP text");
     }
 
@@ -337,7 +337,7 @@ int main(void) {
        запись 0x0110, форма 1, исполнитель 11, только UDP и без воздействий. */
     {
         uint8_t out[256];size_t n=0;char err[200],text[256];
-        int rc=d2k_plan_text_to_tlv("d2k-plan 1 11\nproto udp quic\nquicdeny 1\norder forward\n",
+        int rc=d2s_plan_text_to_tlv("d2s-plan 1 11\nproto udp quic\nquicdeny 1\norder forward\n",
                                     out,sizeof out,&n,err,sizeof err);
         if(rc)printf("quicdeny: %s\n",err);
         static const uint8_t rec[]={0x01,0x10,0x00,0x01,0x01};
@@ -348,13 +348,13 @@ int main(void) {
             "quicdeny 1\nudplen 100\n","quicdeny 1\nquicsplit 1\n","quicdeny 1\nipfrag 1\n",
             "quicdeny 1\npayload 1 00ff\nfake 1 0 before 1 0\n","quicdeny 1\norder reverse\n"};
         for(size_t i=0;i<sizeof bad/sizeof bad[0];i++) {
-            snprintf(text,sizeof text,"d2k-plan 1 11\nproto udp quic\n%s",bad[i]);
-            CHECK(d2k_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
+            snprintf(text,sizeof text,"d2s-plan 1 11\nproto udp quic\n%s",bad[i]);
+            CHECK(d2s_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
                   "invalid/conflicting quicdeny text accepted");
         }
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 10\nproto udp quic\nquicdeny 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 10\nproto udp quic\nquicdeny 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"quicdeny with old executor");
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 11\nproto tcp tls\nquicdeny 1\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 11\nproto tcp tls\nquicdeny 1\n",
               out,sizeof out,&n,err,sizeof err)!=0,"quicdeny with TCP text");
     }
 
@@ -375,16 +375,16 @@ int main(void) {
             "payload 1 aa\npoison 1\nseqovl payload=1 poison=65536\n",
         };
         for (size_t i=0;i<sizeof bad/sizeof bad[0];i++) {
-            snprintf(text,sizeof text,"d2k-plan 1 1\nproto tcp tls\n%s",bad[i]);
-            CHECK(d2k_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
+            snprintf(text,sizeof text,"d2s-plan 1 1\nproto tcp tls\n%s",bad[i]);
+            CHECK(d2s_plan_text_to_tlv(text,out,sizeof out,&n,err,sizeof err)!=0,
                   "строгий разбор принял усечённое/внедиапазонное число");
         }
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 1 1\nproto tcp tls\n",
-              out,sizeof out,&n,err,sizeof err)!=0,"d2k-plan с лишним словом");
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 65536 1\nproto tcp tls\n",
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 1 1\nproto tcp tls\n",
+              out,sizeof out,&n,err,sizeof err)!=0,"d2s-plan с лишним словом");
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 65536 1\nproto tcp tls\n",
               out,sizeof out,&n,err,sizeof err)!=0,"schema вне u16");
         /* Границы ширины полей остаются допустимыми. */
-        CHECK(d2k_plan_text_to_tlv("d2k-plan 1 1\nproto tcp tls\npayload 65535 aa\n"
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 1\nproto tcp tls\npayload 65535 aa\n"
               "poison 65535 ttl=255 seqshift=-2147483648\n"
               "split payload_start -32768\nsplit sni_middle +32767\n"
               "fake payload=65535 poison=65535 repeats=255 gap_us=4294967295 place=before\n",
@@ -393,52 +393,52 @@ int main(void) {
 
     {
         static const char good[] =
-            "d2k-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\n"
+            "d2s-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\n"
             "input tls-sni\nsegment 1400\noob sni_middle 0f\n";
         uint8_t out[256]; size_t n=0; char err[200];
-        CHECK(d2k_plan_text_to_tlv(good,out,sizeof out,&n,err,sizeof err)==0,
+        CHECK(d2s_plan_text_to_tlv(good,out,sizeof out,&n,err,sizeof err)==0,
               "валидное измеренное TCP URG-плечо не сериализовалось");
         static const uint8_t rec[] = {0x01,0x0d,0x00,0x03,0x00,0x05,0x0f};
         int found=0;
         for(size_t i=0;i+sizeof rec<=n;i++) if(!memcmp(out+i,rec,sizeof rec)) found=1;
         CHECK(found,"OOB TLV потерял якорь SNI или срочный байт");
         static const char *bad[] = {
-            "d2k-plan 1 7\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob sni_middle 0f\n",
-            "d2k-plan 1 8\nproto tcp tls\noob sni_middle 0f\n",
-            "d2k-plan 1 8\nproto udp quic\noob sni_middle 0f\n",
-            "d2k-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob sni_middle ff00\n",
-            "d2k-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob unknown 0f\n"
+            "d2s-plan 1 7\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob sni_middle 0f\n",
+            "d2s-plan 1 8\nproto tcp tls\noob sni_middle 0f\n",
+            "d2s-plan 1 8\nproto udp quic\noob sni_middle 0f\n",
+            "d2s-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob sni_middle ff00\n",
+            "d2s-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\noob unknown 0f\n"
         };
         for(size_t i=0;i<sizeof bad/sizeof bad[0];i++)
-            CHECK(d2k_plan_text_to_tlv(bad[i],out,sizeof out,&n,err,sizeof err)!=0,
+            CHECK(d2s_plan_text_to_tlv(bad[i],out,sizeof out,&n,err,sizeof err)!=0,
                   "неподдержанная форма OOB принята");
         static const char duplicate[] =
-            "d2k-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\n"
+            "d2s-plan 1 8\nproto tcp tls\nwire detect-tcp-v1\ninput tls-sni\n"
             "oob sni_middle 0f\noob sni_middle 0e\n";
-        CHECK(d2k_plan_text_to_tlv(duplicate,out,sizeof out,&n,err,sizeof err)!=0,
+        CHECK(d2s_plan_text_to_tlv(duplicate,out,sizeof out,&n,err,sizeof err)!=0,
               "повторное OOB-действие принято");
     }
 
     /* Fallback arm -> text -> TLV -> настоящий datapath executor. */
     {
-        d2k_arm arm = { .name = "seqovl-1", .seqovl = 1 };
-        uint8_t hello[2048], tlv[D2K_PLAN_TLV_MAX];
+        d2s_arm arm = { .name = "seqovl-1", .seqovl = 1 };
+        uint8_t hello[2048], tlv[D2S_PLAN_TLV_MAX];
         size_t hello_len = 0, sni_off = 0, sni_len = 0, tlv_len = 0;
         char plan_text[4096], err[200];
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "rutracker.org",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "rutracker.org",
                                     hello, sizeof hello, &hello_len) == 0,
               "seqovl wire regression: ClientHello fixture не собрался");
-        CHECK(d2k_hello_sni(hello, hello_len, &sni_off, &sni_len) == 0,
+        CHECK(d2s_hello_sni(hello, hello_len, &sni_off, &sni_len) == 0,
               "seqovl wire regression: SNI координаты не извлеклись");
-        d2k_arm_input input = {0};
+        d2s_arm_input input = {0};
         input.trigger_len = hello_len;
         input.sni_off = sni_off;
         input.sni_len = sni_len;
-        CHECK(d2k_arm_plan_measured(&arm, &input, plan_text, sizeof plan_text) == 0,
+        CHECK(d2s_arm_plan_measured(&arm, &input, plan_text, sizeof plan_text) == 0,
               "seqovl wire regression: план измеренного seqovl-1 не собрался");
         CHECK(strstr(plan_text, "split payload_start +1\n") == NULL,
               "seqovl wire regression: лишний разрез относительно сырого зонда");
-        CHECK(d2k_plan_text_to_tlv(plan_text, tlv, sizeof tlv, &tlv_len,
+        CHECK(d2s_plan_text_to_tlv(plan_text, tlv, sizeof tlv, &tlv_len,
                                    err, sizeof err) == 0,
               "seqovl wire regression: план не перевёлся в TLV");
         if (hello_len && tlv_len) {
@@ -457,8 +457,8 @@ int main(void) {
                 size_t prefix_len = strlen(scenario);
                 memcpy(scenario + prefix_len, hex, 2 * hello_len);
                 scenario[prefix_len + 2 * hello_len] = '\n';
-                snprintf(plan_path, sizeof plan_path, "/tmp/d2k-seqovl-%d.tlv", (int)getpid());
-                snprintf(scenario_path, sizeof scenario_path, "/tmp/d2k-seqovl-%d.scn", (int)getpid());
+                snprintf(plan_path, sizeof plan_path, "/tmp/d2s-seqovl-%d.tlv", (int)getpid());
+                snprintf(scenario_path, sizeof scenario_path, "/tmp/d2s-seqovl-%d.scn", (int)getpid());
                 CHECK(write_file_bytes(plan_path, tlv, tlv_len) == 0,
                       "seqovl wire regression: TLV-файл не записался");
                 CHECK(write_file_text(scenario_path, scenario) == 0,
@@ -495,16 +495,16 @@ int main(void) {
 
     {
         char plan_text[4096], err[200], command[400], output[2048];
-        uint8_t tlv[D2K_PLAN_TLV_MAX], hello[64];
+        uint8_t tlv[D2S_PLAN_TLV_MAX], hello[64];
         size_t tlv_len=0, used=0;
         int oob_found=0;
-        for(size_t i=0;i<d2k_fallback_arms();i++) {
-            if(d2k_fallback_plan(i,D2K_SHAPE_MODERN,"rutracker.org",1492,
+        for(size_t i=0;i<d2s_fallback_arms();i++) {
+            if(d2s_fallback_plan(i,D2S_SHAPE_MODERN,"rutracker.org",1492,
                                  plan_text,sizeof plan_text)==0 &&
                strstr(plan_text,"oob sni_middle 0f\n")) { oob_found=1; break; }
         }
         CHECK(oob_found,"OOB fallback arm plan не собрался");
-        CHECK(d2k_plan_text_to_tlv(plan_text,tlv,sizeof tlv,&tlv_len,err,sizeof err)==0,
+        CHECK(d2s_plan_text_to_tlv(plan_text,tlv,sizeof tlv,&tlv_len,err,sizeof err)==0,
               "OOB fallback arm не переводится в TLV");
         memset(hello,0x41,sizeof hello);
         hello[0]=0x16; hello[1]=3; hello[2]=1; hello[3]=0; hello[4]=59;
@@ -516,7 +516,7 @@ int main(void) {
             hex[2*i]=digits[hello[i]>>4]; hex[2*i+1]=digits[hello[i]&15];
         }
         hex[sizeof hex-1]='\0';
-        const char *pp="/tmp/d2k-test-oob.bin", *sp="/tmp/d2k-test-oob.scn";
+        const char *pp="/tmp/d2s-test-oob.bin", *sp="/tmp/d2s-test-oob.scn";
         char scenario[256];
         snprintf(scenario,sizeof scenario,"pkt 1000 20 8 %s\n",hex);
         CHECK(write_file_bytes(pp,tlv,tlv_len)==0,"OOB TLV файл не создан");
@@ -547,28 +547,28 @@ int main(void) {
         size_t n = 0;
         char err[200];
         static const char *head =
-            "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "split payload_start +1\norder forward\n";
         char text[1024];
 
         snprintf(text, sizeof text, "%space 0\n", head);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "pace 0 принят — а он неотличим от отсутствия строки");
 
         snprintf(text, sizeof text, "%space pace=12000\n", head);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "pace принял значение с ключом — у него значение голое");
 
         snprintf(text, sizeof text, "%space 12ms\n", head);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "pace принял не-число");
 
         snprintf(text, sizeof text, "%space 12000 15000\n", head);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) != 0,
               "pace принял два значения");
 
         snprintf(text, sizeof text, "%space 12000\n", head);
-        CHECK(d2k_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) == 0,
+        CHECK(d2s_plan_text_to_tlv(text, out, sizeof out, &n, err, sizeof err) == 0,
               "правильный pace отвергнут заодно с неправильными");
     }
 
@@ -578,9 +578,9 @@ int main(void) {
         size_t n = 0;
         char err[200];
         const char *bad =
-            "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "жарить payload=1\norder forward\n";
-        CHECK(d2k_plan_text_to_tlv(bad, out, sizeof out, &n, err, sizeof err) != 0,
+        CHECK(d2s_plan_text_to_tlv(bad, out, sizeof out, &n, err, sizeof err) != 0,
               "неизвестная директива прошла молча — план на проводе отличался бы от записанного");
         CHECK(strstr(err, "неизвестная директива") != NULL,
               "отказ по неизвестной директиве без внятной причины");
@@ -591,26 +591,26 @@ int main(void) {
         uint8_t out[1024];
         size_t n = 0;
         char err[200];
-        CHECK(d2k_plan_text_to_tlv("order forward\n", out, sizeof out, &n, err, sizeof err) != 0,
-              "план без заголовка d2k-plan принят");
+        CHECK(d2s_plan_text_to_tlv("order forward\n", out, sizeof out, &n, err, sizeof err) != 0,
+              "план без заголовка d2s-plan принят");
     }
 
-    /* --- план от d2k_compose принимается НАСТОЯЩИМ исполнителем датапата -- */
+    /* --- план от d2s_compose принимается НАСТОЯЩИМ исполнителем датапата -- */
     {
-        d2k_props pr;
+        d2s_props pr;
         memset(&pr, 0, sizeof pr);
         char plans[8][4096];
-        size_t n = d2k_compose(&pr, D2K_SHAPE_MODERN, "disk.rzd.ru", 0, plans, 8);
+        size_t n = d2s_compose(&pr, D2S_SHAPE_MODERN, "disk.rzd.ru", 0, plans, 8);
         CHECK(n == 1, "пустой вектор обязан дать ровно один запасной план");
         if (n >= 1) {
-            uint8_t tlv[D2K_PLAN_TLV_MAX];
+            uint8_t tlv[D2S_PLAN_TLV_MAX];
             size_t tlv_len = 0;
             char err[200];
-            CHECK(d2k_plan_text_to_tlv(plans[0], tlv, sizeof tlv, &tlv_len, err, sizeof err) == 0,
-                  "запасной план d2k_compose не переводится в байты провода");
+            CHECK(d2s_plan_text_to_tlv(plans[0], tlv, sizeof tlv, &tlv_len, err, sizeof err) == 0,
+                  "запасной план d2s_compose не переводится в байты провода");
             if (tlv_len > 0) {
-                const char *pp = "/tmp/d2k-test-plantlv.bin";
-                const char *sp = "/tmp/d2k-test-plantlv.scn";
+                const char *pp = "/tmp/d2s-test-plantlv.bin";
+                const char *sp = "/tmp/d2s-test-plantlv.scn";
                 /* Сценарий planlab: один пакет, имя на известном смещении —
                    разрезы по якорям sni_middle обязаны во что-то упереться. */
                 CHECK(write_file_bytes(pp, tlv, tlv_len) == 0, "план не записался");

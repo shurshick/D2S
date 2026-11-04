@@ -1,4 +1,4 @@
-/* quichello.c — контракт и все обоснования в d2k_quichello.h.
+/* quichello.c — контракт и все обоснования в d2s_quichello.h.
  *
  * Своего разбора здесь нет ни одной строки: приветствие достаёт core/quic.c
  * (он же разбирает Initial для датапата), имя подставляет core/hello.c (он же
@@ -10,30 +10,30 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-#include "d2k_hello.h"
-#include "d2k_quic.h"
-#include "d2k_quichello.h"
-#include "d2k_quicsnap.h"
-#include "d2k_quicwire.h"
-#include "d2k_tls13core.h"
-#include "d2k_crypto.h"
+#include "d2s_hello.h"
+#include "d2s_quic.h"
+#include "d2s_quichello.h"
+#include "d2s_quicsnap.h"
+#include "d2s_quicwire.h"
+#include "d2s_tls13core.h"
+#include "d2s_crypto.h"
 #include "profiles/quic_probe.h"
 
 /* Go crypto/tls changes only the cipher-suite order when AES hardware is not
  * available: the non-AES profile starts with TLS_CHACHA20_POLY1305_SHA256.
  * QUIC Initial packet protection itself remains AES-128-GCM; this switch is
  * solely about reproducing the donor ClientHello shape on such targets. */
-#ifndef D2K_QUIC_NON_AES_PROFILE
+#ifndef D2S_QUIC_NON_AES_PROFILE
 # if defined(__mips__)
-#  define D2K_QUIC_NON_AES_PROFILE 1
+#  define D2S_QUIC_NON_AES_PROFILE 1
 # else
-#  define D2K_QUIC_NON_AES_PROFILE 0
+#  define D2S_QUIC_NON_AES_PROFILE 0
 # endif
 #endif
 
 static void select_probe_profile(uint8_t *profile, size_t len) {
-    memcpy(profile, d2k_quic_probe_profile, len);
-#if D2K_QUIC_NON_AES_PROFILE
+    memcpy(profile, d2s_quic_probe_profile, len);
+#if D2S_QUIC_NON_AES_PROFILE
     /* ClientHello: cipher_suites vector starts at 39, length is six bytes;
        donor's non-AES order is 1303, 1301, 1302. */
     if (len >= 47 && profile[39] == 0 && profile[40] == 6) {
@@ -45,9 +45,9 @@ static void select_probe_profile(uint8_t *profile, size_t len) {
 }
 
 typedef char probe_profile_fields_fit[
-    D2K_QUIC_PROFILE_RANDOM_OFF + 32 <= sizeof d2k_quic_probe_profile &&
-    D2K_QUIC_PROFILE_KEY_SHARE_OFF + 32 <= sizeof d2k_quic_probe_profile &&
-    D2K_QUIC_PROFILE_SCID_OFF + 8 <= sizeof d2k_quic_probe_profile ? 1 : -1];
+    D2S_QUIC_PROFILE_RANDOM_OFF + 32 <= sizeof d2s_quic_probe_profile &&
+    D2S_QUIC_PROFILE_KEY_SHARE_OFF + 32 <= sizeof d2s_quic_probe_profile &&
+    D2S_QUIC_PROFILE_SCID_OFF + 8 <= sizeof d2s_quic_probe_profile ? 1 : -1];
 
 #define FR_CRYPTO 0x06
 /* Наименьшая датаграмма с Initial (RFC 9000 §14.1): сервер обязан отбросить
@@ -82,10 +82,10 @@ static int put_crypto(uint8_t *body, size_t cap, size_t *pb, uint64_t off,
     size_t b = *pb;
     if (b >= cap) { return -1; }
     body[b++] = FR_CRYPTO;
-    size_t w = d2k_qw_varint_write(body + b, cap - b, off);
+    size_t w = d2s_qw_varint_write(body + b, cap - b, off);
     if (w == 0) { return -1; }
     b += w;
-    w = d2k_qw_varint_write(body + b, cap - b, len);
+    w = d2s_qw_varint_write(body + b, cap - b, len);
     if (w == 0) { return -1; }
     b += w;
     if (b + len > cap) { return -1; }
@@ -100,7 +100,7 @@ static int put_crypto(uint8_t *body, size_t cap, size_t *pb, uint64_t off,
  * want_v2 — спрошена ли вторая версия. ВЕРСИЯ ОДНА НА ВЕСЬ ПАКЕТ, и её нельзя
  * сменить только в заголовке: у второй версии (RFC 9369) другая соль вывода
  * начального секрета, другие метки ключей и перенумерованы типы пакетов — всё
- * это провод уже знает (d2k_qw_initial_secret, d2k_qw_long_hdr), но только
+ * это провод уже знает (d2s_qw_initial_secret, d2s_qw_long_hdr), но только
  * если ему сказать версию. Поставить в заголовок другое число, а запечатать
  * ключами первой версии, значит послать битый пакет и получить молчание,
  * которое читалось бы как свойство коробки.
@@ -120,21 +120,21 @@ static int put_crypto(uint8_t *body, size_t cap, size_t *pb, uint64_t off,
  * можно, но это меняло бы байты, ради сохранности которых весь этот файл и
  * существует.
  *
- * ch2/dcid/scid обязаны вмещать D2K_QW_MAX_DGRAM и D2K_QW_CID_MAX. */
+ * ch2/dcid/scid обязаны вмещать D2S_QW_MAX_DGRAM и D2S_QW_CID_MAX. */
 static int prepare(const uint8_t *in, size_t n, const char *sni, int want_v2,
                    uint8_t *ch2, size_t *ch2_len,
                    uint8_t *dcid, size_t *dcid_len,
                    uint8_t *scid, size_t *scid_len,
-                   uint32_t *ver, d2k_qw_keys *k) {
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
-        h.type != D2K_QW_LT_INITIAL) {
+                   uint32_t *ver, d2s_qw_keys *k) {
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
+        h.type != D2S_QW_LT_INITIAL) {
         return -1;
     }
 
-    uint8_t ch[D2K_QW_MAX_DGRAM];
+    uint8_t ch[D2S_QW_MAX_DGRAM];
     size_t ch_len = 0;
-    if (d2k_quic_client_hello(in, n, ch, sizeof ch, &ch_len) != 0) {
+    if (d2s_quic_client_hello(in, n, ch, sizeof ch, &ch_len) != 0) {
         return -1;
     }
     struct in_addr ip_target;
@@ -142,10 +142,10 @@ static int prepare(const uint8_t *in, size_t n, const char *sni, int want_v2,
     int rename_rc;
     if (is_ip_target) {
         size_t sni_off = 0, sni_len = 0;
-        if (d2k_hello_sni(ch, ch_len, &sni_off, &sni_len) == 0) {
-            rename_rc = d2k_hello_without_sni(ch, ch_len, ch2,
-                                              D2K_QW_MAX_DGRAM, ch2_len);
-        } else if (ch_len <= D2K_QW_MAX_DGRAM) {
+        if (d2s_hello_sni(ch, ch_len, &sni_off, &sni_len) == 0) {
+            rename_rc = d2s_hello_without_sni(ch, ch_len, ch2,
+                                              D2S_QW_MAX_DGRAM, ch2_len);
+        } else if (ch_len <= D2S_QW_MAX_DGRAM) {
             memcpy(ch2, ch, ch_len);
             *ch2_len = ch_len;
             rename_rc = 0;
@@ -153,22 +153,22 @@ static int prepare(const uint8_t *in, size_t n, const char *sni, int want_v2,
             rename_rc = -1;
         }
     } else {
-        rename_rc = d2k_hello_rename(ch, ch_len, sni, ch2,
-                                     D2K_QW_MAX_DGRAM, ch2_len);
+        rename_rc = d2s_hello_rename(ch, ch_len, sni, ch2,
+                                     D2S_QW_MAX_DGRAM, ch2_len);
     }
     if (rename_rc != 0) {
         return -1;
     }
 
-    *dcid_len = (h.dcid_len >= 8 && h.dcid_len <= D2K_QW_CID_MAX) ? h.dcid_len : 8;
-    *scid_len = (h.scid_len <= D2K_QW_CID_MAX) ? h.scid_len : 0;
-    if (d2k_t13_random(dcid, *dcid_len) != 0) { return -1; }
+    *dcid_len = (h.dcid_len >= 8 && h.dcid_len <= D2S_QW_CID_MAX) ? h.dcid_len : 8;
+    *scid_len = (h.scid_len <= D2S_QW_CID_MAX) ? h.scid_len : 0;
+    if (d2s_t13_random(dcid, *dcid_len) != 0) { return -1; }
     if (*scid_len) { memcpy(scid, in + h.scid_off, *scid_len); }
 
-    *ver = want_v2 ? D2K_QW_V2 : h.version;
+    *ver = want_v2 ? D2S_QW_V2 : h.version;
     uint8_t sec[32];
-    if (d2k_qw_initial_secret(*ver, dcid, *dcid_len, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(*ver, sec, k) != 0) {
+    if (d2s_qw_initial_secret(*ver, dcid, *dcid_len, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(*ver, sec, k) != 0) {
         return -1;
     }
     return 0;
@@ -180,33 +180,33 @@ static int prepare(const uint8_t *in, size_t n, const char *sni, int want_v2,
  * добивки — единственное место во всём файле, где легко разойтись незаметно:
  * длина заголовка зависит от поля Length, а оно — от длины тела ВМЕСТЕ с
  * добивкой. */
-static int seal_one(const d2k_qw_keys *k, uint32_t ver,
+static int seal_one(const d2s_qw_keys *k, uint32_t ver,
                     const uint8_t *dcid, size_t dcid_len,
                     const uint8_t *scid, size_t scid_len,
                     uint8_t *body, size_t b, uint64_t pn, size_t pn_len, size_t want,
                     int clear_fixed, uint8_t *out, size_t cap, size_t *out_len) {
-    if (want > D2K_QW_MAX_DGRAM || want > cap) { return -1; }
+    if (want > D2S_QW_MAX_DGRAM || want > cap) { return -1; }
 
     /* Добивка считается итерацией, а не формулой: ширина varint'а поля Length
        может подрасти на единицу, и тогда нужен ещё один проход. Четырёх
        хватает с запасом (ширина растёт максимум трижды: 1->2->4->8). */
-    if (pn_len == 0) { pn_len = d2k_qw_pn_len(pn, -1); }
+    if (pn_len == 0) { pn_len = d2s_qw_pn_len(pn, -1); }
     uint8_t probe[64];
     size_t hlen = 0;
     for (int i = 0; i < 4; i++) {
-        hlen = d2k_qw_long_hdr(probe, sizeof probe, ver, D2K_QW_LT_INITIAL,
+        hlen = d2s_qw_long_hdr(probe, sizeof probe, ver, D2S_QW_LT_INITIAL,
                                dcid, dcid_len, scid, scid_len, pn_len, b);
         if (hlen == 0) { return -1; }
         size_t total = hlen + pn_len + b + 16;
         if (total >= want) { break; }
         size_t add = want - total;
-        if (b + add > D2K_QW_MAX_DGRAM) { return -1; }
+        if (b + add > D2S_QW_MAX_DGRAM) { return -1; }
         memset(body + b, 0, add);   /* PADDING — нули (RFC 9000 §19.1) */
         b += add;
     }
 
-    uint8_t pkt[D2K_QW_MAX_DGRAM];
-    hlen = d2k_qw_long_hdr(pkt, sizeof pkt, ver, D2K_QW_LT_INITIAL,
+    uint8_t pkt[D2S_QW_MAX_DGRAM];
+    hlen = d2s_qw_long_hdr(pkt, sizeof pkt, ver, D2S_QW_LT_INITIAL,
                            dcid, dcid_len, scid, scid_len, pn_len, b);
     if (hlen == 0) { return -1; }
     if (clear_fixed) {
@@ -220,7 +220,7 @@ static int seal_one(const d2k_qw_keys *k, uint32_t ver,
            «пакет перестал разбираться». */
         pkt[0] &= (uint8_t)~0x40u;
     }
-    size_t made = d2k_qw_seal(k, 1, pkt, hlen, pn, pn_len, body, b, pkt, sizeof pkt);
+    size_t made = d2s_qw_seal(k, 1, pkt, hlen, pn, pn_len, body, b, pkt, sizeof pkt);
     if (made == 0 || made > cap) { return -1; }
     memcpy(out, pkt, made);
     *out_len = made;
@@ -237,35 +237,35 @@ static int probe_initial_sized(const char *sni, size_t want, uint8_t *out,
     if (!sni || !sni[0] || strlen(sni) > 253 || !out || !out_len) { return -1; }
     *out_len = 0;
     if (cap < want) { return -1; }
-    uint8_t profile[sizeof d2k_quic_probe_profile], ch[D2K_QW_MAX_DGRAM];
+    uint8_t profile[sizeof d2s_quic_probe_profile], ch[D2S_QW_MAX_DGRAM];
     uint8_t dcid[8], scid[8], priv[32], sec[32];
     select_probe_profile(profile, sizeof profile);
-    if (d2k_t13_random(dcid, sizeof dcid) != 0 ||
-        d2k_t13_random(scid, sizeof scid) != 0 ||
-        d2k_t13_random(profile + D2K_QUIC_PROFILE_RANDOM_OFF, 32) != 0 ||
-        d2k_t13_random(priv, sizeof priv) != 0) { return -1; }
-    int rc = d2k_x25519_base(profile + D2K_QUIC_PROFILE_KEY_SHARE_OFF, priv);
+    if (d2s_t13_random(dcid, sizeof dcid) != 0 ||
+        d2s_t13_random(scid, sizeof scid) != 0 ||
+        d2s_t13_random(profile + D2S_QUIC_PROFILE_RANDOM_OFF, 32) != 0 ||
+        d2s_t13_random(priv, sizeof priv) != 0) { return -1; }
+    int rc = d2s_x25519_base(profile + D2S_QUIC_PROFILE_KEY_SHARE_OFF, priv);
     memset(priv, 0, sizeof priv);
     if (rc != 0) { return -1; }
-    memcpy(profile + D2K_QUIC_PROFILE_SCID_OFF, scid, sizeof scid);
+    memcpy(profile + D2S_QUIC_PROFILE_SCID_OFF, scid, sizeof scid);
     size_t ch_len = 0;
     struct in_addr ip_target;
     int is_ip_target = inet_pton(AF_INET, sni, &ip_target) == 1;
     int hello_rc = is_ip_target
-        ? d2k_hello_without_sni(profile, sizeof profile, ch, sizeof ch, &ch_len)
-        : d2k_hello_rename(profile, sizeof profile, sni, ch, sizeof ch, &ch_len);
+        ? d2s_hello_without_sni(profile, sizeof profile, ch, sizeof ch, &ch_len)
+        : d2s_hello_rename(profile, sizeof profile, sni, ch, sizeof ch, &ch_len);
     if (hello_rc != 0) {
         return -1;
     }
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(D2K_QW_V1, dcid, sizeof dcid, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(D2K_QW_V1, sec, &k) != 0) { return -1; }
-    uint8_t body[D2K_QW_MAX_DGRAM];
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(D2S_QW_V1, dcid, sizeof dcid, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(D2S_QW_V1, sec, &k) != 0) { return -1; }
+    uint8_t body[D2S_QW_MAX_DGRAM];
     size_t b = 0;
     if (put_crypto(body, sizeof body, &b, 0, ch, ch_len) != 0) { return -1; }
     /* buildInitial оригинала: PN=0, PNLen=4, один CRYPTO, want байт. */
     size_t made = 0;
-    if (seal_one(&k, D2K_QW_V1, dcid, sizeof dcid, scid, sizeof scid,
+    if (seal_one(&k, D2S_QW_V1, dcid, sizeof dcid, scid, sizeof scid,
                  body, b, 0, 4, want, 0, out, cap, &made) != 0 || made != want) {
         return -1;
     }
@@ -273,18 +273,18 @@ static int probe_initial_sized(const char *sni, size_t want, uint8_t *out,
     return 0;
 }
 
-int d2k_quic_probe_initial(const char *sni, uint8_t *out, size_t cap,
+int d2s_quic_probe_initial(const char *sni, uint8_t *out, size_t cap,
                            size_t *out_len) {
     return probe_initial_sized(sni, INITIAL_MIN, out, cap, out_len);
 }
 
-int d2k_quic_probe_initial_longer(const char *sni, uint8_t *out, size_t cap,
+int d2s_quic_probe_initial_longer(const char *sni, uint8_t *out, size_t cap,
                                   size_t *out_len) {
     /* Донор questions.go:237 — buildInitial(sni, V1, 1300, 0). */
     return probe_initial_sized(sni, INITIAL_LONGER, out, cap, out_len);
 }
 
-int d2k_quic_prepare_target(const uint8_t *sample, size_t sample_len,
+int d2s_quic_prepare_target(const uint8_t *sample, size_t sample_len,
                             const char *sni, uint8_t *out, size_t cap,
                             size_t *out_len, int *used_sample) {
     /* ПАЧКА СЮДА НЕ ХОДИТ (задача 66). Вопрос собран для одиночной
@@ -292,12 +292,12 @@ int d2k_quic_prepare_target(const uint8_t *sample, size_t sample_len,
        занимает два Initial, и подменить его одиночным пакетом значило бы
        задать другой вопрос под тем же именем. Честный отказ — вызывающий
        скажет «вопрос не задан». */
-    if (d2k_qsnap_is(sample, sample_len)) { return -1; }
+    if (d2s_qsnap_is(sample, sample_len)) { return -1; }
     if (!sni || !sni[0] || !out || !out_len) { return -1; }
     *out_len = 0;
     if (used_sample) { *used_sample = 0; }
     if (sample && sample_len > 0 &&
-        d2k_quic_hello_rename(sample, sample_len, sni, out, cap, out_len) == 0) {
+        d2s_quic_hello_rename(sample, sample_len, sni, out, cap, out_len) == 0) {
         if (used_sample) { *used_sample = 1; }
         return 0;
     }
@@ -306,18 +306,18 @@ int d2k_quic_prepare_target(const uint8_t *sample, size_t sample_len,
        the ordinary fresh PROFILE path is available and already used at cold
        start. The classifier still has to prove a block before composing plans. */
     *out_len = 0;
-    return d2k_quic_probe_initial(sni, out, cap, out_len);
+    return d2s_quic_probe_initial(sni, out, cap, out_len);
 }
 
-int d2k_quic_hello_rename(const uint8_t *in, size_t n, const char *sni,
+int d2s_quic_hello_rename(const uint8_t *in, size_t n, const char *sni,
                           uint8_t *out, size_t cap, size_t *out_len) {
     /* ПАЧКА СЮДА НЕ ХОДИТ (задача 66). Вопрос собран для одиночной
        датаграммы: он пересобирает ОДИН пакет. Приветствие клиента с ML-KEM
        занимает два Initial, и подменить его одиночным пакетом значило бы
        задать другой вопрос под тем же именем. Честный отказ — вызывающий
        скажет «вопрос не задан». */
-    if (d2k_qsnap_is(in, n)) { return -1; }
-    return d2k_quic_hello_ask(in, n, D2K_QASK_PLAIN, sni, out, cap, out_len);
+    if (d2s_qsnap_is(in, n)) { return -1; }
+    return d2s_quic_hello_ask(in, n, D2S_QASK_PLAIN, sni, out, cap, out_len);
 }
 
 /* ОДИН СБОРЩИК НА ВСЕ ВОПРОСЫ, А НЕ ПО ФУНКЦИИ НА КАЖДЫЙ.
@@ -327,23 +327,23 @@ int d2k_quic_hello_rename(const uint8_t *in, size_t n, const char *sni,
  * старый SCID, вывести ключи, сложить кадры, добить до длины, запечатать.
  * Второй экземпляр этой последовательности разошёлся бы с первым на первой же
  * правке, и разошёлся бы молча: оба собирают «похожий» пакет. */
-int d2k_quic_hello_ask(const uint8_t *in, size_t n, d2k_quic_ask ask,
+int d2s_quic_hello_ask(const uint8_t *in, size_t n, d2s_quic_ask ask,
                        const char *sni, uint8_t *out, size_t cap, size_t *out_len) {
     /* ПАЧКА СЮДА НЕ ХОДИТ (задача 66). Вопрос собран для одиночной
        датаграммы: он пересобирает ОДИН пакет. Приветствие клиента с ML-KEM
        занимает два Initial, и подменить его одиночным пакетом значило бы
        задать другой вопрос под тем же именем. Честный отказ — вызывающий
        скажет «вопрос не задан». */
-    if (d2k_qsnap_is(in, n)) { return -1; }
+    if (d2s_qsnap_is(in, n)) { return -1; }
     if (!in || !sni || !out || !out_len) { return -1; }
 
-    uint8_t ch2[D2K_QW_MAX_DGRAM];
+    uint8_t ch2[D2S_QW_MAX_DGRAM];
     size_t ch2_len = 0;
-    uint8_t dcid[D2K_QW_CID_MAX], scid[D2K_QW_CID_MAX];
+    uint8_t dcid[D2S_QW_CID_MAX], scid[D2S_QW_CID_MAX];
     size_t dcid_len = 0, scid_len = 0;
     uint32_t ver = 0;
-    d2k_qw_keys k;
-    if (prepare(in, n, sni, ask == D2K_QASK_VERSION2, ch2, &ch2_len,
+    d2s_qw_keys k;
+    if (prepare(in, n, sni, ask == D2S_QASK_VERSION2, ch2, &ch2_len,
                 dcid, &dcid_len, scid, &scid_len, &ver, &k) != 0) {
         return -1;
     }
@@ -354,9 +354,9 @@ int d2k_quic_hello_ask(const uint8_t *in, size_t n, d2k_quic_ask ask,
        по которой в TCP второй сегмент шлётся раньше первого: коробка,
        читающая приветствие подряд из первого кадра, получает обрывок, а
        сервер собирает поток по смещениям и не замечает разницы. */
-    uint8_t body[D2K_QW_MAX_DGRAM];
+    uint8_t body[D2S_QW_MAX_DGRAM];
     size_t b = 0;
-    if (ask == D2K_QASK_SPLIT_CRYPTO) {
+    if (ask == D2S_QASK_SPLIT_CRYPTO) {
         size_t cut = split_point(ch2, ch2_len, sni);
         if (cut == 0 || cut >= ch2_len) { return -1; }
         if (put_crypto(body, sizeof body, &b, cut, ch2 + cut, ch2_len - cut) != 0 ||
@@ -368,15 +368,15 @@ int d2k_quic_hello_ask(const uint8_t *in, size_t n, d2k_quic_ask ask,
     }
 
     size_t want = (n > INITIAL_MIN) ? n : INITIAL_MIN;
-    if (ask == D2K_QASK_LONGER) {
+    if (ask == D2S_QASK_LONGER) {
         /* РОВНО 1300 — как у донора: questions.go:237 собирает этот вопрос
            свежим buildInitial(sni, V1, 1300, 0), то есть длина датаграммы
            задана числом, а не «снимок плюс сто» (снимок 1250 давал 1350 —
            другой вопрос под тем же именем). Форма приветствия остаётся
-           снимочной (D2K_SPEC §4), донорская только длина. Не помещается
+           снимочной (D2S_SPEC §4), донорская только длина. Не помещается
            приветствие в 1300 — здесь -1, а вызывающий (qp_questions_step)
            задаёт вопрос собственным Initial донора
-           (d2k_quic_probe_initial_longer) с пометкой PROFILE. */
+           (d2s_quic_probe_initial_longer) с пометкой PROFILE. */
         want = INITIAL_LONGER;
         size_t made = 0;
         if (seal_one(&k, ver, dcid, dcid_len, scid, scid_len, body, b, 0, 0, want,
@@ -387,12 +387,12 @@ int d2k_quic_hello_ask(const uint8_t *in, size_t n, d2k_quic_ask ask,
         return 0;
     }
     return seal_one(&k, ver, dcid, dcid_len, scid, scid_len, body, b, 0, 0, want,
-                    ask == D2K_QASK_CLEAR_FIXED_BIT, out, cap, out_len);
+                    ask == D2S_QASK_CLEAR_FIXED_BIT, out, cap, out_len);
 }
 
 /* ПРИВЕТСТВИЕ ДВУМЯ ДАТАГРАММАМИ, ХВОСТ ПЕРВЫМ (вопрос 4 оригинала).
  *
- * Отдельная функция, а не ещё один d2k_quic_ask: у вопроса ДВА выхода, и
+ * Отдельная функция, а не ещё один d2s_quic_ask: у вопроса ДВА выхода, и
  * втиснуть их в один буфер значило бы отдать склеенную датаграмму — то есть
  * задать совсем другой вопрос (RFC 9000 §12.2 про коалесценцию).
  *
@@ -409,7 +409,7 @@ int d2k_quic_hello_ask(const uint8_t *in, size_t n, d2k_quic_ask ask,
  * Так, между прочим, шлёт и настоящий клиент: Chrome с постквантовым
  * key_share и Firefox 137 по умолчанию не помещают приветствие в одну
  * датаграмму. */
-int d2k_quic_hello_split(const uint8_t *in, size_t n, const char *sni,
+int d2s_quic_hello_split(const uint8_t *in, size_t n, const char *sni,
                          uint8_t *head, size_t head_cap, size_t *head_len,
                          uint8_t *tail, size_t tail_cap, size_t *tail_len) {
     /* ПАЧКА СЮДА НЕ ХОДИТ (задача 66). Вопрос собран для одиночной
@@ -417,15 +417,15 @@ int d2k_quic_hello_split(const uint8_t *in, size_t n, const char *sni,
        занимает два Initial, и подменить его одиночным пакетом значило бы
        задать другой вопрос под тем же именем. Честный отказ — вызывающий
        скажет «вопрос не задан». */
-    if (d2k_qsnap_is(in, n)) { return -1; }
+    if (d2s_qsnap_is(in, n)) { return -1; }
     if (!in || !sni || !head || !head_len || !tail || !tail_len) { return -1; }
 
-    uint8_t ch2[D2K_QW_MAX_DGRAM];
+    uint8_t ch2[D2S_QW_MAX_DGRAM];
     size_t ch2_len = 0;
-    uint8_t dcid[D2K_QW_CID_MAX], scid[D2K_QW_CID_MAX];
+    uint8_t dcid[D2S_QW_CID_MAX], scid[D2S_QW_CID_MAX];
     size_t dcid_len = 0, scid_len = 0;
     uint32_t ver = 0;
-    d2k_qw_keys k;
+    d2s_qw_keys k;
     if (prepare(in, n, sni, 0, ch2, &ch2_len, dcid, &dcid_len, scid, &scid_len,
                 &ver, &k) != 0) {
         return -1;
@@ -438,7 +438,7 @@ int d2k_quic_hello_split(const uint8_t *in, size_t n, const char *sni,
        обязан отбросить недомерок, и такой отказ выглядел бы как молчание
        коробки. Форму снимка здесь не сохранить в принципе — снимок был одной
        датаграммой, а тут их две; это и есть цена вопроса. */
-    uint8_t body[D2K_QW_MAX_DGRAM];
+    uint8_t body[D2S_QW_MAX_DGRAM];
     size_t b = 0;
     if (put_crypto(body, sizeof body, &b, cut, ch2 + cut, ch2_len - cut) != 0 ||
         seal_one(&k, ver, dcid, dcid_len, scid, scid_len, body, b, 1, 0, INITIAL_MIN,
@@ -454,54 +454,54 @@ int d2k_quic_hello_split(const uint8_t *in, size_t n, const char *sni,
     return 0;
 }
 
-int d2k_quic_hello_recid(const uint8_t *in, size_t n,
+int d2s_quic_hello_recid(const uint8_t *in, size_t n,
                          uint8_t *out, size_t cap, size_t *out_len) {
     /* ПАЧКА СЮДА НЕ ХОДИТ (задача 66). Вопрос собран для одиночной
        датаграммы: он пересобирает ОДИН пакет. Приветствие клиента с ML-KEM
        занимает два Initial, и подменить его одиночным пакетом значило бы
        задать другой вопрос под тем же именем. Честный отказ — вызывающий
        скажет «вопрос не задан». */
-    if (d2k_qsnap_is(in, n)) { return -1; }
+    if (d2s_qsnap_is(in, n)) { return -1; }
     if (!in || !out || !out_len) { return -1; }
 
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
-        h.type != D2K_QW_LT_INITIAL) {
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
+        h.type != D2S_QW_LT_INITIAL) {
         return -1;
     }
     /* Соль у каждой версии своя (RFC 9001 §5.2, RFC 9369 §3.3.1), и версию,
        которой мы не знаем, расшифровать нечем. Отказ здесь честен и нужен:
        зонд согласования версий шлёт Initial с ЗАВЕДОМО чужой версией, и
        трогать его этой функцией нельзя. */
-    if (h.version != D2K_QW_V1 && h.version != D2K_QW_V2) { return -1; }
+    if (h.version != D2S_QW_V1 && h.version != D2S_QW_V2) { return -1; }
     /* Склеенная датаграмма (Initial плюс что-то ещё, RFC 9000 §12.2) сюда не
        годится: пересобрав только первый пакет, мы отдали бы датаграмму
        КОРОЧЕ снимка — то есть изменили бы ровно ту форму, ради сохранности
        которой эта функция и написана. */
     if (h.packet_len != n) { return -1; }
 
-    d2k_qw_keys k;
+    d2s_qw_keys k;
     uint8_t sec[32];
-    if (d2k_qw_initial_secret(h.version, in + h.dcid_off, h.dcid_len,
-                              D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(h.version, sec, &k) != 0) {
+    if (d2s_qw_initial_secret(h.version, in + h.dcid_off, h.dcid_len,
+                              D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(h.version, sec, &k) != 0) {
         return -1;
     }
-    uint8_t plain[D2K_QW_MAX_DGRAM];
+    uint8_t plain[D2S_QW_MAX_DGRAM];
     size_t plain_len = 0;
     uint64_t pn = 0;
     if (h.packet_len > sizeof plain ||
-        d2k_qw_open(&k, &h, in, 0, plain, &plain_len, &pn) != 0) {
+        d2s_qw_open(&k, &h, in, 0, plain, &plain_len, &pn) != 0) {
         return -1;
     }
 
     /* Новый DCID той же длины: длина — тоже форма (по ней коробка отличает
        клиента от клиента), а вот содержимое обязано быть новым. */
-    uint8_t dcid[D2K_QW_CID_MAX];
+    uint8_t dcid[D2S_QW_CID_MAX];
     size_t dcid_len = (h.dcid_len >= 8 && h.dcid_len <= sizeof dcid) ? h.dcid_len : 8;
-    if (d2k_t13_random(dcid, dcid_len) != 0) { return -1; }
-    if (d2k_qw_initial_secret(h.version, dcid, dcid_len, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(h.version, sec, &k) != 0) {
+    if (d2s_t13_random(dcid, dcid_len) != 0) { return -1; }
+    if (d2s_qw_initial_secret(h.version, dcid, dcid_len, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(h.version, sec, &k) != 0) {
         return -1;
     }
 
@@ -516,26 +516,26 @@ int d2k_quic_hello_recid(const uint8_t *in, size_t n,
     if (h.length_claimed < plain_len + 16) { return -1; }
     size_t pn_len = h.length_claimed - plain_len - 16;
     if (pn_len < 1 || pn_len > 4) { return -1; }
-    uint8_t pkt[D2K_QW_MAX_DGRAM];
-    size_t hlen = d2k_qw_long_hdr_w(pkt, sizeof pkt, h.version, D2K_QW_LT_INITIAL,
+    uint8_t pkt[D2S_QW_MAX_DGRAM];
+    size_t hlen = d2s_qw_long_hdr_w(pkt, sizeof pkt, h.version, D2S_QW_LT_INITIAL,
                                   dcid, dcid_len, scid, h.scid_len, pn_len, plain_len,
                                   h.length_width);
     if (hlen == 0) { return -1; }
     /* ФИКСИРОВАННЫЙ БИТ — ИЗ СНИМКА, а не от сборщика заголовка.
-       d2k_qw_long_hdr ставит его всегда (RFC 9000 §17.2 требует единицу), а
+       d2s_qw_long_hdr ставит его всегда (RFC 9000 §17.2 требует единицу), а
        эта функция обещает «тот же снимок во всём, кроме идентификатора
        назначения» — значит и этот бит обязан приехать из снимка. Защита
        заголовка его не маскирует (RFC 9001 §5.4.1 у длинного заголовка
        закрывает только младшие четыре бита), поэтому в in[0] он настоящий.
 
        Цена ошибки несимметрична и потому не абстрактна: вопрос про
-       погашенный бит (D2K_QASK_CLEAR_FIXED_BIT) уезжает тремя попытками
+       погашенный бит (D2S_QASK_CLEAR_FIXED_BIT) уезжает тремя попытками
        через эту функцию, и все три вернулись бы с битом на месте. Свойство
        требует единогласия 3/3 — оно не подтвердилось бы НИКОГДА, а молчание
        записали бы коробке. То же верно и для снимка настоящего клиента,
        который бит гризовал по RFC 9287. */
     pkt[0] = (uint8_t)((pkt[0] & (uint8_t)~0x40u) | (in[0] & 0x40u));
-    size_t made = d2k_qw_seal(&k, 1, pkt, hlen, pn, pn_len, plain, plain_len,
+    size_t made = d2s_qw_seal(&k, 1, pkt, hlen, pn, pn_len, plain, plain_len,
                               pkt, sizeof pkt);
     if (made == 0 || made > cap) { return -1; }
     /* Длина обязана совпасть со снимком: добивка уже внутри расшифрованного

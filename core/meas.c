@@ -1,9 +1,9 @@
 #define _POSIX_C_SOURCE 200809L
 /* SO_MARK — НЕ POSIX, и под строгим _POSIX_C_SOURCE glibc его ПРЯЧЕТ. Без
  * этой строки ветка #ifdef SO_MARK ниже не компилировалась НА LINUX ТОЖЕ, и
- * метка молча не ставилась ни на одном зонде: d2k_mark_real всегда возвращал
+ * метка молча не ставилась ни на одном зонде: d2s_mark_real всегда возвращал
  * -1, r.marked оставался нулём, а правило «свои пакеты мимо очереди»
- * (-m mark --mark $MARK -j RETURN, files/S99d2k) не срабатывало ни разу.
+ * (-m mark --mark $MARK -j RETURN, files/S99d2s) не срабатывало ни разу.
  * Замерено счётчиками iptables в лаборатории 13.09.2026: на правиле метки 0
  * пакетов при шести ушедших зондах, и те же зонды — в журнале датапата, то
  * есть система видела собственное эхо (§5.5).
@@ -25,7 +25,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_meas.h"
+#include "d2s_meas.h"
 
 /* Ждать ответа дольше этого незачем: человек уже ушёл со страницы. */
 #define WAIT_CEIL_MS 5000
@@ -38,27 +38,27 @@
  * «Бюджет: до двух минут на цель») на одном зависшем дозвоне — умолчание
  * ядра для connect() на SYN-чёрной-дыре измеряется минутами.
  *
- * Число то же и того же происхождения, что и d2k_send_timeout_s ниже: оба
+ * Число то же и того же происхождения, что и d2s_send_timeout_s ниже: оба
  * унаследованы от connectTimeout/transportCeiling в
  * internal/classify/measure.go, а туда — из internal/volume/probe.go и из
  * пробы донора z2k-detect/internal/tcp16. */
 #define CONNECT_TIMEOUT_MS 8000
 
 /* Потолок ОДНОЙ блокирующей записи. Объявлена и документирована в
- * d2k_meas.h: тесту на короткую запись нужно дождаться настоящего истечения
+ * d2s_meas.h: тесту на короткую запись нужно дождаться настоящего истечения
  * этого таймаута, а не восьми секунд в проде. */
-uint32_t d2k_send_timeout_s = 8;
+uint32_t d2s_send_timeout_s = 8;
 
 static void nap_us(uint32_t us) {
     struct timespec ts = { (time_t)(us / 1000000u), (long)(us % 1000000u) * 1000L };
     (void)nanosleep(&ts, NULL);
 }
 
-/* Настоящая попытка поставить метку — то, на что d2k_mark_hook указывает по
+/* Настоящая попытка поставить метку — то, на что d2s_mark_hook указывает по
  * умолчанию. SO_MARK есть только на Linux (см. шапку core/Makefile и
  * scripts/check.sh: цели gcc-warn/cross существуют именно потому, что на
  * машине разработки — маке — эта ветка не компилируется вовсе). */
-static int d2k_mark_real(int fd, uint32_t mark) {
+static int d2s_mark_real(int fd, uint32_t mark) {
 #ifdef SO_MARK
     int m = (int)mark;
     return setsockopt(fd, SOL_SOCKET, SO_MARK, &m, sizeof m);
@@ -69,10 +69,10 @@ static int d2k_mark_real(int fd, uint32_t mark) {
 #endif
 }
 
-d2k_mark_fn d2k_mark_hook = d2k_mark_real;
+d2s_mark_fn d2s_mark_hook = d2s_mark_real;
 
 /* Типы записей TLS (RFC 8446 §5.1) и тип сообщения рукопожатия (§4). Те же
- * числа названы в d2k_link.h (D2K_TLS_ALERT, D2K_TLS_HANDSHAKE) — там их
+ * числа названы в d2s_link.h (D2S_TLS_ALERT, D2S_TLS_HANDSHAKE) — там их
  * видит датапат на проводе, здесь мы читаем ответ сами. Общего заголовка на
  * двоих не заводится нарочно: meas.o линкуется в тесты и утилиты, где link.o
  * нет вовсе (см. core/Makefile), а ради двух констант тащить туда связь с
@@ -84,7 +84,7 @@ d2k_mark_fn d2k_mark_hook = d2k_mark_real;
 #define TLS_REC_HANDSHAKE  0x16
 #define TLS_HS_SERVER_HELLO 0x02
 
-int d2k_accept_serverhello(const uint8_t *buf, size_t len) {
+int d2s_accept_serverhello(const uint8_t *buf, size_t len) {
     /* 5 байт заголовка записи (тип, версия, длина) и первый байт тела —
        тип сообщения рукопожатия. Шесть байт минимум, иначе смотреть не на
        что; дочитывать ради полного разбора незачем — рукопожатие всё равно
@@ -93,18 +93,18 @@ int d2k_accept_serverhello(const uint8_t *buf, size_t len) {
            buf[5] == TLS_HS_SERVER_HELLO;
 }
 
-int d2k_accept_tls_record(const uint8_t *buf, size_t len) {
+int d2s_accept_tls_record(const uint8_t *buf, size_t len) {
     return len >= 3 && (buf[0] == TLS_REC_HANDSHAKE || buf[0] == TLS_REC_ALERT) &&
            buf[1] == 0x03;
 }
 
-int d2k_accept_any(const uint8_t *buf, size_t len) {
+int d2s_accept_any(const uint8_t *buf, size_t len) {
     (void)buf;
     return len > 0;
 }
 
 /* Точки разреза обязаны строго возрастать и лежать внутри длины приветствия
- * — контракт описан в d2k_meas.h. Нарушение отклоняется целиком, а не
+ * — контракт описан в d2s_meas.h. Нарушение отклоняется целиком, а не
  * ужимается до похожего валидного подмножества. */
 static int cuts_valid(const size_t *cuts, size_t n_cuts, size_t len) {
     size_t prev = 0;
@@ -172,12 +172,12 @@ static int connect_bounded(int fd, const struct sockaddr *addr, socklen_t len,
     return 0;
 }
 
-int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
+int d2s_meas_once(const char *ip, uint16_t port, d2s_hello h,
                   const size_t *cuts, size_t n_cuts,
                   uint32_t gap_us, uint32_t wait_ms,
-                  uint32_t mark, d2k_accept_fn accept, int *marked_out) {
-    if (!ip || !h.bytes || h.len == 0) { return D2K_MEAS_ERR; }
-    if (n_cuts > 0 && !cuts_valid(cuts, n_cuts, h.len)) { return D2K_MEAS_ERR; }
+                  uint32_t mark, d2s_accept_fn accept, int *marked_out) {
+    if (!ip || !h.bytes || h.len == 0) { return D2S_MEAS_ERR; }
+    if (n_cuts > 0 && !cuts_valid(cuts, n_cuts, h.len)) { return D2S_MEAS_ERR; }
     if (marked_out) { *marked_out = (mark == 0); }
     if (wait_ms == 0 || wait_ms > WAIT_CEIL_MS) { wait_ms = WAIT_CEIL_MS; }
 
@@ -187,7 +187,7 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
     struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&a;
     socklen_t alen;
     int family;
-    if (strchr(ip, '%')) { return D2K_MEAS_ERR; }
+    if (strchr(ip, '%')) { return D2S_MEAS_ERR; }
     if (inet_pton(AF_INET, ip, &v4->sin_addr) == 1) {
         family = AF_INET;
         v4->sin_family = AF_INET;
@@ -198,12 +198,12 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
         v6->sin6_family = AF_INET6;
         v6->sin6_port = htons(port);
         alen = sizeof *v6;
-    } else { return D2K_MEAS_ERR; }
+    } else { return D2S_MEAS_ERR; }
     int fd = socket(family, SOCK_STREAM, 0);
-    if (fd < 0) { return D2K_MEAS_ERR; }
+    if (fd < 0) { return D2S_MEAS_ERR; }
 
     if (mark != 0) {
-        if (d2k_mark_hook(fd, mark) == 0) {
+        if (d2s_mark_hook(fd, mark) == 0) {
             if (marked_out) { *marked_out = 1; }
         }
     }
@@ -222,12 +222,12 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
 
     struct timeval tv = { (time_t)(wait_ms / 1000u), (suseconds_t)(wait_ms % 1000u) * 1000 };
     (void)setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-    struct timeval ctv = { (time_t)d2k_send_timeout_s, 0 };
+    struct timeval ctv = { (time_t)d2s_send_timeout_s, 0 };
     (void)setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &ctv, sizeof ctv);
 
     if (connect_bounded(fd, (struct sockaddr *)&a, alen, CONNECT_TIMEOUT_MS) != 0) {
         close(fd);
-        return D2K_MEAS_ERR;
+        return D2S_MEAS_ERR;
     }
 
     size_t prev = 0;
@@ -237,7 +237,7 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
         if (end <= prev) { continue; }
         if (send_all(fd, h.bytes + prev, end - prev) != 0) {
             /* НЕУДАВШАЯСЯ ОТПРАВКА — СБОЙ ОПЫТА, А НЕ РЕШЕНИЕ КОРОБКИ.
-               Раньше здесь стоял D2K_MEAS_SILENT, и это выдавало нашу
+               Раньше здесь стоял D2S_MEAS_SILENT, и это выдавало нашу
                собственную неудачу за молчание мишени: воздействие на провод
                целиком не попало, значит опыта не было и сказать про коробку
                нечего (§2.4 — «не измерено» ≠ «нет»).
@@ -245,12 +245,12 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
                Граница проходит ровно здесь: сбой ОТПРАВКИ — опыт не
                состоялся; сброс или тишина ПОСЛЕ того, как приветствие ушло
                целиком, — законное наблюдение «убито» и остаётся
-               D2K_MEAS_SILENT ниже. У донора та же разводка: ошибка записи
+               D2S_MEAS_SILENT ниже. У донора та же разводка: ошибка записи
                возвращается вызывающему ошибкой и никогда не становится
                отрицательным свойством коробки (probePoison →
                classify.go:838-842). */
             close(fd);
-            return D2K_MEAS_ERR;
+            return D2S_MEAS_ERR;
         }
         prev = end;
         if (prev < h.len && gap_us > 0) { nap_us(gap_us); }
@@ -259,40 +259,40 @@ int d2k_meas_once(const char *ip, uint16_t port, d2k_hello h,
     uint8_t buf[512];
     ssize_t n = recv(fd, buf, sizeof buf, 0);
     close(fd);
-    if (n <= 0) { return D2K_MEAS_SILENT; }
-    /* Приёмки нет — годится любой непустой ответ (см. d2k_meas.h про NULL).
+    if (n <= 0) { return D2S_MEAS_SILENT; }
+    /* Приёмки нет — годится любой непустой ответ (см. d2s_meas.h про NULL).
        Есть — решает она, и её отказ НЕ выдаётся за молчание: ответ был. */
-    if (accept && !accept(buf, (size_t)n)) { return D2K_MEAS_UNPROVEN; }
-    return D2K_MEAS_PASS;
+    if (accept && !accept(buf, (size_t)n)) { return D2S_MEAS_UNPROVEN; }
+    return D2S_MEAS_PASS;
 }
 
-d2k_tally d2k_meas(const char *ip, uint16_t port, d2k_hello h,
+d2s_tally d2s_meas(const char *ip, uint16_t port, d2s_hello h,
                    const size_t *cuts, size_t n_cuts,
                    uint32_t gap_us, uint32_t wait_ms,
-                   uint32_t mark, d2k_accept_fn accept, int repeats) {
-    d2k_tally t;
+                   uint32_t mark, d2s_accept_fn accept, int repeats) {
+    d2s_tally t;
     memset(&t, 0, sizeof t);
     t.marked = 1;
     if (repeats <= 0) { repeats = 3; }
     for (int i = 0; i < repeats; i++) {
         int marked = 0;
-        int r = d2k_meas_once(ip, port, h, cuts, n_cuts, gap_us, wait_ms, mark,
+        int r = d2s_meas_once(ip, port, h, cuts, n_cuts, gap_us, wait_ms, mark,
                               accept, &marked);
         /* Метка серии — И по всем дозвонам: один непомеченный делает серию
            непомеченной. */
         if (!marked) { t.marked = 0; }
-        if (r == D2K_MEAS_ERR) { t.err++; t.fail++; continue; }
-        if (r == D2K_MEAS_PASS) { t.pass++; continue; }
+        if (r == D2S_MEAS_ERR) { t.err++; t.fail++; continue; }
+        if (r == D2S_MEAS_PASS) { t.pass++; continue; }
         /* Не прошло. ЧЕМ именно не прошло — вопрос отдельный: непризнанный
            ответ и тишина ложатся в один fail, но unproven помнит, что ответ
-           был (см. d2k_meas.h). */
-        if (r == D2K_MEAS_UNPROVEN) { t.unproven++; }
+           был (см. d2s_meas.h). */
+        if (r == D2S_MEAS_UNPROVEN) { t.unproven++; }
         t.fail++;
     }
     return t;
 }
 
-/* --- свежая четвёрка UDP (см. d2k_udp_port_claim в d2k_meas.h) ----------- */
+/* --- свежая четвёрка UDP (см. d2s_udp_port_claim в d2s_meas.h) ----------- */
 
 /* Сколько недавних портов помним. Больше, чем зондов за окно у самой
    нагруженной цели: вытеснение ещё живой записи значило бы разрешить повтор,
@@ -310,7 +310,7 @@ static int64_t udp_now_ms(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000L;
 }
 
-int d2k_udp_port_claim(int fd) {
+int d2s_udp_port_claim(int fd) {
     struct sockaddr_storage me;
     socklen_t ml = sizeof me;
     memset(&me, 0, sizeof me);
@@ -324,7 +324,7 @@ int d2k_udp_port_claim(int fd) {
     while (__atomic_test_and_set(&udp_recent_lock, __ATOMIC_ACQUIRE)) { }
     for (size_t i = 0; i < UDP_RECENT_CAP; i++) {
         if (udp_recent[i].port == port && udp_recent[i].at_ms != 0 &&
-            now - udp_recent[i].at_ms < (int64_t)D2K_UDP_RESIDUAL_MS) {
+            now - udp_recent[i].at_ms < (int64_t)D2S_UDP_RESIDUAL_MS) {
             recent = 1;
             break;
         }
@@ -338,7 +338,7 @@ int d2k_udp_port_claim(int fd) {
     return recent;
 }
 
-void d2k_udp_port_forget_all(void) {
+void d2s_udp_port_forget_all(void) {
     while (__atomic_test_and_set(&udp_recent_lock, __ATOMIC_ACQUIRE)) { }
     memset(udp_recent, 0, sizeof udp_recent);
     udp_recent_next = 0;

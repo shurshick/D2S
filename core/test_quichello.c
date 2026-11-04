@@ -14,30 +14,30 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_hello.h"
-#include "d2k_quic.h"
-#include "d2k_quichello.h"
+#include "d2s_hello.h"
+#include "d2s_quic.h"
+#include "d2s_quichello.h"
 #include "test_quic_pq.h"
-#include "d2k_quicsnap.h"
-#include "d2k_quicconn.h"
-#include "d2k_quicwire.h"
+#include "d2s_quicsnap.h"
+#include "d2s_quicconn.h"
+#include "d2s_quicwire.h"
 #include "test_quic_vector.h"
 
 /* Расшифровывает собранный Initial. Нужна ровно одному вопросу — про два
  * кадра CRYPTO: там проверяется не то, что пакет ЧИТАЕТСЯ (это делает
- * d2k_quic_sni, и он кадры как раз пересобирает, то есть разрез от него
+ * d2s_quic_sni, и он кадры как раз пересобирает, то есть разрез от него
  * скрыт), а то, КАК пакет сложен внутри. */
 static size_t open_initial(const uint8_t *p, size_t n, uint8_t *plain, size_t cap) {
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(p, n, 0, &h) != 0 || cap < h.packet_len) { return 0; }
-    d2k_qw_keys k;
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(p, n, 0, &h) != 0 || cap < h.packet_len) { return 0; }
+    d2s_qw_keys k;
     uint8_t sec[32];
-    if (d2k_qw_initial_secret(h.version, p + h.dcid_off, h.dcid_len,
-                              D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(h.version, sec, &k) != 0) { return 0; }
+    if (d2s_qw_initial_secret(h.version, p + h.dcid_off, h.dcid_len,
+                              D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(h.version, sec, &k) != 0) { return 0; }
     size_t plen = 0;
     uint64_t pn = 0;
-    if (d2k_qw_open(&k, &h, p, 0, plain, &plen, &pn) != 0) { return 0; }
+    if (d2s_qw_open(&k, &h, p, 0, plain, &plen, &pn) != 0) { return 0; }
     return plen;
 }
 
@@ -68,8 +68,8 @@ int main(int argc, char **argv) {
                       strcmp(argv[1], "--dump-probe") == 0)) {
         uint8_t packet[1500], hello[1500];
         size_t packet_len = 0, hello_len = 0;
-        if (d2k_quic_probe_initial(argv[2], packet, sizeof packet, &packet_len) != 0 ||
-            d2k_quic_client_hello(packet, packet_len, hello, sizeof hello, &hello_len) != 0) {
+        if (d2s_quic_probe_initial(argv[2], packet, sizeof packet, &packet_len) != 0 ||
+            d2s_quic_client_hello(packet, packet_len, hello, sizeof hello, &hello_len) != 0) {
             return 2;
         }
         const uint8_t *bytes = strcmp(argv[1], "--dump-probe") == 0 ? packet : hello;
@@ -93,17 +93,17 @@ int main(int argc, char **argv) {
      * РЕЖЕМ ВНУТРИ ИМЕНИ, а не посередине буфера, и это не мелочь: коробку
      * ломает разрыв именно того, что она ищет, а разрыв в случайном месте —
      * нет. Проверяется это прямо: имени в открытом теле не должно остаться
-     * ЦЕЛИКОМ. Круг через d2k_quic_sni такую ошибку не поймал бы вовсе — наш
+     * ЦЕЛИКОМ. Круг через d2s_quic_sni такую ошибку не поймал бы вовсе — наш
      * разбор кадры пересобирает и вернёт имя при любом месте разреза.
      *
      * ХВОСТ ИДЁТ ПЕРВЫМ — по той же причине, по которой в TCP посылается
      * второй сегмент раньше первого. */
     {
-        CHECK(d2k_quic_hello_ask(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
-                                 D2K_QASK_SPLIT_CRYPTO, "www.microsoft.com",
+        CHECK(d2s_quic_hello_ask(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
+                                 D2S_QASK_SPLIT_CRYPTO, "www.microsoft.com",
                                  out, sizeof out, &out_len) == 0,
               "приветствие двумя кадрами CRYPTO не собралось");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "разложенное приветствие не пересобирается — это мусор, а не вопрос");
 
@@ -121,9 +121,9 @@ int main(int argc, char **argv) {
             uint64_t o = 0, l = 0;
             size_t w = 0;
             off++;
-            if (d2k_qw_varint_read(plain + off, plen - off, &o, &w) != 0) { break; }
+            if (d2s_qw_varint_read(plain + off, plen - off, &o, &w) != 0) { break; }
             off += w;
-            if (d2k_qw_varint_read(plain + off, plen - off, &l, &w) != 0) { break; }
+            if (d2s_qw_varint_read(plain + off, plen - off, &l, &w) != 0) { break; }
             off += w;
             if (frames == 0) { first_off = o; }
             frames++;
@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
 
         uint8_t ch[2048];
         size_t ch_len = 0;
-        CHECK(d2k_quic_client_hello(out, out_len, ch, sizeof ch, &ch_len) == 0 &&
+        CHECK(d2s_quic_client_hello(out, out_len, ch, sizeof ch, &ch_len) == 0 &&
               total == ch_len,
               "куски в сумме не дают целое приветствие");
     }
@@ -156,15 +156,15 @@ int main(int argc, char **argv) {
     {
         uint8_t head[2048], tail[2048];
         size_t head_len = 0, tail_len = 0;
-        CHECK(d2k_quic_hello_split(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_split(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                    "www.microsoft.com",
                                    head, sizeof head, &head_len,
                                    tail, sizeof tail, &tail_len) == 0,
               "приветствие двумя датаграммами не собралось");
 
-        d2k_qw_hdr hh, ht;
-        CHECK(d2k_qw_hdr_parse(head, head_len, 0, &hh) == 0 &&
-              d2k_qw_hdr_parse(tail, tail_len, 0, &ht) == 0,
+        d2s_qw_hdr hh, ht;
+        CHECK(d2s_qw_hdr_parse(head, head_len, 0, &hh) == 0 &&
+              d2s_qw_hdr_parse(tail, tail_len, 0, &ht) == 0,
               "половины не разбираются как пакеты");
         CHECK(hh.dcid_len == ht.dcid_len && hh.dcid_len >= 8 &&
               memcmp(head + hh.dcid_off, tail + ht.dcid_off, hh.dcid_len) == 0,
@@ -175,7 +175,7 @@ int main(int argc, char **argv) {
         /* Ни одна половина сама по себе имени не даёт — иначе разрез
            фиктивный. И в открытом теле каждой имени нет целиком: режем
            внутри него. */
-        CHECK(d2k_quic_sni(head, head_len, name, sizeof name) != 0,
+        CHECK(d2s_quic_sni(head, head_len, name, sizeof name) != 0,
               "голова одна даёт имя целиком — разрез фиктивный");
         uint8_t plain[2048];
         size_t plen = open_initial(head, head_len, plain, sizeof plain);
@@ -189,7 +189,7 @@ int main(int argc, char **argv) {
            иначе три параллельные попытки снова станут одной (замер 13.09). */
         uint8_t head2[2048], tail2[2048];
         size_t h2 = 0, t2 = 0;
-        CHECK(d2k_quic_hello_split(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_split(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                    "www.microsoft.com",
                                    head2, sizeof head2, &h2,
                                    tail2, sizeof tail2, &t2) == 0,
@@ -200,15 +200,15 @@ int main(int argc, char **argv) {
         /* ПАКЕТЫ НЕ ОБЯЗАНЫ ПРИЙТИ В ПОРЯДКЕ. Сначала хвост, затем голова:
            состояние должно помнить расшифрованный CRYPTO по смещениям и
            выдать имя только после заполнения префикса от нуля. Статический
-           d2k_quic_sni намеренно остаётся однодатаграммным; этот контекст —
+           d2s_quic_sni намеренно остаётся однодатаграммным; этот контекст —
            отдельный API для датапата. */
-        d2k_quic_assembly as;
-        d2k_quic_assembly_init(&as);
+        d2s_quic_assembly as;
+        d2s_quic_assembly_init(&as);
         char assembled[256] = {0};
-        CHECK(d2k_quic_assembly_feed(&as, tail, tail_len,
+        CHECK(d2s_quic_assembly_feed(&as, tail, tail_len,
                                      assembled, sizeof assembled) == 0,
               "хвост QUIC ошибочно объявлен готовым без головы");
-        CHECK(d2k_quic_assembly_feed(&as, head, head_len,
+        CHECK(d2s_quic_assembly_feed(&as, head, head_len,
                                      assembled, sizeof assembled) == 1 &&
               strcmp(assembled, "www.microsoft.com") == 0,
               "ClientHello между датаграммами не собрался");
@@ -229,18 +229,18 @@ int main(int argc, char **argv) {
      * ломает приветствие. Иначе молчание коробки означало бы «мы послали
      * мусор», а не «она смотрит на бит». */
     {
-        CHECK(d2k_quic_hello_ask(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
-                                 D2K_QASK_CLEAR_FIXED_BIT, "www.microsoft.com",
+        CHECK(d2s_quic_hello_ask(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
+                                 D2S_QASK_CLEAR_FIXED_BIT, "www.microsoft.com",
                                  out, sizeof out, &out_len) == 0,
               "приветствие с погашенным фиксированным битом не собралось");
         CHECK((out[0] & 0x40) == 0, "фиксированный бит не погашен — вопрос не задан");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "пакет перестал разбираться: молчание означало бы мусор, а не свойство коробки");
 
         /* И ПЕРЕСБОРКА ПОД НОВОЕ СОЕДИНЕНИЕ ОБЯЗАНА БИТ СОХРАНИТЬ.
            Каждая параллельная попытка вопроса уходит через
-           d2k_quic_hello_recid — свой DCID на соединение, иначе сервер
+           d2s_quic_hello_recid — свой DCID на соединение, иначе сервер
            считает три одинаковые датаграммы одной (замер 13.09, 1/3). А
            заголовок он собирает ЗАНОВО, то есть поставил бы бит обратно.
            Вопрос требует единогласия 3/3, значит свойство «коробка смотрит
@@ -248,11 +248,11 @@ int main(int argc, char **argv) {
            коробку — вывод из собственной ошибки, а не из сети. */
         uint8_t again[2048];
         size_t again_len = 0;
-        CHECK(d2k_quic_hello_recid(out, out_len, again, sizeof again, &again_len) == 0,
+        CHECK(d2s_quic_hello_recid(out, out_len, again, sizeof again, &again_len) == 0,
               "пакет с погашенным битом не пересобрался под новое соединение");
         CHECK((again[0] & 0x40) == 0,
               "пересборка вернула фиксированный бит — вопрос уехал бы незаданным");
-        CHECK(d2k_quic_sni(again, again_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(again, again_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "пересобранный пакет с погашенным битом не разбирается");
     }
@@ -266,17 +266,17 @@ int main(int argc, char **argv) {
      *
      * Проверяем и поле версии, и то, что пакет собран ключами ВТОРОЙ версии:
      * поставить в заголовок другое число, а запечатать по-старому — это не
-     * вопрос про версию, это битый пакет. Разбор идёт тем же d2k_quic_sni,
+     * вопрос про версию, это битый пакет. Разбор идёт тем же d2s_quic_sni,
      * который выводит ключи из версии в заголовке: сойдётся он только если
      * версия и ключи согласованы. */
     {
-        CHECK(d2k_quic_hello_ask(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
-                                 D2K_QASK_VERSION2, "www.microsoft.com",
+        CHECK(d2s_quic_hello_ask(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
+                                 D2S_QASK_VERSION2, "www.microsoft.com",
                                  out, sizeof out, &out_len) == 0,
               "приветствие второй версии не собралось");
         CHECK(out[1] == 0x6b && out[2] == 0x33 && out[3] == 0x43 && out[4] == 0xcf,
               "в заголовке не версия 2 (RFC 9369 §3.1)");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "пакет не разбирается ключами второй версии — версия сменена только на бумаге");
     }
@@ -293,13 +293,13 @@ int main(int argc, char **argv) {
      * 0)), фиксированная длина датаграммы, а не «снимок плюс сто»; пакет
      * обязан остаться разбираемым. */
     {
-        CHECK(d2k_quic_hello_ask(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
-                                 D2K_QASK_LONGER, "www.microsoft.com",
+        CHECK(d2s_quic_hello_ask(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
+                                 D2S_QASK_LONGER, "www.microsoft.com",
                                  out, sizeof out, &out_len) == 0,
               "удлинённое приветствие не собралось");
         CHECK(out_len == 1300,
               "датаграмма вопроса «длина» не 1300 байт донора");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "удлинённый пакет не разбирается");
     }
@@ -308,21 +308,21 @@ int main(int argc, char **argv) {
      * РОВНО 1300 байт, а не «снимок плюс сто». Снимок длиннее 1200 (здесь
      * 1250) прежде давал 1350 — другой вопрос под тем же именем. */
     {
-        uint8_t tail_in[sizeof d2k_test_v1_initial + 50];
-        uint8_t snap[D2K_QW_MAX_DGRAM];
+        uint8_t tail_in[sizeof d2s_test_v1_initial + 50];
+        uint8_t snap[D2S_QW_MAX_DGRAM];
         size_t snap_len = 0;
-        memcpy(tail_in, d2k_test_v1_initial, sizeof d2k_test_v1_initial);
-        memset(tail_in + sizeof d2k_test_v1_initial, 0, 50);
-        CHECK(d2k_quic_hello_ask(tail_in, sizeof tail_in, D2K_QASK_PLAIN,
+        memcpy(tail_in, d2s_test_v1_initial, sizeof d2s_test_v1_initial);
+        memset(tail_in + sizeof d2s_test_v1_initial, 0, 50);
+        CHECK(d2s_quic_hello_ask(tail_in, sizeof tail_in, D2S_QASK_PLAIN,
                                  "www.microsoft.com", snap, sizeof snap, &snap_len) == 0 &&
               snap_len == 1250,
               "не собрался снимок в 1250 байт для вопроса «длина»");
-        CHECK(d2k_quic_hello_ask(snap, snap_len, D2K_QASK_LONGER, "www.microsoft.com",
+        CHECK(d2s_quic_hello_ask(snap, snap_len, D2S_QASK_LONGER, "www.microsoft.com",
                                  out, sizeof out, &out_len) == 0,
               "удлинённое приветствие из снимка 1250 не собралось");
         CHECK(out_len == 1300,
               "вопрос «длина» обязан дать ровно 1300 байт донора (questions.go:237)");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "удлинённый из 1250 пакет не разбирается");
     }
@@ -330,31 +330,31 @@ int main(int argc, char **argv) {
     /* Запасной Initial донора для «длины» (questions.go:237): ровно 1300,
        разбирается, несёт имя. */
     {
-        CHECK(d2k_quic_probe_initial_longer("www.microsoft.com", out, sizeof out, &out_len) == 0 &&
+        CHECK(d2s_quic_probe_initial_longer("www.microsoft.com", out, sizeof out, &out_len) == 0 &&
               out_len == 1300,
               "собственный Initial донора для «длины» не 1300 байт");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "собственный Initial «длины» не разбирается");
     }
 
     /* --- круг: собрали, прочитали, вернули имя, сравнили побайтно ------- */
     {
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                     "www.microsoft.com", out, sizeof out, &out_len) == 0,
               "приветствие с другим именем не собралось");
-        CHECK(out_len == sizeof d2k_test_v1_initial,
+        CHECK(out_len == sizeof d2s_test_v1_initial,
               "длина датаграммы не сохранена — по ней коробка отличает приветствие");
-        CHECK(d2k_quic_is_initial(out, out_len) == 1,
+        CHECK(d2s_quic_is_initial(out, out_len) == 1,
               "собранное не узнаётся как Initial собственным же разбором");
-        CHECK(d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "www.microsoft.com") == 0,
               "из собранного не достаётся подставленное имя");
 
         /* DCID обязан быть СВЕЖИМ: повтор чужого — это второй Initial ЧУЖОГО
            соединения, а не наш вопрос. Лежит он сразу за первым байтом,
            версией и длиной (1+4+1). */
-        CHECK(memcmp(out + 6, d2k_test_v1_initial + 6, 8) != 0,
+        CHECK(memcmp(out + 6, d2s_test_v1_initial + 6, 8) != 0,
               "DCID повторён из снимка — вопрос уехал бы в чужое соединение");
         /* SCID — НАОБОРОТ, дословно из снимка: клиент объявляет его внутри
            приветствия (initial_source_connection_id, RFC 9000 §7.3), и
@@ -363,13 +363,13 @@ int main(int argc, char **argv) {
            В векторе A.2 SCID пустой, поэтому проверяем ДЛИНУ: она обязана
            совпасть с длиной из снимка. */
         {
-            d2k_qw_hdr h0, h1;
-            CHECK(d2k_qw_hdr_parse(d2k_test_v1_initial, sizeof d2k_test_v1_initial, 0, &h0) == 0 &&
-                  d2k_qw_hdr_parse(out, out_len, 0, &h1) == 0,
+            d2s_qw_hdr h0, h1;
+            CHECK(d2s_qw_hdr_parse(d2s_test_v1_initial, sizeof d2s_test_v1_initial, 0, &h0) == 0 &&
+                  d2s_qw_hdr_parse(out, out_len, 0, &h1) == 0,
                   "заголовки снимка и собранного не разобрались");
             CHECK(h1.scid_len == h0.scid_len &&
                   (h0.scid_len == 0 ||
-                   memcmp(out + h1.scid_off, d2k_test_v1_initial + h0.scid_off, h0.scid_len) == 0),
+                   memcmp(out + h1.scid_off, d2s_test_v1_initial + h0.scid_off, h0.scid_len) == 0),
                   "SCID не перенесён из снимка — сервер ответит закрытием, а не ответом");
         }
 
@@ -378,14 +378,14 @@ int main(int argc, char **argv) {
            не поехало ничего. */
         uint8_t back[2048];
         size_t back_len = 0;
-        CHECK(d2k_quic_hello_rename(out, out_len, "example.com",
+        CHECK(d2s_quic_hello_rename(out, out_len, "example.com",
                                     back, sizeof back, &back_len) == 0,
               "обратная подстановка имени не собралась");
         uint8_t ch0[2048], ch1[2048];
         size_t n0 = 0, n1 = 0;
-        CHECK(d2k_quic_client_hello(d2k_test_v1_initial, sizeof d2k_test_v1_initial, ch0, sizeof ch0, &n0) == 0,
+        CHECK(d2s_quic_client_hello(d2s_test_v1_initial, sizeof d2s_test_v1_initial, ch0, sizeof ch0, &n0) == 0,
               "открытый ClientHello не достался из вектора");
-        CHECK(d2k_quic_client_hello(back, back_len, ch1, sizeof ch1, &n1) == 0,
+        CHECK(d2s_quic_client_hello(back, back_len, ch1, sizeof ch1, &n1) == 0,
               "открытый ClientHello не достался из собранного");
         CHECK(n0 == n1 && memcmp(ch0, ch1, n0) == 0,
               "круг не сошёлся побайтно: поехало что-то кроме имени");
@@ -395,18 +395,18 @@ int main(int argc, char **argv) {
      * Цепочка длин у server_name четырёхзвенная, и пропуск любого звена
      * оставляет приветствие похожим на валидное. Разбор поймает. */
     {
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial, "a.io",
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial, "a.io",
                                     out, sizeof out, &out_len) == 0 &&
-              d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+              d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "a.io") == 0,
               "короткое имя не подставилось");
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                     "very.long.name.example.museum.invalid",
                                     out, sizeof out, &out_len) == 0 &&
-              d2k_quic_sni(out, out_len, name, sizeof name) == 0 &&
+              d2s_quic_sni(out, out_len, name, sizeof name) == 0 &&
               strcmp(name, "very.long.name.example.museum.invalid") == 0,
               "длинное имя не подставилось");
-        CHECK(out_len == sizeof d2k_test_v1_initial,
+        CHECK(out_len == sizeof d2s_test_v1_initial,
               "длинное имя сдвинуло длину датаграммы");
     }
 
@@ -419,13 +419,13 @@ int main(int argc, char **argv) {
     {
         uint8_t a[2048], b[2048];
         size_t alen = 0, blen = 0;
-        CHECK(d2k_quic_hello_recid(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_recid(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                    a, sizeof a, &alen) == 0,
               "снимок с новым идентификатором не собрался");
-        CHECK(alen == sizeof d2k_test_v1_initial, "длина датаграммы изменилась");
-        CHECK(memcmp(a, d2k_test_v1_initial, alen) != 0,
+        CHECK(alen == sizeof d2s_test_v1_initial, "длина датаграммы изменилась");
+        CHECK(memcmp(a, d2s_test_v1_initial, alen) != 0,
               "байты не изменились вовсе — идентификатор тот же, сервер сочтёт повтором");
-        CHECK(d2k_quic_sni(a, alen, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(a, alen, name, sizeof name) == 0 &&
               strcmp(name, "example.com") == 0,
               "имя не пережило смену идентификатора");
 
@@ -433,24 +433,24 @@ int main(int argc, char **argv) {
            кадров, добивка, всё. Сверяем открытый ClientHello целиком. */
         uint8_t ch0[2048], ch1[2048];
         size_t n0 = 0, n1 = 0;
-        CHECK(d2k_quic_client_hello(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_client_hello(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                     ch0, sizeof ch0, &n0) == 0 &&
-              d2k_quic_client_hello(a, alen, ch1, sizeof ch1, &n1) == 0 &&
+              d2s_quic_client_hello(a, alen, ch1, sizeof ch1, &n1) == 0 &&
               n0 == n1 && memcmp(ch0, ch1, n0) == 0,
               "приветствие внутри изменилось при смене идентификатора");
 
         /* Две подряд обязаны отличаться друг от друга: идентификатор берётся
            заново каждый раз, иначе три попытки снова станут одной. */
-        CHECK(d2k_quic_hello_recid(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+        CHECK(d2s_quic_hello_recid(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                    b, sizeof b, &blen) == 0, "вторая копия не собралась");
         CHECK(alen == blen && memcmp(a, b, alen) != 0,
               "две копии вышли одинаковыми — идентификатор не свежий");
 
         /* SCID остаётся своим — его клиент объявил внутри приветствия. */
         {
-            d2k_qw_hdr h0, h1;
-            CHECK(d2k_qw_hdr_parse(d2k_test_v1_initial, sizeof d2k_test_v1_initial, 0, &h0) == 0 &&
-                  d2k_qw_hdr_parse(a, alen, 0, &h1) == 0 &&
+            d2s_qw_hdr h0, h1;
+            CHECK(d2s_qw_hdr_parse(d2s_test_v1_initial, sizeof d2s_test_v1_initial, 0, &h0) == 0 &&
+                  d2s_qw_hdr_parse(a, alen, 0, &h1) == 0 &&
                   h1.scid_len == h0.scid_len,
                   "длина SCID не сохранена");
         }
@@ -458,9 +458,9 @@ int main(int argc, char **argv) {
         /* Не Initial и чужая версия — честный отказ: зонд согласования версий
            шлёт Initial заведомо чужой версии, и трогать его нельзя. */
         uint8_t alien[1200];
-        memcpy(alien, d2k_test_v1_initial, sizeof alien);
+        memcpy(alien, d2s_test_v1_initial, sizeof alien);
         alien[1] = 0x0a; alien[2] = 0x0a; alien[3] = 0x0a; alien[4] = 0x0a;
-        CHECK(d2k_quic_hello_recid(alien, sizeof alien, a, sizeof a, &alen) != 0,
+        CHECK(d2s_quic_hello_recid(alien, sizeof alien, a, sizeof a, &alen) != 0,
               "Initial чужой версии пересобран — соль для неё неизвестна");
     }
 
@@ -468,25 +468,25 @@ int main(int argc, char **argv) {
     {
         uint8_t junk[1200];
         memset(junk, 0x5a, sizeof junk);
-        CHECK(d2k_quic_hello_rename(junk, sizeof junk, "a.io", out, sizeof out, &out_len) != 0,
+        CHECK(d2s_quic_hello_rename(junk, sizeof junk, "a.io", out, sizeof out, &out_len) != 0,
               "мусор сошёл за приветствие");
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, 200, "a.io", out, sizeof out, &out_len) != 0,
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, 200, "a.io", out, sizeof out, &out_len) != 0,
               "обрезанная датаграмма сошла за приветствие");
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial, "", out, sizeof out, &out_len) != 0,
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial, "", out, sizeof out, &out_len) != 0,
               "пустое имя принято за имя");
-        CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial, "a.io", out, 100, &out_len) != 0,
+        CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial, "a.io", out, 100, &out_len) != 0,
               "результат втиснут в буфер, куда он не помещается");
     }
 
     /* --- длинный заголовок: собранное читается разбором ------------------
-     * d2k_qw_long_hdr вынесен в проводной слой из quicconn (там он был
+     * d2s_qw_long_hdr вынесен в проводной слой из quicconn (там он был
      * static и второй сборщик Initial завёл бы его копию). Проверка —
      * кругом же: собрать заголовок и разобрать его обратно. */
     {
         uint8_t dcid[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
         uint8_t scid[4] = { 9, 10, 11, 12 };
         uint8_t hdr[64];
-        size_t hlen = d2k_qw_long_hdr(hdr, sizeof hdr, D2K_QW_V1, D2K_QW_LT_INITIAL,
+        size_t hlen = d2s_qw_long_hdr(hdr, sizeof hdr, D2S_QW_V1, D2S_QW_LT_INITIAL,
                                       dcid, sizeof dcid, scid, sizeof scid, 1, 100);
         CHECK(hlen > 0, "длинный заголовок не собрался");
         /* Дописываем столько байт, сколько обещает поле Length, — разбор
@@ -494,10 +494,10 @@ int main(int argc, char **argv) {
         uint8_t pkt[256];
         memcpy(pkt, hdr, hlen);
         memset(pkt + hlen, 0, sizeof pkt - hlen);
-        d2k_qw_hdr h;
-        CHECK(d2k_qw_hdr_parse(pkt, hlen + 1 + 100 + 16, 0, &h) == 0,
+        d2s_qw_hdr h;
+        CHECK(d2s_qw_hdr_parse(pkt, hlen + 1 + 100 + 16, 0, &h) == 0,
               "собранный заголовок не разобрался");
-        CHECK(h.long_hdr && h.type == D2K_QW_LT_INITIAL && h.version == D2K_QW_V1,
+        CHECK(h.long_hdr && h.type == D2S_QW_LT_INITIAL && h.version == D2S_QW_V1,
               "разбор вернул другой тип или версию");
         CHECK(h.dcid_len == sizeof dcid && memcmp(pkt + h.dcid_off, dcid, sizeof dcid) == 0,
               "DCID не совпал после круга");
@@ -508,12 +508,12 @@ int main(int argc, char **argv) {
         /* Версия 2 нумерует типы иначе (RFC 9369 §3.2). Сборка обязана
            написать номер ЭТОЙ версии, а разбор — вернуть его к номеру v1;
            иначе Initial версии 2 собрался бы как 0-RTT молча. */
-        hlen = d2k_qw_long_hdr(hdr, sizeof hdr, D2K_QW_V2, D2K_QW_LT_INITIAL,
+        hlen = d2s_qw_long_hdr(hdr, sizeof hdr, D2S_QW_V2, D2S_QW_LT_INITIAL,
                                dcid, sizeof dcid, scid, sizeof scid, 1, 100);
         CHECK(hlen > 0, "длинный заголовок версии 2 не собрался");
         memcpy(pkt, hdr, hlen);
-        CHECK(d2k_qw_hdr_parse(pkt, hlen + 1 + 100 + 16, 0, &h) == 0 &&
-              h.type == D2K_QW_LT_INITIAL && h.version == D2K_QW_V2,
+        CHECK(d2s_qw_hdr_parse(pkt, hlen + 1 + 100 + 16, 0, &h) == 0 &&
+              h.type == D2S_QW_LT_INITIAL && h.version == D2S_QW_V2,
               "тип Initial версии 2 не пережил круг сборка-разбор");
     }
 
@@ -522,37 +522,37 @@ int main(int argc, char **argv) {
     {
         uint8_t first[1500], second[1500], hello[1500];
         size_t fl = 0, sl = 0, hl = 0;
-        CHECK(d2k_quic_probe_initial("measure.example", first, sizeof first, &fl) == 0 && fl == 1200,
+        CHECK(d2s_quic_probe_initial("measure.example", first, sizeof first, &fl) == 0 && fl == 1200,
               "измерительный Initial оригинала не собрался в 1200 байт");
-        CHECK(d2k_quic_sni(first, fl, name, sizeof name) == 0 && strcmp(name, "measure.example") == 0,
+        CHECK(d2s_quic_sni(first, fl, name, sizeof name) == 0 && strcmp(name, "measure.example") == 0,
               "Initial оригинала не раскрывается или потерял имя");
-        CHECK(d2k_quic_client_hello(first, fl, hello, sizeof hello, &hl) == 0 && hl > 0,
+        CHECK(d2s_quic_client_hello(first, fl, hello, sizeof hello, &hl) == 0 && hl > 0,
               "Initial оригинала не содержит полного ClientHello");
-        CHECK(d2k_quic_probe_initial("measure.example", second, sizeof second, &sl) == 0 &&
+        CHECK(d2s_quic_probe_initial("measure.example", second, sizeof second, &sl) == 0 &&
               sl == fl && memcmp(first, second, fl) != 0,
               "измерительный Initial повторяет случайность другого опыта");
-        CHECK(d2k_quic_probe_initial("measure.example", first, 1199, &fl) != 0 && fl == 0,
+        CHECK(d2s_quic_probe_initial("measure.example", first, 1199, &fl) != 0 && fl == 0,
               "измерительный Initial обрезан до слишком малого буфера");
-        CHECK(d2k_quic_probe_initial("192.0.2.1", first, sizeof first, &fl) == 0 && fl == 1200,
+        CHECK(d2s_quic_probe_initial("192.0.2.1", first, sizeof first, &fl) == 0 && fl == 1200,
               "адресная QUIC-цель донора не собрала измерительный Initial");
-        CHECK(d2k_quic_client_hello(first, fl, hello, sizeof hello, &hl) == 0 && hl > 0 &&
-              d2k_quic_sni(first, fl, name, sizeof name) != 0,
+        CHECK(d2s_quic_client_hello(first, fl, hello, sizeof hello, &hl) == 0 && hl > 0 &&
+              d2s_quic_sni(first, fl, name, sizeof name) != 0,
               "IP-цель должна повторять донорский Initial без SNI, а не подставлять IP как имя");
-        CHECK(d2k_quic_hello_ask(first, fl, D2K_QASK_PLAIN, "192.0.2.1",
+        CHECK(d2s_quic_hello_ask(first, fl, D2S_QASK_PLAIN, "192.0.2.1",
                                  second, sizeof second, &sl) == 0 &&
-              d2k_quic_sni(second, sl, name, sizeof name) != 0,
+              d2s_quic_sni(second, sl, name, sizeof name) != 0,
               "вопрос QUIC для IP-цели не сохранил отсутствие SNI");
-        CHECK(d2k_quic_probe_initial("", first, sizeof first, &fl) != 0,
+        CHECK(d2s_quic_probe_initial("", first, sizeof first, &fl) != 0,
               "безымянной цели выдуман именованный измерительный вход");
 
         {
             const uint8_t unusable_sample[] = {0x01, 0x02, 0x03};
             int used_sample = 1;
-            CHECK(d2k_quic_prepare_target(unusable_sample, sizeof unusable_sample,
+            CHECK(d2s_quic_prepare_target(unusable_sample, sizeof unusable_sample,
                                           "vk.ru", first, sizeof first, &fl,
                                           &used_sample) == 0 && used_sample == 0,
                   "неподходящий последний QUIC-снимок не переключился на безопасный PROFILE");
-            CHECK(d2k_quic_sni(first, fl, name, sizeof name) == 0 &&
+            CHECK(d2s_quic_sni(first, fl, name, sizeof name) == 0 &&
                   strcmp(name, "vk.ru") == 0,
                   "резервный измерительный Initial не содержит имя цели");
         }
@@ -561,32 +561,32 @@ int main(int argc, char **argv) {
     /* ПЕРВЫЙ INITIAL СВОИМ СТЕКОМ — БАЙТЫ, А НЕ СОЕДИНЕНИЕ.
        Нужен приманкой голоса: коробка узнаёт голос по первому пакету потока,
        а боевой профиль z2k ставит перед ним Initial QUIC чужим блобом
-       (quic_dbankcloud). Чужих блобов d2k не берёт; настоящий Initial у него
+       (quic_dbankcloud). Чужих блобов d2s не берёт; настоящий Initial у него
        свой — тот же, что уходит от зонда подтверждения QUIC. Проверяется он
        собственным же разбором: раскрывается ключами из своего DCID и отдаёт
        заданное имя. */
     {
         uint8_t ini[1500];
         size_t il = 0;
-        CHECK(d2k_qc_first_initial("decoy.example", ini, sizeof ini, &il) == 0,
+        CHECK(d2s_qc_first_initial("decoy.example", ini, sizeof ini, &il) == 0,
               "первый Initial не собрался");
         CHECK(il >= 1200, "первый Initial короче 1200 байт — сервер вправе его не обслуживать");
-        CHECK(d2k_quic_is_initial(ini, il), "собранное не похоже на Initial");
+        CHECK(d2s_quic_is_initial(ini, il), "собранное не похоже на Initial");
         char name[256];
-        CHECK(d2k_quic_sni(ini, il, name, sizeof name) == 0 &&
+        CHECK(d2s_quic_sni(ini, il, name, sizeof name) == 0 &&
               strcmp(name, "decoy.example") == 0,
               "собственный разбор не раскрыл собранный Initial или имя не то");
         uint8_t again[1500];
         size_t al = 0;
-        CHECK(d2k_qc_first_initial("decoy.example", again, sizeof again, &al) == 0 &&
+        CHECK(d2s_qc_first_initial("decoy.example", again, sizeof again, &al) == 0 &&
               (al != il || memcmp(again, ini, il) != 0),
               "два Initial совпали байт в байт — случайности в них нет");
-        CHECK(d2k_qc_first_initial("decoy.example", ini, 100, &il) != 0,
+        CHECK(d2s_qc_first_initial("decoy.example", ini, 100, &il) != 0,
               "Initial «собрался» в буфер на 100 байт");
         il = 0;
-        CHECK(d2k_qc_first_initial("192.0.2.1", ini, sizeof ini, &il) == 0 &&
-              d2k_quic_is_initial(ini, il) &&
-              d2k_quic_sni(ini, il, name, sizeof name) != 0,
+        CHECK(d2s_qc_first_initial("192.0.2.1", ini, sizeof ini, &il) == 0 &&
+              d2s_quic_is_initial(ini, il) &&
+              d2s_quic_sni(ini, il, name, sizeof name) != 0,
               "QUIC verifier для IP-цели должен послать Initial без SNI");
     }
 
@@ -600,22 +600,22 @@ int main(int argc, char **argv) {
     {
         uint8_t d1[1500], d2[1500];
         size_t l1 = 0, l2 = 0;
-        CHECK(d2k_test_pq_initials("rutracker.org", d1, &l1, d2, &l2) == 0,
+        CHECK(d2s_test_pq_initials("rutracker.org", d1, &l1, d2, &l2) == 0,
               "стенд двух Initial");
         const uint8_t *dgs[2] = {d1, d2};
         size_t lens[2] = {l1, l2};
-        static uint8_t blob[D2K_SHAPE_MAX], o1[D2K_SHAPE_MAX], o2[D2K_SHAPE_MAX];
-        size_t bl = d2k_qsnap_pack(dgs, lens, 2, blob, sizeof blob), n1 = 0, n2 = 0;
+        static uint8_t blob[D2S_SHAPE_MAX], o1[D2S_SHAPE_MAX], o2[D2S_SHAPE_MAX];
+        size_t bl = d2s_qsnap_pack(dgs, lens, 2, blob, sizeof blob), n1 = 0, n2 = 0;
         CHECK(bl > 0, "пачка не упаковалась");
-        CHECK(d2k_quic_hello_rename(blob, bl, "example.org", o1, sizeof o1, &n1) != 0,
+        CHECK(d2s_quic_hello_rename(blob, bl, "example.org", o1, sizeof o1, &n1) != 0,
               "переименование пачки обязано отказать");
-        CHECK(d2k_quic_hello_split(blob, bl, "rutracker.org", o1, sizeof o1, &n1,
+        CHECK(d2s_quic_hello_split(blob, bl, "rutracker.org", o1, sizeof o1, &n1,
                                    o2, sizeof o2, &n2) != 0,
               "разрез пачки обязан отказать");
-        CHECK(d2k_quic_hello_recid(blob, bl, o1, sizeof o1, &n1) != 0,
+        CHECK(d2s_quic_hello_recid(blob, bl, o1, sizeof o1, &n1) != 0,
               "одиночная пересборка пачки обязана отказать");
         int used = 0;
-        CHECK(d2k_quic_prepare_target(blob, bl, "example.org", o1, sizeof o1, &n1, &used) != 0,
+        CHECK(d2s_quic_prepare_target(blob, bl, "example.org", o1, sizeof o1, &n1, &used) != 0,
               "перенос пачки на другое имя обязан отказать");
     }
 

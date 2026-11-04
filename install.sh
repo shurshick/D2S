@@ -1,6 +1,12 @@
 #!/bin/sh
 # D2S bootstrap. All runtime files come from an Ed25519-signed release.
 set -eu
+
+# Refuse a parallel installation of the retired namespace.
+if [ -d /opt/d2k ] || [ -e /opt/etc/init.d/S99d2k ]; then
+    echo 'D2S: обнаружена прежняя установка. Сначала удалите её штатным деинсталлятором; автоматической миграции нет.' >&2
+    exit 1
+fi
 PATH=/opt/sbin:/opt/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export PATH
 [ "$(id -u)" = 0 ] || { echo 'D2S: требуется root в Entware' >&2; exit 1; }
@@ -10,5 +16,5 @@ opkg install curl ca-bundle iptables ipset kmod_ndms xtables-addons_legacy opens
 task_dir=$(mktemp -d /tmp/d2s-bootstrap.XXXXXX)
 trap 'rm -rf "$task_dir"' EXIT INT TERM
 curl -fsSL --proto '=https' https://raw.githubusercontent.com/shurshick/D2S/main/scripts/install.sh -o "$task_dir/install.sh"
-export D2K_REPO=shurshick/D2S
+export D2S_REPO=shurshick/D2S
 sh "$task_dir/install.sh"

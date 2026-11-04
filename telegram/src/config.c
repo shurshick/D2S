@@ -127,7 +127,7 @@ int tg_config_read(const char *path,tg_config *out) {
            K_WS_ROUTING=1u<<11,K_WS_HEDGE_DELAY=1u<<12,K_WS_HEDGE_LIMIT=1u<<13,
            K_DEFAULT_DOMAINS=1u<<14,K_CF_CACHE=1u<<15,
            K_DIAGNOSTIC_DIRECT_TCP=1u<<16 };
-    FILE *f;char line[2048],state_dir[512]="/opt/d2k/state";unsigned seen=0;int rc=-1;
+    FILE *f;char line[2048],state_dir[512]="/opt/d2s/state";unsigned seen=0;int rc=-1;
     int have_status=0,have_dc_map=0,have_stats_socket=0;
     int have_cf_cache=0;
     if(!path||!out)return -1;
@@ -136,11 +136,11 @@ int tg_config_read(const char *path,tg_config *out) {
     out->ws_hedge_delay_ms=125;
     out->ws_hedge_limit=8;
     out->default_domains=1;
-    if(copy_value(out->ca_bundle,sizeof(out->ca_bundle),"/opt/d2k/files/tg-roots.pem")||
-       copy_value(out->status_path,sizeof(out->status_path),"/opt/d2k/state/telegram.status")||
-       copy_value(out->dc_map_path,sizeof(out->dc_map_path),"/opt/d2k/state/telegram-dc-map.json")||
-       copy_value(out->stats_socket_path,sizeof(out->stats_socket_path),"/opt/d2k/state/telegram.stats.sock"))return -1;
-    const char *managed_ca=getenv("D2K_TG_CA_BUNDLE");
+    if(copy_value(out->ca_bundle,sizeof(out->ca_bundle),"/opt/d2s/files/tg-roots.pem")||
+       copy_value(out->status_path,sizeof(out->status_path),"/opt/d2s/state/telegram.status")||
+       copy_value(out->dc_map_path,sizeof(out->dc_map_path),"/opt/d2s/state/telegram-dc-map.json")||
+       copy_value(out->stats_socket_path,sizeof(out->stats_socket_path),"/opt/d2s/state/telegram.stats.sock"))return -1;
+    const char *managed_ca=getenv("D2S_TG_CA_BUNDLE");
     if(managed_ca&&*managed_ca&&copy_value(out->ca_bundle,sizeof(out->ca_bundle),managed_ca))return -1;
     f=fopen(path,"r");if(!f)return -1;
     while(fgets(line,sizeof(line),f)) {

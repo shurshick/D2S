@@ -1,6 +1,6 @@
 #!/bin/sh
-# Упаковка выпуска для d2k-update.sh: на каждую арку архив d2k-<арка>.tar.gz с
-# тем, что берёт установщик (scripts/install.sh, D2K_LOCAL), и latest.json с
+# Упаковка выпуска для d2s-update.sh: на каждую арку архив d2s-<арка>.tar.gz с
+# тем, что берёт установщик (scripts/install.sh, D2S_LOCAL), и latest.json с
 # хешами архивов. Подпись latest.json делает release.yml ключом из секрета.
 #
 #   RELEASE_ID=d2o-… [NOTES=…] [VERSION=…] sh scripts/package-release.sh BUILDS OUT
@@ -25,7 +25,7 @@ assets=
 for arch in $ARCHES; do
     tree="$STAGE/$arch"
     mkdir -p "$tree/builds" "$tree/scripts"
-    for bin in d2kd d2kc d2kfetch d2kpanel d2ktg d2o-resolver d2o-dns-watch; do
+    for bin in d2sd d2sc d2sfetch d2spanel d2stg d2s-resolver d2s-dns-watch; do
         test -s "$BUILDS/$bin-linux-$arch" || { echo "нет $BUILDS/$bin-linux-$arch" >&2; exit 1; }
         cp "$BUILDS/$bin-linux-$arch" "$tree/builds/"
     done
@@ -34,11 +34,11 @@ for arch in $ARCHES; do
     cp -R "$ROOT/files" "$tree/files"
     mkdir -p "$tree/internal/web"
     cp -R "$ROOT/internal/web/assets" "$tree/internal/web/assets"
-    tar -czf "$OUT/d2k-$arch.tar.gz" -C "$tree" builds scripts files internal
-    sum=$(sha "$OUT/d2k-$arch.tar.gz")
+    tar -czf "$OUT/d2s-$arch.tar.gz" -C "$tree" builds scripts files internal
+    sum=$(sha "$OUT/d2s-$arch.tar.gz")
     assets="$assets${assets:+,}\"$arch\":{\"sha256\":\"$sum\"}"
 done
-# Одна строка: d2k-update.sh читает поля sed'ом и встраивает объект в своё состояние.
+# Одна строка: d2s-update.sh читает поля sed'ом и встраивает объект в своё состояние.
 printf '{"release_id":"%s","version":%s,"notes":%s,"assets":{%s}}\n' \
     "$RELEASE_ID" "$(json "$VERSION")" "$(json "$NOTES")" "$assets" > "$OUT/latest.json"
 echo "выпуск $RELEASE_ID: $(echo "$ARCHES" | wc -w | tr -d ' ') арок, $OUT/latest.json"

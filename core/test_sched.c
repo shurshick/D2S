@@ -5,26 +5,26 @@
  * переписан план, и он же — единственное место, где две половины движка
  * встречаются.
  *
- * СЕТИ ЗДЕСЬ НЕТ. Сетевые оракулы подменены через d2k_sched_tcp_hook,
- * d2k_sched_quic_hook, d2k_sched_vol_hook и d2k_sched_ver_hook — тот же приём,
- * что d2k_mark_hook (d2k_meas.h), и по той же причине: тест обязан утверждать
+ * СЕТИ ЗДЕСЬ НЕТ. Сетевые оракулы подменены через d2s_sched_tcp_hook,
+ * d2s_sched_quic_hook, d2s_sched_vol_hook и d2s_sched_ver_hook — тот же приём,
+ * что d2s_mark_hook (d2s_meas.h), и по той же причине: тест обязан утверждать
  * развилку одинаково и на машине разработки, и на роутере, а не зависеть от
  * того, что сегодня отвечает настоящий instagram.com. Датапат подменён обычным
  * socketpair: планировщик пишет в него команды, тест их читает.
  *
  * ЧТО СЧИТАЕТСЯ ПОДТВЕРЖДЕНИЕМ. Две вещи вместе, и ни одна по отдельности:
- * СОБСТВЕННЫЙ зонд планировщика дошёл до ответа приложения (D2K_VER_APPLICATION
- * от подменённого d2k_sched_ver_hook) И датапат сказал, что ИМЕННО ЭТОТ план
- * применился к ключу ИМЕННО ЕГО потока (D2K_EV_APPLIED с идентификатором
+ * СОБСТВЕННЫЙ зонд планировщика дошёл до ответа приложения (D2S_VER_APPLICATION
+ * от подменённого d2s_sched_ver_hook) И датапат сказал, что ИМЕННО ЭТОТ план
+ * применился к ключу ИМЕННО ЕГО потока (D2S_EV_APPLIED с идентификатором
  * плана). Событие обмена с внешним типом записи 23 подтверждением больше не
  * является вовсе: в TLS 1.3 им едет и второй полёт рукопожатия (RFC 8446
  * §5.2). Идентификатор плана тест не выдумывает, а ЧИТАЕТ С ПРОВОДА — из той
  * самой команды, которую планировщик только что отправил (см. last_plan_id
  * ниже): иначе он проверял бы своё представление о связи, а не связь.
  *
- * ПОДОЗРЕНИЕ НЕ НЕСЁТ ИМЕНИ. На проводе D2K_EV_SUSPECT — это ключ потока и код
- * причины, и только (core/link.c, разбор события; datapath/include/d2k_ctl.h).
- * Имя цели приходит РАНЬШЕ, отдельным D2K_EV_HELLO, и планировщик обязан их
+ * ПОДОЗРЕНИЕ НЕ НЕСЁТ ИМЕНИ. На проводе D2S_EV_SUSPECT — это ключ потока и код
+ * причины, и только (core/link.c, разбор события; datapath/include/d2s_ctl.h).
+ * Имя цели приходит РАНЬШЕ, отдельным D2S_EV_HELLO, и планировщик обязан их
  * связать по ключу. Go-сторона делает ровно это (controller.go, Handle:
  * `c.remember(ev.Key, ev.Name)` на EvHello). Поэтому каждый случай ниже сперва
  * шлёт приветствие и лишь затем подозрение: тест, который клал бы имя прямо в
@@ -48,16 +48,16 @@
 #include <unistd.h>
 #include <pthread.h>
 
-#include "d2k_compose_internal.h"
-#include "d2k_plantlv.h"
-#include "d2k_quichello.h"
-#include "d2k_sched.h"
-#include "d2k_quic.h"
-#include "d2k_quicsnap.h"
+#include "d2s_compose_internal.h"
+#include "d2s_plantlv.h"
+#include "d2s_quichello.h"
+#include "d2s_sched.h"
+#include "d2s_quic.h"
+#include "d2s_quicsnap.h"
 #include "test_quic_pq.h"
 #include "test_quic_vector.h"
-#include "d2k_tls13.h"
-#include "d2k_meas.h"
+#include "d2s_tls13.h"
+#include "d2s_meas.h"
 
 /* Что планировщик говорил о себе. Нужен не для красоты: узнавание коробки
    снаружи иначе НЕ отличить от совпадения имени — имя коробки выводится из
@@ -65,7 +65,7 @@
    каталога и БЕЗ узнавания. Отличает их ровно одно: пришли ли готовые планы
    узнанной коробки в кандидаты. Про это планировщик говорит, и только по
    этому проверка честна (первая редакция этой проверки смотрела на число
-   коробок и проходила даже при выключенном d2k_catalog_match). */
+   коробок и проходила даже при выключенном d2s_catalog_match). */
 static char saidbuf[1 << 18];
 static void collect_say(void *ctx, const char *line) {
     (void)ctx;
@@ -83,17 +83,17 @@ static int tcp_calls, quic_calls;
 static int voice_calls;
 static int voice_discovery_fixture;
 static int voice_seen_known;
-static d2k_verdict tcp_answer = D2K_V_OPAQUE;
+static d2s_verdict tcp_answer = D2S_V_OPAQUE;
 static int tcp_dial_deadline;
 static int tcp_owns_search;
 static int tcp_found_arm;
 static size_t tcp_last_wire;
-static d2k_verdict quic_answer = D2K_V_OPAQUE;
+static d2s_verdict quic_answer = D2S_V_OPAQUE;
 /* Вход плеча «разрез CRYPTO клиенту неприменим», с которым позвали вопросник
    (финальное ревью core, I1); -1 — не звали. */
 static int quic_last_split_unfit = -1;
 static char tcp_last_ip[64], quic_last_sni[256], quic_last_ip[64];
-static uint8_t quic_seen_triggers[2][D2K_SHAPE_MAX];
+static uint8_t quic_seen_triggers[2][D2S_SHAPE_MAX];
 static size_t quic_seen_trigger_lens[2];
 static char quic_seen_ips[2][64], quic_seen_snis[2][256];
 static char quic_seen_targets[2][256], quic_seen_controls[2][256];
@@ -111,14 +111,14 @@ static int quic_progress_notes; /* задача 49: то же для QUIC */
 static int ver_snapshot_enabled, ver_snapshot_entered, ver_snapshot_release;
 static int ver_snapshot_repeat;
 
-static d2k_voice_res stub_voice(const d2k_voice_opt *opt) {
-    d2k_voice_res r;
+static d2s_voice_res stub_voice(const d2s_voice_opt *opt) {
+    d2s_voice_res r;
     memset(&r, 0, sizeof r);
     voice_calls++;
     if (opt && opt->known_discovery_prefix) { voice_seen_known=1; return r; }
     if (!opt || opt->mark != 0x2d || !opt->flow_port_a || !opt->flow_port_b ||
         (voice_discovery_fixture && !opt->discovery)) { return r; }
-    r.verdict = D2K_VOICE_BLOCKED;
+    r.verdict = D2S_VOICE_BLOCKED;
     r.ip = opt->flow_ip_a;
     r.port = opt->flow_port_a;
     r.client_ip = opt->flow_ip_b;
@@ -151,8 +151,8 @@ static uint8_t tcp_last_trig[2048];
 static int tcp_last_opts_known;       /* чем здоровался зонд: набор клиента снят? */
 static size_t tcp_last_opts_len;
 
-static d2k_vres stub_tcp(const char *ip, uint16_t port, d2k_hello trigger,
-                         d2k_hello control, uint32_t mark, int repeats,
+static d2s_vres stub_tcp(const char *ip, uint16_t port, d2s_hello trigger,
+                         d2s_hello control, uint32_t mark, int repeats,
                          uint32_t gap_us, uint32_t wait_ms,
                          const volatile sig_atomic_t *stop) {
     (void)port; (void)trigger; (void)control; (void)mark;
@@ -179,7 +179,7 @@ static d2k_vres stub_tcp(const char *ip, uint16_t port, d2k_hello trigger,
         }
     }
     snprintf(tcp_last_ip, sizeof tcp_last_ip, "%s", ip ? ip : "");
-    d2k_vres r;
+    d2s_vres r;
     memset(&r, 0, sizeof r);
     r.verdict = tcp_answer;
     r.dial_deadline = tcp_dial_deadline;
@@ -194,17 +194,17 @@ static d2k_vres stub_tcp(const char *ip, uint16_t port, d2k_hello trigger,
         }
         snprintf(r.arm_path, sizeof r.arm_path, "перебор");
         r.arm_input.trigger_len = trigger.len;
-        (void)d2k_hello_sni(trigger.bytes, trigger.len, &r.arm_input.sni_off, &r.arm_input.sni_len);
+        (void)d2s_hello_sni(trigger.bytes, trigger.len, &r.arm_input.sni_off, &r.arm_input.sni_len);
     }
     if (tcp_trace_lines) {
         snprintf(r.qtrace[0].label, sizeof r.qtrace[0].label, "метка времени");
-        r.qtrace[0].sent = 3; r.qtrace[0].answered = 0; r.qtrace[0].outcome = D2K_PROP_NO;
+        r.qtrace[0].sent = 3; r.qtrace[0].answered = 0; r.qtrace[0].outcome = D2S_PROP_NO;
         snprintf(r.qtrace[1].label, sizeof r.qtrace[1].label, "сверка MD5");
-        r.qtrace[1].sent = 1; r.qtrace[1].answered = 0; r.qtrace[1].outcome = D2K_PROP_UNKNOWN;
+        r.qtrace[1].sent = 1; r.qtrace[1].answered = 0; r.qtrace[1].outcome = D2S_PROP_UNKNOWN;
     }
     if (tcp_progress_notes) {
-        d2k_sched_progress_note("split", 0, 500);
-        d2k_sched_progress_note("poison:seqovl-1", 0, 500);
+        d2s_sched_progress_note("split", 0, 500);
+        d2s_sched_progress_note("poison:seqovl-1", 0, 500);
         r.probes = 1006; /* итог прогона больше хода: ответное направление хода не шлёт */
     }
     if (snapshot_enabled) {
@@ -226,7 +226,7 @@ static d2k_vres stub_tcp(const char *ip, uint16_t port, d2k_hello trigger,
 static int vol_calls;
 static volatile int vol_hold, vol_entered;
 static size_t vol_last_wire;
-static d2k_vol_verdict vol_answer = D2K_VOL_PASSED;
+static d2s_vol_verdict vol_answer = D2S_VOL_PASSED;
 static int vol_rx_cut, vol_rx_wire_basis;
 static int vol_at_kb = 20;
 static int vol_rx_at_kb = 24;
@@ -251,7 +251,7 @@ static int vol_rx_cut_first_only;
    другой публичный путь имени (resource_retry_path), и наверх путь идёт полем
    результата. Пусто — зонд путь не называл (мерил «/»). */
 static const char *vol_measured_path;
-static d2k_vol_result stub_vol(const char *ip, uint16_t port, const char *sni,
+static d2s_vol_result stub_vol(const char *ip, uint16_t port, const char *sni,
                                int plain, int tls12, size_t hello_wire,
                                uint32_t mark) {
     (void)ip; (void)port; (void)sni; (void)plain; (void)tls12;
@@ -262,7 +262,7 @@ static d2k_vol_result stub_vol(const char *ip, uint16_t port, const char *sni,
        снимок клиента пришёл именно во время объёмного шага. */
     vol_entered = 1;
     while (vol_hold) { usleep(1000); }
-    d2k_vol_result r;
+    d2s_vol_result r;
     memset(&r, 0, sizeof r);
     r.verdict = vol_answer;
     r.at_kb = vol_at_kb;
@@ -301,7 +301,7 @@ static int ver_fail_first;
 static int ver_local_limit; /* неуспех зонда из-за нашего предела чтения (задача 44) */
 static int ver_app_after_tcp_search;
 static uint8_t ver_last_transport;
-static d2k_ver_level ver_answer = D2K_VER_APPLICATION;
+static d2s_ver_level ver_answer = D2S_VER_APPLICATION;
 static uint16_t ver_answer_port;
 static uint8_t ver_local_ip4[4] = {192, 168, 1, 67};
 static int mark_calls;
@@ -316,9 +316,9 @@ static int stub_mark(int fd, uint32_t mark) {
 
 /* Подменённый подбор плеча QUIC: настоящий ходит в сеть десятками опытов, а
    тест обязан утверждать поведение планировщика, не выходя наружу. */
-static d2k_quic_arm_kind arm_kind = D2K_QA_BLOB;
-/* Свойства коробки, которые подменённый вопросник «измерил» (d2k_vres.qprops). */
-static d2k_quic_props quic_props_answer;
+static d2s_quic_arm_kind arm_kind = D2S_QA_BLOB;
+/* Свойства коробки, которые подменённый вопросник «измерил» (d2s_vres.qprops). */
+static d2s_quic_props quic_props_answer;
 static int arm_calls;
 static int arm_fragment_shape;
 
@@ -331,11 +331,11 @@ static int stub_bind_fail(uint8_t transport, uint8_t family, int *out_fd, uint16
     return -1;
 }
 
-static d2k_quic_arm stub_arm(const char *ip, uint16_t port, const char *sni,
-                             const char *decoy_sni, d2k_hello trigger, uint32_t mark) {
+static d2s_quic_arm stub_arm(const char *ip, uint16_t port, const char *sni,
+                             const char *decoy_sni, d2s_hello trigger, uint32_t mark) {
     (void)ip; (void)port; (void)sni; (void)decoy_sni; (void)trigger; (void)mark;
     arm_calls++;
-    d2k_quic_arm a;
+    d2s_quic_arm a;
     memset(&a, 0, sizeof a);
     a.kind = arm_kind;
     a.original = 1;
@@ -344,14 +344,14 @@ static d2k_quic_arm stub_arm(const char *ip, uint16_t port, const char *sni,
     a.copies = 6;
     a.ttl = 3;
     a.probes = 4;
-    if (arm_kind == D2K_QA_SPLIT) {
+    if (arm_kind == D2S_QA_SPLIT) {
         /* Ответ вопроса стратегии «разрез CRYPTO»: план без блоба. */
         a.len = 0; a.copies = 0; a.ttl = 0;
-        a.strategy = D2K_QS_SPLIT;
+        a.strategy = D2S_QS_SPLIT;
     }
     if(arm_fragment_shape) {
-        a.frag_kind=arm_fragment_shape;a.frag_survives=D2K_PROP_YES;
-        if(arm_kind==D2K_QA_FRAG){a.len=0;a.copies=0;a.ttl=0;}
+        a.frag_kind=arm_fragment_shape;a.frag_survives=D2S_PROP_YES;
+        if(arm_kind==D2S_QA_FRAG){a.len=0;a.copies=0;a.ttl=0;}
     }
     snprintf(a.reason, sizeof a.reason, "подменённый подбор");
     return a;
@@ -377,7 +377,7 @@ static int ver_socket_family;
 static uint8_t ver_last_shape;
 
 /* ЗАДАЧА 55: исход проверки бюджета потока по номеру обращения (1..n) и
-   бюджет, с которым зонд позван (поточная настройка d2k_verify). Пусто —
+   бюджет, с которым зонд позван (поточная настройка d2s_verify). Пусто —
    проверка «не просилась» (0), как у прежних тестов. */
 static int ver_budget_seq[8];
 static int ver_budget_n;
@@ -385,7 +385,7 @@ static unsigned ver_budget_seen[8];
 static int ver_budget_status = 200;
 static int ver_fail_after; /* обращения после этого номера — без приложения (0 — нет) */
 
-static d2k_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_t transport,
+static d2s_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_t transport,
                                const char *sni, int deadline_ms, size_t hello_wire,
                                uint8_t client_shape) {
     ver_last_fd = use_fd;
@@ -408,7 +408,7 @@ static d2k_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_
     ver_last_wire = hello_wire;
     ver_calls++;
     ver_last_transport = transport;
-    d2k_ver_result r;
+    d2s_ver_result r;
     memset(&r, 0, sizeof r);
     /* «Сказать нечего», а не «чужое имя»: ноль здесь значил бы ИЗМЕРЕННОЕ
        несовпадение, и обнуление структуры молча отменяло бы все
@@ -422,17 +422,17 @@ static d2k_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_
     r.level = (ver_calls <= ver_fail_first ||
                (ver_fail_after && ver_calls > ver_fail_after) ||
                (ver_app_after_tcp_search && tcp_calls == 0))
-                  ? D2K_VER_HANDSHAKE : ver_answer;
-    r.status = (r.level == D2K_VER_APPLICATION) ? 200 : 0;
-    r.local_limit = r.level == D2K_VER_APPLICATION ? 0 : ver_local_limit;
-    if (ver_calls >= 1 && ver_calls <= 8) ver_budget_seen[ver_calls - 1] = d2k_verify_budget_get();
-    if (r.level == D2K_VER_APPLICATION && ver_calls >= 1 && ver_calls <= ver_budget_n) {
-        unsigned b = d2k_verify_budget_get();
+                  ? D2S_VER_HANDSHAKE : ver_answer;
+    r.status = (r.level == D2S_VER_APPLICATION) ? 200 : 0;
+    r.local_limit = r.level == D2S_VER_APPLICATION ? 0 : ver_local_limit;
+    if (ver_calls >= 1 && ver_calls <= 8) ver_budget_seen[ver_calls - 1] = d2s_verify_budget_get();
+    if (r.level == D2S_VER_APPLICATION && ver_calls >= 1 && ver_calls <= ver_budget_n) {
+        unsigned b = d2s_verify_budget_get();
         r.status = ver_budget_status;
         r.budget = ver_budget_seq[ver_calls - 1];
         r.budget_need = 2 * b;
-        r.budget_packets = r.budget == D2K_BUDGET_PASSED ? 2 * b : r.budget == D2K_BUDGET_CUT ? b : 9;
-        r.budget_requests = r.budget == D2K_BUDGET_NOT_APPLICABLE ? 1 : 6;
+        r.budget_packets = r.budget == D2S_BUDGET_PASSED ? 2 * b : r.budget == D2S_BUDGET_CUT ? b : 9;
+        r.budget_requests = r.budget == D2S_BUDGET_NOT_APPLICABLE ? 1 : 6;
         snprintf(r.budget_note, sizeof r.budget_note, "подменённый бюджет %d", r.budget);
     }
     /* Тот же местный конец, что в ключах событий этого теста (ev_hello). */
@@ -448,7 +448,7 @@ static d2k_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_
     }
     r.local_port = ver_answer_port;
     snprintf(r.reason, sizeof r.reason, "%s",
-             r.level == D2K_VER_CHALLENGE ? "Cloudflare challenge, HTTP 403" : "подменённый зонд");
+             r.level == D2S_VER_CHALLENGE ? "Cloudflare challenge, HTTP 403" : "подменённый зонд");
     if (ver_snapshot_enabled) {
         pthread_mutex_lock(&snapshot_mu);
         ver_snapshot_entered = 1;
@@ -465,7 +465,7 @@ static d2k_ver_result stub_ver(int use_fd, const char *ip, uint16_t port, uint8_
 static int alpn_ver_calls;
 static uint8_t alpn_ver_seen[256];
 static size_t alpn_ver_seen_len;
-static d2k_ver_result stub_alpn_ver(int use_fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_alpn_ver(int use_fd, const char *ip, uint16_t port,
                                     const char *sni, int deadline_ms, size_t hello_wire,
                                     const uint8_t *alpn, size_t alpn_len) {
     (void)ip; (void)port; (void)sni; (void)deadline_ms; (void)hello_wire;
@@ -473,10 +473,10 @@ static d2k_ver_result stub_alpn_ver(int use_fd, const char *ip, uint16_t port,
     alpn_ver_calls++;
     alpn_ver_seen_len = alpn_len < sizeof alpn_ver_seen ? alpn_len : sizeof alpn_ver_seen;
     if (alpn_ver_seen_len) memcpy(alpn_ver_seen, alpn, alpn_ver_seen_len);
-    d2k_ver_result r;
+    d2s_ver_result r;
     memset(&r, 0, sizeof r);
     r.fd = -1; r.name_ok = -1; r.family = 4;
-    r.level = D2K_VER_HANDSHAKE;
+    r.level = D2S_VER_HANDSHAKE;
     r.handshake_proof = 1;
     memcpy(r.local_ip4, ver_local_ip4, 4);
     memcpy(r.local_addr, ver_local_ip4, 4);
@@ -485,12 +485,12 @@ static d2k_ver_result stub_alpn_ver(int use_fd, const char *ip, uint16_t port,
     return r;
 }
 
-static d2k_vol_result stub_resource_volume(const char *ip, uint16_t port,
+static d2s_vol_result stub_resource_volume(const char *ip, uint16_t port,
     const char *name, int plain, int tls12, size_t wire, uint32_t mark, const char *path) {
     resource_volume_calls++;
     CHECK(!strcmp(path, "/public/app.min.css") && !strcmp(name, "assets.example"),
           "volume worker changed resource context");
-    d2k_vol_result r = stub_vol(ip, port, name, plain, tls12, wire, mark);
+    d2s_vol_result r = stub_vol(ip, port, name, plain, tls12, wire, mark);
     r.rx_cut = r.rx_compressed_complete = 1;
     return r;
 }
@@ -499,27 +499,27 @@ static d2k_vol_result stub_resource_volume(const char *ip, uint16_t port,
    — именно то, каким путём планировщик проверяет воздействие. */
 static int proven_ver_calls;
 static char proven_ver_path[512];
-static d2k_ver_result stub_proven_verify(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_proven_verify(int fd, const char *ip, uint16_t port,
     const char *name, int deadline, size_t wire, int tls12, int encoding,
     uint32_t mark, const char *path) {
     (void)encoding; (void)mark;
     proven_ver_calls++;
     snprintf(proven_ver_path, sizeof proven_ver_path, "%s", path ? path : "");
-    d2k_ver_result r = stub_ver(fd, ip, port, 6, name, deadline, wire,
-                                tls12 ? D2K_SHAPE_LEGACY : D2K_SHAPE_MODERN);
+    d2s_ver_result r = stub_ver(fd, ip, port, 6, name, deadline, wire,
+                                tls12 ? D2S_SHAPE_LEGACY : D2S_SHAPE_MODERN);
     r.body_complete = r.body_framing_valid = r.body_has_length = 1;
     r.body_bytes = r.body_expected = 40000;
     return r;
 }
 
-static d2k_ver_result stub_resource_verify(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_resource_verify(int fd, const char *ip, uint16_t port,
     const char *name, int deadline, size_t wire, int tls12, int encoding,
     uint32_t mark, const char *path) {
     resource_verify_calls++;
     CHECK(!strcmp(path, "/public/app.min.css") && encoding == 0 && mark == 0,
           "candidate did not prove the same identity resource");
-    d2k_ver_result r = stub_ver(fd, ip, port, 6, name, deadline, wire,
-                              tls12 ? D2K_SHAPE_LEGACY : D2K_SHAPE_MODERN);
+    d2s_ver_result r = stub_ver(fd, ip, port, 6, name, deadline, wire,
+                              tls12 ? D2S_SHAPE_LEGACY : D2S_SHAPE_MODERN);
     r.body_complete = r.body_framing_valid = r.body_has_length = 1;
     r.body_bytes = r.body_expected = 40000;
     return r;
@@ -529,40 +529,40 @@ static d2k_ver_result stub_resource_verify(int fd, const char *ip, uint16_t port
  * but the compressed control may finish. No network access is involved. */
 static int layered_identity_calls, layered_gzip_calls, layered_bad_control;
 /* Полное identity-тело под кандидатом: TLS доходит, обрыва нет (задача 30). */
-static d2k_ver_result stub_rx_counting(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_rx_counting(int fd, const char *ip, uint16_t port,
         uint8_t transport, const char *name, int deadline, size_t wire, uint8_t shape) {
     layered_identity_calls++;
     return stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
 }
 
-static d2k_ver_result stub_layered_identity(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_layered_identity(int fd, const char *ip, uint16_t port,
         uint8_t transport, const char *name, int deadline, size_t wire, uint8_t shape) {
-    d2k_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
+    d2s_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
     layered_identity_calls++;
-    r.level = D2K_VER_HANDSHAKE; r.status = 200;
+    r.level = D2S_VER_HANDSHAKE; r.status = 200;
     r.body_bytes = 19806; r.body_expected = 96460;
     r.body_has_length = 1; r.body_framing_valid = 1;
     if (layered_bad_control == 3 && layered_identity_calls == 2)
         r.body_bytes += 10000;
     return r;
 }
-static d2k_ver_result stub_layered_gzip(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_layered_gzip(int fd, const char *ip, uint16_t port,
         uint8_t transport, const char *name, int deadline, size_t wire, uint8_t shape) {
-    d2k_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
+    d2s_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
     layered_gzip_calls++;
-    r.level = D2K_VER_APPLICATION; r.status = 200;
+    r.level = D2S_VER_APPLICATION; r.status = 200;
     r.body_bytes = r.body_expected = 14384;
     r.body_has_length = r.body_framing_valid = r.body_complete = 1;
     r.body_encoding = (layered_bad_control == 1 || layered_bad_control == 5) ? 0 : 1;
     return r;
 }
 
-static d2k_ver_result stub_family_identity(int fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_family_identity(int fd, const char *ip, uint16_t port,
         uint8_t transport, const char *name, int deadline, size_t wire, uint8_t shape) {
-    d2k_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
+    d2s_ver_result r = stub_ver(fd, ip, port, transport, name, deadline, wire, shape);
     r.body_has_length = r.body_framing_valid = 1;
     r.body_bytes = r.body_expected = 96460;
-    r.body_complete = r.level == D2K_VER_APPLICATION;
+    r.body_complete = r.level == D2S_VER_APPLICATION;
     return r;
 }
 
@@ -574,12 +574,12 @@ static uint32_t quic_last_mark;
    stub_ver (транспорт 17) и запоминает путь — настоящий хук пошёл бы в сеть. */
 static int quic_path_ver_calls;
 static char quic_path_ver_last[512];
-static d2k_ver_result stub_quic_path_ver(int use_fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_quic_path_ver(int use_fd, const char *ip, uint16_t port,
                                          const char *sni, int deadline_ms,
                                          size_t hello_wire, const char *path) {
     quic_path_ver_calls++;
     snprintf(quic_path_ver_last, sizeof quic_path_ver_last, "%s", path ? path : "");
-    return stub_ver(use_fd, ip, port, 17, sni, deadline_ms, hello_wire, D2K_SHAPE_UNKNOWN);
+    return stub_ver(use_fd, ip, port, 17, sni, deadline_ms, hello_wire, D2S_SHAPE_UNKNOWN);
 }
 
 /* Задача 39: путь, которым этап данных плеча спрашивает цель (вход в arm). */
@@ -589,9 +589,9 @@ static unsigned quic_last_budget;
 static int quic_arm_none = 0; /* OPAQUE без найденного плеча */
 /* OPAQUE от рукопожатия, а не от своего запроса: data_cut_seen не ставится. */
 static int quic_opaque_handshake = 0;
-static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
-                          d2k_hello trigger, d2k_hello control, uint32_t mark,
-                          d2k_quic_arm *arm) {
+static d2s_vres stub_quic(const char *ip, uint16_t port, const char *sni,
+                          d2s_hello trigger, d2s_hello control, uint32_t mark,
+                          d2s_quic_arm *arm) {
     (void)port;
     quic_last_mark = mark;
     snprintf(quic_last_path, sizeof quic_last_path, "%s", arm ? arm->probe_path : "");
@@ -608,17 +608,17 @@ static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
     quic_last_trig[0] = '\0';
     quic_last_ctl[0] = '\0';
     if (trigger.bytes && trigger.len &&
-        d2k_quic_sni(trigger.bytes, trigger.len, quic_last_trig, sizeof quic_last_trig) != 0) {
+        d2s_quic_sni(trigger.bytes, trigger.len, quic_last_trig, sizeof quic_last_trig) != 0) {
         uint8_t ch[2048]; size_t ch_len = 0;
         snprintf(quic_last_trig, sizeof quic_last_trig, "%s",
-                 d2k_quic_client_hello(trigger.bytes, trigger.len, ch, sizeof ch, &ch_len) == 0
+                 d2s_quic_client_hello(trigger.bytes, trigger.len, ch, sizeof ch, &ch_len) == 0
                     ? "<без SNI>" : "<не QUIC>");
     }
     if (control.bytes && control.len &&
-        d2k_quic_sni(control.bytes, control.len, quic_last_ctl, sizeof quic_last_ctl) != 0) {
+        d2s_quic_sni(control.bytes, control.len, quic_last_ctl, sizeof quic_last_ctl) != 0) {
         uint8_t ch[2048]; size_t ch_len = 0;
         snprintf(quic_last_ctl, sizeof quic_last_ctl, "%s",
-                 d2k_quic_client_hello(control.bytes, control.len, ch, sizeof ch, &ch_len) == 0
+                 d2s_quic_client_hello(control.bytes, control.len, ch, sizeof ch, &ch_len) == 0
                     ? "<без SNI>" : "<не QUIC>");
     }
     if (call_index < 2) {
@@ -627,9 +627,9 @@ static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
         snprintf(quic_seen_targets[call_index], sizeof quic_seen_targets[call_index], "%s", quic_last_trig);
         snprintf(quic_seen_controls[call_index], sizeof quic_seen_controls[call_index], "%s", quic_last_ctl);
     }
-    if (quic_progress_notes && d2k_quic_progress_hook) {
-        d2k_quic_progress_hook("контроль живости", 3);
-        d2k_quic_progress_hook("прямой зонд", 3);
+    if (quic_progress_notes && d2s_quic_progress_hook) {
+        d2s_quic_progress_hook("контроль живости", 3);
+        d2s_quic_progress_hook("прямой зонд", 3);
     }
     if (snapshot_enabled) {
         uint8_t before[2048];
@@ -643,7 +643,7 @@ static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
                       memcmp(before, trigger.bytes, before_len) == 0;
         pthread_mutex_unlock(&snapshot_mu);
     }
-    d2k_vres r;
+    d2s_vres r;
     memset(&r, 0, sizeof r);
     r.verdict = quic_answer;
     quic_last_split_unfit = arm ? arm->split_unfit : -1;
@@ -651,14 +651,14 @@ static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
     quic_last_budget = arm ? arm->budget_pk : 0;
     int keep_data_cut = arm ? arm->data_cut : 0;
     memset(arm, 0, sizeof *arm);
-    arm->kind = D2K_QA_NOT_FOUND;
+    arm->kind = D2S_QA_NOT_FOUND;
     if (!quic_arm_none &&
-        (r.verdict == D2K_V_OPAQUE || r.verdict == D2K_V_PREFIX || r.verdict == D2K_V_WHOLE))
+        (r.verdict == D2S_V_OPAQUE || r.verdict == D2S_V_PREFIX || r.verdict == D2S_V_WHOLE))
         *arm = stub_arm(ip, port, sni, NULL, trigger, mark);
     if (quic_arm_none) { arm->original = 1; }
     arm->data_cut = keep_data_cut;
     /* Как настоящий прогон: обрыв своим запросом воспроизведён — выход. */
-    arm->data_cut_seen = keep_data_cut && r.verdict == D2K_V_OPAQUE && !quic_opaque_handshake;
+    arm->data_cut_seen = keep_data_cut && r.verdict == D2S_V_OPAQUE && !quic_opaque_handshake;
     r.qprops = quic_props_answer;
     snprintf(r.reason, sizeof r.reason, "подменённый вопросник QUIC");
     return r;
@@ -668,15 +668,15 @@ static d2k_vres stub_quic(const char *ip, uint16_t port, const char *sni,
 
 /* Адрес «сервера» в ключах событий. 127.0.0.1 и НЕ 443 — потому что
    планировщик, задавая вопросы о свойствах, действительно идёт к этому адресу
-   настоящим сокетом (d2k_props_contact). Поставь сюда чужой адрес — и модульный
+   настоящим сокетом (d2s_props_contact). Поставь сюда чужой адрес — и модульный
    тест начал бы ходить в интернет, а его вердикт зависел бы от того, что
    сегодня отвечает чужой сервер. Порт подставляет стенд, когда он нужен. */
 static uint16_t g_server_port = 1; /* 1 — заведомо никто не слушает */
 
-static d2k_ev ev_hello(uint8_t transport, uint16_t cport, const char *name) {
-    d2k_ev e;
+static d2s_ev ev_hello(uint8_t transport, uint16_t cport, const char *name) {
+    d2s_ev e;
     memset(&e, 0, sizeof e);
-    e.kind = D2K_EV_HELLO;
+    e.kind = D2S_EV_HELLO;
     e.transport = transport;
     /* Сервер — тот конец, чей порт НЕ эфемерный (server_of в sched.c);
        клиентские порты здесь всегда 4xxxx, серверный — маленький. */
@@ -688,11 +688,11 @@ static d2k_ev ev_hello(uint8_t transport, uint16_t cport, const char *name) {
     return e;
 }
 
-static d2k_ev ev_suspect(uint8_t transport, uint16_t cport) {
-    d2k_ev e = ev_hello(transport, cport, "");
-    e.kind = D2K_EV_SUSPECT;
+static d2s_ev ev_suspect(uint8_t transport, uint16_t cport) {
+    d2s_ev e = ev_hello(transport, cport, "");
+    e.kind = D2S_EV_SUSPECT;
     e.name[0] = '\0';
-    e.code = D2K_SUSPECT_RST_CUT; /* снятый защитой аномальный сброс */
+    e.code = D2S_SUSPECT_RST_CUT; /* снятый защитой аномальный сброс */
     e.ttl = 127;     /* примета коробки: она на фиксированном расстоянии */
     e.ref_ttl = 53;  /* сервер — на своём, разность приметой не является */
     e.tos = 0x88;
@@ -700,63 +700,63 @@ static d2k_ev ev_suspect(uint8_t transport, uint16_t cport) {
     return e;
 }
 
-static int tls_shape_event(d2k_ev *e, const char *name, d2k_shape shape) {
+static int tls_shape_event(d2s_ev *e, const char *name, d2s_shape shape) {
     if (!e) { return -1; }
     memset(e, 0, sizeof *e);
-    e->kind = D2K_EV_SHAPE;
+    e->kind = D2S_EV_SHAPE;
     e->transport = 6;
-    return d2k_hello_from_profile(shape, name, e->shape, sizeof e->shape,
+    return d2s_hello_from_profile(shape, name, e->shape, sizeof e->shape,
                                   &e->shape_len);
 }
 
 /* СНИМОК ПРИВЕТСТВИЯ QUIC для имени. У TLS ту же роль в этом файле играет
-   d2k_hello_from_profile; для QUIC профиля нет и быть не может (см.
-   d2k_quichello.h), поэтому снимок делается ровно тем же способом, каким его
+   d2s_hello_from_profile; для QUIC профиля нет и быть не может (см.
+   d2s_quichello.h), поэтому снимок делается ровно тем же способом, каким его
    делает продукт: из настоящего снятого Initial с подставленным именем.
 
    Нужен он теперь КАЖДОМУ поиску по QUIC: без снимка планировщик больше не
    меряет вовсе (T_SHAPE_WAIT) — прежде он подставлял TLS-приветствие, то есть
    байты другого протокола, и «цель молчит» говорило про нашу ошибку. */
-static int quic_shape(d2k_ev *sh, const char *name) {
+static int quic_shape(d2s_ev *sh, const char *name) {
     memset(sh, 0, sizeof *sh);
-    sh->kind = D2K_EV_SHAPE;
+    sh->kind = D2S_EV_SHAPE;
     sh->transport = 17;
-    return d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+    return d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                  name, sh->shape, sizeof sh->shape, &sh->shape_len);
 }
 
 /* ПЕРВАЯ ИЗ ДВУХ ДАТАГРАММ ПРИВЕТСТВИЯ: CRYPTO с нуля, имя в нём целиком,
    но ClientHello обрезан сразу за server_name — ровно то, что датапат отдаёт
    снимком, когда браузер с постквантовым key_share шлёт приветствие двумя
-   Initial. d2k_quic_sni его принимает, d2k_quic_client_hello — нет. */
-static int quic_shape_first_of_two(d2k_ev *sh, const char *name) {
-    d2k_ev whole;
+   Initial. d2s_quic_sni его принимает, d2s_quic_client_hello — нет. */
+static int quic_shape_first_of_two(d2s_ev *sh, const char *name) {
+    d2s_ev whole;
     if (quic_shape(&whole, name) != 0) { return -1; }
     uint8_t ch[2048];
     size_t ch_len = 0;
-    if (d2k_quic_client_hello(whole.shape, whole.shape_len, ch, sizeof ch, &ch_len) != 0) {
+    if (d2s_quic_client_hello(whole.shape, whole.shape_len, ch, sizeof ch, &ch_len) != 0) {
         return -1;
     }
     size_t nl = strlen(name), at = 0;
     while (at + nl <= ch_len && memcmp(ch + at, name, nl) != 0) { at++; }
     size_t cut = at + nl + 4;
     if (at + nl > ch_len || cut >= ch_len) { return -1; }
-    uint8_t body[D2K_QW_MAX_DGRAM];
+    uint8_t body[D2S_QW_MAX_DGRAM];
     size_t b = 0;
     body[b++] = 0x06;                                   /* CRYPTO */
-    b += d2k_qw_varint_write(body + b, sizeof body - b, 0);
-    b += d2k_qw_varint_write(body + b, sizeof body - b, cut);
+    b += d2s_qw_varint_write(body + b, sizeof body - b, 0);
+    b += d2s_qw_varint_write(body + b, sizeof body - b, cut);
     memcpy(body + b, ch, cut);
     b += cut;
     uint8_t dcid[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     uint8_t sec[32];
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(D2K_QW_V1, dcid, sizeof dcid, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(D2K_QW_V1, sec, &k) != 0) { return -1; }
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(D2S_QW_V1, dcid, sizeof dcid, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(D2S_QW_V1, sec, &k) != 0) { return -1; }
     size_t pn_len = 1, hlen = 0;
-    uint8_t pkt[D2K_QW_MAX_DGRAM];
+    uint8_t pkt[D2S_QW_MAX_DGRAM];
     for (int i = 0; i < 4; i++) {
-        hlen = d2k_qw_long_hdr(pkt, sizeof pkt, D2K_QW_V1, D2K_QW_LT_INITIAL,
+        hlen = d2s_qw_long_hdr(pkt, sizeof pkt, D2S_QW_V1, D2S_QW_LT_INITIAL,
                                dcid, sizeof dcid, NULL, 0, pn_len, b);
         if (hlen == 0) { return -1; }
         size_t total = hlen + pn_len + b + 16;
@@ -764,23 +764,23 @@ static int quic_shape_first_of_two(d2k_ev *sh, const char *name) {
         memset(body + b, 0, 1250 - total);
         b += 1250 - total;
     }
-    hlen = d2k_qw_long_hdr(pkt, sizeof pkt, D2K_QW_V1, D2K_QW_LT_INITIAL,
+    hlen = d2s_qw_long_hdr(pkt, sizeof pkt, D2S_QW_V1, D2S_QW_LT_INITIAL,
                            dcid, sizeof dcid, NULL, 0, pn_len, b);
     memset(sh, 0, sizeof *sh);
-    sh->kind = D2K_EV_SHAPE;
+    sh->kind = D2S_EV_SHAPE;
     sh->transport = 17;
-    sh->shape_len = d2k_qw_seal(&k, 1, pkt, hlen, 0, pn_len, body, b,
+    sh->shape_len = d2s_qw_seal(&k, 1, pkt, hlen, 0, pn_len, body, b,
                                 sh->shape, sizeof sh->shape);
     return sh->shape_len ? 0 : -1;
 }
 
 /* Обмен с ВНЕШНИМ типом записи 23 в маске встреченных типов
-   (d2k_ev_outer_appdata). Порогом успеха это БОЛЬШЕ НЕ является: в TLS 1.3 тем
+   (d2s_ev_outer_appdata). Порогом успеха это БОЛЬШЕ НЕ является: в TLS 1.3 тем
    же типом едет второй полёт рукопожатия (RFC 8446 §5.2). Наблюдение не
    повышает достоверность уже подтверждённой записи. */
-static d2k_ev ev_exchange(uint8_t transport, uint16_t cport, int appdata) {
-    d2k_ev e = ev_hello(transport, cport, "");
-    e.kind = D2K_EV_EXCHANGE;
+static d2s_ev ev_exchange(uint8_t transport, uint16_t cport, int appdata) {
+    d2s_ev e = ev_hello(transport, cport, "");
+    e.kind = D2S_EV_EXCHANGE;
     e.name[0] = '\0';
     e.code = 22;
     e.num = 1380;
@@ -800,9 +800,9 @@ static d2k_ev ev_exchange(uint8_t transport, uint16_t cport, int appdata) {
 
 /* Осушает сторону датапата: планировщик пишет туда команды SET_NAME, и
    приветствие-приманка внутри плана весит полтора килобайта. Без чтения
-   буфер socketpair переполняется, и d2k_link_set_name встаёт в write
+   буфер socketpair переполняется, и d2s_link_set_name встаёт в write
    навсегда — первый прогон этого теста так и повис. На живом датапате
-   команды читает d2kd своим циклом; здесь читать обязан тест.
+   команды читает d2sd своим циклом; здесь читать обязан тест.
 
    Прочитанное НЕ выбрасывается: из него тест берёт идентификатор плана (см.
    last_plan_id). */
@@ -832,14 +832,14 @@ static void drain(void) {
 
 static void forget_sent(void) { sent_len = 0; }
 
-static void area_ack_id(d2k_ev *ack) {
+static void area_ack_id(d2s_ev *ack) {
     for (size_t off=0; off+6<=sent_len;) {
         const uint8_t *p=sentbuf+off;
         uint32_t n=(uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3];
         if(n<2 || n>sent_len-off-4) break;
         uint16_t cmd=(uint16_t)((uint16_t)p[4]<<8|p[5]);
-        if(cmd==ack->code && n>=2+D2K_TRIAL_ID_LEN)
-            memcpy(ack->trial_id,p+4+n-D2K_TRIAL_ID_LEN,D2K_TRIAL_ID_LEN);
+        if(cmd==ack->code && n>=2+D2S_TRIAL_ID_LEN)
+            memcpy(ack->trial_id,p+4+n-D2S_TRIAL_ID_LEN,D2S_TRIAL_ID_LEN);
         off+=4+n;
     }
 }
@@ -847,7 +847,7 @@ static void area_ack_id(d2k_ev *ack) {
 /* Trial ID последней пробной установки ИМЕНИ name (v8: хвост
    SET_NAME_PROBE). Нулевой хвост — диагностический вопрос, не опыт
    кандидата: такие пропускаются. 1 — найден. */
-static int name_probe_trial(const char *name, uint8_t out[D2K_TRIAL_ID_LEN]) {
+static int name_probe_trial(const char *name, uint8_t out[D2S_TRIAL_ID_LEN]) {
     int found = 0;
     size_t nl = strlen(name);
     for (size_t off = 0; off + 6 <= sent_len;) {
@@ -857,30 +857,30 @@ static int name_probe_trial(const char *name, uint8_t out[D2K_TRIAL_ID_LEN]) {
         if (n < 2 || n > sent_len - off - 4) break;
         uint16_t cmd = (uint16_t)((uint16_t)p[4] << 8 | p[5]);
         const uint8_t *body = p + 6;
-        if (cmd == D2K_CMD_SET_NAME_PROBE && n >= 2 + 1 + nl + D2K_TRIAL_ID_LEN &&
+        if (cmd == D2S_CMD_SET_NAME_PROBE && n >= 2 + 1 + nl + D2S_TRIAL_ID_LEN &&
             body[0] == nl && !memcmp(body + 1, name, nl)) {
-            const uint8_t *id = p + 4 + n - D2K_TRIAL_ID_LEN;
+            const uint8_t *id = p + 4 + n - D2S_TRIAL_ID_LEN;
             uint8_t any = 0;
-            for (size_t i = 0; i < D2K_TRIAL_ID_LEN; i++) any |= id[i];
-            if (any) { memcpy(out, id, D2K_TRIAL_ID_LEN); found = 1; }
+            for (size_t i = 0; i < D2S_TRIAL_ID_LEN; i++) any |= id[i];
+            if (any) { memcpy(out, id, D2S_TRIAL_ID_LEN); found = 1; }
         }
         off += 4 + n;
     }
     return found;
 }
 
-static d2k_ev name_probe_ack(const uint8_t id[D2K_TRIAL_ID_LEN], int ok, uint8_t reason) {
-    d2k_ev e;
+static d2s_ev name_probe_ack(const uint8_t id[D2S_TRIAL_ID_LEN], int ok, uint8_t reason) {
+    d2s_ev e;
     memset(&e, 0, sizeof e);
-    e.kind = D2K_EV_ACK;
-    e.code = D2K_CMD_SET_NAME_PROBE;
+    e.kind = D2S_EV_ACK;
+    e.code = D2S_CMD_SET_NAME_PROBE;
     e.num = (uint32_t)(ok ? 1u : 0u) << 8 | reason;
-    memcpy(e.trial_id, id, D2K_TRIAL_ID_LEN);
+    memcpy(e.trial_id, id, D2S_TRIAL_ID_LEN);
     return e;
 }
 
 /* trial ID последней SET_ADDR_PROBE (адресный QUIC-опыт). 1 — найден. */
-static int last_addr_probe_trial(uint8_t out[D2K_TRIAL_ID_LEN]) {
+static int last_addr_probe_trial(uint8_t out[D2S_TRIAL_ID_LEN]) {
     int found = 0;
     for (size_t off = 0; off + 6 <= sent_len;) {
         const uint8_t *p = sentbuf + off;
@@ -888,8 +888,8 @@ static int last_addr_probe_trial(uint8_t out[D2K_TRIAL_ID_LEN]) {
                      (uint32_t)p[2] << 8 | p[3];
         if (n < 2 || n > sent_len - off - 4) break;
         uint16_t cmd = (uint16_t)((uint16_t)p[4] << 8 | p[5]);
-        if (cmd == D2K_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2K_TRIAL_ID_LEN) {
-            memcpy(out, p + 6 + 38, D2K_TRIAL_ID_LEN);
+        if (cmd == D2S_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2S_TRIAL_ID_LEN) {
+            memcpy(out, p + 6 + 38, D2S_TRIAL_ID_LEN);
             found = 1;
         }
         off += 4 + n;
@@ -897,24 +897,24 @@ static int last_addr_probe_trial(uint8_t out[D2K_TRIAL_ID_LEN]) {
     return found;
 }
 
-static d2k_ev addr_probe_ack(const uint8_t id[D2K_TRIAL_ID_LEN], int ok, uint8_t reason) {
-    d2k_ev e;
+static d2s_ev addr_probe_ack(const uint8_t id[D2S_TRIAL_ID_LEN], int ok, uint8_t reason) {
+    d2s_ev e;
     memset(&e, 0, sizeof e);
-    e.kind = D2K_EV_ACK;
-    e.code = D2K_CMD_SET_ADDR_PROBE;
+    e.kind = D2S_EV_ACK;
+    e.code = D2S_CMD_SET_ADDR_PROBE;
     e.num = (uint32_t)(ok ? 1u : 0u) << 8 | reason;
-    memcpy(e.trial_id, id, D2K_TRIAL_ID_LEN);
+    memcpy(e.trial_id, id, D2S_TRIAL_ID_LEN);
     return e;
 }
 
 /* Бюджет зондов планировщика — из его живого файла (probes_used). */
-static int live_probes_used(d2k_sched *s) {
-    char path[] = "/tmp/d2k-probes-live-XXXXXX";
+static int live_probes_used(d2s_sched *s) {
+    char path[] = "/tmp/d2s-probes-live-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return -1;
     close(fd);
     int v = -1;
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         char body[65536] = {0};
         if (f) { size_t got = fread(body, 1, sizeof body - 1, f); body[got] = 0; fclose(f); }
@@ -927,14 +927,14 @@ static int live_probes_used(d2k_sched *s) {
 
 /* Запись ОДНОЙ активной задачи из живого файла (до закрывающей скобки).
    Пустая строка — задачи нет среди активных или файл не прочитан. */
-static const char *live_task_entry(d2k_sched *s, const char *target) {
+static const char *live_task_entry(d2s_sched *s, const char *target) {
     static char entry[4096];
-    char path[] = "/tmp/d2k-task-entry-XXXXXX";
+    char path[] = "/tmp/d2s-task-entry-XXXXXX";
     entry[0] = 0;
     int fd = mkstemp(path);
     if (fd < 0) return entry;
     close(fd);
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         static char body[65536];
         body[0] = 0;
@@ -951,12 +951,12 @@ static const char *live_task_entry(d2k_sched *s, const char *target) {
     return entry;
 }
 
-static int live_autopick_reason_is(d2k_sched *s, const char *expected) {
-    char path[] = "/tmp/d2k-autopick-reason-XXXXXX";
+static int live_autopick_reason_is(d2s_sched *s, const char *expected) {
+    char path[] = "/tmp/d2s-autopick-reason-XXXXXX";
     int fd = mkstemp(path), ok = 0;
     if (fd < 0) return 0;
     close(fd);
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         char body[32768] = {0};
         if (f) { (void)!fread(body, 1, sizeof body - 1, f); fclose(f); }
@@ -974,13 +974,13 @@ static int live_autopick_reason_is(d2k_sched *s, const char *expected) {
 /* "since" активного поиска цели — из блока "searches", а не первой
    встречной записи с этим именем (у подтверждённой цели раньше идёт её
    привязка в каталоге). Пусто — поиска нет. */
-static void search_since(d2k_sched *s, const char *target, char *out, size_t cap) {
-    char path[] = "/tmp/d2k-task-since-XXXXXX";
+static void search_since(d2s_sched *s, const char *target, char *out, size_t cap) {
+    char path[] = "/tmp/d2s-task-since-XXXXXX";
     out[0] = 0;
     int fd = mkstemp(path);
     if (fd < 0) return;
     close(fd);
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         static char body[65536];
         body[0] = 0;
@@ -998,13 +998,13 @@ static void search_since(d2k_sched *s, const char *target, char *out, size_t cap
 
 /* Зонды ОДНОЙ активной задачи из живого файла ("probes" её записи). -1 —
    задачи нет среди активных или файл не прочитан. */
-static int live_task_probes(d2k_sched *s, const char *target) {
-    char path[] = "/tmp/d2k-task-probes-XXXXXX";
+static int live_task_probes(d2s_sched *s, const char *target) {
+    char path[] = "/tmp/d2s-task-probes-XXXXXX";
     int fd = mkstemp(path);
     if (fd < 0) return -1;
     close(fd);
     int v = -1;
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         static char body[65536];
         body[0] = 0;
@@ -1069,8 +1069,8 @@ static int stub_spawn(void) {
 }
 
 /* Безымянный QUIC по IPv6: задача by_addr, опыт — SET_ADDR_PROBE. */
-static d2k_ev addr_quic_suspect(uint16_t port) {
-    d2k_ev su = ev_suspect(17, port);
+static d2s_ev addr_quic_suspect(uint16_t port) {
+    d2s_ev su = ev_suspect(17, port);
     su.family = 6;
     CHECK(inet_pton(AF_INET6, "::1", su.low_ip) == 1, "address trial destination");
     CHECK(inet_pton(AF_INET6, "2001:db8::2", su.high_ip) == 1, "address trial client");
@@ -1084,8 +1084,8 @@ static uint16_t last_area_command(void) {
         uint32_t n=(uint32_t)p[0]<<24|(uint32_t)p[1]<<16|(uint32_t)p[2]<<8|p[3];
         if(n<2 || n>sent_len-off-4) break;
         uint16_t cmd=(uint16_t)((uint16_t)p[4]<<8|p[5]);
-        if(cmd==D2K_CMD_SET_SUFFIX || cmd==D2K_CMD_SET_BYPASS ||
-           cmd==D2K_CMD_DEL_SUFFIX || cmd==D2K_CMD_DEL_BYPASS) found=cmd;
+        if(cmd==D2S_CMD_SET_SUFFIX || cmd==D2S_CMD_SET_BYPASS ||
+           cmd==D2S_CMD_DEL_SUFFIX || cmd==D2S_CMD_DEL_BYPASS) found=cmd;
         off+=4+n;
     }
     return found;
@@ -1133,8 +1133,8 @@ static probe_tally name_probe_tally(const char *name) {
         const uint8_t *body = p + 6;
         size_t blen = n - 2;
         int ours = blen >= 1 + nl && body[0] == nl && !memcmp(body + 1, name, nl);
-        if (ours && cmd == D2K_CMD_DEL_NAME) { r.broad++; }
-        if (ours && (cmd == D2K_CMD_SET_NAME_PROBE || cmd == D2K_CMD_DEL_NAME_PROBE) &&
+        if (ours && cmd == D2S_CMD_DEL_NAME) { r.broad++; }
+        if (ours && (cmd == D2S_CMD_SET_NAME_PROBE || cmd == D2S_CMD_DEL_NAME_PROBE) &&
             blen >= 1 + nl + 4) {
             uint8_t shape = body[1 + nl], family = body[2 + nl];
             uint16_t port;
@@ -1143,7 +1143,7 @@ static probe_tally name_probe_tally(const char *name) {
             while (k < n_open && !(open_set[k].shape == shape &&
                                    open_set[k].family == family &&
                                    open_set[k].port == port)) { k++; }
-            if (cmd == D2K_CMD_SET_NAME_PROBE) {
+            if (cmd == D2S_CMD_SET_NAME_PROBE) {
                 r.sets++;
                 if (k == n_open && n_open < sizeof open_set / sizeof open_set[0]) {
                     open_set[n_open].shape = shape;
@@ -1175,7 +1175,7 @@ static size_t sent_set_addr_shape(uint8_t family, const uint8_t *ip, uint8_t sha
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)p[4] << 8) | p[5]);
         const uint8_t *body = p + 6;
-        if (type == D2K_CMD_SET_ADDR && n >= 2 + 18 && body[0] == family &&
+        if (type == D2S_CMD_SET_ADDR && n >= 2 + 18 && body[0] == family &&
             !memcmp(body + 1, ip, family == 6 ? 16 : 4) && body[17] == shape) {
             count++;
         }
@@ -1185,17 +1185,17 @@ static size_t sent_set_addr_shape(uint8_t family, const uint8_t *ip, uint8_t sha
 }
 
 static int last_addr_probe_endpoint(uint8_t src[4], uint16_t *sport_be,
-                                    uint8_t trial[D2K_TRIAL_ID_LEN]) {
+                                    uint8_t trial[D2S_TRIAL_ID_LEN]) {
     for (size_t off = 0; off + 6 <= sent_len;) {
         const uint8_t *p = sentbuf + off;
         uint32_t n = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                      ((uint32_t)p[2] << 8) | p[3];
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)p[4] << 8) | p[5]);
-        if (type == D2K_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2K_TRIAL_ID_LEN + 4) {
+        if (type == D2S_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2S_TRIAL_ID_LEN + 4) {
             memcpy(src, p + 7, 4);
             memcpy(sport_be, p + 39, 2);
-            memcpy(trial, p + 6 + 38, D2K_TRIAL_ID_LEN);
+            memcpy(trial, p + 6 + 38, D2S_TRIAL_ID_LEN);
             return 1;
         }
         off += 4 + n;
@@ -1206,7 +1206,7 @@ static int last_addr_probe_endpoint(uint8_t src[4], uint16_t *sport_be,
 /* Снимок всех адресных проб, ушедших по управляющему сокету. Нужен для
  * lifecycle-регрессий: один и тот же Plan ID не различает параллельные
  * задачи, а trial ID и точный destination должны различать их. */
-static size_t collect_addr_probes(uint8_t dst[][4], uint8_t trial[][D2K_TRIAL_ID_LEN],
+static size_t collect_addr_probes(uint8_t dst[][4], uint8_t trial[][D2S_TRIAL_ID_LEN],
                                   uint16_t *src_port_be, size_t cap) {
     size_t found = 0;
     for (size_t off = 0; off + 6 <= sent_len;) {
@@ -1215,12 +1215,12 @@ static size_t collect_addr_probes(uint8_t dst[][4], uint8_t trial[][D2K_TRIAL_ID
                      ((uint32_t)p[2] << 8) | p[3];
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)p[4] << 8) | p[5]);
-        if (type == D2K_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2K_TRIAL_ID_LEN + 4 &&
+        if (type == D2S_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2S_TRIAL_ID_LEN + 4 &&
             found < cap) {
             const uint8_t *body = p + 6;
             memcpy(dst[found], body + 17, 4);
             if (src_port_be) { memcpy(&src_port_be[found], body + 33, 2); }
-            memcpy(trial[found], body + 38, D2K_TRIAL_ID_LEN);
+            memcpy(trial[found], body + 38, D2S_TRIAL_ID_LEN);
             found++;
         }
         off += 4 + n;
@@ -1231,7 +1231,7 @@ static size_t collect_addr_probes(uint8_t dst[][4], uint8_t trial[][D2K_TRIAL_ID
 /* Последняя адресная проба после жизненного цикла может идти вместе с
  * продлением старого lease; проверяем именно конечную цель и trial ID. */
 static int last_addr_probe_target(uint16_t *dst_port_be,
-                                  uint8_t trial[D2K_TRIAL_ID_LEN]) {
+                                  uint8_t trial[D2S_TRIAL_ID_LEN]) {
     int found = 0;
     for (size_t off = 0; off + 6 <= sent_len;) {
         const uint8_t *p = sentbuf + off;
@@ -1239,10 +1239,10 @@ static int last_addr_probe_target(uint16_t *dst_port_be,
                      ((uint32_t)p[2] << 8) | p[3];
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)p[4] << 8) | p[5]);
-        if (type == D2K_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2K_TRIAL_ID_LEN + 4) {
+        if (type == D2S_CMD_SET_ADDR_PROBE && n >= 2 + 38 + D2S_TRIAL_ID_LEN + 4) {
             const uint8_t *body = p + 6;
             if (dst_port_be) { memcpy(dst_port_be, body + 35, 2); }
-            memcpy(trial, body + 38, D2K_TRIAL_ID_LEN);
+            memcpy(trial, body + 38, D2S_TRIAL_ID_LEN);
             found = 1;
         }
         off += 4 + n;
@@ -1262,17 +1262,17 @@ static int last_plan_identity(uint8_t out[16],uint8_t trial[16]) {
         uint16_t type = (uint16_t)(((uint16_t)p[4] << 8) | p[5]);
         const uint8_t *body = p + 6;
         size_t len = n - 2, start = len;
-        if (type == D2K_CMD_SET_NAME_PROBE && len >= D2K_TRIAL_ID_LEN) {
-            len -= D2K_TRIAL_ID_LEN; /* v8: хвост — trial ID, не план */
+        if (type == D2S_CMD_SET_NAME_PROBE && len >= D2S_TRIAL_ID_LEN) {
+            len -= D2S_TRIAL_ID_LEN; /* v8: хвост — trial ID, не план */
         }
-        if ((type == D2K_CMD_SET_NAME || type == D2K_CMD_SET_NAME_PROBE) && len) {
-            start = 3u + body[0] + (type == D2K_CMD_SET_NAME_PROBE ? 2u : 0u);
-        } else if (type == D2K_CMD_SET_ADDR) {
+        if ((type == D2S_CMD_SET_NAME || type == D2S_CMD_SET_NAME_PROBE) && len) {
+            start = 3u + body[0] + (type == D2S_CMD_SET_NAME_PROBE ? 2u : 0u);
+        } else if (type == D2S_CMD_SET_ADDR) {
             start = 18; /* v7: family, address(16), форма */
-        } else if (type == D2K_CMD_SET_ADDR_PROBE) {
+        } else if (type == D2S_CMD_SET_ADDR_PROBE) {
             start = 58;
         }
-        if (start <= len && len - start >= 12 && !memcmp(body + start, "D2KP", 4)) {
+        if (start <= len && len - start >= 12 && !memcmp(body + start, "D2SP", 4)) {
             for (size_t at = start + 12; at + 4 <= len;) {
                 unsigned record = ((unsigned)body[at] << 8) | body[at + 1];
                 size_t size = ((size_t)body[at + 2] << 8) | body[at + 3];
@@ -1282,8 +1282,8 @@ static int last_plan_identity(uint8_t out[16],uint8_t trial[16]) {
                     memcpy(out, body + at, 16);
                     if(trial) {
                         memset(trial,0,16);
-                        if(type==D2K_CMD_SET_NAME_PROBE)memcpy(trial,p+4+n-16,16);
-                        if(type==D2K_CMD_SET_ADDR_PROBE)memcpy(trial,body+38,16);
+                        if(type==D2S_CMD_SET_NAME_PROBE)memcpy(trial,p+4+n-16,16);
+                        if(type==D2S_CMD_SET_ADDR_PROBE)memcpy(trial,body+38,16);
                     }
                     found = 1;
                 }
@@ -1326,7 +1326,7 @@ static int sent_contains_plan_ascii(const char *fragment) {
 }
 
 /* Binary payload bytes (for example the literal SNI in a generated ClientHello)
-   are encoded once by d2k_plan_text_to_hex as the complete TLV frame. */
+   are encoded once by d2s_plan_text_to_hex as the complete TLV frame. */
 static int sent_contains_plan_payload(const char *fragment) {
     char current[1024], hex[2048];
     size_t n = strlen(fragment);
@@ -1355,7 +1355,7 @@ static int sent_contains_plan_payload(const char *fragment) {
    МЕХАНИКИ RX-лестницы (порядок, gzip-гейтинг, приоритет кандидата), а не
    ПОДБОРА имени, задают приманку явно, иначе лестница ушла бы в перебор
    266 имён и сломала бы их инварианты. */
-static void net_name_known(d2k_catalog *c, const char *name) {
+static void net_name_known(d2s_catalog *c, const char *name) {
     snprintf(c->net.name, sizeof c->net.name, "%s", name);
     c->net.searched = 1;
 }
@@ -1395,19 +1395,19 @@ static int sent_first_split_index(unsigned wanted_offset) {
                      ((uint32_t)frame[2] << 8) | frame[3];
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)frame[4] << 8) | frame[5]);
-        if (type == D2K_CMD_SET_NAME || type == D2K_CMD_SET_NAME_PROBE) {
+        if (type == D2S_CMD_SET_NAME || type == D2S_CMD_SET_NAME_PROBE) {
             const uint8_t *body = frame + 6;
             size_t body_len = n - 2;
-            if (type == D2K_CMD_SET_NAME_PROBE && body_len >= D2K_TRIAL_ID_LEN) {
-                body_len -= D2K_TRIAL_ID_LEN; /* v8: хвост — trial ID */
+            if (type == D2S_CMD_SET_NAME_PROBE && body_len >= D2S_TRIAL_ID_LEN) {
+                body_len -= D2S_TRIAL_ID_LEN; /* v8: хвост — trial ID */
             }
             size_t nl = body_len ? body[0] : body_len;
-            size_t prefix = 1 + nl + 2 + (type == D2K_CMD_SET_NAME_PROBE ? 2 : 0);
+            size_t prefix = 1 + nl + 2 + (type == D2S_CMD_SET_NAME_PROBE ? 2 : 0);
             int found = 0;
             if (prefix <= body_len && body_len - prefix >= 12) {
                 const uint8_t *plan = body + prefix;
                 size_t plan_len = body_len - prefix;
-                size_t pos = 12; /* D2KP header */
+                size_t pos = 12; /* D2SP header */
                 while (pos + 4 <= plan_len) {
                     uint16_t rec = (uint16_t)(((uint16_t)plan[pos] << 8) | plan[pos + 1]);
                     size_t len = ((size_t)plan[pos + 2] << 8) | plan[pos + 3];
@@ -1437,7 +1437,7 @@ static int sent_plan_index(const char *fragment, unsigned first_depth,
                      ((uint32_t)frame[2] << 8) | frame[3];
         if (n < 2 || n > sent_len - off - 4) { break; }
         uint16_t type = (uint16_t)(((uint16_t)frame[4] << 8) | frame[5]);
-        if (type == D2K_CMD_SET_NAME || type == D2K_CMD_SET_NAME_PROBE) {
+        if (type == D2S_CMD_SET_NAME || type == D2S_CMD_SET_NAME_PROBE) {
             int found = 0;
             for (unsigned depth = first_depth; depth <= last_depth; depth++) {
                 if (region_has_encoded(frame + 6, n - 2, fragment, depth)) {
@@ -1456,22 +1456,22 @@ static int sent_plan_index(const char *fragment, unsigned first_depth,
 /* Событие применения ПО КЛЮЧУ ПОТОКА ЗОНДА и с идентификатором того плана,
    который планировщик только что отправил. Вместе с уровнем «приложение» от
    подменённого зонда это и есть полное доказательство. */
-static d2k_ev ev_applied(uint8_t transport, uint16_t cport) {
-    d2k_ev e = ev_hello(transport, cport, "");
-    e.kind = D2K_EV_APPLIED;
+static d2s_ev ev_applied(uint8_t transport, uint16_t cport) {
+    d2s_ev e = ev_hello(transport, cport, "");
+    e.kind = D2S_EV_APPLIED;
     e.name[0] = '\0';
     (void)last_plan_identity(e.plan_id,e.trial_id);
     return e;
 }
 
-/* Отказ отправки ПО КЛЮЧУ ПОТОКА ЗОНДА. code — D2K_REFUSE_*: ненулевой
+/* Отказ отправки ПО КЛЮЧУ ПОТОКА ЗОНДА. code — D2S_REFUSE_*: ненулевой
    означает «посылка плана не покинула машину», то есть опыта не было. Это НЕ
    ответ коробки, и свойство от него меняться не имеет права.
    own_id == 0 подставляет ЧУЖОЙ идентификатор: такой отказ относится к
    другому плану и не должен влиять на нашего кандидата (0009, U2). */
-static d2k_ev ev_refused(uint8_t transport, uint16_t cport, uint8_t code, int own_id) {
-    d2k_ev e = ev_hello(transport, cport, "");
-    e.kind = D2K_EV_REFUSED;
+static d2s_ev ev_refused(uint8_t transport, uint16_t cport, uint8_t code, int own_id) {
+    d2s_ev e = ev_hello(transport, cport, "");
+    e.kind = D2S_EV_REFUSED;
     e.name[0] = '\0';
     e.code = code;
     (void)last_plan_id(e.plan_id);
@@ -1490,34 +1490,34 @@ static int64_t g_now_ms;
    даже не начинался, когда четыреста пустых тиков уже кончились — первая
    редакция этой функции так и плавала, проходя или падая в зависимости от
    того, успел ли поток встать. Миллисекунда на круг — это и ожидание, и
-   уступка планировщику ОС, и ровно тот же приём, каким d2kc ждёт событий. */
-static void tick_once(d2k_sched *s) {
+   уступка планировщику ОС, и ровно тот же приём, каким d2sc ждёт событий. */
+static void tick_once(d2s_sched *s) {
     struct pollfd pfd;
-    pfd.fd = d2k_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
+    pfd.fd = d2s_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
     (void)poll(&pfd, 1, 1);
     g_now_ms += 5;
-    d2k_sched_tick(s, g_now_ms);
+    d2s_sched_tick(s, g_now_ms);
     drain();
 }
 
 /* Круг БЕЗ хода часов: срок ожидания приёма плана (SCHED_TRIAL_SETTLE_MS)
    не истекает, и отпустить ожидание может только подтверждение. */
-static void tick_frozen(d2k_sched *s) {
+static void tick_frozen(d2s_sched *s) {
     struct pollfd pfd;
-    pfd.fd = d2k_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
+    pfd.fd = d2s_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
     (void)poll(&pfd, 1, 1);
-    d2k_sched_tick(s, g_now_ms);
+    d2s_sched_tick(s, g_now_ms);
     drain();
 }
 
-static void spin(d2k_sched *s, int rounds) {
+static void spin(d2s_sched *s, int rounds) {
     for (int i = 0; i < rounds; i++) { tick_once(s); }
 }
 
-/* Будилка взведена: цикл d2kc проснётся сразу, а не на следующем тике. */
-static int wake_pending(d2k_sched *s) {
+/* Будилка взведена: цикл d2sc проснётся сразу, а не на следующем тике. */
+static int wake_pending(d2s_sched *s) {
     struct pollfd pfd;
-    pfd.fd = d2k_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
+    pfd.fd = d2s_sched_wake_fd(s); pfd.events = POLLIN; pfd.revents = 0;
     return poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN);
 }
 
@@ -1527,7 +1527,7 @@ static int wake_pending(d2k_sched *s) {
 /* Шагов, а не секунд: один шаг — 5 мс модельных часов. Запас взят с учётом
    того, что каждый кандидат теперь ждёт приёма плана датапатом
    (SCHED_TRIAL_SETTLE_MS) — это ход планировщика, а не задержка теста. */
-static void settle(d2k_sched *s) { spin(s, 800); }
+static void settle(d2s_sched *s) { spin(s, 800); }
 
 /* Крутит до УСТАНОВКИ ПЕРВОГО кандидата и останавливается. Нужно тем
    проверкам, которым надо вмешаться, пока задача ещё испытывает именно его:
@@ -1545,7 +1545,7 @@ static void settle(d2k_sched *s) { spin(s, 800); }
    команды SET_NAME (last_plan_id по sentbuf), а туда она попадает только
    через drain(). Без него отказ строился со старым идентификатором, не
    совпадал с кандидатом и молча пропадал. */
-static void spin_until_installed(d2k_sched *s) {
+static void spin_until_installed(d2s_sched *s) {
     for (int i = 0; i < 400 && !said("поставил план"); i++) { tick_once(s); }
     drain();
 }
@@ -1556,31 +1556,31 @@ static void spin_until_installed(d2k_sched *s) {
    аргументом, а не из ОС. */
 /* Первый поздний RST той же цели на соседнем потоке: одиночный поздний RST
    замер не запускает (задача 18), второй по независимому flow key — да. */
-static void prime_late_rst(d2k_sched *s, const char *name, uint16_t cport) {
-    d2k_ev h = ev_hello(6, cport, name);
-    d2k_sched_event(s, &h);
-    d2k_ev r = ev_suspect(6, cport);
-    r.code = D2K_SUSPECT_RST_AFTER_APP;
-    d2k_sched_event(s, &r);
+static void prime_late_rst(d2s_sched *s, const char *name, uint16_t cport) {
+    d2s_ev h = ev_hello(6, cport, name);
+    d2s_sched_event(s, &h);
+    d2s_ev r = ev_suspect(6, cport);
+    r.code = D2S_SUSPECT_RST_AFTER_APP;
+    d2s_sched_event(s, &r);
 }
 
-static void skip_ahead(d2k_sched *s, int64_t ms) {
+static void skip_ahead(d2s_sched *s, int64_t ms) {
     g_now_ms += ms;
-    d2k_sched_tick(s, g_now_ms);
+    d2s_sched_tick(s, g_now_ms);
     drain();
 }
 
 /* Задача 38: блок "measurements" живого JSON целиком (в buf) и предел из
    него; -1 — блока нет. */
-static int live_meas(d2k_sched *s, char *buf, size_t n) {
-    char path[] = "/tmp/d2k-t38-live-XXXXXX";
+static int live_meas(d2s_sched *s, char *buf, size_t n) {
+    char path[] = "/tmp/d2s-t38-live-XXXXXX";
     int fd = mkstemp(path);
     if (n) buf[0] = '\0';
     if (fd < 0) return -1;
     close(fd);
     static char body[65536];
     body[0] = '\0';
-    if (d2k_sched_write_live(s, path, "catalog.json") == 0) {
+    if (d2s_sched_write_live(s, path, "catalog.json") == 0) {
         FILE *f = fopen(path, "r");
         if (f) { size_t got = fread(body, 1, sizeof body - 1, f); body[got] = '\0'; fclose(f); }
     }
@@ -1596,18 +1596,18 @@ static int live_meas(d2k_sched *s, char *buf, size_t n) {
     const char *l = strstr(m, "\"limit\": ");
     return l ? atoi(l + strlen("\"limit\": ")) : -1;
 }
-static int live_limit(d2k_sched *s) { return live_meas(s, NULL, 0); }
+static int live_limit(d2s_sched *s) { return live_meas(s, NULL, 0); }
 
 /* Задача 38: n новых целей по одной в секунду модельных часов (каждая
    успевает выйти из очереди за паузу запуска); возвращает наибольший
    увиденный предел. */
-static int meas_ramp(d2k_sched *s, const char *prefix, uint16_t port0, int n) {
+static int meas_ramp(d2s_sched *s, const char *prefix, uint16_t port0, int n) {
     int top = 0;
     for (int i = 0; i < n; i++) {
         char name[64];
         snprintf(name, sizeof name, "%s-%d.example", prefix, i);
-        d2k_ev h = ev_hello(6, (uint16_t)(port0 + i), name); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, (uint16_t)(port0 + i)); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, (uint16_t)(port0 + i), name); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, (uint16_t)(port0 + i)); d2s_sched_event(s, &su);
         spin(s, 60);
         skip_ahead(s, 1000);
         int l = live_limit(s);
@@ -1639,7 +1639,7 @@ static size_t sent_set_name_shape(const char *name, uint8_t shape) {
         if (n < 2 || n > sent_len - off - 4) break;
         uint16_t cmd = (uint16_t)((uint16_t)p[4] << 8 | p[5]);
         const uint8_t *body = p + 6;
-        if (cmd == D2K_CMD_SET_NAME && n - 2 >= 3 + nl && body[0] == nl &&
+        if (cmd == D2S_CMD_SET_NAME && n - 2 >= 3 + nl && body[0] == nl &&
             !memcmp(body + 1, name, nl) && body[1 + nl] == shape) { count++; }
         off += 4 + n;
     }
@@ -1658,7 +1658,7 @@ static size_t sent_quic_deny(const char *name) {
         uint16_t cmd = (uint16_t)((uint16_t)p[4] << 8 | p[5]);
         const uint8_t *body = p + 6;
         size_t len = n - 2;
-        if (cmd == D2K_CMD_SET_NAME && len >= 3 + nl && body[0] == nl &&
+        if (cmd == D2S_CMD_SET_NAME && len >= 3 + nl && body[0] == nl &&
             !memcmp(body + 1, name, nl)) {
             for (size_t i = 1 + nl; i + sizeof rec <= len; i++)
                 if (!memcmp(body + i, rec, sizeof rec)) { count++; break; }
@@ -1676,15 +1676,15 @@ static size_t sent_del_name_key(const char *name, uint8_t transport, uint8_t sha
     body[0] = (uint8_t)nl;
     memcpy(body + 1, name, nl);
     body[1 + nl] = transport; body[2 + nl] = shape; body[3 + nl] = family;
-    return sent_command_count(D2K_CMD_DEL_NAME, body, nl + 4);
+    return sent_command_count(D2S_CMD_DEL_NAME, body, nl + 4);
 }
 
 /* Добавляет к коробке копию привязки с другой формой/транспортом — фикстура
    «то же имя, другие протоколы». */
-static void add_binding_like(d2k_cat_box *b, const d2k_cat_binding *proto,
+static void add_binding_like(d2s_cat_box *b, const d2s_cat_binding *proto,
                              uint8_t transport, uint8_t shape) {
-    d2k_cat_binding copy = *proto;
-    d2k_cat_binding *nb = realloc(b->binds, (b->n_binds + 1) * sizeof *nb);
+    d2s_cat_binding copy = *proto;
+    d2s_cat_binding *nb = realloc(b->binds, (b->n_binds + 1) * sizeof *nb);
     CHECK(nb != NULL, "fixture binding realloc");
     if (!nb) return;
     b->binds = nb;
@@ -1695,11 +1695,11 @@ static void add_binding_like(d2k_cat_box *b, const d2k_cat_binding *proto,
     b->binds[b->n_binds++] = copy;
 }
 
-static d2k_cat_binding *binding_shape(d2k_catalog *c, const char *target,
+static d2s_cat_binding *binding_shape(d2s_catalog *c, const char *target,
                                       uint8_t transport, uint8_t shape) {
     for (size_t i = 0; i < c->n_boxes; i++)
         for (size_t j = 0; j < c->boxes[i].n_binds; j++) {
-            d2k_cat_binding *b = &c->boxes[i].binds[j];
+            d2s_cat_binding *b = &c->boxes[i].binds[j];
             if (!strcmp(b->target, target) && b->transport == transport && b->shape == shape)
                 return b;
         }
@@ -1723,22 +1723,22 @@ static int sent_has_bytes(const uint8_t *needle, size_t n) {
     return 0;
 }
 
-static void sync_out(d2k_sched *s) {
+static void sync_out(d2s_sched *s) {
     for (int i = 0; i < 1000; i++) {
-        int more = d2k_sched_sync_step(s);
+        int more = d2s_sched_sync_step(s);
         drain();
         if (!more) { break; }
     }
 }
 
-static void run_out(d2k_sched *s) {
-    for (int i = 0; i < 60 && d2k_sched_active(s); i++) {
+static void run_out(d2s_sched *s) {
+    for (int i = 0; i < 60 && d2s_sched_active(s); i++) {
         skip_ahead(s, 6000);
         spin(s, 40);
     }
 }
 
-static size_t total_bindings(const d2k_catalog *c) {
+static size_t total_bindings(const d2s_catalog *c) {
     size_t n = 0;
     for (size_t i = 0; i < c->n_boxes; i++) { n += c->boxes[i].n_binds; }
     return n;
@@ -1752,32 +1752,32 @@ static size_t total_bindings(const d2k_catalog *c) {
  * самый параметр без замера, который здесь запрещён. Поэтому тест ДОБЫВАЕТ
  * её: поднимает клиента TLS 1.3 (core/tls13.c — тот самый, которым ходит
  * зонд) поверх socketpair, снимает с провода его приветствие и отдаёт на
- * разбор d2k_hello_shape — ровно тем же способом, которым планировщик
+ * разбор d2s_hello_shape — ровно тем же способом, которым планировщик
  * определяет форму снятого приветствия цели.
  *
  * Рукопожатие при этом не состоится (на том конце socketpair никто не
  * отвечает), и это неважно: приветствие уходит ПЕРВЫМ, до любого чтения. */
-static d2k_shape probe_hello_shape(void) {
+static d2s_shape probe_hello_shape(void) {
     int p[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, p) != 0) { return D2K_SHAPE_UNKNOWN; }
-    d2k_tls *t = NULL;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, p) != 0) { return D2S_SHAPE_UNKNOWN; }
+    d2s_tls *t = NULL;
     char e[200];
     /* Потолок маленький: ждать здесь нечего, а тест платит за это временем. */
-    (void)d2k_tls_connect(p[0], "пример.цель", 50, 0, &t, e, sizeof e);
-    d2k_tls_free(t);
+    (void)d2s_tls_connect(p[0], "пример.цель", 50, 0, &t, e, sizeof e);
+    d2s_tls_free(t);
     uint8_t buf[2048];
     ssize_t n = read(p[1], buf, sizeof buf);
     close(p[0]);
     close(p[1]);
-    if (n <= 0) { return D2K_SHAPE_UNKNOWN; }
-    return d2k_hello_shape(buf, (size_t)n);
+    if (n <= 0) { return D2S_SHAPE_UNKNOWN; }
+    return d2s_hello_shape(buf, (size_t)n);
 }
 
-static const d2k_cat_binding *binding_of(const d2k_catalog *c, const char *target,
+static const d2s_cat_binding *binding_of(const d2s_catalog *c, const char *target,
                                           uint8_t transport) {
     for (size_t i = 0; i < c->n_boxes; i++) {
         for (size_t j = 0; j < c->boxes[i].n_binds; j++) {
-            const d2k_cat_binding *b = &c->boxes[i].binds[j];
+            const d2s_cat_binding *b = &c->boxes[i].binds[j];
             if (strcmp(b->target, target) == 0 && b->transport == transport) { return b; }
         }
     }
@@ -1788,11 +1788,11 @@ static const d2k_cat_binding *binding_of(const d2k_catalog *c, const char *targe
    «не больше одной» по построению; теперь ключ — тройка с формой приветствия,
    и число записей стало наблюдаемым различием между «обновили» и «завели
    рядом». */
-static size_t bindings_of(const d2k_catalog *c, const char *target, uint8_t transport) {
+static size_t bindings_of(const d2s_catalog *c, const char *target, uint8_t transport) {
     size_t n = 0;
     for (size_t i = 0; i < c->n_boxes; i++) {
         for (size_t j = 0; j < c->boxes[i].n_binds; j++) {
-            const d2k_cat_binding *b = &c->boxes[i].binds[j];
+            const d2s_cat_binding *b = &c->boxes[i].binds[j];
             if (strcmp(b->target, target) == 0 && b->transport == transport) { n++; }
         }
     }
@@ -1803,10 +1803,10 @@ static size_t bindings_of(const d2k_catalog *c, const char *target, uint8_t tran
    полей (shape = 0), и файл, где записана ДРУГАЯ форма. Настоящих путей
    завести такую запись у планировщика сегодня нет — зонд один, и форма у
    него одна, — а проверить ключ надо сейчас, а не когда появится второй. */
-static d2k_cat_binding *binding_mut(d2k_catalog *c, const char *target, uint8_t transport) {
+static d2s_cat_binding *binding_mut(d2s_catalog *c, const char *target, uint8_t transport) {
     for (size_t i = 0; i < c->n_boxes; i++) {
         for (size_t j = 0; j < c->boxes[i].n_binds; j++) {
-            d2k_cat_binding *b = &c->boxes[i].binds[j];
+            d2s_cat_binding *b = &c->boxes[i].binds[j];
             if (strcmp(b->target, target) == 0 && b->transport == transport) { return b; }
         }
     }
@@ -1818,30 +1818,30 @@ static d2k_cat_binding *binding_mut(d2k_catalog *c, const char *target, uint8_t 
    его вызывающий и смотрит; планировщик после прохода закрывается, потому что
    проверяется именно НАКОПЛЕННОЕ в файле, а не живое состояние задачи. Порт
    клиента задаёт вызывающий: по нему сходятся зонд и событие. */
-static void confirm_transport(d2k_catalog *cat, int link_fd, const char *target,
+static void confirm_transport(d2s_catalog *cat, int link_fd, const char *target,
                               uint16_t cport, uint8_t transport) {
-    d2k_sched *s = d2k_sched_new(cat, link_fd, 0x2d);
+    d2s_sched *s = d2s_sched_new(cat, link_fd, 0x2d);
     if (!s) { CHECK(0, "планировщик не завёлся"); return; }
-    d2k_sched_set_say(s, collect_say, NULL);
+    d2s_sched_set_say(s, collect_say, NULL);
     CHECK(live_autopick_reason_is(s, "нет событий от datapath"),
           "живой статус не объясняет отсутствие событий от datapath");
     ver_answer_port = cport;
     ver_calls = 0;
     forget_sent();
-    d2k_ev h = ev_hello(transport, cport, target);
-    d2k_sched_event(s, &h);
-    d2k_ev su = ev_suspect(transport, cport);
-    d2k_sched_event(s, &su);
+    d2s_ev h = ev_hello(transport, cport, target);
+    d2s_sched_event(s, &h);
+    d2s_ev su = ev_suspect(transport, cport);
+    d2s_sched_event(s, &su);
     settle(s);
-    d2k_ev ap = ev_applied(transport, cport);
-    d2k_sched_event(s, &ap);
+    d2s_ev ap = ev_applied(transport, cport);
+    d2s_sched_event(s, &ap);
     spin(s, 40);
-    char live_path[] = "/tmp/d2k-confirmed-live-XXXXXX";
+    char live_path[] = "/tmp/d2s-confirmed-live-XXXXXX";
     int live_fd = mkstemp(live_path);
     CHECK(live_fd >= 0, "confirmed live fixture");
     if (live_fd >= 0) {
         close(live_fd);
-        CHECK(!d2k_sched_write_live(s, live_path, "catalog.json"), "confirmed live write");
+        CHECK(!d2s_sched_write_live(s, live_path, "catalog.json"), "confirmed live write");
         FILE *live = fopen(live_path, "r"); char body[32768] = {0};
         if (live) { (void)!fread(body, 1, sizeof body - 1, live); fclose(live); }
         CHECK(!strstr(body, "подтверждено, смотрим живой трафик"),
@@ -1852,10 +1852,10 @@ static void confirm_transport(d2k_catalog *cat, int link_fd, const char *target,
               "живой статус не называет подтверждённый Plan, из-за которого поиск ждёт");
         unlink(live_path);
     }
-    d2k_sched_free(s);
+    d2s_sched_free(s);
 }
 
-static void confirm_once(d2k_catalog *cat, int link_fd, const char *target,
+static void confirm_once(d2s_catalog *cat, int link_fd, const char *target,
                          uint16_t cport) {
     confirm_transport(cat, link_fd, target, cport, 6);
 }
@@ -1879,20 +1879,20 @@ static int stub_ack(const char *ip, uint16_t port, uint32_t mark,
 static int base_calls;
 static int base_blocked_answer = 1;
 static int base_wait_until_stop;
-static d2k_vres stub_base(const char *ip, uint16_t port, d2k_hello trigger,
-                          d2k_hello control, uint32_t mark, int repeats,
+static d2s_vres stub_base(const char *ip, uint16_t port, d2s_hello trigger,
+                          d2s_hello control, uint32_t mark, int repeats,
                           uint32_t gap_us, uint32_t wait_ms,
                           const volatile sig_atomic_t *stop) {
     (void)ip; (void)port; (void)control; (void)mark; (void)repeats;
     (void)gap_us; (void)wait_ms;
     base_calls++;
     tcp_last_wire = trigger.len;
-    d2k_vres r;
+    d2s_vres r;
     memset(&r, 0, sizeof r);
     if (base_wait_until_stop && base_calls == 1) {
         /* Как настоящий: в сети, бросить может только просьба. */
         while (!(stop && *stop)) usleep(1000);
-        r.verdict = D2K_V_INCONCLUSIVE;
+        r.verdict = D2S_V_INCONCLUSIVE;
         snprintf(r.reason, sizeof r.reason, "базовый вопрос брошен");
         return r;
     }
@@ -1902,7 +1902,7 @@ static d2k_vres stub_base(const char *ip, uint16_t port, d2k_hello trigger,
     r.base.valid = 1; r.base.repeats = 3;
     r.base.pass = base_blocked_answer ? 0 : 3;
     r.base.fail = 3 - r.base.pass;
-    r.verdict = base_blocked_answer ? D2K_V_INCONCLUSIVE : D2K_V_CLEAR;
+    r.verdict = base_blocked_answer ? D2S_V_INCONCLUSIVE : D2S_V_CLEAR;
     snprintf(r.reason, sizeof r.reason, "%s", base_blocked_answer
              ? "подменённая база: 0 из 3" : "подменённая база: 3 из 3");
     return r;
@@ -1910,10 +1910,10 @@ static d2k_vres stub_base(const char *ip, uint16_t port, d2k_hello trigger,
 
 /* Полный прогон с ответом базы: сколько раз позван и с каким ответом. */
 static int seeded_calls, seeded_pass, seeded_fail;
-static d2k_vres stub_tcp_seeded(const char *ip, uint16_t port, d2k_hello trigger,
-                                d2k_hello control, uint32_t mark, int repeats,
+static d2s_vres stub_tcp_seeded(const char *ip, uint16_t port, d2s_hello trigger,
+                                d2s_hello control, uint32_t mark, int repeats,
                                 uint32_t gap_us, uint32_t wait_ms,
-                                const volatile sig_atomic_t *stop, const d2k_base_seed *seed) {
+                                const volatile sig_atomic_t *stop, const d2s_base_seed *seed) {
     seeded_calls++;
     seeded_pass = seed ? seed->pass : -1;
     seeded_fail = seed ? seed->fail : -1;
@@ -1923,11 +1923,11 @@ static d2k_vres stub_tcp_seeded(const char *ip, uint16_t port, d2k_hello trigger
    семейства C замер идёт снятыми байтами (seed), и приманка обязана доходить и
    сюда — иначе составной ECH-вопрос не задаётся. Запоминаем длину приманки. */
 static int seeded_white_calls, seeded_white_len;
-static d2k_vres stub_tcp_seeded_white(const char *ip, uint16_t port, d2k_hello trigger,
-                                      d2k_hello control, d2k_hello white, uint32_t mark,
+static d2s_vres stub_tcp_seeded_white(const char *ip, uint16_t port, d2s_hello trigger,
+                                      d2s_hello control, d2s_hello white, uint32_t mark,
                                       int repeats, uint32_t gap_us, uint32_t wait_ms,
                                       const volatile sig_atomic_t *stop,
-                                      const d2k_base_seed *seed) {
+                                      const d2s_base_seed *seed) {
     (void)seed;
     seeded_white_calls++;
     seeded_white_len = (int)white.len;
@@ -1935,13 +1935,13 @@ static d2k_vres stub_tcp_seeded_white(const char *ip, uint16_t port, d2k_hello t
 }
 /* QUIC: базовый вопрос и полный прогон с его ответом. */
 static int quic_base_calls, quic_seeded_calls, quic_seeded_ctl;
-static d2k_vres stub_quic_base(const char *ip, uint16_t port, const char *sni,
-                               d2k_hello trigger, d2k_hello control, uint32_t mark) {
+static d2s_vres stub_quic_base(const char *ip, uint16_t port, const char *sni,
+                               d2s_hello trigger, d2s_hello control, uint32_t mark) {
     (void)ip; (void)port; (void)sni; (void)trigger; (void)control; (void)mark;
     quic_base_calls++;
-    d2k_vres r;
+    d2s_vres r;
     memset(&r, 0, sizeof r);
-    r.verdict = D2K_V_INCONCLUSIVE;
+    r.verdict = D2S_V_INCONCLUSIVE;
     r.base_blocked = base_blocked_answer;
     r.base.valid = 1; r.base.repeats = 3; r.base.ctl_pass = 3; r.base.ctl_marked = 1;
     r.base.direct_asked = 1; r.base.pass = base_blocked_answer ? 0 : 3;
@@ -1949,9 +1949,9 @@ static d2k_vres stub_quic_base(const char *ip, uint16_t port, const char *sni,
     snprintf(r.reason, sizeof r.reason, "подменённая QUIC-база");
     return r;
 }
-static d2k_vres stub_quic_seeded(const char *ip, uint16_t port, const char *sni,
-                                 d2k_hello trigger, d2k_hello control, uint32_t mark,
-                                 d2k_quic_arm *arm, const d2k_base_seed *seed) {
+static d2s_vres stub_quic_seeded(const char *ip, uint16_t port, const char *sni,
+                                 d2s_hello trigger, d2s_hello control, uint32_t mark,
+                                 d2s_quic_arm *arm, const d2s_base_seed *seed) {
     quic_seeded_calls++;
     quic_seeded_ctl = seed ? seed->ctl_pass : -1;
     return stub_quic(ip, port, sni, trigger, control, mark, arm);
@@ -1959,33 +1959,33 @@ static d2k_vres stub_quic_seeded(const char *ip, uint16_t port, const char *sni,
 
 /* Коробка с одним планом и одной подтверждённой привязкой — фикстура своего
    найденного решения другой цели. split различает тексты планов. */
-static void own_box(d2k_catalog *c, const char *box, char plan_id[40], unsigned split,
+static void own_box(d2s_catalog *c, const char *box, char plan_id[40], unsigned split,
                     int successes, const char *target, uint8_t transport, uint8_t shape,
                     uint8_t family, int64_t confirmed, int64_t recheck) {
     char plan[256];
     if (transport == 17)
         snprintf(plan, sizeof plan,
-                 "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                 "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                  "proto udp quic\npayload 1 aa%02x\n"
                  "fake payload=1 poison=0 repeats=1 gap_us=0 place=before\n"
                  "order forward\n", split & 0xff);
     else
         snprintf(plan, sizeof plan,
-                 "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                 "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                  "proto tcp tls\nsplit payload_start +%u\norder forward\n", split);
     /* Идентификатор — из текста, тем же FNV-1a, что plan_ident планировщика:
        каталог роутера иначе не бывает. */
     uint64_t h = 1469598103934665603ULL;
     for (const char *q = plan; *q; q++) { h ^= (unsigned char)*q; h *= 1099511628211ULL; }
     snprintf(plan_id, 40, "plan-%08x", (unsigned)(h & 0xFFFFFFFFu));
-    d2k_cat_box *nb = realloc(c->boxes, (c->n_boxes + 1) * sizeof *nb);
+    d2s_cat_box *nb = realloc(c->boxes, (c->n_boxes + 1) * sizeof *nb);
     CHECK(nb != NULL, "own_box: realloc");
     if (!nb) return;
     c->boxes = nb;
-    d2k_cat_box *b = &c->boxes[c->n_boxes++];
+    d2s_cat_box *b = &c->boxes[c->n_boxes++];
     memset(b, 0, sizeof *b);
     snprintf(b->id, sizeof b->id, "%s", box);
-    b->fp.method = D2K_FP_METHOD;
+    b->fp.method = D2S_FP_METHOD;
     b->fp.n_sig = 1;
     snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
     b->fp.sig[0].ttl = (uint8_t)(60 + c->n_boxes);
@@ -2001,13 +2001,13 @@ static void own_box(d2k_catalog *c, const char *box, char plan_id[40], unsigned 
     snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "%s", transport == 17 ? "quic" : "tls");
     b->plans[0].text = strdup(plan);
     b->n_binds = 1;
-    d2k_cat_binding *bd = &b->binds[0];
+    d2s_cat_binding *bd = &b->binds[0];
     snprintf(bd->kind, sizeof bd->kind, "name");
     snprintf(bd->target, sizeof bd->target, "%s", target);
     snprintf(bd->plan_id, sizeof bd->plan_id, "%s", plan_id);
     bd->level = 3; bd->enabled = 1; bd->successes = successes;
     bd->confirmed = confirmed; bd->transport = transport; bd->family = family;
-    bd->shape = shape; bd->verified_by = D2K_VERBY_PROBE; bd->input = D2K_INPUT_CLIENT;
+    bd->shape = shape; bd->verified_by = D2S_VERBY_PROBE; bd->input = D2S_INPUT_CLIENT;
     bd->recheck_since = recheck;
 }
 
@@ -2030,7 +2030,7 @@ static int ech_offer_hello(const char *name, uint8_t *out, size_t cap, size_t *l
 static int ech_offer_hello_sized(const char *name, size_t payload, uint8_t *out,
                                  size_t cap, size_t *len) {
     size_t n = 0;
-    if (d2k_hello_from_profile(D2K_SHAPE_MODERN, name, out, cap, &n) != 0) return -1;
+    if (d2s_hello_from_profile(D2S_SHAPE_MODERN, name, out, cap, &n) != 0) return -1;
     size_t p = 9 + 2 + 32;
     p += 1 + out[p];
     p += 2 + ((size_t)out[p] << 8 | out[p + 1]);
@@ -2058,7 +2058,7 @@ static int ech_offer_hello_sized(const char *name, size_t payload, uint8_t *out,
 /* HTTPS RR без сети: ECH есть у origin.ech.example (public_name
    ech-public.example) и у самого ech-public.example; у прочих — нет. */
 static int ech_resolve_calls;
-static int stub_ech_resolve(const char *origin, uint32_t mark, d2k_ech_config *cfg) {
+static int stub_ech_resolve(const char *origin, uint32_t mark, d2s_ech_config *cfg) {
     (void)mark;
     __atomic_add_fetch(&ech_resolve_calls, 1, __ATOMIC_SEQ_CST);
     if (!origin || !cfg) return -1;
@@ -2076,21 +2076,21 @@ static int stub_ech_resolve(const char *origin, uint32_t mark, d2k_ech_config *c
 static int replay_calls;
 static size_t replay_last_len;
 static int replay_answer_ok = 1;
-static d2k_ver_result stub_replay(int use_fd, const char *ip, uint16_t port,
+static d2s_ver_result stub_replay(int use_fd, const char *ip, uint16_t port,
                                   const uint8_t *hello, size_t len, int deadline_ms) {
     (void)ip; (void)port; (void)hello; (void)deadline_ms;
     if (use_fd >= 0) close(use_fd);
     __atomic_add_fetch(&replay_calls, 1, __ATOMIC_SEQ_CST);
     replay_last_len = len;
-    d2k_ver_result r;
+    d2s_ver_result r;
     memset(&r, 0, sizeof r);
     r.fd = -1; r.name_ok = -1; r.family = 4;
     memcpy(r.local_ip4, ver_local_ip4, 4);
     memcpy(r.local_addr, ver_local_ip4, 4);
     r.local_port = ver_answer_port;
-    r.level = replay_answer_ok ? D2K_VER_HANDSHAKE : D2K_VER_TRANSPORT;
+    r.level = replay_answer_ok ? D2S_VER_HANDSHAKE : D2S_VER_TRANSPORT;
     r.replay_proof = replay_answer_ok;
-    r.budget = D2K_BUDGET_NOT_APPLICABLE;
+    r.budget = D2S_BUDGET_NOT_APPLICABLE;
     snprintf(r.budget_note, sizeof r.budget_note, "подменённый повтор: пакеты не считаются");
     snprintf(r.reason, sizeof r.reason, "%s", replay_answer_ok
              ? "подменённый повтор: ServerHello" : "подменённый повтор: тишина");
@@ -2098,46 +2098,46 @@ static d2k_ver_result stub_replay(int use_fd, const char *ip, uint16_t port,
 }
 
 static void test_clean_handshake_multi_client(int ctl_fd) {
-    d2k_catalog empty = {0};
-    d2k_sched *s = d2k_sched_new(&empty, ctl_fd, 0x2d);
+    d2s_catalog empty = {0};
+    d2s_sched *s = d2s_sched_new(&empty, ctl_fd, 0x2d);
     saidbuf[0] = '\0'; forget_sent();
-    d2k_sched_set_say(s, collect_say, NULL);
+    d2s_sched_set_say(s, collect_say, NULL);
     tcp_calls = quic_calls = 0;
     const char *nm = "clean.multi-client.test";
 
-    d2k_ev hA = ev_hello(6, 40704, nm); d2k_sched_event(s, &hA);
-    d2k_ev xA = ev_exchange(6, 40704, 1);
-    xA.planned = D2K_LINK_PLANNED_NO;
-    d2k_sched_event(s, &xA);
+    d2s_ev hA = ev_hello(6, 40704, nm); d2s_sched_event(s, &hA);
+    d2s_ev xA = ev_exchange(6, 40704, 1);
+    xA.planned = D2S_LINK_PLANNED_NO;
+    d2s_sched_event(s, &xA);
 
-    d2k_ev hB = ev_hello(6, 40705, nm);
+    d2s_ev hB = ev_hello(6, 40705, nm);
     hB.high_ip[3] = 68; /* второй ПК: 192.168.1.68 вместо .67 */
-    d2k_sched_event(s, &hB);
-    d2k_ev suB = ev_suspect(6, 40705);
+    d2s_sched_event(s, &hB);
+    d2s_ev suB = ev_suspect(6, 40705);
     suB.high_ip[3] = 68;
-    suB.code = D2K_SUSPECT_RST;
-    suB.planned = D2K_LINK_PLANNED_NO;
-    int rcB = d2k_sched_event(s, &suB);
+    suB.code = D2S_SUSPECT_RST;
+    suB.planned = D2S_LINK_PLANNED_NO;
+    int rcB = d2s_sched_event(s, &suB);
     CHECK(rcB == 1,
           "чистое рукопожатие первого ПК подавило подозрение второго");
     settle(s);
     CHECK(tcp_calls == 1,
           "подозрение второго ПК не запустило отдельный замер");
     if (fails) fprintf(stderr, "%s\n", saidbuf);
-    d2k_sched_free(s); d2k_catalog_free(&empty);
+    d2s_sched_free(s); d2s_catalog_free(&empty);
 }
 
 int main(int argc, char **argv) {
     /* A scheduler without the measured packet runtime must never silently
        substitute the legacy socket-write classifier and export its cuts. */
     {
-        d2k_hello empty = {0};
-        d2k_vres r = d2k_sched_tcp_hook("127.0.0.1", 0, empty, empty, 0, 1, 0, 1, NULL);
-        CHECK(r.verdict == D2K_V_FLAKY && r.owns_search && !r.probes && !r.have_arm && !r.split_pos,
+        d2s_hello empty = {0};
+        d2s_vres r = d2s_sched_tcp_hook("127.0.0.1", 0, empty, empty, 0, 1, 0, 1, NULL);
+        CHECK(r.verdict == D2S_V_FLAKY && r.owns_search && !r.probes && !r.have_arm && !r.split_pos,
               "unconfigured scheduler must refuse socket-only bypass measurement");
     }
     if (argc == 2 && !strcmp(argv[1], "--runtime-default-only")) return fails ? 1 : 0;
-    d2k_sched_mark_fn saved_mark = d2k_sched_mark_hook;
+    d2s_sched_mark_fn saved_mark = d2s_sched_mark_hook;
     int voice_only = argc == 2 && strcmp(argv[1], "--voice-only") == 0;
     int partial_only = argc == 2 && strcmp(argv[1], "--rx-partial-only") == 0;
     int rx_only = partial_only || (argc == 2 && strcmp(argv[1], "--rx-volume-only") == 0);
@@ -2171,32 +2171,32 @@ int main(int argc, char **argv) {
         socklen_t alen = sizeof a;
         CHECK(getsockname(lfd, (struct sockaddr *)&a, &alen) == 0, "listener address failed");
         uint16_t sport = 0;
-        CHECK(d2k_props_bind(&fd, &sport) == 0, "reserve verifier socket failed");
+        CHECK(d2s_props_bind(&fd, &sport) == 0, "reserve verifier socket failed");
         if (fd >= 0 && lfd >= 0) {
-            d2k_ver_result r = d2k_sched_ver_hook(fd, "127.0.0.1", ntohs(a.sin_port),
+            d2s_ver_result r = d2s_sched_ver_hook(fd, "127.0.0.1", ntohs(a.sin_port),
                                                   6, "probe.example", 50, 0,
-                                                  (uint8_t)D2K_SHAPE_MODERN);
+                                                  (uint8_t)D2S_SHAPE_MODERN);
             CHECK(r.fd == fd && r.local_port == ntohs(sport), "verifier replaced reserved socket");
             if (r.fd != fd) { close(fd); }
-            d2k_verify_close(&r);
+            d2s_verify_close(&r);
         }
         if (lfd >= 0) { close(lfd); }
     }
-    d2k_sched_vol_hook = stub_vol;
-    d2k_sched_tcp_hook = stub_tcp;
-    d2k_sched_quic_hook = stub_quic;
+    d2s_sched_vol_hook = stub_vol;
+    d2s_sched_tcp_hook = stub_tcp;
+    d2s_sched_quic_hook = stub_quic;
     /* Зонд подтверждения тоже подменён: настоящий пошёл бы к 127.0.0.1 своим
        рукопожатием TLS 1.3, а стенд этого теста TLS не умеет — тест мерил бы
        стенд. */
-    d2k_sched_ver_hook = stub_ver;
-    d2k_sched_rx_ver_hook = stub_ver;
-    d2k_sched_rx_gzip_ver_hook = stub_ver;
-    d2k_sched_quic_path_ver_hook = stub_quic_path_ver;
-    d2k_sched_mark_hook = stub_mark;
-    d2k_sched_spawn_hook = stub_spawn;
-    d2k_sched_cpu_hook = stub_cpu;
-    d2k_sched_mem_hook = stub_mem;
-    d2k_sched_ct_hook = stub_ct;
+    d2s_sched_ver_hook = stub_ver;
+    d2s_sched_rx_ver_hook = stub_ver;
+    d2s_sched_rx_gzip_ver_hook = stub_ver;
+    d2s_sched_quic_path_ver_hook = stub_quic_path_ver;
+    d2s_sched_mark_hook = stub_mark;
+    d2s_sched_spawn_hook = stub_spawn;
+    d2s_sched_cpu_hook = stub_cpu;
+    d2s_sched_mem_hook = stub_mem;
+    d2s_sched_ct_hook = stub_ct;
 
     int sv[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
@@ -2216,259 +2216,259 @@ int main(int argc, char **argv) {
         return fails ? 1 : 0;
     }
 
-    d2k_catalog cat;
+    d2s_catalog cat;
     memset(&cat, 0, sizeof cat);
     if (groups_only) {
-        d2k_ver_result ech_direct = {0}; d2k_vol_result ech_volume = {0};
+        d2s_ver_result ech_direct = {0}; d2s_vol_result ech_volume = {0};
         ech_direct.fd = 7; ech_direct.ech_accepted=1; ech_direct.name_ok=1;
-        ech_direct.level=D2K_VER_APPLICATION; ech_direct.body_complete=1;
+        ech_direct.level=D2S_VER_APPLICATION; ech_direct.body_complete=1;
         ech_direct.status=200;
-        d2k_vres ech_result=d2k_sched_ech_baseline_result(&ech_direct,&ech_volume,"origin.example.com");
-        CHECK(ech_result.verdict==D2K_V_CLEAR && ech_volume.rx_direct_complete,
+        d2s_vres ech_result=d2s_sched_ech_baseline_result(&ech_direct,&ech_volume,"origin.example.com");
+        CHECK(ech_result.verdict==D2S_V_CLEAR && ech_volume.rx_direct_complete,
               "authenticated complete direct ECH supplies the clear learner gate");
         ech_direct.ech_accepted=0;
-        ech_result=d2k_sched_ech_baseline_result(&ech_direct,&ech_volume,"origin.example.com");
-        CHECK(ech_result.verdict!=D2K_V_CLEAR && !ech_volume.rx_direct_complete,
+        ech_result=d2s_sched_ech_baseline_result(&ech_direct,&ech_volume,"origin.example.com");
+        CHECK(ech_result.verdict!=D2S_V_CLEAR && !ech_volume.rx_direct_complete,
               "rejected ECH cannot become a clean bypass observation");
-        tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
-        d2k_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
         confirm_once(&c, sv[0], "rr-a.googlevideo.com", 40301);
         confirm_once(&c, sv[0], "rr-b.googlevideo.com", 40302);
         confirm_once(&c, sv[0], "rr-c.googlevideo.com", 40303);
-        d2k_group_key key = {0}; key.transport = 6; key.family = 4; key.shape = 1;
+        d2s_group_key key = {0}; key.transport = 6; key.family = 4; key.shape = 1;
         strcpy(key.probe_path, "/");
-        const d2k_domain_group *g = d2k_group_match(c.groups, "rr-new.googlevideo.com", &key);
+        const d2s_domain_group *g = d2s_group_match(c.groups, "rr-new.googlevideo.com", &key);
         CHECK(g && !strcmp(g->suffix, "googlevideo.com"), "three own blocking outcomes teach shared area");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_calls = vol_calls = ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40304, "rr-new.googlevideo.com");
-        d2k_sched_event(s, &h); spin(s, 5);
-        CHECK(!d2k_sched_active(s) && !tcp_calls && !vol_calls && !ver_calls,
+        d2s_ev h = ev_hello(6, 40304, "rr-new.googlevideo.com");
+        d2s_sched_event(s, &h); spin(s, 5);
+        CHECK(!d2s_sched_active(s) && !tcp_calls && !vol_calls && !ver_calls,
               "new member hello launches no measure or verification");
         CHECK(!binding_of(&c, "rr-new.googlevideo.com", 6), "new member creates no individual binding");
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_command_count(D2K_CMD_SET_SUFFIX, NULL, 0) == 1, "restart sync installs learned suffix");
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_command_count(D2S_CMD_SET_SUFFIX, NULL, 0) == 1, "restart sync installs learned suffix");
         CHECK(g && sent_has(g->plan_id), "suffix carries its own nonzero Plan ID");
-        CHECK(d2k_sched_sync_pending(s), "suffix write waits for ACK");
-        d2k_ev stale = {0}; stale.kind=D2K_EV_ACK; stale.code=D2K_CMD_SET_SUFFIX;
+        CHECK(d2s_sched_sync_pending(s), "suffix write waits for ACK");
+        d2s_ev stale = {0}; stale.kind=D2S_EV_ACK; stale.code=D2S_CMD_SET_SUFFIX;
         stale.num=1u<<8; area_ack_id(&stale);
         skip_ahead(s, 6000); sync_out(s);
-        CHECK(!d2k_sched_sync_pending(s), "lost area ACK ends bounded wait");
-        c.groups->disabled=1; CHECK(!d2k_group_restore(c.groups), "disable learned areas");
-        d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_command_count(D2K_CMD_DEL_SUFFIX,NULL,0)==1,
+        CHECK(!d2s_sched_sync_pending(s), "lost area ACK ends bounded wait");
+        c.groups->disabled=1; CHECK(!d2s_group_restore(c.groups), "disable learned areas");
+        d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_command_count(D2S_CMD_DEL_SUFFIX,NULL,0)==1,
               "possibly installed rule is removed even when its install ACK was lost");
-        d2k_ev removed={0}; removed.kind=D2K_EV_ACK; removed.code=D2K_CMD_DEL_SUFFIX;
+        d2s_ev removed={0}; removed.kind=D2S_EV_ACK; removed.code=D2S_CMD_DEL_SUFFIX;
         removed.num=1u<<8; area_ack_id(&removed);
-        d2k_sched_event(s,&removed); sync_out(s);
-        c.groups->disabled=0; CHECK(!d2k_group_restore(c.groups), "restore eligible family");
-        g=d2k_group_match(c.groups,"rr-new.googlevideo.com",&key);
-        d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_command_count(D2K_CMD_SET_SUFFIX, NULL, 0) == 2,
+        d2s_sched_event(s,&removed); sync_out(s);
+        c.groups->disabled=0; CHECK(!d2s_group_restore(c.groups), "restore eligible family");
+        g=d2s_group_match(c.groups,"rr-new.googlevideo.com",&key);
+        d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_command_count(D2S_CMD_SET_SUFFIX, NULL, 0) == 2,
               "lost ACK can retry safely on next synchronization");
-        d2k_sched_event(s,&stale); sync_out(s);
-        CHECK(d2k_sched_sync_pending(s), "late ACK cannot confirm a newer area command");
-        d2k_ev ack = {0}; ack.kind = D2K_EV_ACK; ack.code = D2K_CMD_SET_SUFFIX; ack.num = 1u << 8;
+        d2s_sched_event(s,&stale); sync_out(s);
+        CHECK(d2s_sched_sync_pending(s), "late ACK cannot confirm a newer area command");
+        d2s_ev ack = {0}; ack.kind = D2S_EV_ACK; ack.code = D2S_CMD_SET_SUFFIX; ack.num = 1u << 8;
         area_ack_id(&ack);
-        d2k_sched_event(s, &ack); sync_out(s);
-        CHECK(!d2k_sched_sync_pending(s), "positive suffix ACK completes sync");
+        d2s_sched_event(s, &ack); sync_out(s);
+        CHECK(!d2s_sched_sync_pending(s), "positive suffix ACK completes sync");
         h = ev_hello(6, 40308, "rr-fresh.googlevideo.com");
-        d2k_sched_event(s, &h);
-        d2k_ev fresh = ev_suspect(6, 40308);
-        fresh.planned = D2K_LINK_PLANNED_NO;
-        fresh.client_shape = D2K_SHAPE_MODERN;
+        d2s_sched_event(s, &h);
+        d2s_ev fresh = ev_suspect(6, 40308);
+        fresh.planned = D2S_LINK_PLANNED_NO;
+        fresh.client_shape = D2S_SHAPE_MODERN;
         tcp_calls = vol_calls = ver_calls = 0;
-        d2k_sched_event(s, &fresh); spin(s, 2);
-        CHECK(!d2k_sched_active(s) && !tcp_calls && !vol_calls && !ver_calls,
+        d2s_sched_event(s, &fresh); spin(s, 2);
+        CHECK(!d2s_sched_active(s) && !tcp_calls && !vol_calls && !ver_calls,
               "fresh unplanned TLS13 family member inherits without starting a search");
-        fresh.planned = D2K_LINK_PLANNED_YES;
-        fresh.code = D2K_SUSPECT_SILENT;
-        d2k_sched_event(s, &fresh);
+        fresh.planned = D2S_LINK_PLANNED_YES;
+        fresh.code = D2S_SUSPECT_SILENT;
+        d2s_sched_event(s, &fresh);
         settle(s);
         CHECK(ver_calls > 0 && tcp_calls == 0 && vol_calls == 0,
               "inherited plan recovery verifies own family knowledge before full classification");
-        char live_path[] = "/tmp/d2k-family-live-XXXXXX";
+        char live_path[] = "/tmp/d2s-family-live-XXXXXX";
         int live_fd = mkstemp(live_path); CHECK(live_fd >= 0, "family live fixture");
         if (live_fd >= 0) {
             close(live_fd);
-            CHECK(!d2k_sched_write_live(s, live_path, "catalog.json"), "family live write");
+            CHECK(!d2s_sched_write_live(s, live_path, "catalog.json"), "family live write");
             FILE *live = fopen(live_path, "r"); char body[32768] = {0};
             if (live) { (void)!fread(body, 1, sizeof body-1, live); fclose(live); }
             CHECK(strstr(body, "\"groups\"") && strstr(body, "\"suffix\": \"googlevideo.com\"") &&
                   strstr(body, "\"active\": true"), "live exposes actual ACKed area, not individual inheritance proofs");
             unlink(live_path);
         }
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(!sent_command_count(D2K_CMD_SET_SUFFIX, NULL, 0) &&
-              !sent_command_count(D2K_CMD_DEL_SUFFIX, NULL, 0), "unchanged group never withdrawn or resent");
-        d2k_group_observation failed = {0};
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(!sent_command_count(D2S_CMD_SET_SUFFIX, NULL, 0) &&
+              !sent_command_count(D2S_CMD_DEL_SUFFIX, NULL, 0), "unchanged group never withdrawn or resent");
+        d2s_group_observation failed = {0};
         strcpy(failed.name, "rr-new.googlevideo.com"); strcpy(failed.plan_id, g->plan_id);
-        failed.key = key; failed.evidence = D2K_GROUP_PLAN_FAILED; failed.at = g->at+1;
-        CHECK(d2k_group_learn(c.groups, &failed) > 0, "targeted member failure recorded");
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_command_count(D2K_CMD_SET_BYPASS, NULL, 0) == 1 &&
-              !sent_command_count(D2K_CMD_DEL_SUFFIX, NULL, 0), "one exception does not withdraw family");
-        ack.code = D2K_CMD_SET_BYPASS; ack.num = D2K_ACK_NO_ROOM;
+        failed.key = key; failed.evidence = D2S_GROUP_PLAN_FAILED; failed.at = g->at+1;
+        CHECK(d2s_group_learn(c.groups, &failed) > 0, "targeted member failure recorded");
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_command_count(D2S_CMD_SET_BYPASS, NULL, 0) == 1 &&
+              !sent_command_count(D2S_CMD_DEL_SUFFIX, NULL, 0), "one exception does not withdraw family");
+        ack.code = D2S_CMD_SET_BYPASS; ack.num = D2S_ACK_NO_ROOM;
         area_ack_id(&ack);
-        d2k_sched_event(s, &ack); sync_out(s);
-        CHECK(!d2k_sched_sync_pending(s), "negative area ACK ends sync explicitly");
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_command_count(D2K_CMD_SET_BYPASS, NULL, 0) == 1, "negative ACK was not remembered as installed");
-        ack.num = 1u << 8; area_ack_id(&ack); d2k_sched_event(s, &ack); sync_out(s);
-        CHECK(d2k_group_match(c.groups, "rr-other.googlevideo.com", &key), "other members retain learned plan");
-        tcp_answer = D2K_V_CLEAR; vol_direct_complete = 1;
-        h = ev_hello(6, 40305, "clean.googlevideo.com"); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40305); d2k_sched_event(s, &su); settle(s);
-        CHECK(d2k_group_match(c.groups, "rr-other.googlevideo.com", &key), "direct clean exception preserves family");
-        CHECK(!d2k_group_match(c.groups, "clean.googlevideo.com", &key), "complete direct application records bypass exception");
+        d2s_sched_event(s, &ack); sync_out(s);
+        CHECK(!d2s_sched_sync_pending(s), "negative area ACK ends sync explicitly");
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_command_count(D2S_CMD_SET_BYPASS, NULL, 0) == 1, "negative ACK was not remembered as installed");
+        ack.num = 1u << 8; area_ack_id(&ack); d2s_sched_event(s, &ack); sync_out(s);
+        CHECK(d2s_group_match(c.groups, "rr-other.googlevideo.com", &key), "other members retain learned plan");
+        tcp_answer = D2S_V_CLEAR; vol_direct_complete = 1;
+        h = ev_hello(6, 40305, "clean.googlevideo.com"); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40305); d2s_sched_event(s, &su); settle(s);
+        CHECK(d2s_group_match(c.groups, "rr-other.googlevideo.com", &key), "direct clean exception preserves family");
+        CHECK(!d2s_group_match(c.groups, "clean.googlevideo.com", &key), "complete direct application records bypass exception");
         vol_direct_complete = 0;
-        h = ev_hello(6, 40306, "unfit.googlevideo.com"); d2k_sched_event(s, &h);
-        d2k_ev refusal = h; refusal.kind = D2K_EV_REFUSED; refusal.code = D2K_REFUSE_TOO_LONG;
+        h = ev_hello(6, 40306, "unfit.googlevideo.com"); d2s_sched_event(s, &h);
+        d2s_ev refusal = h; refusal.kind = D2S_EV_REFUSED; refusal.code = D2S_REFUSE_TOO_LONG;
         refusal.client_shape = 1;
         memset(refusal.plan_id, 0, sizeof refusal.plan_id);
         memcpy(refusal.plan_id, failed.plan_id, strlen(failed.plan_id));
-        refusal.client_shape=2; d2k_sched_event(s,&refusal);
-        CHECK(d2k_group_match(c.groups,"unfit.googlevideo.com",&key),
+        refusal.client_shape=2; d2s_sched_event(s,&refusal);
+        CHECK(d2s_group_match(c.groups,"unfit.googlevideo.com",&key),
               "refusal in TLS12 cannot exclude the same host from TLS13 family");
         refusal.client_shape=1;
-        d2k_sched_event(s, &refusal);
-        CHECK(d2k_sched_active(s) > 0, "real inherited plan refusal starts targeted diagnosis");
-        CHECK(!d2k_group_match(c.groups, "unfit.googlevideo.com", &key),
+        d2s_sched_event(s, &refusal);
+        CHECK(d2s_sched_active(s) > 0, "real inherited plan refusal starts targeted diagnosis");
+        CHECK(!d2s_group_match(c.groups, "unfit.googlevideo.com", &key),
               "permanent inherited execution refusal persists exact exception");
-        CHECK(d2k_group_restore(c.groups)==0 &&
-              !d2k_group_match(c.groups, "unfit.googlevideo.com", &key) &&
-              d2k_group_match(c.groups, "rr-other.googlevideo.com", &key),
+        CHECK(d2s_group_restore(c.groups)==0 &&
+              !d2s_group_match(c.groups, "unfit.googlevideo.com", &key) &&
+              d2s_group_match(c.groups, "rr-other.googlevideo.com", &key),
               "runtime failure exception survives restore without losing siblings");
         /* Task 22: a family exception never overrides a member's own exact
            confirmed plan. Settle pending areas first, then fail the group
            plan for rr-b, which holds its own confirmed exact binding. */
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
         for(unsigned i=0;i<8;i++) {
             ack.code=last_area_command(); if(!ack.code) break;
-            ack.num=1u<<8; area_ack_id(&ack); d2k_sched_event(s,&ack);
+            ack.num=1u<<8; area_ack_id(&ack); d2s_sched_event(s,&ack);
             forget_sent(); sync_out(s);
         }
         {
-            const d2k_cat_binding *own = binding_of(&c, "rr-b.googlevideo.com", 6);
+            const d2s_cat_binding *own = binding_of(&c, "rr-b.googlevideo.com", 6);
             CHECK(own && own->level >= 3 && !own->recheck_since && own->shape == key.shape &&
                   !strcmp(own->plan_id, g->plan_id),
                   "fixture: member holds own exact confirmed binding with the group plan");
-            d2k_group_observation own_fail = {0};
+            d2s_group_observation own_fail = {0};
             strcpy(own_fail.name, "rr-b.googlevideo.com"); strcpy(own_fail.plan_id, g->plan_id);
-            own_fail.key = key; own_fail.evidence = D2K_GROUP_PLAN_FAILED; own_fail.at = g->at+2;
-            CHECK(d2k_group_learn(c.groups, &own_fail) > 0, "member failure of group plan recorded");
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            CHECK(!sent_command_count(D2K_CMD_SET_BYPASS, NULL, 0),
+            own_fail.key = key; own_fail.evidence = D2S_GROUP_PLAN_FAILED; own_fail.at = g->at+2;
+            CHECK(d2s_group_learn(c.groups, &own_fail) > 0, "member failure of group plan recorded");
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            CHECK(!sent_command_count(D2S_CMD_SET_BYPASS, NULL, 0),
                   "family bypass is never installed over a member's own exact confirmed plan");
             /* A foreign client's permanent execution refusal of the group
                plan on a member with its own confirmed exact plan is about
                that client's flow, not evidence against the plan (§7): it must
                not stale the member's vote nor exclude it from the family. */
-            h = ev_hello(6, 40309, "rr-a.googlevideo.com"); d2k_sched_event(s, &h);
-            d2k_ev foreign = h; foreign.kind = D2K_EV_REFUSED; foreign.code = D2K_REFUSE_TOO_LONG;
+            h = ev_hello(6, 40309, "rr-a.googlevideo.com"); d2s_sched_event(s, &h);
+            d2s_ev foreign = h; foreign.kind = D2S_EV_REFUSED; foreign.code = D2S_REFUSE_TOO_LONG;
             foreign.client_shape = 1;
             memset(foreign.plan_id, 0, sizeof foreign.plan_id);
             memcpy(foreign.plan_id, g->plan_id, strlen(g->plan_id));
-            d2k_sched_event(s, &foreign);
+            d2s_sched_event(s, &foreign);
             int stale_vote = 0;
             for (size_t i = 0; i < c.groups->n_observations; i++)
                 if (!strcmp(c.groups->observations[i].name, "rr-a.googlevideo.com") &&
-                    (c.groups->observations[i].evidence & D2K_GROUP_PLAN_FAILED)) stale_vote = 1;
-            CHECK(d2k_group_match(c.groups, "rr-a.googlevideo.com", &key) && !stale_vote,
+                    (c.groups->observations[i].evidence & D2S_GROUP_PLAN_FAILED)) stale_vote = 1;
+            CHECK(d2s_group_match(c.groups, "rr-a.googlevideo.com", &key) && !stale_vote,
                   "foreign refusal on a member with own exact plan records no family failure");
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            CHECK(!sent_command_count(D2K_CMD_SET_BYPASS, NULL, 0),
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            CHECK(!sent_command_count(D2S_CMD_SET_BYPASS, NULL, 0),
                   "foreign refusal installs no bypass over own exact plan");
         }
-        d2k_sched_free(s);
+        d2s_sched_free(s);
         {
             /* Final review #6: a legacy grandfathered (shape 0) confirmed
                name binding is the member's own exact plan for any TCP TLS
                shape; a family exception must not be installed over it. */
-            d2k_catalog cg = {0};
+            d2s_catalog cg = {0};
             static const char *gm[4] = {"a.gf.net", "b.gf.net", "c.gf.net", "d.gf.net"};
-            tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+            tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
             int gf_sendbuf = 256 * 1024;
             (void)setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &gf_sendbuf, sizeof gf_sendbuf);
             for (int i = 0; i < 4; i++) confirm_once(&cg, sv[0], gm[i], (uint16_t)(40391 + i));
-            const d2k_domain_group *gg = d2k_group_match(cg.groups, "new.gf.net", &key);
-            d2k_cat_binding *legacy = binding_mut(&cg, "d.gf.net", 6);
+            const d2s_domain_group *gg = d2s_group_match(cg.groups, "new.gf.net", &key);
+            d2s_cat_binding *legacy = binding_mut(&cg, "d.gf.net", 6);
             CHECK(gg && legacy && legacy->level >= 3 && !strcmp(legacy->plan_id, gg->plan_id),
                   "fixture: gf family learned and member d holds own confirmed binding");
             if (gg && legacy) {
                 legacy->shape = 0;
-                d2k_sched *sg = d2k_sched_new(&cg, sv[0], 0x2d);
-                drain(); forget_sent(); d2k_sched_sync(sg); sync_out(sg);
-                d2k_ev gack = {0}; gack.kind = D2K_EV_ACK;
+                d2s_sched *sg = d2s_sched_new(&cg, sv[0], 0x2d);
+                drain(); forget_sent(); d2s_sched_sync(sg); sync_out(sg);
+                d2s_ev gack = {0}; gack.kind = D2S_EV_ACK;
                 for (unsigned i = 0; i < 8; i++) {
                     gack.code = last_area_command(); if (!gack.code) break;
-                    gack.num = 1u << 8; area_ack_id(&gack); d2k_sched_event(sg, &gack);
+                    gack.num = 1u << 8; area_ack_id(&gack); d2s_sched_event(sg, &gack);
                     forget_sent(); sync_out(sg);
                 }
-                d2k_group_observation gf_fail = {0};
+                d2s_group_observation gf_fail = {0};
                 strcpy(gf_fail.name, "d.gf.net"); strcpy(gf_fail.plan_id, gg->plan_id);
-                gf_fail.key = key; gf_fail.evidence = D2K_GROUP_PLAN_FAILED; gf_fail.at = gg->at + 1;
-                CHECK(d2k_group_learn(cg.groups, &gf_fail) > 0, "legacy member failure recorded");
-                CHECK(d2k_group_match(cg.groups, "new.gf.net", &key) != NULL,
+                gf_fail.key = key; gf_fail.evidence = D2S_GROUP_PLAN_FAILED; gf_fail.at = gg->at + 1;
+                CHECK(d2s_group_learn(cg.groups, &gf_fail) > 0, "legacy member failure recorded");
+                CHECK(d2s_group_match(cg.groups, "new.gf.net", &key) != NULL,
                       "fixture: one member failure keeps the family");
-                drain(); forget_sent(); d2k_sched_sync(sg); sync_out(sg);
-                CHECK(!sent_command_count(D2K_CMD_SET_BYPASS, NULL, 0),
+                drain(); forget_sent(); d2s_sched_sync(sg); sync_out(sg);
+                CHECK(!sent_command_count(D2S_CMD_SET_BYPASS, NULL, 0),
                       "family bypass installed over a grandfathered own exact name binding");
-                d2k_sched_free(sg);
+                d2s_sched_free(sg);
             }
-            d2k_catalog_free(&cg);
+            d2s_catalog_free(&cg);
         }
-        s=d2k_sched_new(&c,sv[0],0x2d); spin(s,1);
+        s=d2s_sched_new(&c,sv[0],0x2d); spin(s,1);
         tcp_block_until_stop=1;
         for (uint16_t port=40311; port<40313; port++) {
             h=ev_hello(6,port,port==40311?"busy-a.example":"busy-b.example");
-            d2k_sched_event(s,&h); su=ev_suspect(6,port); d2k_sched_event(s,&su);
+            d2s_sched_event(s,&h); su=ev_suspect(6,port); d2s_sched_event(s,&su);
         }
         for (uint16_t port=40314; port<40317; port++) {
             const char *name=port==40314?"tls12.googlevideo.com":
                 port==40315?"tls13.googlevideo.com":"unknown.googlevideo.com";
-            h=ev_hello(6,port,name); d2k_sched_event(s,&h);
+            h=ev_hello(6,port,name); d2s_sched_event(s,&h);
             if (port!=40316) {
-                d2k_ev shape;
-                CHECK(tls_shape_event(&shape,name,port==40314?D2K_SHAPE_LEGACY:D2K_SHAPE_MODERN)==0,
+                d2s_ev shape;
+                CHECK(tls_shape_event(&shape,name,port==40314?D2S_SHAPE_LEGACY:D2S_SHAPE_MODERN)==0,
                       "queued TLS shape fixture");
                 memcpy(shape.low_ip,h.low_ip,16); memcpy(shape.high_ip,h.high_ip,16);
                 shape.low_port=h.low_port; shape.high_port=h.high_port;
-                d2k_sched_event(s,&shape);
+                d2s_sched_event(s,&shape);
             }
-            su=ev_suspect(6,port); su.planned=D2K_LINK_PLANNED_NO; d2k_sched_event(s,&su);
+            su=ev_suspect(6,port); su.planned=D2S_LINK_PLANNED_NO; d2s_sched_event(s,&su);
         }
-        h=ev_hello(6,40317,"tls12.googlevideo.com"); d2k_sched_event(s,&h);
-        d2k_ev later_shape;
-        CHECK(tls_shape_event(&later_shape,h.name,D2K_SHAPE_MODERN)==0,"later TLS13 fixture");
+        h=ev_hello(6,40317,"tls12.googlevideo.com"); d2s_sched_event(s,&h);
+        d2s_ev later_shape;
+        CHECK(tls_shape_event(&later_shape,h.name,D2S_SHAPE_MODERN)==0,"later TLS13 fixture");
         memcpy(later_shape.low_ip,h.low_ip,16); memcpy(later_shape.high_ip,h.high_ip,16);
         later_shape.low_port=h.low_port; later_shape.high_port=h.high_port;
-        d2k_sched_event(s,&later_shape);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+        d2s_sched_event(s,&later_shape);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
         for(unsigned i=0;i<8;i++) {
             ack.code=last_area_command(); if(!ack.code) break;
-            ack.num=1u<<8; area_ack_id(&ack); d2k_sched_event(s,&ack);
+            ack.num=1u<<8; area_ack_id(&ack); d2s_sched_event(s,&ack);
             forget_sent(); sync_out(s);
         }
         spin(s,2);
-        CHECK(d2k_sched_active(s)==4,
+        CHECK(d2s_sched_active(s)==4,
               "retire only flow-proven TLS13 queue; preserve TLS12 and unknown after later same-name snapshot");
         tcp_block_until_stop=0;
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        d2s_sched_free(s); d2s_catalog_free(&c);
         /* Two historically working family plans. An applied first candidate
            fails its own verifier; the second succeeds without classification. */
-        d2k_catalog recovery={0};
+        d2s_catalog recovery={0};
         int recovery_sendbuf=256*1024;
         CHECK(!setsockopt(sv[0],SOL_SOCKET,SO_SNDBUF,&recovery_sendbuf,sizeof recovery_sendbuf),
               "family recovery socket must hold one bounded sync batch before test receiver drains it");
-        tcp_answer=D2K_V_PREFIX; tcp_found_arm=0; ver_fail_first=0;
+        tcp_answer=D2S_V_PREFIX; tcp_found_arm=0; ver_fail_first=0;
         confirm_once(&recovery,sv[0],"a.recovery.net",40501);
         confirm_once(&recovery,sv[0],"b.recovery.net",40502);
         confirm_once(&recovery,sv[0],"c.recovery.net",40503);
         confirm_once(&recovery,sv[0],"d.recovery.net",40504);
         char primary[40];
         snprintf(primary,sizeof primary,"%s",binding_of(&recovery,"a.recovery.net",6)->plan_id);
-        d2k_catalog alternate_catalog={0};
+        d2s_catalog alternate_catalog={0};
         tcp_found_arm=1; tcp_owns_search=1;
         confirm_once(&alternate_catalog,sv[0],"e.recovery.net",40505);
         confirm_once(&alternate_catalog,sv[0],"f.recovery.net",40506);
@@ -2476,7 +2476,7 @@ int main(int argc, char **argv) {
         char alternate[40];
         snprintf(alternate,sizeof alternate,"%s",binding_of(&alternate_catalog,"g.recovery.net",6)->plan_id);
         CHECK(strcmp(primary,alternate),"recovery fixture needs different own confirmed plans");
-        d2k_cat_box *merged=realloc(recovery.boxes,
+        d2s_cat_box *merged=realloc(recovery.boxes,
             (recovery.n_boxes+alternate_catalog.n_boxes)*sizeof *merged);
         CHECK(merged!=NULL,"merge independently measured family alternatives");
         if(!merged) return 1;
@@ -2485,63 +2485,63 @@ int main(int argc, char **argv) {
                alternate_catalog.n_boxes*sizeof *merged);
         recovery.n_boxes+=alternate_catalog.n_boxes;
         for(size_t i=0;i<alternate_catalog.groups->n_observations;i++)
-            CHECK(d2k_group_learn(recovery.groups,&alternate_catalog.groups->observations[i])>0,
+            CHECK(d2s_group_learn(recovery.groups,&alternate_catalog.groups->observations[i])>0,
                   "merge own independently confirmed sibling observations");
         free(alternate_catalog.boxes); alternate_catalog.boxes=NULL; alternate_catalog.n_boxes=0;
-        d2k_catalog_free(&alternate_catalog);
+        d2s_catalog_free(&alternate_catalog);
         tcp_found_arm=0; tcp_owns_search=0;
-        s=d2k_sched_new(&recovery,sv[0],0x2d);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        ack.code=D2K_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
-        d2k_sched_event(s,&ack); sync_out(s);
+        s=d2s_sched_new(&recovery,sv[0],0x2d);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        ack.code=D2S_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
+        d2s_sched_event(s,&ack); sync_out(s);
         tcp_calls=vol_calls=ver_calls=0; ver_fail_first=1; ver_answer_port=40508;
-        h=ev_hello(6,40508,"new.recovery.net"); d2k_sched_event(s,&h);
-        su=ev_suspect(6,40508); su.planned=D2K_LINK_PLANNED_YES;
-        su.code=D2K_SUSPECT_SILENT; su.client_shape=D2K_SHAPE_MODERN;
-        d2k_sched_event(s,&su);
+        h=ev_hello(6,40508,"new.recovery.net"); d2s_sched_event(s,&h);
+        su=ev_suspect(6,40508); su.planned=D2S_LINK_PLANNED_YES;
+        su.code=D2S_SUSPECT_SILENT; su.client_shape=D2S_SHAPE_MODERN;
+        d2s_sched_event(s,&su);
         for(int i=0;i<800;i++) {
             tick_once(s);
-            d2k_ev applied=ev_applied(6,40508); d2k_sched_event(s,&applied);
+            d2s_ev applied=ev_applied(6,40508); d2s_sched_event(s,&applied);
         }
-        const d2k_cat_binding *recovered=binding_of(&recovery,"new.recovery.net",6);
+        const d2s_cat_binding *recovered=binding_of(&recovery,"new.recovery.net",6);
         CHECK(recovered && !strcmp(recovered->plan_id,alternate),
               "failed inherited plan must recover under distinct confirmed sibling alternative");
         CHECK(ver_calls==2 && !tcp_calls && !vol_calls,
               "family recovery must not classify or synthesize before two saved alternatives");
-        g=d2k_group_match(recovery.groups,"next.recovery.net",&key);
+        g=d2s_group_match(recovery.groups,"next.recovery.net",&key);
         CHECK(g && !strcmp(g->plan_id,alternate),
               "actual applied verifier failure must change family election for future members");
         CHECK(binding_of(&recovery,"a.recovery.net",6) &&
               !strcmp(binding_of(&recovery,"a.recovery.net",6)->plan_id,primary),
               "failure on new family member must preserve old individual successes");
-        d2k_sched_free(s); ver_fail_first=0;
-        s=d2k_sched_new(&recovery,sv[0],0x2d);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        ack.code=D2K_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
-        d2k_sched_event(s,&ack); sync_out(s);
+        d2s_sched_free(s); ver_fail_first=0;
+        s=d2s_sched_new(&recovery,sv[0],0x2d);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        ack.code=D2S_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
+        d2s_sched_event(s,&ack); sync_out(s);
         tcp_calls=vol_calls=ver_calls=0; ver_answer_port=40509;
-        h=ev_hello(6,40509,"new.recovery.net"); d2k_sched_event(s,&h);
-        su=ev_suspect(6,40509); su.planned=D2K_LINK_PLANNED_YES;
-        su.code=D2K_SUSPECT_SILENT; su.client_shape=D2K_SHAPE_MODERN;
-        d2k_sched_event(s,&su); settle(s);
+        h=ev_hello(6,40509,"new.recovery.net"); d2s_sched_event(s,&h);
+        su=ev_suspect(6,40509); su.planned=D2S_LINK_PLANNED_YES;
+        su.code=D2S_SUSPECT_SILENT; su.client_shape=D2S_SHAPE_MODERN;
+        d2s_sched_event(s,&su); settle(s);
         CHECK(ver_calls>0 && !tcp_calls && !vol_calls,
               "existing individual family members must also recover from saved family plans first");
-        d2k_sched_free(s);
-        s=d2k_sched_new(&recovery,sv[0],0x2d);
-        d2k_sched_set_say(s,collect_say,NULL);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        ack.code=D2K_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
-        d2k_sched_event(s,&ack); sync_out(s);
-        tcp_answer=D2K_V_CLEAR; tcp_wait_until_stop=1; tcp_release_waiters=0;
+        d2s_sched_free(s);
+        s=d2s_sched_new(&recovery,sv[0],0x2d);
+        d2s_sched_set_say(s,collect_say,NULL);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        ack.code=D2S_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
+        d2s_sched_event(s,&ack); sync_out(s);
+        tcp_answer=D2S_V_CLEAR; tcp_wait_until_stop=1; tcp_release_waiters=0;
         for(uint16_t port=40511;port<40513;port++) {
             h=ev_hello(6,port,port==40511?"busy-one.example":"busy-two.example");
-            d2k_sched_event(s,&h); su=ev_suspect(6,port); d2k_sched_event(s,&su);
+            d2s_sched_event(s,&h); su=ev_suspect(6,port); d2s_sched_event(s,&su);
         }
-        h=ev_hello(6,40513,"fresh-research.example"); d2k_sched_event(s,&h);
-        su=ev_suspect(6,40513); d2k_sched_event(s,&su);
-        h=ev_hello(6,40514,"priority.recovery.net"); d2k_sched_event(s,&h);
-        su=ev_suspect(6,40514); su.planned=D2K_LINK_PLANNED_YES;
-        su.client_shape=D2K_SHAPE_MODERN; d2k_sched_event(s,&su);
+        h=ev_hello(6,40513,"fresh-research.example"); d2s_sched_event(s,&h);
+        su=ev_suspect(6,40513); d2s_sched_event(s,&su);
+        h=ev_hello(6,40514,"priority.recovery.net"); d2s_sched_event(s,&h);
+        su=ev_suspect(6,40514); su.planned=D2S_LINK_PLANNED_YES;
+        su.client_shape=D2S_SHAPE_MODERN; d2s_sched_event(s,&su);
         tcp_release_waiters=1; spin(s,40); tcp_wait_until_stop=0;
         saidbuf[0]=0;
         skip_ahead(s,15000); spin(s,100);
@@ -2553,73 +2553,73 @@ int main(int argc, char **argv) {
         const char *fresh_line = strstr(saidbuf, "по fresh-research.example ожидание в очереди");
         CHECK(prio_line && (!fresh_line || prio_line < fresh_line),
               "saved family recovery must precede older unrelated queued classification");
-        d2k_sched_free(s); tcp_answer=D2K_V_PREFIX;
+        d2s_sched_free(s); tcp_answer=D2S_V_PREFIX;
         /* Задача 44: неуспех зонда из-за НАШЕГО предела чтения при применённом
            плане не засчитывается плану семьи как провал на проводе; тот же
            неуспех без признака предела — засчитывается (контроль). */
         for (int limit = 1; limit >= 0; limit--) {
             const char *nm = limit ? "lim.recovery.net" : "ctl.recovery.net";
             uint16_t pt = limit ? 40519 : 40520;
-            s=d2k_sched_new(&recovery,sv[0],0x2d);
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            ack.code=D2K_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
-            d2k_sched_event(s,&ack); sync_out(s);
+            s=d2s_sched_new(&recovery,sv[0],0x2d);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            ack.code=D2S_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
+            d2s_sched_event(s,&ack); sync_out(s);
             tcp_calls=vol_calls=ver_calls=0; ver_fail_first=1; ver_local_limit=limit;
             ver_answer_port=pt;
-            h=ev_hello(6,pt,nm); d2k_sched_event(s,&h);
-            su=ev_suspect(6,pt); su.planned=D2K_LINK_PLANNED_YES;
-            su.code=D2K_SUSPECT_SILENT; su.client_shape=D2K_SHAPE_MODERN;
-            d2k_sched_event(s,&su);
+            h=ev_hello(6,pt,nm); d2s_sched_event(s,&h);
+            su=ev_suspect(6,pt); su.planned=D2S_LINK_PLANNED_YES;
+            su.code=D2S_SUSPECT_SILENT; su.client_shape=D2S_SHAPE_MODERN;
+            d2s_sched_event(s,&su);
             for(int i=0;i<800;i++) {
                 tick_once(s);
-                d2k_ev applied=ev_applied(6,pt); d2k_sched_event(s,&applied);
+                d2s_ev applied=ev_applied(6,pt); d2s_sched_event(s,&applied);
             }
             int failed_votes=0;
             for(size_t i=0;i<recovery.groups->n_observations;i++)
                 if(!strcmp(recovery.groups->observations[i].name,nm) &&
-                   (recovery.groups->observations[i].evidence&D2K_GROUP_PLAN_FAILED)) failed_votes++;
+                   (recovery.groups->observations[i].evidence&D2S_GROUP_PLAN_FAILED)) failed_votes++;
             if(limit) CHECK(ver_calls>=1 && failed_votes==0,
                   "verifier failure from our own reader limit is not recorded as a plan failure");
             else CHECK(ver_calls>=1 && failed_votes>=1,
                   "control: the same verifier failure from the wire is recorded as a plan failure");
-            d2k_sched_free(s); ver_fail_first=0; ver_local_limit=0;
+            d2s_sched_free(s); ver_fail_first=0; ver_local_limit=0;
         }
-        d2k_catalog_free(&recovery);
-        d2k_catalog qc = {0};
-        quic_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&recovery);
+        d2s_catalog qc = {0};
+        quic_answer = D2S_V_OPAQUE;
         confirm_transport(&qc, sv[0], "q-a.googlevideo.com", 40401, 17);
         confirm_transport(&qc, sv[0], "q-b.googlevideo.com", 40402, 17);
         confirm_transport(&qc, sv[0], "q-c.googlevideo.com", 40403, 17);
-        d2k_group_key qkey = {0}; qkey.transport=17; qkey.family=4; qkey.shape=3;
+        d2s_group_key qkey = {0}; qkey.transport=17; qkey.family=4; qkey.shape=3;
         strcpy(qkey.probe_path,"/");
-        CHECK(d2k_group_match(qc.groups,"q-new.googlevideo.com",&qkey),
+        CHECK(d2s_group_match(qc.groups,"q-new.googlevideo.com",&qkey),
               "three own QUIC outcomes teach their own family, not TCP's");
-        s=d2k_sched_new(&qc,sv[0],0x2d); spin(s,1);
+        s=d2s_sched_new(&qc,sv[0],0x2d); spin(s,1);
         tcp_block_until_stop=1; tcp_calls=quic_calls=0;
         for (uint16_t port=40411; port<40413; port++) {
-            d2k_ev busy=ev_hello(6,port,port==40411?"busy-a.example":"busy-b.example");
-            d2k_sched_event(s,&busy);
-            d2k_ev suspect=ev_suspect(6,port); d2k_sched_event(s,&suspect);
+            d2s_ev busy=ev_hello(6,port,port==40411?"busy-a.example":"busy-b.example");
+            d2s_sched_event(s,&busy);
+            d2s_ev suspect=ev_suspect(6,port); d2s_sched_event(s,&suspect);
         }
-        h=ev_hello(17,40414,"q-new.googlevideo.com"); d2k_sched_event(s,&h);
-        su=ev_suspect(17,40414); su.planned=D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s,&su);
-        h=ev_hello(17,40415,"q-failed.googlevideo.com"); d2k_sched_event(s,&h);
-        su=ev_suspect(17,40415); su.planned=D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s,&su);
-        CHECK(d2k_sched_active(s)==4,"uncovered QUIC suspicions are queued before area ACK");
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        ack.code=D2K_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
-        d2k_sched_event(s,&ack);
-        su.planned=D2K_LINK_PLANNED_YES; d2k_sched_event(s,&su);
+        h=ev_hello(17,40414,"q-new.googlevideo.com"); d2s_sched_event(s,&h);
+        su=ev_suspect(17,40414); su.planned=D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s,&su);
+        h=ev_hello(17,40415,"q-failed.googlevideo.com"); d2s_sched_event(s,&h);
+        su=ev_suspect(17,40415); su.planned=D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s,&su);
+        CHECK(d2s_sched_active(s)==4,"uncovered QUIC suspicions are queued before area ACK");
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        ack.code=D2S_CMD_SET_SUFFIX; ack.num=1u<<8; area_ack_id(&ack);
+        d2s_sched_event(s,&ack);
+        su.planned=D2S_LINK_PLANNED_YES; d2s_sched_event(s,&su);
         spin(s,2);
-        CHECK(d2k_sched_active(s)==3 && quic_calls==0,
+        CHECK(d2s_sched_active(s)==3 && quic_calls==0,
               "same-tick family ACK retires old unplanned queue but preserves later inherited-plan failure");
-        char queued_live[]="/tmp/d2k-family-queues-XXXXXX";
+        char queued_live[]="/tmp/d2s-family-queues-XXXXXX";
         int queued_fd=mkstemp(queued_live);
         CHECK(queued_fd>=0,"queue retirement fixture");
         if (queued_fd>=0) {
-            close(queued_fd); d2k_sched_write_live(s,queued_live,"catalog.json");
+            close(queued_fd); d2s_sched_write_live(s,queued_live,"catalog.json");
             FILE *live=fopen(queued_live,"r"); char body[32768]={0};
             if(live){(void)!fread(body,1,sizeof body-1,live);fclose(live);}
             CHECK(!strstr(body,"q-new.googlevideo.com") && strstr(body,"q-failed.googlevideo.com"),
@@ -2628,10 +2628,10 @@ int main(int argc, char **argv) {
         }
         CHECK(!binding_of(&qc,"q-new.googlevideo.com",17),"queue adoption creates no exact enrollment");
         tcp_block_until_stop=0;
-        d2k_sched_free(s); d2k_catalog_free(&qc); close(sv[0]); close(sv[1]);
+        d2s_sched_free(s); d2s_catalog_free(&qc); close(sv[0]); close(sv[1]);
         return fails ? 1 : 0;
     }
-    uint8_t question_prev_id[D2K_PLAN_ID_LEN] = {0};
+    uint8_t question_prev_id[D2S_PLAN_ID_LEN] = {0};
     if (rx_only) { goto rx_volume_tests; }
     if (question_only) { goto question_test; }
     if (retire_only) { goto retire_test; }
@@ -2643,37 +2643,37 @@ int main(int argc, char **argv) {
     if (client_tcp_only) { goto client_tcp_test; }
     if (shape_only) { goto shape_test; }
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         /* Each family starts its own direct classifier; an address/name
            mismatch is still discarded rather than attached to either task. */
-        d2k_ev h4 = ev_hello(6, 41001, "dual.example");
+        d2s_ev h4 = ev_hello(6, 41001, "dual.example");
         h4.family = 4;
-        d2k_sched_event(s, &h4);
-        d2k_ev h6 = h4;
+        d2s_sched_event(s, &h4);
+        d2s_ev h6 = h4;
         h6.family = 6;
         CHECK(inet_pton(AF_INET6, "2001:db8::1", h6.low_ip) == 1, "IPv6 low fixture");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", h6.high_ip) == 1, "IPv6 high fixture");
-        d2k_sched_event(s, &h6);
-        d2k_ev r4 = h4, r6 = h6;
-        r4.kind = r6.kind = D2K_EV_SUSPECT;
-        r4.code = r6.code = D2K_SUSPECT_RST;
+        d2s_sched_event(s, &h6);
+        d2s_ev r4 = h4, r6 = h6;
+        r4.kind = r6.kind = D2S_EV_SUSPECT;
+        r4.code = r6.code = D2S_SUSPECT_RST;
         r4.name[0] = r6.name[0] = 0;
-        d2k_sched_event(s, &r4);
-        d2k_sched_event(s, &r6);
-        CHECK(d2k_sched_active(s) == 2, "IPv4/IPv6 direct checks were incorrectly merged");
+        d2s_sched_event(s, &r4);
+        d2s_sched_event(s, &r6);
+        CHECK(d2s_sched_active(s) == 2, "IPv4/IPv6 direct checks were incorrectly merged");
         /* Same IPv6 /32 but distinct endpoints: must not recall dual.example. */
-        d2k_ev other = r6;
+        d2s_ev other = r6;
         other.low_ip[15] = 3;
-        d2k_sched_event(s, &other);
-        CHECK(d2k_sched_active(s) == 2, "IPv6 name recall compares all 128 bits");
+        d2s_sched_event(s, &other);
+        CHECK(d2s_sched_active(s) == 2, "IPv6 name recall compares all 128 bits");
         h6.high_port++;
-        d2k_sched_event(s, &h6);
+        d2s_sched_event(s, &h6);
         r6.high_port++;
-        d2k_sched_event(s, &r6);
-        CHECK(d2k_sched_active(s) == 2, "repeat RST created a duplicate IPv6 classifier");
-        d2k_sched_free(s);
-        d2k_catalog_free(&empty);
+        d2s_sched_event(s, &r6);
+        CHECK(d2s_sched_active(s) == 2, "repeat RST created a duplicate IPv6 classifier");
+        d2s_sched_free(s);
+        d2s_catalog_free(&empty);
     }
     if (voice_only) { goto voice_only_run; }
     if (admission_only) { goto admission_only_run; }
@@ -2695,30 +2695,30 @@ int main(int argc, char **argv) {
         for (int mode = 0; mode < 3; mode++) {
             const char *nm = mode == 0 ? "grease.ech.example" :
                              mode == 1 ? "ech-public.example" : "grease2.ech.example";
-            d2k_catalog empty = {0};
-            d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_catalog empty = {0};
+            d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
+            d2s_sched_set_say(s, collect_say, NULL);
             saidbuf[0] = '\0'; sent_len = 0;
             tcp_calls = 0; tcp_last_wire = 0; ech_resolve_calls = 0;
-            tcp_answer = D2K_V_CLEAR;
-            d2k_sched_ech_resolve_hook = stub_ech_resolve;
+            tcp_answer = D2S_V_CLEAR;
+            d2s_sched_ech_resolve_hook = stub_ech_resolve;
             CHECK(ech_offer_hello(nm, ech_bytes, sizeof ech_bytes, &ech_len) == 0 &&
-                  d2k_hello_ech_offer(ech_bytes, ech_len, NULL) == 1,
+                  d2s_hello_ech_offer(ech_bytes, ech_len, NULL) == 1,
                   "ECH: приветствие с ECH offer не собралось");
             if (mode == 2) {
                 /* Свидетель на том же адресе есть, но его public_name — не
                    внешнее имя этого приветствия: это не доказательство ECH. */
-                d2k_ev w = ev_hello(6, 41199, "origin.ech.example");
-                d2k_sched_event(s, &w);
+                d2s_ev w = ev_hello(6, 41199, "origin.ech.example");
+                d2s_sched_event(s, &w);
             }
-            d2k_ev h = ev_hello(6, (uint16_t)(41100 + mode), nm);
-            d2k_sched_event(s, &h);
-            d2k_ev sh; memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+            d2s_ev h = ev_hello(6, (uint16_t)(41100 + mode), nm);
+            d2s_sched_event(s, &h);
+            d2s_ev sh; memset(&sh, 0, sizeof sh);
+            sh.kind = D2S_EV_SHAPE; sh.transport = 6;
             memcpy(sh.shape, ech_bytes, ech_len); sh.shape_len = ech_len;
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, (uint16_t)(41100 + mode));
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, (uint16_t)(41100 + mode));
+            d2s_sched_event(s, &su);
             settle(s);
             if (mode != 1) {
                 CHECK(tcp_calls == 1,
@@ -2740,10 +2740,10 @@ int main(int argc, char **argv) {
                       "ECH replay: проходящий повтор завёл план");
                 /* Повтор подозрения в окне не заводит тот же опыт. */
                 saidbuf[0] = '\0';
-                d2k_ev h2 = ev_hello(6, 41150, nm);
-                d2k_sched_event(s, &h2);
-                d2k_ev su2 = ev_suspect(6, 41150);
-                d2k_sched_event(s, &su2);
+                d2s_ev h2 = ev_hello(6, 41150, nm);
+                d2s_sched_event(s, &h2);
+                d2s_ev su2 = ev_suspect(6, 41150);
+                d2s_sched_event(s, &su2);
                 settle(s);
                 CHECK(tcp_calls == 1 && !said("начинаю поиск"),
                       "ECH replay: «напрямую проходит» не отложило повтор");
@@ -2751,10 +2751,10 @@ int main(int argc, char **argv) {
             if (mode == 2)
                 CHECK(ech_resolve_calls >= 2, "ECH: свидетель на том же адресе не проверен по HTTPS RR");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&empty);
+            d2s_sched_free(s); d2s_catalog_free(&empty);
         }
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ПОЛЕ 04.10.2026, rutracker в Chrome: ECH-привязка внешнего имени
@@ -2765,27 +2765,27 @@ int main(int argc, char **argv) {
      * при каждом поиске), семья — только у самой привязки. */
     {
         const char *nm = "ech-public.example";
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         char pid[40];
-        own_box(&c, "box-ech-v6", pid, 2, 2, nm, 6, D2K_LINK_SHAPE_ECH_TCP, 6, 1790000000, 0);
+        own_box(&c, "box-ech-v6", pid, 2, 2, nm, 6, D2S_LINK_SHAPE_ECH_TCP, 6, 1790000000, 0);
         if (c.n_boxes && c.boxes[0].n_binds)
             snprintf(c.boxes[0].binds[0].ech_origin, sizeof c.boxes[0].binds[0].ech_origin,
                      "%s", "origin.ech.example");
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
-        d2k_sched_replay_ver_hook = stub_replay; replay_calls = 0;
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
+        d2s_sched_replay_ver_hook = stub_replay; replay_calls = 0;
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         uint8_t eb[2048]; size_t el = 0;
         CHECK(ech_offer_hello(nm, eb, sizeof eb, &el) == 0 &&
-              d2k_hello_ech_offer(eb, el, NULL) == 1, "ECH cross-family: fixture");
-        d2k_ev h = ev_hello(6, 41180, nm); d2k_sched_event(s, &h);   /* IPv4 */
-        d2k_ev sh; memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+              d2s_hello_ech_offer(eb, el, NULL) == 1, "ECH cross-family: fixture");
+        d2s_ev h = ev_hello(6, 41180, nm); d2s_sched_event(s, &h);   /* IPv4 */
+        d2s_ev sh; memset(&sh, 0, sizeof sh);
+        sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, eb, el); sh.shape_len = el;
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 41180); d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 41180); d2s_sched_event(s, &su);
         settle(s);
         CHECK(said("собственный witness: origin.ech.example"),
               "ECH cross-family: свидетель ECH-привязки IPv6 не подхвачен для IPv4");
@@ -2794,9 +2794,9 @@ int main(int argc, char **argv) {
         CHECK(!said("своего свидетеля нет") && !said("своего ECH-свидетеля нет"),
               "ECH cross-family: IPv4 объявлен «не проверено» при известном свидетеле");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ПОЛЕ 04.10.2026: свидетель находился случайно — кандидатами были
@@ -2811,58 +2811,58 @@ int main(int argc, char **argv) {
     /* (q) ПОЛЕ 04.10.2026, чистый каталог: свидетель rua.gr (HTTPS RR даёт
      * ту же конфигурацию cloudflare-ech.com) был в каталоге, но 32 места
      * кандидатов заняли имена, виденные открытым текстом на ДРУГИХ адресах,
-     * — до своих привязок очередь не дошла, и d2kc сказал «своего
+     * — до своих привязок очередь не дошла, и d2sc сказал «своего
      * ECH-свидетеля нет». Своё подтверждённое знание (любой транспорт)
      * идёт раньше случайных имён чужих адресов. */
     for (int mode = 0; mode < 3; mode++) {
         const char *nm = "ech-public.example";
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         char pid[40];
         if (mode == 2)
-            own_box(&c, "box-wit-quic", pid, 2, 2, "origin.ech.example", 17, D2K_LINK_SHAPE_QUIC, 4,
+            own_box(&c, "box-wit-quic", pid, 2, 2, "origin.ech.example", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1780000000, 0);
         if (mode == 0) {
-            own_box(&c, "box-wit-old", pid, 2, 2, "origin.ech.example", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-wit-old", pid, 2, 2, "origin.ech.example", 6, D2S_SHAPE_MODERN, 4,
                     1780000000, 0);
             for (int k = 0; k < 6; k++) {
                 char bn[32], nn[64];
                 snprintf(bn, sizeof bn, "box-new-%d", k);
                 snprintf(nn, sizeof nn, "newer%d.example", k);
-                own_box(&c, bn, pid, (unsigned)(3 + k), 2, nn, 6, D2K_SHAPE_MODERN, 4,
+                own_box(&c, bn, pid, (unsigned)(3 + k), 2, nn, 6, D2S_SHAPE_MODERN, 4,
                         1790000000 + k, 0);
             }
         }
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0; ech_resolve_calls = 0;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0; ech_resolve_calls = 0;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         if (mode == 1) {
-            d2k_ev w = ev_hello(6, 41190, "origin.ech.example");
+            d2s_ev w = ev_hello(6, 41190, "origin.ech.example");
             w.low_ip[3] = 9;                 /* другой адрес того же Cloudflare */
-            d2k_sched_event(s, &w);
-            d2k_ev o = ev_hello(6, 41191, "plain-other.example");
+            d2s_sched_event(s, &w);
+            d2s_ev o = ev_hello(6, 41191, "plain-other.example");
             o.low_ip[3] = 10;
-            d2k_sched_event(s, &o);
+            d2s_sched_event(s, &o);
         }
         if (mode == 2) {
             for (int k = 0; k < 40; k++) {
                 char other[64];
                 snprintf(other, sizeof other, "flood%d.example", k);
-                d2k_ev o = ev_hello(6, (uint16_t)(43000 + k), other);
+                d2s_ev o = ev_hello(6, (uint16_t)(43000 + k), other);
                 o.low_ip[2] = 7; o.low_ip[3] = (uint8_t)(10 + k);
-                d2k_sched_event(s, &o);
+                d2s_sched_event(s, &o);
             }
         }
-        d2k_sched_replay_ver_hook = stub_replay; replay_calls = 0;
+        d2s_sched_replay_ver_hook = stub_replay; replay_calls = 0;
         uint8_t eb[2048]; size_t el = 0;
         CHECK(ech_offer_hello(nm, eb, sizeof eb, &el) == 0, "ECH witness: fixture");
-        d2k_ev h = ev_hello(6, (uint16_t)(41192 + mode), nm); d2k_sched_event(s, &h);
-        d2k_ev sh; memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+        d2s_ev h = ev_hello(6, (uint16_t)(41192 + mode), nm); d2s_sched_event(s, &h);
+        d2s_ev sh; memset(&sh, 0, sizeof sh);
+        sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, eb, el); sh.shape_len = el;
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, (uint16_t)(41192 + mode)); d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, (uint16_t)(41192 + mode)); d2s_sched_event(s, &su);
         settle(s);
         CHECK(said("ECH-свидетель найден: origin.ech.example") && replay_calls == 0,
               mode == 0 ? "ECH witness (r): свидетель старше 4 последних привязок не найден"
@@ -2874,17 +2874,17 @@ int main(int argc, char **argv) {
             int before = ech_resolve_calls;
             skip_ahead(s, 11 * 60 * 1000);
             saidbuf[0] = '\0';
-            d2k_ev h2 = ev_hello(6, 41196, nm); d2k_sched_event(s, &h2);
-            d2k_ev sh2 = sh; d2k_sched_event(s, &sh2);
-            d2k_ev su2 = ev_suspect(6, 41196); d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(6, 41196, nm); d2s_sched_event(s, &h2);
+            d2s_ev sh2 = sh; d2s_sched_event(s, &sh2);
+            d2s_ev su2 = ev_suspect(6, 41196); d2s_sched_event(s, &su2);
             settle(s);
             CHECK(ech_resolve_calls - before <= 2,
                   "ECH witness (c): ответы HTTPS RR не запоминаются между поисками");
         }
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ПОЛЕ 04.10.2026, чистый каталог, Chrome → Cloudflare с настоящим ECH
@@ -2899,37 +2899,37 @@ int main(int argc, char **argv) {
      * повтором. */
     for (int mode = 0; mode < 2; mode++) {
         const char *nm = "ech-public.example";
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         char pid[40] = "";
         if (mode == 0)
-            own_box(&c, "box-ech-own", pid, 2, 3, "rua.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-ech-own", pid, 2, 3, "rua.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-        d2k_sched_tcp_fn saved_base = d2k_sched_tcp_base_hook;
-        d2k_sched_tcp_base_hook = mode == 0 ? stub_base : NULL;
+        d2s_sched_tcp_fn saved_base = d2s_sched_tcp_base_hook;
+        d2s_sched_tcp_base_hook = mode == 0 ? stub_base : NULL;
         base_blocked_answer = 1;
-        d2k_sched_replay_ver_hook = stub_replay;
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
+        d2s_sched_replay_ver_hook = stub_replay;
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
         replay_answer_ok = 1; replay_calls = 0; replay_last_len = 0;
-        tcp_answer = mode == 0 ? D2K_V_OPAQUE : D2K_V_PREFIX;
+        tcp_answer = mode == 0 ? D2S_V_OPAQUE : D2S_V_PREFIX;
         tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0; ver_app_after_tcp_search = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0; ver_app_after_tcp_search = 0;
         base_calls = tcp_calls = ver_calls = vol_calls = 0; tcp_last_wire = 0;
         uint16_t port = (uint16_t)(41230 + mode);
         ver_answer_port = port;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         uint8_t eb[2048]; size_t el = 0;
         CHECK(ech_offer_hello(nm, eb, sizeof eb, &el) == 0, "ECH replay: fixture");
-        d2k_ev h = ev_hello(6, port, nm); d2k_sched_event(s, &h);
-        d2k_ev sh; memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+        d2s_ev h = ev_hello(6, port, nm); d2s_sched_event(s, &h);
+        d2s_ev sh; memset(&sh, 0, sizeof sh);
+        sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, eb, el); sh.shape_len = el;
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
         for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 200);
-            d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
         }
         spin(s, 40);
         if (mode == 0) {
@@ -2943,20 +2943,20 @@ int main(int argc, char **argv) {
         CHECK(replay_calls >= 1 && replay_last_len == el,
               "ECH replay: кандидат проверен не повтором приветствия клиента");
         CHECK(ver_calls == 0, "ECH replay: кандидат проверен обычным зондом внешнего имени");
-        const d2k_cat_binding *bd = binding_of(&c, nm, 6);
-        CHECK(bd && bd->shape == D2K_LINK_SHAPE_ECH_TCP && bd->level >= 3 && bd->enabled &&
-              bd->verified_by == D2K_VERBY_REPLAY_HANDSHAKE && !bd->ech_origin[0] &&
-              bd->budget == D2K_CAT_BUDGET_UNCHECKED && bd->family == 4,
+        const d2s_cat_binding *bd = binding_of(&c, nm, 6);
+        CHECK(bd && bd->shape == D2S_LINK_SHAPE_ECH_TCP && bd->level >= 3 && bd->enabled &&
+              bd->verified_by == D2S_VERBY_REPLAY_HANDSHAKE && !bd->ech_origin[0] &&
+              bd->budget == D2S_CAT_BUDGET_UNCHECKED && bd->family == 4,
               "ECH replay: привязка внешнего имени не ECH-формы с уровнем рукопожатия");
         if (mode == 0)
             CHECK(bd && !strcmp(bd->plan_id, pid), "ECH replay (o): подтверждён не свой план коробки");
         CHECK(said("уровне рукопожатия") && said("прикладной уровень не измерен"),
               "ECH replay: граница доказательства не названа");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_tcp_base_hook = saved_base;
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_tcp_base_hook = saved_base;
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ECH-ВХОД ДЛИННЕЕ 2048 БАЙТ (провод v20). Датапат снимает TCP-приветствие
@@ -2966,22 +2966,22 @@ int main(int argc, char **argv) {
      * ячейку, и чужое имя теряло снятые байты клиента — замер шёл не ими. */
     {
         const char *nm = "ech-public.example";
-        d2k_catalog c = {0};
-        d2k_sched_tcp_fn saved_base = d2k_sched_tcp_base_hook;
-        d2k_sched_tcp_base_hook = NULL;
+        d2s_catalog c = {0};
+        d2s_sched_tcp_fn saved_base = d2s_sched_tcp_base_hook;
+        d2s_sched_tcp_base_hook = NULL;
         base_blocked_answer = 1;
-        d2k_sched_replay_ver_hook = stub_replay;
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
+        d2s_sched_replay_ver_hook = stub_replay;
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
         replay_answer_ok = 1; replay_calls = 0; replay_last_len = 0;
-        tcp_answer = D2K_V_PREFIX;
+        tcp_answer = D2S_V_PREFIX;
         tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0; ver_app_after_tcp_search = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0; ver_app_after_tcp_search = 0;
         base_calls = tcp_calls = ver_calls = vol_calls = 0; tcp_last_wire = 0;
         uint16_t port = 41240;
         ver_answer_port = port;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         static uint8_t small_a[2048], big_a[4096], eb[2048];
         size_t sl = 0, bl = 0, el = 0;
         /* Длинный вход — около 2800 байт при любом размере профиля: полезная
@@ -2992,26 +2992,26 @@ int main(int argc, char **argv) {
                                        sizeof big_a, &bl) == 0 &&
                  ech_offer_hello(nm, eb, sizeof eb, &el) == 0;
         CHECK(fx && bl > 2048 && bl <= sizeof big_a, "ECH long input: fixture");
-        d2k_ev sh; memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+        d2s_ev sh; memset(&sh, 0, sizeof sh);
+        sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, small_a, sl); sh.shape_len = sl;
-        d2k_sched_event(s, &sh);                                  /* ячейка 0 */
+        d2s_sched_event(s, &sh);                                  /* ячейка 0 */
         memcpy(sh.shape, eb, el); sh.shape_len = el;
-        d2k_sched_event(s, &sh);                                  /* ячейка 1 */
+        d2s_sched_event(s, &sh);                                  /* ячейка 1 */
         /* Общую TCP-ячейку снимка занимает третье имя: байты клиента у
            ech-public.example остаются только в ячейке ECH-входа. */
         uint8_t other[2048]; size_t ol = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "other.example", other,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "other.example", other,
                                      sizeof other, &ol) == 0, "ECH long input: third name");
         memcpy(sh.shape, other, ol); sh.shape_len = ol;
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         memcpy(sh.shape, big_a, bl); sh.shape_len = bl;
-        d2k_sched_event(s, &sh);                                  /* снова 0 */
-        d2k_ev h = ev_hello(6, port, nm); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);                                  /* снова 0 */
+        d2s_ev h = ev_hello(6, port, nm); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
         for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 200);
-            d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
         }
         spin(s, 40);
         CHECK(tcp_calls == 1 && tcp_last_wire == el,
@@ -3019,10 +3019,10 @@ int main(int argc, char **argv) {
         CHECK(replay_calls >= 1 && replay_last_len == el,
               "ECH long input: кандидат проверен не повтором приветствия клиента");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_tcp_base_hook = saved_base;
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_tcp_base_hook = saved_base;
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ПОЛЕ 03.10.2026, Discord: QUIC-поиск discord.com кончился «кандидатов
@@ -3036,44 +3036,44 @@ int main(int argc, char **argv) {
      * транспорт. */
     {
         const char *nm = "discord-fallback.test";
-        d2k_catalog cd = {0};
-        d2k_sched *s = d2k_sched_new(&cd, sv[0], 0x2d);
+        d2s_catalog cd = {0};
+        d2s_sched *s = d2s_sched_new(&cd, sv[0], 0x2d);
         CHECK(s != NULL, "QUIC→TCP: планировщик не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            arm_kind = D2K_QA_FLAKY;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            arm_kind = D2S_QA_FLAKY;
             quic_calls = 0;
-            d2k_ev qh = ev_hello(17, 41070, nm); d2k_sched_event(s, &qh);
-            d2k_ev qs = ev_suspect(17, 41070); d2k_sched_event(s, &qs);
+            d2s_ev qh = ev_hello(17, 41070, nm); d2s_sched_event(s, &qh);
+            d2s_ev qs = ev_suspect(17, 41070); d2s_sched_event(s, &qs);
             settle(s);
             CHECK(quic_calls == 1 && said("кандидатов нет"),
                   "QUIC→TCP: пустой QUIC-поиск не воспроизведён");
             uint8_t eb[2048]; size_t el = 0;
             CHECK(ech_offer_hello(nm, eb, sizeof eb, &el) == 0 &&
-                  d2k_hello_ech_offer(eb, el, NULL) == 1, "QUIC→TCP: fixture GREASE");
-            d2k_sched_ech_resolve_hook = stub_ech_resolve;
-            tcp_calls = 0; tcp_answer = D2K_V_CLEAR;
+                  d2s_hello_ech_offer(eb, el, NULL) == 1, "QUIC→TCP: fixture GREASE");
+            d2s_sched_ech_resolve_hook = stub_ech_resolve;
+            tcp_calls = 0; tcp_answer = D2S_V_CLEAR;
             tcp_wait_until_stop = 1; tcp_release_waiters = 0;
             saidbuf[0] = '\0';
-            d2k_ev th = ev_hello(6, 41071, nm); d2k_sched_event(s, &th);
-            d2k_ev sh; memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+            d2s_ev th = ev_hello(6, 41071, nm); d2s_sched_event(s, &th);
+            d2s_ev sh; memset(&sh, 0, sizeof sh);
+            sh.kind = D2S_EV_SHAPE; sh.transport = 6;
             memcpy(sh.shape, eb, el); sh.shape_len = el;
-            d2k_sched_event(s, &sh);
-            d2k_ev ts = ev_suspect(6, 41071); ts.code = D2K_SUSPECT_REPEAT;
-            d2k_sched_event(s, &ts);
+            d2s_sched_event(s, &sh);
+            d2s_ev ts = ev_suspect(6, 41071); ts.code = D2S_SUSPECT_REPEAT;
+            d2s_sched_event(s, &ts);
             for (int i = 0; i < 200 && tcp_calls == 0; i++) spin(s, 5);
             CHECK(said("(TCP) начинаю поиск") && said("GREASE") && tcp_calls == 1,
                   "QUIC→TCP: отдых QUIC отложил TCP-поиск того же имени");
             /* Пока TCP-поиск идёт: новый TCP-поток того же имени и повтор
                QUIC приложением (поле: каждые ~30 с). */
-            d2k_ev th2 = ev_hello(6, 41072, nm); d2k_sched_event(s, &th2);
-            d2k_ev ts2 = ev_suspect(6, 41072); ts2.code = D2K_SUSPECT_REPEAT;
-            d2k_sched_event(s, &ts2);
-            d2k_ev qh2 = ev_hello(17, 41073, nm); d2k_sched_event(s, &qh2);
-            d2k_ev qs2 = ev_suspect(17, 41073); d2k_sched_event(s, &qs2);
+            d2s_ev th2 = ev_hello(6, 41072, nm); d2s_sched_event(s, &th2);
+            d2s_ev ts2 = ev_suspect(6, 41072); ts2.code = D2S_SUSPECT_REPEAT;
+            d2s_sched_event(s, &ts2);
+            d2s_ev qh2 = ev_hello(17, 41073, nm); d2s_sched_event(s, &qh2);
+            d2s_ev qs2 = ev_suspect(17, 41073); d2s_sched_event(s, &qs2);
             spin(s, 20);
             CHECK(!said("(TCP) замер отложен"),
                   "QUIC→TCP: TCP-подозрение отложено отдыхом QUIC");
@@ -3085,34 +3085,34 @@ int main(int argc, char **argv) {
             CHECK(tcp_calls == 1 && said("напрямую проходит"),
                   "QUIC→TCP: TCP-поиск после GREASE не дошёл до своего итога");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cd);
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&cd);
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE;
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        quic_answer = D2K_V_OPAQUE;
-        arm_kind = D2K_QA_BLOB;
+        quic_answer = D2S_V_OPAQUE;
+        arm_kind = D2S_QA_BLOB;
     }
     if (ech_only) { goto voice_only_done; }
 
     /* A completed domain-search provider is not a bare classifier. Its
      * failure must not launch another property questionnaire or fallback. */
     for (int mode = 0; mode < 5; mode++) {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         tcp_owns_search = 1;
         mark_calls = 0;
-        tcp_answer = mode == 4 ? D2K_V_FLAKY :
-            mode == 0 || mode == 3 ? D2K_V_OPAQUE : mode == 1 ? D2K_V_PREFIX : D2K_V_WHOLE;
+        tcp_answer = mode == 4 ? D2S_V_FLAKY :
+            mode == 0 || mode == 3 ? D2S_V_OPAQUE : mode == 1 ? D2S_V_PREFIX : D2S_V_WHOLE;
         tcp_found_arm = mode == 3;
-        ver_answer = D2K_VER_NOT_MEASURED; ver_calls = 0; tcp_calls = 0;
+        ver_answer = D2S_VER_NOT_MEASURED; ver_calls = 0; tcp_calls = 0;
         saidbuf[0] = '\0'; sent_len = 0;
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, (uint16_t)(39990 + mode), "search-owned.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, (uint16_t)(39990 + mode));
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, (uint16_t)(39990 + mode), "search-owned.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, (uint16_t)(39990 + mode));
+        d2s_sched_event(s, &su);
         settle(s); spin(s, 100);
         CHECK(tcp_calls == 1, "domain search repeated");
         CHECK(!said("спрашиваю коробку о свойствах"), "second property search after original");
@@ -3136,9 +3136,9 @@ int main(int argc, char **argv) {
             CHECK(mark_calls > 0 && last_mark == 0x2d,
                   "сокет verifier-зонда не получил метку контроллера");
         }
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
     }
-    tcp_owns_search = tcp_found_arm = 0; tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+    tcp_owns_search = tcp_found_arm = 0; tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
 
     /* СТАРЫЙ КЛИЕНТ НЕ ПОЛУЧАЕТ ПОКРЫТИЯ МОЛЧА.
      *
@@ -3149,48 +3149,48 @@ int main(int argc, char **argv) {
      * Ложного в каталоге при этом нет, но молчание читается как покрытие,
      * которого нет. Проверяем, что расхождение названо вслух. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_calls = 0; ver_answer_port = 40507;
-        d2k_ev h = ev_hello(6, 40507, "staryi.klient.example");
-        d2k_sched_event(s, &h);
+        d2s_ev h = ev_hello(6, 40507, "staryi.klient.example");
+        d2s_sched_event(s, &h);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "staryi.klient.example",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "staryi.klient.example",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "приветствие старой формы не собралось — проверять нечем");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
-        d2k_ev su = ev_suspect(6, 40507);
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40507);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls >= 1, "планировщик не испытал кандидата сам");
         /* Датапат говорит, что план применился к пакетам ЭТОГО потока —
            без этого подтверждения не бывает, и проверять было бы нечего. */
-        d2k_ev ap = ev_applied(6, 40507);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40507);
+        d2s_sched_event(s, &ap);
         spin(s, 60);
         CHECK(said("ПОДТВЕРЖДЕНО"), "подтверждения не случилось — оговорку проверять не на чем");
         /* ПРОТОКОЛ ПОДТВЕРЖДЕНИЯ ВЫБИРАЕТСЯ ПО ФОРМЕ КЛИЕНТА. Зонд подменён,
            поэтому проверяем не сам обмен, а то, ЧТО ему сказали: с чужой
            формой он пошёл бы современным рукопожатием к старому клиенту. */
-        CHECK(ver_last_shape == (uint8_t)D2K_SHAPE_LEGACY,
+        CHECK(ver_last_shape == (uint8_t)D2S_SHAPE_LEGACY,
               "зонду не сказали, что клиент старой формы — он подтвердит не тем протоколом");
         {
-            const d2k_cat_binding *bd = binding_of(&empty, "staryi.klient.example", 6);
-            CHECK(bd != NULL && bd->shape == (uint8_t)D2K_SHAPE_LEGACY,
+            const d2s_cat_binding *bd = binding_of(&empty, "staryi.klient.example", 6);
+            CHECK(bd != NULL && bd->shape == (uint8_t)D2S_SHAPE_LEGACY,
                   "привязка записана НЕ под форму клиента — по ключу формы он её не получит");
         }
         CHECK(said("зонд СТАРОЙ формы"), "подтверждение старой формой не названо в журнале");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
-        ver_answer = D2K_VER_APPLICATION; tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&empty);
+        ver_answer = D2S_VER_APPLICATION; tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ЦИКЛ НЕ ЖДЁТ СЕТЕВОГО ОРАКУЛА.
@@ -3205,30 +3205,30 @@ int main(int argc, char **argv) {
      * Проверяем ДВА факта: просьба дошла до измерителя и ожидание уложилось в
      * малую долю того, сколько он был готов ждать. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         tcp_block_until_stop = 1; tcp_saw_stop = 0; tcp_calls = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 39977, "slow-oracle.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39977);
-        d2k_sched_event(s, &su);
+        tcp_answer = D2S_V_INCONCLUSIVE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 39977, "slow-oracle.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39977);
+        d2s_sched_event(s, &su);
         /* Крутим ровно столько, чтобы замер успел начаться, и не столько,
            чтобы он успел кончиться сам. */
         spin(s, 60);
         CHECK(tcp_calls == 1, "замер не начался — проверять было бы нечего");
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        d2k_sched_free(s);
+        d2s_sched_free(s);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
         CHECK(tcp_saw_stop, "измеритель не получил просьбы бросить");
         CHECK(ms < STUB_BLOCK_MS / 5,
               "остановка ждала сетевого оракула");
-        d2k_catalog_free(&empty);
+        d2s_catalog_free(&empty);
         tcp_block_until_stop = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Time spent in the bounded admission queue must not consume the active
@@ -3236,20 +3236,20 @@ int main(int argc, char **argv) {
        slots; the third target waits nine minutes, then receives its own full
        ten-minute active budget after those workers time out. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_wait_until_stop = 1;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         CHECK(s != NULL, "планировщик проверки очереди не завёлся");
         if (s) {
             for (uint16_t port = 40601; port <= 40603; port++) {
                 char name[64];
                 snprintf(name, sizeof name, "queue-life-%u.example", port);
-                d2k_ev h = ev_hello(6, port, name);
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, name);
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port);
+                d2s_sched_event(s, &su);
             }
             spin(s, 60);
             CHECK(tcp_calls == 2, "очередь не ограничила одновременные замеры двумя");
@@ -3261,78 +3261,78 @@ int main(int argc, char **argv) {
             skip_ahead(s, 60 * 1000 + 1);
             CHECK(tcp_stop_count == 0,
                   "время ожидания в очереди сократило активный лимит поиска");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_release_waiters = 0;
         tcp_wait_until_stop = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* A direct classifier timeout with zero candidate probes is still an
        incomplete search and must receive the bounded, target-local cooldown. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_wait_until_stop = 1;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         CHECK(s != NULL, "планировщик cooldown незавершённого замера не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 40620, "incomplete-cooldown.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40620);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40620, "incomplete-cooldown.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40620);
+            d2s_sched_event(s, &su);
             spin(s, 60);
             CHECK(tcp_calls == 1, "незавершённый прямой замер не стартовал");
             skip_ahead(s, 10 * 60 * 1000 + 1);
             CHECK(tcp_stop_count == 1, "десятиминутный таймаут не остановил замер");
             skip_ahead(s, 2 * 60 * 1000 + 1);
-            d2k_ev h2 = ev_hello(6, 40621, "incomplete-cooldown.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 40621);
-            d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(6, 40621, "incomplete-cooldown.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 40621);
+            d2s_sched_event(s, &su2);
             spin(s, 60);
             CHECK(tcp_calls == 1,
                   "замер с нулём кандидатов не получил cooldown и сразу повторился");
             skip_ahead(s, 8 * 60 * 1000 + 1);
-            d2k_ev h3 = ev_hello(6, 40622, "incomplete-cooldown.example");
-            d2k_sched_event(s, &h3);
-            d2k_ev su3 = ev_suspect(6, 40622);
-            d2k_sched_event(s, &su3);
+            d2s_ev h3 = ev_hello(6, 40622, "incomplete-cooldown.example");
+            d2s_sched_event(s, &h3);
+            d2s_ev su3 = ev_suspect(6, 40622);
+            d2s_sched_event(s, &su3);
             spin(s, 60);
             CHECK(tcp_calls == 2,
                   "ограниченный cooldown незавершённого поиска не истёк через 10 минут");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* SHAPE arrives while the oracle holds its trigger. Main-thread writes
      * must not alter the bytes of an already-running measurement. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         snapshot_enabled = 1; snapshot_entered = snapshot_release = snapshot_ok = 0;
-        tcp_answer = D2K_V_CLEAR;
-        d2k_ev h = ev_hello(6, 39989, "snapshot.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39989);
-        d2k_sched_event(s, &su);
+        tcp_answer = D2S_V_CLEAR;
+        d2s_ev h = ev_hello(6, 39989, "snapshot.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39989);
+        d2s_sched_event(s, &su);
         pthread_mutex_lock(&snapshot_mu);
         while (!snapshot_entered) { pthread_cond_wait(&snapshot_cv, &snapshot_mu); }
         pthread_mutex_unlock(&snapshot_mu);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "snapshot.example",
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "snapshot.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "snapshot fixture failed");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         pthread_mutex_lock(&snapshot_mu);
         snapshot_release = 1; pthread_cond_broadcast(&snapshot_cv);
         pthread_mutex_unlock(&snapshot_mu);
         settle(s);
         CHECK(snapshot_ok, "SHAPE overwrote a running measurement's trigger");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
-        snapshot_enabled = 0; tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&empty);
+        snapshot_enabled = 0; tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Задача 48: ход классификатора виден, пока он работает. Полный прогон
@@ -3340,17 +3340,17 @@ int main(int argc, char **argv) {
      * 4 мин 20 с), и «probes: 0» без вопроса не отличить от зависания. Поле
      * source («откуда план») у задачи без плана — ложь: только при проверке. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         /* Задача 49: QUIC-прогон отдаёт ход тем же приёмником. */
-        CHECK(d2k_quic_progress_hook != NULL, "QUIC progress is not wired into the scheduler");
+        CHECK(d2s_quic_progress_hook != NULL, "QUIC progress is not wired into the scheduler");
         snapshot_enabled = 1; snapshot_entered = snapshot_release = snapshot_ok = 0;
         tcp_progress_notes = 1;
-        tcp_answer = D2K_V_OPAQUE;
-        d2k_ev h = ev_hello(6, 39977, "progress.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39977);
-        d2k_sched_event(s, &su);
+        tcp_answer = D2S_V_OPAQUE;
+        d2s_ev h = ev_hello(6, 39977, "progress.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39977);
+        d2s_sched_event(s, &su);
         pthread_mutex_lock(&snapshot_mu);
         while (!snapshot_entered) { pthread_cond_wait(&snapshot_cv, &snapshot_mu); }
         pthread_mutex_unlock(&snapshot_mu);
@@ -3377,20 +3377,20 @@ int main(int argc, char **argv) {
         int p = live_task_probes(s, "progress.example");
         CHECK(p >= 1006 && p < 2006,
               "live probes dropped after the classifier returned or counted it twice");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
-        snapshot_enabled = 0; tcp_progress_notes = 0; tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&empty);
+        snapshot_enabled = 0; tcp_progress_notes = 0; tcp_answer = D2S_V_OPAQUE;
     }
     /* Задача 49: QUIC-поиск отдаёт ход тем же путём (через настоящий
-       рабочий поток и d2k_quic_progress_hook). */
+       рабочий поток и d2s_quic_progress_hook). */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         snapshot_enabled = 1; snapshot_entered = snapshot_release = snapshot_ok = 0;
         quic_progress_notes = 1;
-        d2k_ev h = ev_hello(17, 39975, "quic-progress.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 39975);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 39975, "quic-progress.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 39975);
+        d2s_sched_event(s, &su);
         pthread_mutex_lock(&snapshot_mu);
         while (!snapshot_entered) { pthread_cond_wait(&snapshot_cv, &snapshot_mu); }
         pthread_mutex_unlock(&snapshot_mu);
@@ -3402,35 +3402,35 @@ int main(int argc, char **argv) {
         snapshot_release = 1; pthread_cond_broadcast(&snapshot_cv);
         pthread_mutex_unlock(&snapshot_mu);
         settle(s);
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         snapshot_enabled = 0; quic_progress_notes = 0;
     }
 
     /* Complete cached input is used; an observable SNI prefix is not.
        Neither case needs a second visit to obtain the cached observation. */
     for (int partial = 0; partial < 2; partial++) {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "complete.example",
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "complete.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "complete fixture failed");
         size_t complete_len = sh.shape_len;
         if (partial) { sh.shape_len--; }
         size_t off, len;
-        CHECK(d2k_hello_sni(sh.shape, sh.shape_len, &off, &len) == 0,
+        CHECK(d2s_hello_sni(sh.shape, sh.shape_len, &off, &len) == 0,
               "fragment fixture must still expose SNI");
-        d2k_sched_event(s, &sh);
-        tcp_answer = D2K_V_CLEAR; tcp_last_wire = 0;
-        d2k_ev h = ev_hello(6, 39988, "complete.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39988);
-        d2k_sched_event(s, &su); settle(s);
+        d2s_sched_event(s, &sh);
+        tcp_answer = D2S_V_CLEAR; tcp_last_wire = 0;
+        d2s_ev h = ev_hello(6, 39988, "complete.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39988);
+        d2s_sched_event(s, &su); settle(s);
         CHECK(partial ? tcp_last_wire > complete_len : tcp_last_wire == complete_len,
               "complete cache ignored or fragment used as a complete input");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
     }
 
-    tcp_answer = D2K_V_OPAQUE;
+    tcp_answer = D2S_V_OPAQUE;
 
     /* ЗАДАЧА 54. Поле 04.10, cdn.cookielaw.org: адрес 104.18.86.42 после
        рукопожатия не принимает никаких данных, замер это доказывает (вердикт
@@ -3441,24 +3441,24 @@ int main(int argc, char **argv) {
        подтверждён без триггеров, подтверждение — молчание вызывал триггер,
        вердикт снят, обычный путь. */
     {
-        d2k_catalog c_addr = {0};
-        d2k_sched *s = d2k_sched_new(&c_addr, sv[0], 0x2d);
+        d2s_catalog c_addr = {0};
+        d2s_sched *s = d2s_sched_new(&c_addr, sv[0], 0x2d);
         CHECK(s != NULL, "task54: планировщик не завёлся");
         if (s) {
             const char *name = "dead.address.example";
-            d2k_sched_tcp_ack_hook = stub_ack;
+            d2s_sched_tcp_ack_hook = stub_ack;
             tcp_calls = quic_calls = 0;
             ack_calls = 0; ack_answer = 0;
-            tcp_answer = D2K_V_ADDRESS;
+            tcp_answer = D2S_V_ADDRESS;
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             /* A — 127.0.0.1 (мёртвый), B — 127.0.0.2 (DNS чередует). */
             #define T54_EV(port, last, code_) do { \
-                d2k_ev h_ = ev_hello(6, (port), name); h_.low_ip[3] = (last); \
-                d2k_sched_event(s, &h_); \
-                d2k_ev r_ = ev_suspect(6, (port)); r_.low_ip[3] = (last); \
+                d2s_ev h_ = ev_hello(6, (port), name); h_.low_ip[3] = (last); \
+                d2s_sched_event(s, &h_); \
+                d2s_ev r_ = ev_suspect(6, (port)); r_.low_ip[3] = (last); \
                 if (code_) r_.code = (code_); \
-                t54_rc = d2k_sched_event(s, &r_); settle(s); } while (0)
+                t54_rc = d2s_sched_event(s, &r_); settle(s); } while (0)
             int t54_rc;
             T54_EV(41301, 1, 0);
             CHECK(t54_rc == 1 && tcp_calls == 1 && strcmp(tcp_last_ip, "127.0.0.1") == 0,
@@ -3474,7 +3474,7 @@ int main(int argc, char **argv) {
 
             /* Другой адрес имени мерится сразу и исходом (inconclusive,
                отсрочка имени вида 2) лестницу A не сбрасывает (I1). */
-            tcp_answer = D2K_V_INCONCLUSIVE;
+            tcp_answer = D2S_V_INCONCLUSIVE;
             skip_ahead(s, 3 * 60 * 1000); /* задача имени отдыхает 2 мин после исхода */
             T54_EV(41302, 2, 0);
             CHECK(t54_rc == 1 && tcp_calls == 2 && strcmp(tcp_last_ip, "127.0.0.2") == 0,
@@ -3484,19 +3484,19 @@ int main(int argc, char **argv) {
                триггера; тишина — вердикт подтверждён, ступень 30 мин. */
             skip_ahead(s, 11 * 60 * 1000);
             saidbuf[0] = '\0';
-            T54_EV(41303, 1, D2K_SUSPECT_RST);
+            T54_EV(41303, 1, D2S_SUSPECT_RST);
             CHECK(t54_rc == 1 && ack_calls == 1 && strcmp(ack_last_ip, "127.0.0.1") == 0,
                   "task54: перепроверка мёртвого адреса не начала с нейтрального байта");
             CHECK(tcp_calls == 2, "task54: перепроверка мёртвого адреса слала триггер");
             CHECK(said("через 30 мин"), "task54: вторая ступень не 30 мин");
             /* B в это время — снова неубедительно (DNS чередует). */
-            tcp_answer = D2K_V_INCONCLUSIVE;
+            tcp_answer = D2S_V_INCONCLUSIVE;
             skip_ahead(s, 11 * 60 * 1000);
             T54_EV(41304, 2, 0);
             CHECK(tcp_calls == 3, "task54: другой адрес не измерен после своей отсрочки");
             /* A ещё в 30-минутной отсрочке, любой симптом. */
             skip_ahead(s, 3 * 60 * 1000);
-            T54_EV(41305, 1, D2K_SUSPECT_RST);
+            T54_EV(41305, 1, D2S_SUSPECT_RST);
             CHECK(t54_rc == 0 && ack_calls == 1 && tcp_calls == 3,
                   "task54: исход другого адреса снял отсрочку мёртвого");
             CHECK(said("замер отложен после блока адреса 127.0.0.1"),
@@ -3521,7 +3521,7 @@ int main(int argc, char **argv) {
             skip_ahead(s, 61 * 60 * 1000);
             saidbuf[0] = '\0';
             ack_answer = 1;
-            tcp_answer = D2K_V_INCONCLUSIVE;
+            tcp_answer = D2S_V_INCONCLUSIVE;
             T54_EV(41309, 1, 0);
             CHECK(ack_calls == 4 && tcp_calls == 4 && strcmp(tcp_last_ip, "127.0.0.1") == 0,
                   "task54: подтверждённый байт не открыл обычный путь");
@@ -3533,7 +3533,7 @@ int main(int argc, char **argv) {
 
             /* Байт подтверждён, а дерево снова сказало address: адрес глохнет
                только после триггера — это штраф, а не блок адреса. */
-            tcp_answer = D2K_V_ADDRESS; ack_answer = 0;
+            tcp_answer = D2S_V_ADDRESS; ack_answer = 0;
             skip_ahead(s, 11 * 60 * 1000);
             T54_EV(41311, 1, 0);              /* address, ступень 1 */
             skip_ahead(s, 11 * 60 * 1000);
@@ -3543,65 +3543,65 @@ int main(int argc, char **argv) {
                   "task54: штраф после триггера выдан за блок адреса");
             CHECK(!said("не принимает данных"), "task54: штраф записан как блок адреса");
             #undef T54_EV
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c_addr);
+        d2s_catalog_free(&c_addr);
 
         /* IPv6: тот же ключ с семейством. */
-        d2k_catalog c6 = {0};
-        s = d2k_sched_new(&c6, sv[0], 0x2d);
+        d2s_catalog c6 = {0};
+        s = d2s_sched_new(&c6, sv[0], 0x2d);
         if (s) {
             tcp_calls = 0; ack_calls = 0; ack_answer = 0;
-            tcp_answer = D2K_V_ADDRESS;
+            tcp_answer = D2S_V_ADDRESS;
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            d2k_ev h = ev_hello(6, 41320, "dead6.example");
+            d2s_sched_set_say(s, collect_say, NULL);
+            d2s_ev h = ev_hello(6, 41320, "dead6.example");
             h.family = 6; memset(h.low_ip, 0, 16); h.low_ip[15] = 1;
             memset(h.high_ip, 0, 16); h.high_ip[0] = 0xfd; h.high_ip[15] = 2;
-            d2k_sched_event(s, &h);
-            d2k_ev r = ev_suspect(6, 41320);
+            d2s_sched_event(s, &h);
+            d2s_ev r = ev_suspect(6, 41320);
             r.family = 6; memcpy(r.low_ip, h.low_ip, 16); memcpy(r.high_ip, h.high_ip, 16);
-            d2k_sched_event(s, &r);
+            d2s_sched_event(s, &r);
             settle(s);
             CHECK(tcp_calls == 1 && said("адрес ::1 не принимает данных"),
                   "task54/v6: блок адреса IPv6 не установлен");
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h2 = h; h2.high_port = 41321; d2k_sched_event(s, &h2);
-            d2k_ev r2 = r; r2.high_port = 41321;
-            CHECK(d2k_sched_event(s, &r2) == 0 && tcp_calls == 1,
+            d2s_ev h2 = h; h2.high_port = 41321; d2s_sched_event(s, &h2);
+            d2s_ev r2 = r; r2.high_port = 41321;
+            CHECK(d2s_sched_event(s, &r2) == 0 && tcp_calls == 1,
                   "task54/v6: отсрочка адреса IPv6 не держится");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c6);
+        d2s_catalog_free(&c6);
 
         /* Найденные раньше привязки имени вердикт address не трогает. */
-        d2k_catalog cb = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog cb = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         confirm_once(&cb, sv[0], "bound.dead.example", 41330);
         size_t before = bindings_of(&cb, "bound.dead.example", 6);
         CHECK(before >= 1, "task54: фикстура привязки не подтверждена");
-        s = d2k_sched_new(&cb, sv[0], 0x2d);
+        s = d2s_sched_new(&cb, sv[0], 0x2d);
         if (s) {
             tcp_calls = 0;
-            tcp_answer = D2K_V_ADDRESS;
+            tcp_answer = D2S_V_ADDRESS;
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            d2k_ev h = ev_hello(6, 41331, "bound.dead.example");
+            d2s_sched_set_say(s, collect_say, NULL);
+            d2s_ev h = ev_hello(6, 41331, "bound.dead.example");
             h.low_ip[3] = 9; /* другой адрес того же имени */
-            d2k_sched_event(s, &h);
-            d2k_ev r = ev_suspect(6, 41331); r.low_ip[3] = 9;
-            d2k_sched_event(s, &r);
+            d2s_sched_event(s, &h);
+            d2s_ev r = ev_suspect(6, 41331); r.low_ip[3] = 9;
+            d2s_sched_event(s, &r);
             settle(s);
             CHECK(said("адрес 127.0.0.9 не принимает данных"),
                   "task54: фикстура с привязками не дошла до вердикта address");
             CHECK(bindings_of(&cb, "bound.dead.example", 6) == before,
                   "task54: вердикт address тронул найденные привязки имени");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cb);
-        d2k_sched_tcp_ack_hook = NULL;
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&cb);
+        d2s_sched_tcp_ack_hook = NULL;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Обычный входящий RST запускает ТОЛЬКО прямую классификацию. Пока она
@@ -3609,20 +3609,20 @@ int main(int argc, char **argv) {
        Неопределённый результат охлаждает цель, чтобы повторные RST не
        превращались в непрерывный перебор. */
     {
-        d2k_catalog c_rst = {0};
-        d2k_sched *s = d2k_sched_new(&c_rst, sv[0], 0x2d);
+        d2s_catalog c_rst = {0};
+        d2s_sched *s = d2s_sched_new(&c_rst, sv[0], 0x2d);
         tcp_calls = quic_calls = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
-        ver_answer = D2K_VER_NOT_MEASURED;
+        tcp_answer = D2S_V_INCONCLUSIVE;
+        ver_answer = D2S_VER_NOT_MEASURED;
         saidbuf[0] = '\0';
         CHECK(s != NULL, "планировщик для порога RST не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            d2k_ev h1 = ev_hello(6, 41001, "single-reset.example");
-            d2k_sched_event(s, &h1);
-            d2k_ev r1 = ev_suspect(6, 41001);
-            r1.code = D2K_SUSPECT_RST;
-            CHECK(d2k_sched_event(s, &r1) == 1,
+            d2s_sched_set_say(s, collect_say, NULL);
+            d2s_ev h1 = ev_hello(6, 41001, "single-reset.example");
+            d2s_sched_event(s, &h1);
+            d2s_ev r1 = ev_suspect(6, 41001);
+            r1.code = D2S_SUSPECT_RST;
+            CHECK(d2s_sched_event(s, &r1) == 1,
                   "одиночный обычный RST не запустил прямую классификацию");
             settle(s);
             CHECK(tcp_calls == 1 && quic_calls == 0,
@@ -3636,11 +3636,11 @@ int main(int argc, char **argv) {
                но десятиминутный cooldown неопределённого замера всё ещё
                не позволяет повторно запускать измеритель. */
             skip_ahead(s, 121000);
-            d2k_ev h2 = ev_hello(6, 41002, "single-reset.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev r2 = ev_suspect(6, 41002);
-            r2.code = D2K_SUSPECT_RST;
-            CHECK(d2k_sched_event(s, &r2) == 0,
+            d2s_ev h2 = ev_hello(6, 41002, "single-reset.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev r2 = ev_suspect(6, 41002);
+            r2.code = D2S_SUSPECT_RST;
+            CHECK(d2s_sched_event(s, &r2) == 0,
                   "неопределённый RST обошёл десятиминутный cooldown");
             settle(s);
             CHECK(tcp_calls == 1,
@@ -3650,105 +3650,105 @@ int main(int argc, char **argv) {
             /* Поле 06.10: один и тот же отказ по одному имени повторялся
                сотнями строк и раздувал журнал на флеше. Причина уже названа —
                повтор в пределах десяти минут молчит, после — звучит снова. */
-            d2k_ev h3 = ev_hello(6, 41003, "single-reset.example");
-            d2k_sched_event(s, &h3);
-            d2k_ev r3 = ev_suspect(6, 41003);
-            r3.code = D2K_SUSPECT_RST;
-            (void)d2k_sched_event(s, &r3);
+            d2s_ev h3 = ev_hello(6, 41003, "single-reset.example");
+            d2s_sched_event(s, &h3);
+            d2s_ev r3 = ev_suspect(6, 41003);
+            r3.code = D2S_SUSPECT_RST;
+            (void)d2s_sched_event(s, &r3);
             settle(s);
             CHECK(said_count("single-reset.example (TCP) замер отложен") == 1,
                   "повтор той же причины отдыха записан в журнал снова");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c_rst);
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog_free(&c_rst);
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* Таймер второго RST больше не является условием допуска к прямой
        классификации: каждый новый flow того же имени уже покрыт её cooldown. */
     {
-        d2k_catalog c_rst = {0};
-        d2k_sched *s = d2k_sched_new(&c_rst, sv[0], 0x2d);
-        tcp_calls = 0; tcp_answer = D2K_V_INCONCLUSIVE;
+        d2s_catalog c_rst = {0};
+        d2s_sched *s = d2s_sched_new(&c_rst, sv[0], 0x2d);
+        tcp_calls = 0; tcp_answer = D2S_V_INCONCLUSIVE;
         CHECK(s != NULL, "планировщик для границ RST не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 41003, "reset-window.example");
-            d2k_sched_event(s, &h);
-            d2k_ev r = ev_suspect(6, 41003);
-            r.code = D2K_SUSPECT_RST;
-            CHECK(d2k_sched_event(s, &r) == 1, "прямой замер по первому RST не начат");
+            d2s_ev h = ev_hello(6, 41003, "reset-window.example");
+            d2s_sched_event(s, &h);
+            d2s_ev r = ev_suspect(6, 41003);
+            r.code = D2S_SUSPECT_RST;
+            CHECK(d2s_sched_event(s, &r) == 1, "прямой замер по первому RST не начат");
             settle(s);
             CHECK(tcp_calls == 1, "первый RST не запустил прямой замер ровно один раз");
             skip_ahead(s, 30001);
-            d2k_ev h2 = ev_hello(6, 41004, "reset-window.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev r2 = ev_suspect(6, 41004);
-            r2.code = D2K_SUSPECT_RST;
-            CHECK(d2k_sched_event(s, &r2) == 0,
+            d2s_ev h2 = ev_hello(6, 41004, "reset-window.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev r2 = ev_suspect(6, 41004);
+            r2.code = D2S_SUSPECT_RST;
+            CHECK(d2s_sched_event(s, &r2) == 0,
                   "повторное соединение обошло cooldown прямого замера");
             settle(s);
             CHECK(tcp_calls == 1, "повторное соединение запустило второй прямой замер");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c_rst);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c_rst);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Более сильные сигналы не должны ждать второго потока: повтор ClientHello,
        молчание и снятый защитой аномальный RST запускают поиск сразу. */
     {
         static const uint16_t strong_codes[] = {
-            D2K_SUSPECT_REPEAT, D2K_SUSPECT_SILENT, D2K_SUSPECT_RST_CUT
+            D2S_SUSPECT_REPEAT, D2S_SUSPECT_SILENT, D2S_SUSPECT_RST_CUT
         };
         for (size_t i = 0; i < sizeof strong_codes / sizeof strong_codes[0]; i++) {
-            d2k_catalog c_strong = {0};
-            d2k_sched *s = d2k_sched_new(&c_strong, sv[0], 0x2d);
+            d2s_catalog c_strong = {0};
+            d2s_sched *s = d2s_sched_new(&c_strong, sv[0], 0x2d);
             tcp_calls = quic_calls = 0;
             CHECK(s != NULL, "планировщик сильного подозрения не завёлся");
             if (s) {
                 uint16_t port = (uint16_t)(41010 + i);
-                d2k_ev h = ev_hello(6, port, "strong-signal.example");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port);
+                d2s_ev h = ev_hello(6, port, "strong-signal.example");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port);
                 su.code = strong_codes[i];
-                CHECK(d2k_sched_event(s, &su) == 1,
+                CHECK(d2s_sched_event(s, &su) == 1,
                       "сильный сигнал ошибочно ждал второго потока");
                 settle(s);
                 CHECK(tcp_calls == 1,
                       "сильный сигнал не вызвал ровно один TCP-поиск");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
-            d2k_catalog_free(&c_strong);
+            d2s_catalog_free(&c_strong);
         }
     }
 
     /* Сильный сигнал на соседнем потоке не создаёт второй прямой замер,
        пока первый классификатор уже проверяет цель. */
     {
-        d2k_catalog c_promote = {0};
-        d2k_sched *s = d2k_sched_new(&c_promote, sv[0], 0x2d);
+        d2s_catalog c_promote = {0};
+        d2s_sched *s = d2s_sched_new(&c_promote, sv[0], 0x2d);
         tcp_calls = 0;
         CHECK(s != NULL, "планировщик для усиления RST не завёлся");
         if (s) {
-            d2k_ev h1 = ev_hello(6, 41020, "promote-reset.example");
-            d2k_sched_event(s, &h1);
-            d2k_ev r1 = ev_suspect(6, 41020);
-            r1.code = D2K_SUSPECT_RST;
-            CHECK(d2k_sched_event(s, &r1) == 1,
+            d2s_ev h1 = ev_hello(6, 41020, "promote-reset.example");
+            d2s_sched_event(s, &h1);
+            d2s_ev r1 = ev_suspect(6, 41020);
+            r1.code = D2S_SUSPECT_RST;
+            CHECK(d2s_sched_event(s, &r1) == 1,
                   "первый обычный RST не запустил прямую классификацию");
-            d2k_ev h2 = ev_hello(6, 41021, "promote-reset.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev repeat = ev_suspect(6, 41021);
-            repeat.code = D2K_SUSPECT_REPEAT;
-            CHECK(d2k_sched_event(s, &repeat) == 0,
+            d2s_ev h2 = ev_hello(6, 41021, "promote-reset.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev repeat = ev_suspect(6, 41021);
+            repeat.code = D2S_SUSPECT_REPEAT;
+            CHECK(d2s_sched_event(s, &repeat) == 0,
                   "дополнительный сигнал создал параллельный поиск той же цели");
             settle(s);
             CHECK(tcp_calls == 1,
                   "усиленное подозрение не запустило ровно один поиск");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c_promote);
+        d2s_catalog_free(&c_promote);
     }
 
     /* ЗАДАЧА 18 (пересмотр 15.10.2026). Поздний RST меряется с ПЕРВОГО
@@ -3757,22 +3757,22 @@ int main(int argc, char **argv) {
        другой причине: на здоровом сайте RX-пара кончается «не подтвердилось»,
        и повтор держит отдых позднего закрытия, а не второй поток. */
     {
-        d2k_catalog c18 = {0};
-        d2k_sched *s = d2k_sched_new(&c18, sv[0], 0x2d);
+        d2s_catalog c18 = {0};
+        d2s_sched *s = d2s_sched_new(&c18, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для позднего RST не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
-            vol_answer = D2K_VOL_PASSED;
+            vol_answer = D2S_VOL_PASSED;
             vol_rx_cut = 0;
             settle(s);
             const char *name = "late-threshold.test";
-            d2k_ev h = ev_hello(6, 41040, name);
-            d2k_sched_event(s, &h);
-            d2k_ev r = ev_suspect(6, 41040);
-            r.code = D2K_SUSPECT_RST_AFTER_APP;
-            CHECK(d2k_sched_event(s, &r) == 1,
+            d2s_ev h = ev_hello(6, 41040, name);
+            d2s_sched_event(s, &h);
+            d2s_ev r = ev_suspect(6, 41040);
+            r.code = D2S_SUSPECT_RST_AFTER_APP;
+            CHECK(d2s_sched_event(s, &r) == 1,
                   "одиночный поздний RST не запустил замер");
             settle(s);
             CHECK(vol_calls == 1 && tcp_calls == 0,
@@ -3782,18 +3782,18 @@ int main(int argc, char **argv) {
             CHECK(said("позднее закрытие не подтвердилось"),
                   "неподтверждённый поздний RST не отражён в журнале");
             /* Тот же поток повторно — замера нет. */
-            d2k_sched_event(s, &r);
+            d2s_sched_event(s, &r);
             settle(s);
             CHECK(vol_calls == 1, "повтор того же потока запустил второй замер");
             /* Здоровый трафик продолжает рвать соединения поздним RST —
                в пределах отдыха повторного замера быть не должно. */
             skip_ahead(s, 3 * 60 * 1000);
             for (uint16_t port = 41043; port <= 41045; port++) {
-                d2k_ev hh = ev_hello(6, port, name);
-                d2k_sched_event(s, &hh);
-                d2k_ev rr = ev_suspect(6, port);
-                rr.code = D2K_SUSPECT_RST_AFTER_APP;
-                d2k_sched_event(s, &rr);
+                d2s_ev hh = ev_hello(6, port, name);
+                d2s_sched_event(s, &hh);
+                d2s_ev rr = ev_suspect(6, port);
+                rr.code = D2S_SUSPECT_RST_AFTER_APP;
+                d2s_sched_event(s, &rr);
                 settle(s);
             }
             CHECK(vol_calls == 1,
@@ -3802,9 +3802,9 @@ int main(int argc, char **argv) {
                   "отдых неподтверждённого позднего RST не отражён в журнале");
             CHECK(bindings_of(&c18, name, 6) == 0,
                   "неподтверждённый поздний RST записал обход");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c18);
+        d2s_catalog_free(&c18);
     }
 
     /* ПОЛЕ 04.10, rua.gr: два поздних закрытия подтвердили подозрение,
@@ -3812,21 +3812,21 @@ int main(int argc, char **argv) {
        пакетов (~25). Это примета коробки — дальше обычный поиск планов
        (RX-лестница fake-first), а не «не подтвердилось» и отдых. */
     {
-        d2k_catalog cr = {0};
+        d2s_catalog cr = {0};
         net_name_known(&cr, "hcaptcha.com");
-        d2k_sched *s = d2k_sched_new(&cr, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cr, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0;
-        vol_answer = D2K_VOL_PASSED;
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 1; vol_rx_packet_only = 1; vol_rx_packets = 25; vol_rx_at_kb = 21;
         const char *name = "rua.packet.example";
         for (uint16_t port = 41060; port <= 41061; port++) {
-            d2k_ev hh = ev_hello(6, port, name);
-            d2k_sched_event(s, &hh);
-            d2k_ev rr = ev_suspect(6, port);
-            rr.code = D2K_SUSPECT_RST_AFTER_APP;
-            d2k_sched_event(s, &rr);
+            d2s_ev hh = ev_hello(6, port, name);
+            d2s_sched_event(s, &hh);
+            d2s_ev rr = ev_suspect(6, port);
+            rr.code = D2S_SUSPECT_RST_AFTER_APP;
+            d2s_sched_event(s, &rr);
         }
         settle(s); spin(s, 200);
         CHECK(vol_calls >= 1, "rua.gr: RX-пара позднего закрытия не началась");
@@ -3837,7 +3837,7 @@ int main(int argc, char **argv) {
         CHECK(said("fake-SNI") && said("поставил план 1 из"),
               "rua.gr: после пакетной приметы не начат поиск fake-first кандидатов");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&cr);
+        d2s_sched_free(s); d2s_catalog_free(&cr);
         vol_rx_cut = 0; vol_rx_packet_only = 0; vol_rx_packets = 0; vol_rx_at_kb = 24;
     }
 
@@ -3849,24 +3849,24 @@ int main(int argc, char **argv) {
        десять минут — узкое измерение не состоялось, и дальше идёт ОБЫЧНЫЙ
        полный замер. */
     {
-        d2k_catalog cs = {0};
-        d2k_sched *s = d2k_sched_new(&cs, sv[0], 0x2d);
+        d2s_catalog cs = {0};
+        d2s_sched *s = d2s_sched_new(&cs, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для короткого ответа зонда не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = ver_calls = 0;
-            vol_answer = D2K_VOL_PASSED;
+            vol_answer = D2S_VOL_PASSED;
             vol_rx_cut = 0;
             vol_rx_short = 1; vol_rx_short_bytes = 263;
             settle(s);
             const char *name = "style.short-body.test";
             for (uint16_t port = 41080; port <= 41081; port++) {
-                d2k_ev hh = ev_hello(6, port, name);
-                d2k_sched_event(s, &hh);
-                d2k_ev rr = ev_suspect(6, port);
-                rr.code = D2K_SUSPECT_RST_AFTER_APP;
-                d2k_sched_event(s, &rr);
+                d2s_ev hh = ev_hello(6, port, name);
+                d2s_sched_event(s, &hh);
+                d2s_ev rr = ev_suspect(6, port);
+                rr.code = D2S_SUSPECT_RST_AFTER_APP;
+                d2s_sched_event(s, &rr);
             }
             settle(s); spin(s, 200);
             CHECK(vol_calls >= 1, "короткий ответ: RX-пара позднего закрытия не началась");
@@ -3883,9 +3883,9 @@ int main(int argc, char **argv) {
             CHECK(again && !strstr(again + 1, "бюджет объёма не проверен"),
                   "полный замер после непроверенного бюджета запущен повторно");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cs);
+        d2s_catalog_free(&cs);
         vol_rx_short = 0; vol_rx_short_bytes = 0;
     }
 
@@ -3894,61 +3894,61 @@ int main(int argc, char **argv) {
        RX-volume-парой, без полного поиска. Второй сигнал той же цели на
        другом потоке второго замера не запускает. */
     {
-        d2k_catalog c50 = {0};
-        d2k_sched *s = d2k_sched_new(&c50, sv[0], 0x2d);
+        d2s_catalog c50 = {0};
+        d2s_sched *s = d2s_sched_new(&c50, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для повтора FIN не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
-            vol_answer = D2K_VOL_PASSED;
+            vol_answer = D2S_VOL_PASSED;
             vol_rx_cut = 0;
             settle(s);
             const char *name = "silent-cut.test";
-            d2k_ev h = ev_hello(6, 41060, name);
-            d2k_sched_event(s, &h);
-            d2k_ev f = ev_suspect(6, 41060);
-            f.code = D2K_SUSPECT_FIN_RETRY;
-            f.planned = D2K_LINK_PLANNED_NO;
-            CHECK(d2k_sched_event(s, &f) == 1,
+            d2s_ev h = ev_hello(6, 41060, name);
+            d2s_sched_event(s, &h);
+            d2s_ev f = ev_suspect(6, 41060);
+            f.code = D2S_SUSPECT_FIN_RETRY;
+            f.planned = D2S_LINK_PLANNED_NO;
+            CHECK(d2s_sched_event(s, &f) == 1,
                   "одиночный повтор FIN без плана не запустил замер");
             settle(s);
             CHECK(vol_calls == 1 && tcp_calls == 0,
                   "одиночный повтор FIN не прошёл ровно одну RX-volume-пару");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c50);
+        d2s_catalog_free(&c50);
 
         /* Смешанная пара: поздний RST, затем повтор FIN на другом потоке —
            один замер, не два. */
-        c50 = (d2k_catalog){0};
-        s = d2k_sched_new(&c50, sv[0], 0x2d);
+        c50 = (d2s_catalog){0};
+        s = d2s_sched_new(&c50, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик смешанной пары не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
-            vol_answer = D2K_VOL_PASSED;
+            vol_answer = D2S_VOL_PASSED;
             vol_rx_cut = 0;
             settle(s);
             const char *name = "silent-cut-mixed.test";
-            d2k_ev h = ev_hello(6, 41062, name);
-            d2k_sched_event(s, &h);
-            d2k_ev r = ev_suspect(6, 41062);
-            r.code = D2K_SUSPECT_RST_AFTER_APP;
-            d2k_sched_event(s, &r);
+            d2s_ev h = ev_hello(6, 41062, name);
+            d2s_sched_event(s, &h);
+            d2s_ev r = ev_suspect(6, 41062);
+            r.code = D2S_SUSPECT_RST_AFTER_APP;
+            d2s_sched_event(s, &r);
             settle(s);
-            d2k_ev h2 = ev_hello(6, 41063, name);
-            d2k_sched_event(s, &h2);
-            d2k_ev f2 = ev_suspect(6, 41063);
-            f2.code = D2K_SUSPECT_FIN_RETRY;
-            f2.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &f2);
+            d2s_ev h2 = ev_hello(6, 41063, name);
+            d2s_sched_event(s, &h2);
+            d2s_ev f2 = ev_suspect(6, 41063);
+            f2.code = D2S_SUSPECT_FIN_RETRY;
+            f2.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &f2);
             settle(s);
             CHECK(vol_calls == 1 && tcp_calls == 0,
                   "смешанная пара позднего закрытия дала не ровно одну RX-volume-пару");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c50);
+        d2s_catalog_free(&c50);
     }
 
     /* ЗАДАЧА 56. «TCP встал на бюджете коробки» (Safari на mailsuite.com и
@@ -3961,128 +3961,128 @@ int main(int argc, char **argv) {
        сверяется с ЕЁ бюджетом. Повтор FIN без плана по-прежнему ждёт второго
        потока. */
     {
-        d2k_catalog c56 = {0};
-        d2k_sched *s = d2k_sched_new(&c56, sv[0], 0x2d);
+        d2s_catalog c56 = {0};
+        d2s_sched *s = d2s_sched_new(&c56, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для TCP-обрыва на бюджете не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
-            vol_answer = D2K_VOL_PASSED;
+            vol_answer = D2S_VOL_PASSED;
             vol_rx_cut = 0;
             settle(s);
             const char *name = "stall.mailsuite.test";
-            d2k_ev h = ev_hello(6, 41070, name);
-            d2k_sched_event(s, &h);
-            d2k_ev f = ev_suspect(6, 41070);
-            f.code = D2K_SUSPECT_TCP_STALL; f.planned = D2K_LINK_PLANNED_NO; f.num = 24;
-            CHECK(d2k_sched_event(s, &f) == 1,
+            d2s_ev h = ev_hello(6, 41070, name);
+            d2s_sched_event(s, &h);
+            d2s_ev f = ev_suspect(6, 41070);
+            f.code = D2S_SUSPECT_TCP_STALL; f.planned = D2S_LINK_PLANNED_NO; f.num = 24;
+            CHECK(d2s_sched_event(s, &f) == 1,
                   "одиночный TCP-обрыв на бюджете не запустил RX-замер");
-            d2k_ev h2 = ev_hello(6, 41071, name);
-            d2k_sched_event(s, &h2);
-            d2k_ev f2 = ev_suspect(6, 41071);
-            f2.code = D2K_SUSPECT_TCP_STALL; f2.planned = D2K_LINK_PLANNED_NO; f2.num = 25;
-            d2k_sched_event(s, &f2);
+            d2s_ev h2 = ev_hello(6, 41071, name);
+            d2s_sched_event(s, &h2);
+            d2s_ev f2 = ev_suspect(6, 41071);
+            f2.code = D2S_SUSPECT_TCP_STALL; f2.planned = D2S_LINK_PLANNED_NO; f2.num = 25;
+            d2s_sched_event(s, &f2);
             settle(s);
             CHECK(vol_calls == 1 && tcp_calls == 0,
                   "TCP-обрыв на бюджете не прошёл ровно одну RX-volume-пару (без поиска)");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c56);
+        d2s_catalog_free(&c56);
 
         /* Под планом — тоже сразу один узкий замер. */
-        c56 = (d2k_catalog){0};
-        s = d2k_sched_new(&c56, sv[0], 0x2d);
+        c56 = (d2s_catalog){0};
+        s = d2s_sched_new(&c56, sv[0], 0x2d);
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
             settle(s);
             const char *name = "stall-planned.test";
-            d2k_ev h = ev_hello(6, 41072, name);
-            d2k_sched_event(s, &h);
-            d2k_ev f = ev_suspect(6, 41072);
-            f.code = D2K_SUSPECT_TCP_STALL; f.planned = D2K_LINK_PLANNED_YES; f.num = 25;
-            CHECK(d2k_sched_event(s, &f) == 1, "TCP-обрыв под планом не запустил RX-замер");
+            d2s_ev h = ev_hello(6, 41072, name);
+            d2s_sched_event(s, &h);
+            d2s_ev f = ev_suspect(6, 41072);
+            f.code = D2S_SUSPECT_TCP_STALL; f.planned = D2S_LINK_PLANNED_YES; f.num = 25;
+            CHECK(d2s_sched_event(s, &f) == 1, "TCP-обрыв под планом не запустил RX-замер");
             settle(s);
             CHECK(vol_calls == 1 && tcp_calls == 0,
                   "TCP-обрыв под планом не прошёл ровно одну RX-volume-пару");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c56);
+        d2s_catalog_free(&c56);
 
         /* Коробка цели измерена: бюджет 16 (адресные диапазоны хостинга).
            Поток на 25 — вне её полосы, замера нет; на 17 — есть. */
-        c56 = (d2k_catalog){0};
+        c56 = (d2s_catalog){0};
         char pid[40];
-        own_box(&c56, "box-16", pid, 64, 3, "stall.hz.test", 6, D2K_SHAPE_MODERN, 4,
+        own_box(&c56, "box-16", pid, 64, 3, "stall.hz.test", 6, D2S_SHAPE_MODERN, 4,
                 1790000000, 0);
-        d2k_cat_signal *rv = &c56.boxes[0].fp.sig[c56.boxes[0].fp.n_sig++];
+        d2s_cat_signal *rv = &c56.boxes[0].fp.sig[c56.boxes[0].fp.n_sig++];
         memset(rv, 0, sizeof *rv);
         snprintf(rv->kind, sizeof rv->kind, "rx-volume");
         rv->volume = 16; rv->seen = 1; rv->packets = 16;
-        s = d2k_sched_new(&c56, sv[0], 0x2d);
+        s = d2s_sched_new(&c56, sv[0], 0x2d);
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
             settle(s);
-            d2k_ev h = ev_hello(6, 41074, "stall.hz.test");
-            d2k_sched_event(s, &h);
-            d2k_ev f = ev_suspect(6, 41074);
-            f.code = D2K_SUSPECT_TCP_STALL; f.planned = D2K_LINK_PLANNED_YES; f.num = 25;
-            d2k_sched_event(s, &f);
+            d2s_ev h = ev_hello(6, 41074, "stall.hz.test");
+            d2s_sched_event(s, &h);
+            d2s_ev f = ev_suspect(6, 41074);
+            f.code = D2S_SUSPECT_TCP_STALL; f.planned = D2S_LINK_PLANNED_YES; f.num = 25;
+            d2s_sched_event(s, &f);
             settle(s);
             CHECK(vol_calls == 0, "TCP-обрыв вне бюджета коробки цели запустил замер");
             CHECK(said("вне бюджета её коробки"), "отказ по бюджету коробки цели не назван");
-            d2k_ev h2 = ev_hello(6, 41076, "stall.hz.test");
-            d2k_sched_event(s, &h2);
-            d2k_ev f2 = ev_suspect(6, 41076);
-            f2.code = D2K_SUSPECT_TCP_STALL; f2.planned = D2K_LINK_PLANNED_YES; f2.num = 17;
-            d2k_sched_event(s, &f2);
+            d2s_ev h2 = ev_hello(6, 41076, "stall.hz.test");
+            d2s_sched_event(s, &h2);
+            d2s_ev f2 = ev_suspect(6, 41076);
+            f2.code = D2S_SUSPECT_TCP_STALL; f2.planned = D2S_LINK_PLANNED_YES; f2.num = 17;
+            d2s_sched_event(s, &f2);
             settle(s);
             CHECK(vol_calls == 1, "TCP-обрыв на бюджете коробки цели (16) не запустил замер");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c56);
+        d2s_catalog_free(&c56);
     }
 
     /* ЗАДАЧА 56. Бюджеты коробок уходят датапату командой после прохода по
        каталогу: полевой 25 и измеренные. Каталог без измерений — команды нет
        (датапат и так держит полевой). */
     {
-        d2k_catalog cb = {0};
+        d2s_catalog cb = {0};
         char pid[40];
-        own_box(&cb, "box-26", pid, 64, 3, "budget.push.test", 6, D2K_SHAPE_MODERN, 4,
+        own_box(&cb, "box-26", pid, 64, 3, "budget.push.test", 6, D2S_SHAPE_MODERN, 4,
                 1790000000, 0);
-        d2k_sched *s = d2k_sched_new(&cb, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cb, sv[0], 0x2d);
         if (s) {
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
             int frames = 0;
             for (size_t off = 0; off + 6 <= sent_len;) {
                 const uint8_t *p = sentbuf + off;
                 uint32_t n = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
                 if (n < 2 || n > sent_len - off - 4) break;
-                if (((uint16_t)p[4] << 8 | p[5]) == D2K_CMD_SET_STALL_BUDGETS) frames++;
+                if (((uint16_t)p[4] << 8 | p[5]) == D2S_CMD_SET_STALL_BUDGETS) frames++;
                 off += 4 + n;
             }
             CHECK(frames == 0, "каталог без измеренных бюджетов прислал команду бюджетов");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_cat_signal *rv = &cb.boxes[0].fp.sig[cb.boxes[0].fp.n_sig++];
+        d2s_cat_signal *rv = &cb.boxes[0].fp.sig[cb.boxes[0].fp.n_sig++];
         memset(rv, 0, sizeof *rv);
         snprintf(rv->kind, sizeof rv->kind, "rx-volume");
         rv->volume = 20; rv->seen = 1; rv->packets = 26;
-        s = d2k_sched_new(&cb, sv[0], 0x2d);
+        s = d2s_sched_new(&cb, sv[0], 0x2d);
         if (s) {
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
             int frames = 0, ok = 0;
             for (size_t off = 0; off + 6 <= sent_len;) {
                 const uint8_t *p = sentbuf + off;
                 uint32_t n = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
                 if (n < 2 || n > sent_len - off - 4) break;
-                if (((uint16_t)p[4] << 8 | p[5]) == D2K_CMD_SET_STALL_BUDGETS) {
+                if (((uint16_t)p[4] << 8 | p[5]) == D2S_CMD_SET_STALL_BUDGETS) {
                     frames++;
                     ok = n == 2 + 5 && p[6] == 2 && (p[7] << 8 | p[8]) == 25 &&
                          (p[9] << 8 | p[10]) == 26;
@@ -4090,19 +4090,19 @@ int main(int argc, char **argv) {
                 off += 4 + n;
             }
             CHECK(frames == 1 && ok, "бюджеты коробок (25 и 26) не ушли датапату одной командой");
-            forget_sent(); d2k_sched_sync(s); sync_out(s);
+            forget_sent(); d2s_sched_sync(s); sync_out(s);
             frames = 0;
             for (size_t off = 0; off + 6 <= sent_len;) {
                 const uint8_t *p = sentbuf + off;
                 uint32_t n = (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3];
                 if (n < 2 || n > sent_len - off - 4) break;
-                if (((uint16_t)p[4] << 8 | p[5]) == D2K_CMD_SET_STALL_BUDGETS) frames++;
+                if (((uint16_t)p[4] << 8 | p[5]) == D2S_CMD_SET_STALL_BUDGETS) frames++;
                 off += 4 + n;
             }
             CHECK(frames == 0, "неизменные бюджеты отправлены повторно");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cb);
+        d2s_catalog_free(&cb);
     }
 
     /* ЗАДАЧА 50, РАУНД 2. «QUIC замолчал после рукопожатия» (Safari на
@@ -4110,70 +4110,70 @@ int main(int argc, char **argv) {
        ответ своим запросом (arm.data_cut), а не только ответ на Initial.
        Обычное подозрение QUIC (молчание рукопожатия) — без этого признака. */
     {
-        d2k_catalog cq = {0};
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+        d2s_catalog cq = {0};
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для обрыва QUIC не завёлся");
         if (s) {
             settle(s);
             quic_calls = 0; quic_last_data_cut = -1;
-            quic_answer = D2K_V_CLEAR;
-            d2k_ev h = ev_hello(17, 41090, "quic-stall.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41090);
-            su.code = D2K_SUSPECT_QUIC_STALL;
-            su.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &su);
+            quic_answer = D2S_V_CLEAR;
+            d2s_ev h = ev_hello(17, 41090, "quic-stall.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41090);
+            su.code = D2S_SUSPECT_QUIC_STALL;
+            su.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(quic_calls == 1 && quic_last_data_cut == 1,
                   "обрыв QUIC после рукопожатия не дошёл до замера ответа своим запросом");
-            CHECK(quic_last_budget == D2K_BUDGET_FIELD_PACKETS,
+            CHECK(quic_last_budget == D2S_BUDGET_FIELD_PACKETS,
                   "свой запрос не получил бюджет коробки (по умолчанию поле 04.10, 25)");
             /* Поле 04.10 13:37, rua.gr в Safari: обрыв после рукопожатия
                пришёл подозрением 3 (молчание) — сервер уложился в окно
                очереди. Прежде вопросник проверял только Initial и говорил
                «проходит как есть». Теперь молчание QUIC тоже доходит до
                своего запроса — он задаётся, лишь если Initial прошёл. */
-            d2k_ev h2 = ev_hello(17, 41091, "quic-silent.test");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(17, 41091);
-            su2.code = D2K_SUSPECT_SILENT;
-            d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(17, 41091, "quic-silent.test");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(17, 41091);
+            su2.code = D2S_SUSPECT_SILENT;
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(quic_calls == 2 && quic_last_data_cut == 1,
                   "молчание QUIC при прошедшем Initial не проверено своим запросом");
             CHECK(sent_quic_deny("quic-stall.test") == 0,
                   "QUIC снят по невоспроизведённому обрыву");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cq);
-        quic_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&cq);
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* Молчание QUIC с признаком на входе, а OPAQUE — от рукопожатия (свой
        запрос не задавался): это не воспроизведённый обрыв после
        рукопожатия, и QUIC для имени не снимается. */
     {
-        d2k_catalog cq = {0};
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+        d2s_catalog cq = {0};
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для молчания рукопожатия QUIC не завёлся");
         if (s) {
             settle(s);
             forget_sent();
-            quic_calls = 0; quic_answer = D2K_V_OPAQUE; quic_arm_none = 1;
+            quic_calls = 0; quic_answer = D2S_V_OPAQUE; quic_arm_none = 1;
             quic_opaque_handshake = 1;
-            d2k_ev h = ev_hello(17, 41097, "quic-hs.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41097);
-            su.code = D2K_SUSPECT_SILENT;
-            su.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 41097, "quic-hs.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41097);
+            su.code = D2S_SUSPECT_SILENT;
+            su.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 20; i++) settle(s);
             CHECK(quic_calls == 1 && sent_quic_deny("quic-hs.test") == 0,
                   "блок рукопожатия QUIC снял QUIC как обрыв после рукопожатия");
             quic_opaque_handshake = 0; quic_arm_none = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cq);
+        d2s_catalog_free(&cq);
     }
 
     /* ЗАДАЧА 50, РАУНД 2, требование 5c. Обрыв воспроизведён своим
@@ -4182,21 +4182,21 @@ int main(int argc, char **argv) {
        браузер ушёл на TCP. По сроку отдыха снимается — следующий обрыв
        меряется заново. */
     {
-        d2k_catalog cq = {0};
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+        d2s_catalog cq = {0};
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для снятия QUIC не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             settle(s);
             forget_sent();
-            quic_calls = 0; quic_answer = D2K_V_OPAQUE; quic_arm_none = 1;
-            d2k_ev h = ev_hello(17, 41095, "quic-deny.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41095);
-            su.code = D2K_SUSPECT_QUIC_STALL;
-            su.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &su);
+            quic_calls = 0; quic_answer = D2S_V_OPAQUE; quic_arm_none = 1;
+            d2s_ev h = ev_hello(17, 41095, "quic-deny.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41095);
+            su.code = D2S_SUSPECT_QUIC_STALL;
+            su.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !sent_quic_deny("quic-deny.test"); i++) settle(s);
             CHECK(quic_calls == 1 && sent_quic_deny("quic-deny.test") == 1,
                   "обхода по QUIC нет, а QUIC для имени по-прежнему пропускается");
@@ -4212,24 +4212,24 @@ int main(int argc, char **argv) {
             CHECK(quic_calls == 2 && quic_last_data_cut == 2,
                   "перед снятием запрета QUIC нет своей перепроверки только прямым запросом");
             CHECK(sent_quic_deny("quic-deny.test") == 2 &&
-                  sent_del_name_key("quic-deny.test", 17, D2K_LINK_SHAPE_QUIC, 4) == 0,
+                  sent_del_name_key("quic-deny.test", 17, D2S_LINK_SHAPE_QUIC, 4) == 0,
                   "обрыв воспроизведён перепроверкой, а запрет QUIC снят или не продлён");
             /* Второй срок длиннее (30 мин). Ответ своим запросом пришёл — снять. */
-            quic_answer = D2K_V_CLEAR;
+            quic_answer = D2S_V_CLEAR;
             skip_ahead(s, 11 * 60 * 1000);
             settle(s);
             CHECK(quic_calls == 2, "продлённый запрет перепроверен раньше своего срока");
             skip_ahead(s, 20 * 60 * 1000);
             for (int i = 0; i < 40 &&
-                 !sent_del_name_key("quic-deny.test", 17, D2K_LINK_SHAPE_QUIC, 4); i++) settle(s);
+                 !sent_del_name_key("quic-deny.test", 17, D2S_LINK_SHAPE_QUIC, 4); i++) settle(s);
             CHECK(quic_calls == 3 &&
-                  sent_del_name_key("quic-deny.test", 17, D2K_LINK_SHAPE_QUIC, 4) >= 1,
+                  sent_del_name_key("quic-deny.test", 17, D2S_LINK_SHAPE_QUIC, 4) >= 1,
                   "ответ своим запросом пришёл целиком, а запрет QUIC не снят");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cq);
+        d2s_catalog_free(&cq);
         quic_arm_none = 0;
-        quic_answer = D2K_V_OPAQUE;
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* Раунд 3, I2: у имени подтверждённая QUIC-привязка, а обрыв после
@@ -4237,27 +4237,27 @@ int main(int argc, char **argv) {
        этим обрывом не работает: помечается на повторную проверку (каталог
        цел), запрет QUIC действует, проход каталога её обратно не ставит. */
     {
-        d2k_catalog cq = {0};
+        d2s_catalog cq = {0};
         char pq[40];
         own_box(&cq, "box-quic-deny", pq, 31, 5, "quic-bound.test", 17,
-                D2K_LINK_SHAPE_QUIC, 4, 1790000000, 0);
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+                D2S_LINK_SHAPE_QUIC, 4, 1790000000, 0);
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для привязки под обрывом не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             settle(s);
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            size_t set_before = sent_set_name_shape("quic-bound.test", D2K_LINK_SHAPE_QUIC);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            size_t set_before = sent_set_name_shape("quic-bound.test", D2S_LINK_SHAPE_QUIC);
             CHECK(set_before >= 1, "фикстура: подтверждённая QUIC-привязка не встала");
             forget_sent();
-            quic_calls = 0; quic_answer = D2K_V_OPAQUE; quic_arm_none = 1;
-            d2k_ev h = ev_hello(17, 41097, "quic-bound.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41097);
-            su.code = D2K_SUSPECT_QUIC_STALL;
-            su.planned = D2K_LINK_PLANNED_YES;
-            d2k_sched_event(s, &su);
+            quic_calls = 0; quic_answer = D2S_V_OPAQUE; quic_arm_none = 1;
+            d2s_ev h = ev_hello(17, 41097, "quic-bound.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41097);
+            su.code = D2S_SUSPECT_QUIC_STALL;
+            su.planned = D2S_LINK_PLANNED_YES;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !sent_quic_deny("quic-bound.test"); i++) settle(s);
             CHECK(sent_quic_deny("quic-bound.test") == 1, "обрыв под привязкой не снял QUIC");
             CHECK(cq.n_boxes == 1 && cq.boxes[0].n_binds == 1 &&
@@ -4266,98 +4266,98 @@ int main(int argc, char **argv) {
             CHECK(said("помечена на повторную проверку"), "пометка привязки не названа в журнале");
             /* Проходы каталога после этого привязку не возвращают. */
             for (int i = 0; i < 10; i++) settle(s);
-            d2k_sched_sync(s); sync_out(s);
-            CHECK(sent_set_name_shape("quic-bound.test", D2K_LINK_SHAPE_QUIC) ==
+            d2s_sched_sync(s); sync_out(s);
+            CHECK(sent_set_name_shape("quic-bound.test", D2S_LINK_SHAPE_QUIC) ==
                   sent_quic_deny("quic-bound.test"),
                   "проход каталога вернул QUIC-привязку поверх запрета QUIC");
             /* И даже привязка без пометки (например, подтверждённая заново
                где-то ещё) поверх действующего запрета не ставится. */
             cq.boxes[0].binds[0].recheck_since = 0;
-            d2k_sched_sync(s); sync_out(s);
-            CHECK(sent_set_name_shape("quic-bound.test", D2K_LINK_SHAPE_QUIC) ==
+            d2s_sched_sync(s); sync_out(s);
+            CHECK(sent_set_name_shape("quic-bound.test", D2S_LINK_SHAPE_QUIC) ==
                   sent_quic_deny("quic-bound.test"),
                   "проход каталога поставил QUIC-привязку при действующем запрете QUIC");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cq);
+        d2s_catalog_free(&cq);
         quic_arm_none = 0;
-        quic_answer = D2K_V_OPAQUE;
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* Найденное плечо — обычный кандидат, QUIC не снимается. */
     {
-        d2k_catalog cq = {0};
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+        d2s_catalog cq = {0};
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         if (s) {
             settle(s);
             forget_sent();
-            quic_calls = 0; quic_answer = D2K_V_OPAQUE;
-            d2k_ev h = ev_hello(17, 41096, "quic-arm.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41096);
-            su.code = D2K_SUSPECT_QUIC_STALL;
-            su.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &su);
+            quic_calls = 0; quic_answer = D2S_V_OPAQUE;
+            d2s_ev h = ev_hello(17, 41096, "quic-arm.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41096);
+            su.code = D2S_SUSPECT_QUIC_STALL;
+            su.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(quic_calls == 1 && sent_quic_deny("quic-arm.test") == 0,
                   "QUIC снят при найденном плече");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cq);
+        d2s_catalog_free(&cq);
     }
 
     /* «Блок доказан, кандидатов 0»: пустой поиск откладывается на cooldown,
        а не повторяется после двухминутного отдыха. */
     {
-        d2k_catalog c18 = {0};
-        d2k_sched *s = d2k_sched_new(&c18, sv[0], 0x2d);
+        d2s_catalog c18 = {0};
+        d2s_sched *s = d2s_sched_new(&c18, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для пустого поиска не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            arm_kind = D2K_QA_FLAKY;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            arm_kind = D2S_QA_FLAKY;
             quic_calls = 0;
-            d2k_ev h = ev_hello(17, 41050, "empty-search.test");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 41050);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 41050, "empty-search.test");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 41050);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(quic_calls == 1 && said("верить нельзя"),
                   "блок без кандидатов не прошёл ровно один QUIC-замер");
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h2 = ev_hello(17, 41051, "empty-search.test");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(17, 41051);
-            d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(17, 41051, "empty-search.test");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(17, 41051);
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(quic_calls == 1,
                   "пустой поиск при доказанном блоке повторён через две минуты");
             skip_ahead(s, 8 * 60 * 1000);
-            d2k_ev h3 = ev_hello(17, 41052, "empty-search.test");
-            d2k_sched_event(s, &h3);
-            d2k_ev su3 = ev_suspect(17, 41052);
-            d2k_sched_event(s, &su3);
+            d2s_ev h3 = ev_hello(17, 41052, "empty-search.test");
+            d2s_sched_event(s, &h3);
+            d2s_ev su3 = ev_suspect(17, 41052);
+            d2s_sched_event(s, &su3);
             settle(s);
             CHECK(quic_calls == 2, "после cooldown пустой поиск не возобновился");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c18);
-        quic_answer = D2K_V_OPAQUE;
-        arm_kind = D2K_QA_BLOB;
+        d2s_catalog_free(&c18);
+        quic_answer = D2S_V_OPAQUE;
+        arm_kind = D2S_QA_BLOB;
     }
 
     /* «Готовые планы не помогли, новых кандидатов нет» — тоже cooldown. */
     {
-        d2k_catalog cR;
+        d2s_catalog cR;
         memset(&cR, 0, sizeof cR);
         cR.boxes = calloc(1, sizeof *cR.boxes);
         CHECK(cR.boxes != NULL, "не удалось создать коробку для пустого повтора");
         if (cR.boxes) {
             cR.n_boxes = 1;
-            d2k_cat_box *b = &cR.boxes[0];
+            d2s_cat_box *b = &cR.boxes[0];
             snprintf(b->id, sizeof b->id, "box-empty-after-known");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
             b->fp.sig[0].ttl = 127;
@@ -4371,29 +4371,29 @@ int main(int argc, char **argv) {
                 b->plans[0].successes = 3;
                 snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "quic");
                 b->plans[0].text = strdup(
-                    "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                    "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                     "proto udp quic\npayload 1 aabb\n"
                     "fake payload=1 poison=0 repeats=1 gap_us=0 place=before\n"
                     "order forward\n");
             }
             if (b->plans && b->plans[0].text) {
-                d2k_sched *s = d2k_sched_new(&cR, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&cR, sv[0], 0x2d);
                 saidbuf[0] = '\0';
-                d2k_sched_set_say(s, collect_say, NULL);
-                quic_answer = D2K_V_PREFIX;
-                arm_kind = D2K_QA_FLAKY;
-                ver_answer = D2K_VER_TRANSPORT;
+                d2s_sched_set_say(s, collect_say, NULL);
+                quic_answer = D2S_V_PREFIX;
+                arm_kind = D2S_QA_FLAKY;
+                ver_answer = D2S_VER_TRANSPORT;
                 ver_fail_first = 0;
                 quic_calls = ver_calls = 0;
                 ver_answer_port = 41060;
-                d2k_ev h = ev_hello(17, 41060, "known-then-empty.test");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(17, 41060);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(17, 41060, "known-then-empty.test");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(17, 41060);
+                d2s_sched_event(s, &su);
                 spin_until_installed(s);
                 for (int i = 0; i < 20 && !said("не дало новых кандидатов"); i++) {
-                    d2k_ev ap = ev_applied(17, 41060);
-                    d2k_sched_event(s, &ap);
+                    d2s_ev ap = ev_applied(17, 41060);
+                    d2s_sched_event(s, &ap);
                     spin(s, 80);
                 }
                 CHECK(said("готовых планов узнанной коробки") &&
@@ -4401,20 +4401,20 @@ int main(int argc, char **argv) {
                       "сценарий «готовые планы не помогли, новых нет» не воспроизведён");
                 int measured = quic_calls;
                 skip_ahead(s, 3 * 60 * 1000);
-                d2k_ev h2 = ev_hello(17, 41061, "known-then-empty.test");
-                d2k_sched_event(s, &h2);
-                d2k_ev su2 = ev_suspect(17, 41061);
-                d2k_sched_event(s, &su2);
+                d2s_ev h2 = ev_hello(17, 41061, "known-then-empty.test");
+                d2s_sched_event(s, &h2);
+                d2s_ev su2 = ev_suspect(17, 41061);
+                d2s_sched_event(s, &su2);
                 settle(s);
                 CHECK(quic_calls == measured && said("замер отложен"),
                       "пустой повтор после готовых планов не отложен cooldown");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&cR);
-        quic_answer = D2K_V_OPAQUE;
-        arm_kind = D2K_QA_BLOB;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog_free(&cR);
+        quic_answer = D2S_V_OPAQUE;
+        arm_kind = D2S_QA_BLOB;
+        ver_answer = D2S_VER_APPLICATION;
         ver_answer_port = 0;
     }
 
@@ -4437,17 +4437,17 @@ admission_only_run:
         CHECK(bound && listen(lfd, 4) == 0, "native property listener");
         uint16_t saved_port = g_server_port;
         g_server_port = ntohs(local.sin6_port);
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_NOT_MEASURED;
-        d2k_ev h = ev_hello(6, 41015, "native-properties.example");
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_NOT_MEASURED;
+        d2s_ev h = ev_hello(6, 41015, "native-properties.example");
         h.family = 6;
         CHECK(inet_pton(AF_INET6, "::1", h.low_ip) == 1, "property destination");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", h.high_ip) == 1, "property client");
-        d2k_sched_event(s, &h);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_RST_CUT;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &h);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_RST_CUT;
+        d2s_sched_event(s, &su);
         int peer = -1; struct sockaddr_in6 remote = {0};
         for (int i = 0; i < 500 && peer < 0; i++) {
             tick_once(s);
@@ -4460,47 +4460,47 @@ admission_only_run:
         CHECK(peer >= 0, "property question connects over native IPv6");
         if (peer >= 0) {
             for (int i = 0; i < 500 && !said("жду обмена"); i++) tick_once(s);
-            d2k_ev x = {0}; x.family = 6; x.transport = 6;
+            d2s_ev x = {0}; x.family = 6; x.transport = 6;
             memcpy(x.low_ip, &local.sin6_addr, 16); memcpy(x.high_ip, &remote.sin6_addr, 16);
             x.low_port = g_server_port; x.high_port = ntohs(remote.sin6_port);
-            x.kind = D2K_EV_EXCHANGE; x.code = 22; x.num = 1380;
+            x.kind = D2S_EV_EXCHANGE; x.code = 22; x.num = 1380;
             x.seen_types = 0x0c; x.server_hello = 1;
-            d2k_sched_event(s, &x);
+            d2s_sched_event(s, &x);
             CHECK(said("жду подтверждения полного исполнения"), "native reply matches property flow");
-            x.kind = D2K_EV_APPLIED; (void)last_plan_id(x.plan_id);
-            d2k_sched_event(s, &x); spin(s, 20);
+            x.kind = D2S_EV_APPLIED; (void)last_plan_id(x.plan_id);
+            d2s_sched_event(s, &x); spin(s, 20);
             CHECK(said("перекрытие слева=нет"), "native property proof updates measured vector");
             close(peer);
         }
-        d2k_sched_free(s); d2k_catalog_free(&c); close(lfd);
-        g_server_port = saved_port; ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s); d2s_catalog_free(&c); close(lfd);
+        g_server_port = saved_port; ver_answer = D2S_VER_APPLICATION;
     }
     for (int proof = 0; proof < 4; proof++) {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = proof == 1 ? D2K_VER_APPLICATION : D2K_VER_NOT_MEASURED;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = proof == 1 ? D2S_VER_APPLICATION : D2S_VER_NOT_MEASURED;
         ver_fail_first = 0;
-        saidbuf[0] = 0; d2k_sched_set_say(s, collect_say, NULL);
+        saidbuf[0] = 0; d2s_sched_set_say(s, collect_say, NULL);
         quic_calls = 0;
         drain(); forget_sent();
-        d2k_ev su = ev_suspect(17, 41016);
+        d2s_ev su = ev_suspect(17, 41016);
         su.family = 6;
         CHECK(inet_pton(AF_INET6, "::1", su.low_ip) == 1, "address trial destination");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", su.high_ip) == 1, "address trial client");
-        d2k_sched_event(s, &su); spin_until_installed(s); drain();
+        d2s_sched_event(s, &su); spin_until_installed(s); drain();
         CHECK(quic_calls == 1 && !strcmp(quic_last_ip, "::1"), "unnamed native QUIC measured as IP");
-        CHECK(sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0) == 0,
+        CHECK(sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0) == 0,
               "unnamed native QUIC never installs a name probe");
         unsigned found = 0;
-        uint8_t trial[D2K_TRIAL_ID_LEN] = {0}, endpoint[38] = {0};
+        uint8_t trial[D2S_TRIAL_ID_LEN] = {0}, endpoint[38] = {0};
         for (size_t off = 0; off + 6 <= sent_len;) {
             const uint8_t *p = sentbuf + off;
             uint32_t n = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
                          ((uint32_t)p[2] << 8) | p[3];
             if (n < 2 || n > sent_len - off - 4) break;
             unsigned kind = ((unsigned)p[4] << 8) | p[5];
-            if (kind == D2K_CMD_SET_ADDR_PROBE && n >= 2 + 38 + sizeof trial) {
+            if (kind == D2S_CMD_SET_ADDR_PROBE && n >= 2 + 38 + sizeof trial) {
                 const uint8_t *body = p + 6;
                 uint8_t loopback[16] = {0}; loopback[15] = 1;
                 CHECK(body[0] == 6 && !memcmp(body + 1, loopback, 16) &&
@@ -4517,20 +4517,20 @@ admission_only_run:
         CHECK(found == 1, "native address trial installed exactly once");
         if (proof && found) {
             ver_answer_port = (uint16_t)(((unsigned)endpoint[33] << 8) | endpoint[34]);
-            d2k_ev ap = ev_applied(17, ver_answer_port);
+            d2s_ev ap = ev_applied(17, ver_answer_port);
             ap.family = 6;
             memcpy(ap.low_ip, endpoint + 17, 16); memcpy(ap.high_ip, endpoint + 1, 16);
             ap.low_port = su.low_port;
             memcpy(ap.trial_id, trial, sizeof trial);
             if (proof >= 2) {
-                ap.kind = D2K_EV_REFUSED; ap.code = D2K_REFUSE_TOO_LONG;
+                ap.kind = D2S_EV_REFUSED; ap.code = D2S_REFUSE_TOO_LONG;
                 if (proof == 2) ap.high_ip[15] = 2; /* same /32, foreign full source */
             }
-            d2k_sched_event(s, &ap);
-            d2k_ev ack = {0}; ack.kind = D2K_EV_ACK; ack.code = D2K_CMD_SET_ADDR_PROBE;
+            d2s_sched_event(s, &ap);
+            d2s_ev ack = {0}; ack.kind = D2S_EV_ACK; ack.code = D2S_CMD_SET_ADDR_PROBE;
             ack.num = 0x100u; memcpy(ack.trial_id, trial, sizeof trial);
-            d2k_sched_event(s, &ack); settle(s);
-            const d2k_cat_binding *bd = binding_of(&c, "::1", 17);
+            d2s_sched_event(s, &ack); settle(s);
+            const d2s_cat_binding *bd = binding_of(&c, "::1", 17);
             if (proof >= 2) {
                 CHECK(!bd && said("опыт невозможен") == (proof == 3),
                       "early IPv6 refusal matches full source, not just first32 bits");
@@ -4538,77 +4538,77 @@ admission_only_run:
             if (!bd) fprintf(stderr, "native address proof trace:\n%s", saidbuf);
             CHECK(bd && bd->family == 6 && !strcmp(bd->kind, "addr"),
                   "native address proof saved as IPv6 address binding");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) >= 1,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) >= 1,
                   "native address proof promotes persistent datapath plan");
-            CHECK(sent_set_addr_shape(6, endpoint + 17, D2K_LINK_SHAPE_QUIC) >= 1 &&
-                  sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) ==
-                      sent_set_addr_shape(6, endpoint + 17, D2K_LINK_SHAPE_QUIC),
+            CHECK(sent_set_addr_shape(6, endpoint + 17, D2S_LINK_SHAPE_QUIC) >= 1 &&
+                  sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) ==
+                      sent_set_addr_shape(6, endpoint + 17, D2S_LINK_SHAPE_QUIC),
                   "QUIC address promotion not keyed by the QUIC protocol shape");
             }
         }
-        settle(s); d2k_sched_free(s); drain();
-        uint8_t removal[38 + D2K_TRIAL_ID_LEN];
+        settle(s); d2s_sched_free(s); drain();
+        uint8_t removal[38 + D2S_TRIAL_ID_LEN];
         memcpy(removal, endpoint, 38); memcpy(removal + 38, trial, sizeof trial);
-        CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, removal, sizeof removal) >= 1,
+        CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, removal, sizeof removal) >= 1,
               "native address trial cleanup preserves full endpoint and generation");
-        d2k_catalog_free(&c); quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog_free(&c); quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
     for (int proof = 0; proof < 2; proof++) {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 1;
-        ver_answer = proof ? D2K_VER_APPLICATION : D2K_VER_NOT_MEASURED;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 1;
+        ver_answer = proof ? D2S_VER_APPLICATION : D2S_VER_NOT_MEASURED;
         ver_answer_port = 41017; ver_fail_first = 0;
         ver_socket_family = ver_calls = 0;
         drain(); forget_sent();
-        d2k_ev h = ev_hello(6, 41017, "native-probe.example");
+        d2s_ev h = ev_hello(6, 41017, "native-probe.example");
         h.family = 6;
         CHECK(inet_pton(AF_INET6, "::1", h.low_ip) == 1, "native probe destination");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", h.high_ip) == 1, "native probe client");
-        d2k_sched_event(s, &h);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_RST_CUT;
-        d2k_sched_event(s, &su); settle(s);
+        d2s_sched_event(s, &h);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_RST_CUT;
+        d2s_sched_event(s, &su); settle(s);
         CHECK(ver_calls > 0, "native candidate reaches verifier");
         CHECK(ver_socket_family == AF_INET6, "IPv6 verifier receives a reserved IPv6 socket");
         CHECK(strcmp(tcp_last_ip, "::1") == 0, "native measurement receives full target address");
         if (proof) {
-        d2k_ev ap = ev_applied(6, 41017);
+        d2s_ev ap = ev_applied(6, 41017);
         memcpy(ap.low_ip, h.low_ip, 16); memcpy(ap.high_ip, h.high_ip, 16);
         ap.family = 4;
-        d2k_sched_event(s, &ap); spin(s, 10);
+        d2s_sched_event(s, &ap); spin(s, 10);
         CHECK(c.n_boxes == 0, "IPv4 APPLIED cannot prove an IPv6 trial");
         ap.family = 6;
-        d2k_sched_event(s, &ap); spin(s, 40);
-        const d2k_cat_binding *native = binding_of(&c, "native-probe.example", 6);
+        d2s_sched_event(s, &ap); spin(s, 40);
+        const d2s_cat_binding *native = binding_of(&c, "native-probe.example", 6);
         CHECK(native && native->family == 6, "verified IPv6 trial creates IPv6 binding");
-        CHECK(d2k_sched_write_live(s, "/tmp/d2k-native-live.json", "") == 0,
+        CHECK(d2s_sched_write_live(s, "/tmp/d2s-native-live.json", "") == 0,
               "write native live API snapshot");
-        d2k_catalog live = {0}; char live_err[160];
-        CHECK(d2k_catalog_load("/tmp/d2k-native-live.json", &live, live_err, sizeof live_err) == 0,
+        d2s_catalog live = {0}; char live_err[160];
+        CHECK(d2s_catalog_load("/tmp/d2s-native-live.json", &live, live_err, sizeof live_err) == 0,
               "parse native bindings from live API");
-        const d2k_cat_binding *live_native = binding_of(&live, "native-probe.example", 6);
+        const d2s_cat_binding *live_native = binding_of(&live, "native-probe.example", 6);
         CHECK(live_native && live_native->family == 6, "live API retains transport and family of binding");
-        d2k_catalog_free(&live);
+        d2s_catalog_free(&live);
         if (c.n_boxes == 1 && c.boxes[0].n_binds == 1) {
-            d2k_cat_box *b = &c.boxes[0];
-            d2k_cat_binding *both = realloc(b->binds, 2 * sizeof *both);
+            d2s_cat_box *b = &c.boxes[0];
+            d2s_cat_binding *both = realloc(b->binds, 2 * sizeof *both);
             CHECK(both != NULL, "allocate mixed-family measured bindings");
             if (both) {
                 b->binds = both; b->n_binds = 2;
                 both[1] = both[0];
-                both[0].family = 4; both[0].input = D2K_INPUT_PROFILE;
-                both[1].input = D2K_INPUT_CLIENT;
-                d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6; sh.family = 6;
-                CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "native-probe.example",
+                both[0].family = 4; both[0].input = D2S_INPUT_PROFILE;
+                both[1].input = D2S_INPUT_CLIENT;
+                d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6; sh.family = 6;
+                CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "native-probe.example",
                       sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "native repeat snapshot");
                 int before_calls = tcp_calls;
-                d2k_sched_event(s, &sh); settle(s);
+                d2s_sched_event(s, &sh); settle(s);
                 CHECK(tcp_calls == before_calls, "IPv4 profile binding cannot force IPv6 remeasurement");
             }
         }
         }
-        d2k_sched_free(s); drain(); d2k_catalog_free(&c);
+        d2s_sched_free(s); drain(); d2s_catalog_free(&c);
         unsigned installed = 0, removed = 0;
         for (size_t off = 0; off + 6 <= sent_len;) {
             const uint8_t *p = sentbuf + off;
@@ -4617,51 +4617,51 @@ admission_only_run:
             if (n < 2 || n > sent_len - off - 4) break;
             unsigned kind = ((unsigned)p[4] << 8) | p[5];
             const uint8_t *body = p + 6;
-            if (kind == D2K_CMD_SET_NAME_PROBE || kind == D2K_CMD_DEL_NAME_PROBE) {
+            if (kind == D2S_CMD_SET_NAME_PROBE || kind == D2S_CMD_DEL_NAME_PROBE) {
                 CHECK(n > 4 && (size_t)body[0] + 5 <= n - 2,
                       "native probe frame is complete");
                 if (n > 4 && (size_t)body[0] + 5 <= n - 2) {
                     CHECK(body[body[0] + 2] == 6, "probe install/removal uses IPv6 family");
-                    installed += kind == D2K_CMD_SET_NAME_PROBE;
-                    removed += kind == D2K_CMD_DEL_NAME_PROBE;
+                    installed += kind == D2S_CMD_SET_NAME_PROBE;
+                    removed += kind == D2S_CMD_DEL_NAME_PROBE;
                 }
             }
             off += 4 + n;
         }
         CHECK(installed && (proof || removed), "unconfirmed native trial is installed and cleaned up");
         tcp_owns_search = tcp_found_arm = 0;
-        tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
     }
     for (int proto_case = 0; proto_case < 2; proto_case++) {
         uint8_t transport = proto_case ? 17 : 6;
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        d2k_ev sh4 = {0}, sh6 = {0};
-        sh4.kind = sh6.kind = D2K_EV_SHAPE;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        d2s_ev sh4 = {0}, sh6 = {0};
+        sh4.kind = sh6.kind = D2S_EV_SHAPE;
         sh4.transport = sh6.transport = transport;
         sh4.family = 4; sh6.family = 6;
         if (!proto_case) {
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "shape-family.example",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "shape-family.example",
               sh4.shape, sizeof sh4.shape, &sh4.shape_len) == 0, "IPv4 legacy snapshot");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "shape-family.example",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "shape-family.example",
               sh6.shape, sizeof sh6.shape, &sh6.shape_len) == 0, "IPv6 modern snapshot");
         CHECK(sh4.shape_len != sh6.shape_len, "snapshot fixtures differ");
         } else {
             CHECK(quic_shape(&sh4, "shape-family.example") == 0, "IPv4 QUIC snapshot");
             sh4.family = 4;
-            CHECK(d2k_quic_probe_initial("shape-family.example", sh6.shape,
+            CHECK(d2s_quic_probe_initial("shape-family.example", sh6.shape,
                   sizeof sh6.shape, &sh6.shape_len) == 0, "IPv6 QUIC snapshot");
             CHECK(sh4.shape_len != sh6.shape_len ||
                   memcmp(sh4.shape, sh6.shape, sh4.shape_len) != 0, "QUIC fixtures differ");
         }
-        d2k_sched_event(s, &sh4); d2k_sched_event(s, &sh6);
-        tcp_answer = quic_answer = D2K_V_CLEAR;
+        d2s_sched_event(s, &sh4); d2s_sched_event(s, &sh6);
+        tcp_answer = quic_answer = D2S_V_CLEAR;
         quic_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
         drain(); forget_sent();
         for (int family = 4; family <= 6; family += 2) {
-            d2k_ev h = ev_hello(transport, 41018, "shape-family.example");
-            d2k_ev su = ev_suspect(transport, 41018);
+            d2s_ev h = ev_hello(transport, 41018, "shape-family.example");
+            d2s_ev su = ev_suspect(transport, 41018);
             h.family = su.family = (uint8_t)family;
             if (family == 6) {
                 CHECK(inet_pton(AF_INET6, "2001:db8::1", h.low_ip) == 1, "snapshot low IPv6");
@@ -4669,8 +4669,8 @@ admission_only_run:
                 memcpy(su.low_ip, h.low_ip, 16); memcpy(su.high_ip, h.high_ip, 16);
             }
             tcp_last_wire = 0;
-            d2k_sched_event(s, &h); d2k_sched_event(s, &su); settle(s);
-            const d2k_ev *want = family == 4 ? &sh4 : &sh6;
+            d2s_sched_event(s, &h); d2s_sched_event(s, &su); settle(s);
+            const d2s_ev *want = family == 4 ? &sh4 : &sh6;
             if (!proto_case) {
                 CHECK(tcp_last_wire == want->shape_len, "search uses snapshot from its own family");
             } else {
@@ -4685,22 +4685,22 @@ admission_only_run:
             memcpy(request + 1, "shape-family.example", nl);
             request[nl + 1] = transport; request[nl + 2] = (uint8_t)family;
             drain();
-            CHECK(sent_command_count(D2K_CMD_ARM_SHAPE, request, nl + 3) == 1,
+            CHECK(sent_command_count(D2S_CMD_ARM_SHAPE, request, nl + 3) == 1,
                   "snapshot request carries the search family");
             skip_ahead(s, 1000);
         }
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        tcp_answer = quic_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        tcp_answer = quic_answer = D2S_V_OPAQUE;
     }
     {
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         confirm_once(&c, sv[0], "family-sync.example", 40170);
         CHECK(c.n_boxes == 1 && c.boxes[0].n_binds == 1, "sync family fixture confirmed");
         if (c.n_boxes == 1 && c.boxes[0].n_binds == 1) {
-            d2k_cat_box *b = &c.boxes[0];
-            d2k_cat_binding *grown = realloc(b->binds, 3 * sizeof *grown);
+            d2s_cat_box *b = &c.boxes[0];
+            d2s_cat_binding *grown = realloc(b->binds, 3 * sizeof *grown);
             CHECK(grown != NULL, "allocate native family bindings");
             if (grown) {
                 b->binds = grown; b->n_binds = 3;
@@ -4709,9 +4709,9 @@ admission_only_run:
                 b->binds[1].family = b->binds[2].family = 6;
                 snprintf(b->binds[2].kind, sizeof b->binds[2].kind, "addr");
                 snprintf(b->binds[2].target, sizeof b->binds[2].target, "2001:db8::abcd");
-                d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
                 drain(); forget_sent();
-                (void)d2k_sched_sync(s); sync_out(s);
+                (void)d2s_sched_sync(s); sync_out(s);
                 unsigned name4 = 0, name6 = 0, addr6 = 0;
                 uint8_t want_addr[16];
                 CHECK(inet_pton(AF_INET6, "2001:db8::abcd", want_addr) == 1, "sync address fixture");
@@ -4722,23 +4722,23 @@ admission_only_run:
                     if (n < 2 || n > sent_len - off - 4) break;
                     unsigned kind = ((unsigned)p[4] << 8) | p[5];
                     const uint8_t *body = p + 6;
-                    if (kind == D2K_CMD_SET_NAME && n > 2 + 1 + strlen("family-sync.example") + 2 &&
+                    if (kind == D2S_CMD_SET_NAME && n > 2 + 1 + strlen("family-sync.example") + 2 &&
                         body[0] == strlen("family-sync.example") &&
                         !memcmp(body + 1, "family-sync.example", body[0])) {
                         name4 += body[2 + body[0]] == 4;
                         name6 += body[2 + body[0]] == 6;
                     }
-                    if (kind == D2K_CMD_SET_ADDR && n > 19 && body[0] == 6 &&
+                    if (kind == D2S_CMD_SET_ADDR && n > 19 && body[0] == 6 &&
                         !memcmp(body + 1, want_addr, 16)) addr6++;
                     off += 4 + n;
                 }
                 CHECK(name4 == 1 && name6 == 1, "sync restores each name family exactly once");
                 CHECK(addr6 == 1, "sync restores full native IPv6 address binding");
-                tcp_answer = D2K_V_CLEAR;
-                d2k_ev h = ev_hello(6, 41019, "family-sync.example");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, 41019);
-                d2k_sched_event(s, &su);
+                tcp_answer = D2S_V_CLEAR;
+                d2s_ev h = ev_hello(6, 41019, "family-sync.example");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, 41019);
+                d2s_sched_event(s, &su);
                 settle(s);
                 /* Задача 21: один прямой проход помечает, а не удаляет. */
                 CHECK(b->n_binds == 3 && b->binds[0].family == 4 &&
@@ -4749,44 +4749,44 @@ admission_only_run:
                           b->binds[2].family == 6 && !b->binds[2].recheck_since,
                           "IPv4 CLEAR retains IPv6 knowledge");
                 }
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_calls = 0; tcp_answer = D2K_V_CLEAR;
-        d2k_ev h = ev_hello(6, 41020, "family-clear.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41020);
-        d2k_sched_event(s, &su);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_calls = 0; tcp_answer = D2S_V_CLEAR;
+        d2s_ev h = ev_hello(6, 41020, "family-clear.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41020);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1, "IPv4 CLEAR fixture measured once");
         skip_ahead(s, 3 * 60 * 1000);
-        d2k_sched_event(s, &su);
-        CHECK(d2k_sched_active(s) == 0, "IPv4 CLEAR suppresses IPv4 repeat");
+        d2s_sched_event(s, &su);
+        CHECK(d2s_sched_active(s) == 0, "IPv4 CLEAR suppresses IPv4 repeat");
         h.family = su.family = 6;
         CHECK(inet_pton(AF_INET6, "2001:db8::1", h.low_ip) == 1, "CLEAR low fixture");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", h.high_ip) == 1, "CLEAR high fixture");
         memcpy(su.low_ip, h.low_ip, 16); memcpy(su.high_ip, h.high_ip, 16);
-        d2k_sched_event(s, &h);
-        d2k_sched_event(s, &su);
-        CHECK(d2k_sched_active(s) == 1, "IPv4 CLEAR must not suppress IPv6 search");
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_event(s, &h);
+        d2s_sched_event(s, &su);
+        CHECK(d2s_sched_active(s) == 1, "IPv4 CLEAR must not suppress IPv6 search");
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
     /* Bound network work during a burst of distinct targets. Two measurements
        may run at once; the rest stay queued, including events beyond the old
        16-entry queue cap. Releasing the workers starts queued work without a
        new datapath event. The stub never touches an external host. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_calls = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         tcp_wait_until_stop = 1;
         tcp_release_waiters = 0;
         CHECK(s != NULL, "планировщик ограничения нагрузки не завёлся");
@@ -4796,22 +4796,22 @@ admission_only_run:
                 char name[48];
                 uint16_t port = (uint16_t)(41030 + i);
                 snprintf(name, sizeof name, "burst-%02u.example", (unsigned)i);
-                d2k_ev h = ev_hello(6, port, name);
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, name);
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port);
+                d2s_sched_event(s, &su);
             }
             settle(s);
             CHECK(tcp_calls == 2,
                   "всплеск запустил больше двух сетевых замеров одновременно");
-            CHECK(d2k_sched_active(s) == 20,
+            CHECK(d2s_sched_active(s) == 20,
                   "часть подозрений потерялась после заполнения очереди");
-            char live_path[] = "/tmp/d2k-queue-time-XXXXXX";
+            char live_path[] = "/tmp/d2s-queue-time-XXXXXX";
             int live_fd = mkstemp(live_path);
             CHECK(live_fd >= 0, "queue time fixture");
             if (live_fd >= 0) {
                 close(live_fd);
-                CHECK(!d2k_sched_write_live(s, live_path, "catalog.json"), "queue live write");
+                CHECK(!d2s_sched_write_live(s, live_path, "catalog.json"), "queue live write");
                 char body[16384] = {0}; FILE *live = fopen(live_path, "r");
                 if (live) { (void)!fread(body, 1, sizeof body - 1, live); fclose(live); }
                 const char *row = strstr(body, "burst-19.example");
@@ -4844,32 +4844,32 @@ admission_only_run:
             }
             CHECK(tcp_calls > 2,
                   "очередь не продолжилась без нового сигнала datapath");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0;
         tcp_release_waiters = 0;
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
     {
         /* Задача 38: темп запуска — не больше одного нового замера за
            250 мс (было 1 с). События пришли до первого тика: время ещё
            неизвестно, оба первых стартуют; третий ждёт паузу от первого
            тика и выходит из очереди после 250 мс, а не через секунду. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_calls = 0;
         tcp_block_until_stop = 0;
-        tcp_answer = D2K_V_CLEAR;
+        tcp_answer = D2S_V_CLEAR;
         if (s) {
             for (uint16_t i = 0; i < 3; i++) {
                 char name[48];
                 uint16_t port = (uint16_t)(41040 + i);
                 snprintf(name, sizeof name, "paced-%u.example", (unsigned)i);
-                d2k_ev h = ev_hello(6, port, name);
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, name);
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port);
+                d2s_sched_event(s, &su);
             }
             spin(s, 40); /* 200 мс: оба первых уже кончились, пауза ещё идёт */
             CHECK(tcp_calls == 2,
@@ -4877,39 +4877,39 @@ admission_only_run:
             spin(s, 30); /* 350 мс */
             CHECK(tcp_calls == 3,
                   "очередь не продолжилась через 250 мс (осталась прежняя секунда)");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
     {
         /* Задача 38: темп касается и свежего подозрения при уже идущем
            замере — всплеск живого трафика не даёт пачки SYN. Предел 2 (нет
            данных), часы уже идут: второй стартует не раньше 250 мс. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         tcp_calls = 0; tcp_stop_count = 0;
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         if (s) {
             spin(s, 1);
             for (uint16_t i = 0; i < 2; i++) {
                 char name[48];
                 uint16_t port = (uint16_t)(41050 + i);
                 snprintf(name, sizeof name, "pace-live-%u.example", (unsigned)i);
-                d2k_ev h = ev_hello(6, port, name); d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, name); d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             }
             spin(s, 40); /* 200 мс */
             CHECK(tcp_calls == 1, "pace: второй замер стартовал раньше 250 мс после первого");
             spin(s, 20); /* 300 мс */
             CHECK(tcp_calls == 2, "pace: второй замер не стартовал после паузы 250 мс");
             tcp_release_waiters = 1; spin(s, 60); tcp_release_waiters = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0;
-        tcp_answer = D2K_V_OPAQUE;
-        d2k_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
+        d2s_catalog_free(&c);
     }
     /* ЗАДАЧА 29 → 38: параллельность замеров по измеренным ресурсам с
        запасом. Задача 29 мерила только процессор и ставила потолок
@@ -4922,24 +4922,24 @@ admission_only_run:
     {
         /* Разбор строки /proc/stat: занятость без idle и iowait. */
         uint64_t b = 0, tt = 0;
-        CHECK(d2k_sched_cpu_parse("cpu  100 5 50 800 40 3 2 0 0 0\n", &b, &tt) == 0 &&
+        CHECK(d2s_sched_cpu_parse("cpu  100 5 50 800 40 3 2 0 0 0\n", &b, &tt) == 0 &&
               b == 160 && tt == 1000, "cpu parse: busy/total из строки cpu");
-        CHECK(d2k_sched_cpu_parse("cpu0 1 2 3 4\n", &b, &tt) != 0,
+        CHECK(d2s_sched_cpu_parse("cpu0 1 2 3 4\n", &b, &tt) != 0,
               "cpu parse: строка отдельного ядра принята за общую");
-        CHECK(d2k_sched_cpu_parse("intr 1 2 3\n", &b, &tt) != 0,
+        CHECK(d2s_sched_cpu_parse("intr 1 2 3\n", &b, &tt) != 0,
               "cpu parse: чужая строка принята");
     }
     {
         /* Разбор /proc/meminfo: MemTotal и MemAvailable в кБ; без
            MemAvailable (ядро старше 3.14) данных о памяти нет. */
         uint64_t av = 0, tot = 0;
-        CHECK(d2k_sched_meminfo_parse("MemTotal:         254000 kB\nMemFree:  10000 kB\n"
+        CHECK(d2s_sched_meminfo_parse("MemTotal:         254000 kB\nMemFree:  10000 kB\n"
                                       "MemAvailable:     120000 kB\nBuffers: 1 kB\n",
                                       &av, &tot) == 0 && av == 120000 && tot == 254000,
               "meminfo parse: MemTotal/MemAvailable");
-        CHECK(d2k_sched_meminfo_parse("MemTotal: 254000 kB\nMemFree: 10000 kB\n", &av, &tot) != 0,
+        CHECK(d2s_sched_meminfo_parse("MemTotal: 254000 kB\nMemFree: 10000 kB\n", &av, &tot) != 0,
               "meminfo parse: без MemAvailable принята оценка");
-        CHECK(d2k_sched_meminfo_parse("garbage\n", &av, &tot) != 0,
+        CHECK(d2s_sched_meminfo_parse("garbage\n", &av, &tot) != 0,
               "meminfo parse: чужой текст принят");
     }
     {
@@ -4947,15 +4947,15 @@ admission_only_run:
            нехватка памяти (20 % от 512 МБ = 102 МБ > 32 МБ) — предел вдвое
            на каждом снимке до 1; идущие не прерываются; один замер
            разрешён всегда. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         res_ok(1);
         tcp_calls = 0; tcp_saw_stop = 0; tcp_stop_count = 0;
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         CHECK(s != NULL, "aimd: планировщик не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             saidbuf[0] = '\0';
             for (int i = 0; i < 4; i++) skip_ahead(s, 1000);
             CHECK(said("замеров 0 из 2, запас по всем ресурсам"),
@@ -4988,23 +4988,23 @@ admission_only_run:
             CHECK(said("замеров 64 из 1, упёрлись в: память"),
                   "aimd: журнал не назвал память причиной снижения");
             tcp_release_waiters = 1; spin(s, 60); tcp_release_waiters = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
         res_ok(0);
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
     {
         /* Минимум 1: нехватка памяти с самого начала — 2 → 1 и не ниже;
            один замер при этом идёт всегда, второй ждёт в очереди. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         res_ok(1);
         mem_avail_kb_v = 20u * 1024;
         tcp_calls = 0; tcp_stop_count = 0;
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         if (s) {
             for (int i = 0; i < 10; i++) skip_ahead(s, 1000);
             CHECK(live_limit(s) == 1, "min: нехватка памяти не опустила предел до 1 или опустила ниже");
@@ -5012,33 +5012,33 @@ admission_only_run:
                 char name[48];
                 uint16_t port = (uint16_t)(42150 + i);
                 snprintf(name, sizeof name, "aimd-one-%u.example", (unsigned)i);
-                d2k_ev h = ev_hello(6, port, name); d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, name); d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             }
             spin(s, 100);
             for (int i = 0; i < 3; i++) skip_ahead(s, 1000);
             spin(s, 20);
-            CHECK(tcp_calls == 1 && d2k_sched_active(s) == 2,
+            CHECK(tcp_calls == 1 && d2s_sched_active(s) == 2,
                   "min: при пределе 1 идёт не ровно один замер (второй не в очереди)");
             tcp_release_waiters = 1; spin(s, 60); tcp_release_waiters = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
         res_ok(0);
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
     {
         /* Процессор: свободно 30 % (между 25 и 40) — предел держится: ни
            роста при спросе, ни снижения; ниже 25 % — вдвое за снимок. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         res_ok(1);
         tcp_calls = 0; tcp_stop_count = 0;
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             saidbuf[0] = '\0';
             for (int i = 0; i < 4; i++) skip_ahead(s, 1000);
             (void)meas_ramp(s, "cpu-up", 42200, 8);
@@ -5066,24 +5066,24 @@ admission_only_run:
             CHECK(tcp_stop_count == 0, "cpu: снижение прервало идущие замеры");
             CHECK(said("упёрлись в: процессор"), "cpu: журнал не назвал процессор");
             tcp_release_waiters = 1; spin(s, 60); tcp_release_waiters = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
         res_ok(0);
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
     {
         /* conntrack: 59 % — запас, 60 % — вдвое. Память: при MemTotal
            128 МБ запас — 32 МБ (20 % меньше), 33 МБ хватает. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         res_ok(1);
         tcp_calls = 0; tcp_stop_count = 0;
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             saidbuf[0] = '\0';
             for (int i = 0; i < 4; i++) skip_ahead(s, 1000);
             mem_total_kb_v = 128u * 1024; mem_avail_kb_v = 33u * 1024;
@@ -5104,22 +5104,22 @@ admission_only_run:
             CHECK(live_limit(s) == 1 && said("упёрлись в: память"),
                   "mem: 31 МБ при запасе 32 МБ не названы нехваткой памяти");
             tcp_release_waiters = 1; spin(s, 60); tcp_release_waiters = 0;
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
         res_ok(0);
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
     {
         /* Мёртвая зона журнала (задача 29) сохранена: conntrack, скачущий
            через 60 % каждый снимок, не пишет строку на каждом
            пересечении; устоявшееся состояние называется один раз. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         res_ok(1);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             saidbuf[0] = '\0';
             for (int i = 0; i < 4; i++) skip_ahead(s, 1000);
             CHECK(said("замеров 0 из 2, запас по всем ресурсам"), "log: первый предел не назван");
@@ -5133,10 +5133,10 @@ admission_only_run:
             for (int i = 0; i < 12; i++) skip_ahead(s, 1000);
             CHECK(said("замеров 0 из 1, запас по всем ресурсам"),
                   "log: устоявшийся предел не назван");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         res_ok(0);
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
     {
         /* Горячая цель: по ждущей в очереди пришло новое подозрение — она
@@ -5144,23 +5144,23 @@ admission_only_run:
            данных о ресурсах: предел 2, темп 250 мс (задача 38: свежее
            подозрение при идущем замере тоже ждёт паузу, поэтому run1 встаёт
            в очередь первым и выходит через 250 мс). */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_calls = 0; tcp_block_until_stop = 0; tcp_answer = D2K_V_CLEAR;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_calls = 0; tcp_block_until_stop = 0; tcp_answer = D2S_V_CLEAR;
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 1);
             const char *names[5] = { "hot-run0.example", "hot-run1.example",
                                      "hot-a.example", "hot-b.example", "hot-c.example" };
             for (uint16_t i = 0; i < 5; i++) {
                 uint16_t port = (uint16_t)(41140 + i);
-                d2k_ev h = ev_hello(6, port, names[i]); d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, port, names[i]); d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             }
             spin(s, 55); /* 275 мс: run0 сразу, run1 — через паузу */
             CHECK(tcp_calls == 2, "hot: run0 и run1 не стартовали за первую паузу");
             saidbuf[0] = '\0';
-            d2k_ev again = ev_suspect(6, 41144); d2k_sched_event(s, &again);
+            d2s_ev again = ev_suspect(6, 41144); d2s_sched_event(s, &again);
             skip_ahead(s, 250);
             CHECK(said("по hot-c.example ожидание в очереди") &&
                   !said("по hot-a.example ожидание в очереди"),
@@ -5170,10 +5170,10 @@ admission_only_run:
             CHECK(said("по hot-a.example ожидание в очереди") &&
                   !said("по hot-b.example ожидание в очереди"),
                   "hot: тихая очередь нарушила FIFO");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        tcp_answer = D2K_V_OPAQUE;
-        d2k_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
+        d2s_catalog_free(&c);
     }
     if (admission_only) {
         close(sv[0]); close(sv[1]);
@@ -5194,14 +5194,14 @@ admission_only_run:
             { "nottelegram.org", 0 },
         };
         for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-            d2k_catalog empty = {0};
-            d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+            d2s_catalog empty = {0};
+            d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
             uint16_t port = (uint16_t)(40600 + i);
             tcp_calls = quic_calls = 0;
-            d2k_ev h = ev_hello(6, port, cases[i].name);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port);
-            int rc = d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, cases[i].name);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port);
+            int rc = d2s_sched_event(s, &su);
             if (cases[i].excluded) {
                 CHECK(rc == 0, "telegram.org попал в очередь замеров");
                 settle(s);
@@ -5212,8 +5212,8 @@ admission_only_run:
                 settle(s);
                 CHECK(tcp_calls == 1, "посторонний домен перестал измеряться");
             }
-            d2k_sched_free(s);
-            d2k_catalog_free(&empty);
+            d2s_sched_free(s);
+            d2s_catalog_free(&empty);
         }
     }
 
@@ -5222,21 +5222,21 @@ admission_only_run:
        те же имена завершают обмен без плана. RST на рукопожатии гасится,
        обрыв объёма (позднее закрытие) — нет. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         tcp_calls = quic_calls = 0;
         const char *nm = "clean.media.test";
         /* Поток A: обмен с ответом сервера без плана → чистое рукопожатие. */
-        d2k_ev hA = ev_hello(6, 40700, nm); d2k_sched_event(s, &hA);
-        d2k_ev xA = ev_exchange(6, 40700, 1); xA.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &xA);
+        d2s_ev hA = ev_hello(6, 40700, nm); d2s_sched_event(s, &hA);
+        d2s_ev xA = ev_exchange(6, 40700, 1); xA.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &xA);
         /* Поток B: RST на рукопожатии того же имени без плана → гасим. */
-        d2k_ev hB = ev_hello(6, 40701, nm); d2k_sched_event(s, &hB);
-        d2k_ev suB = ev_suspect(6, 40701); suB.code = D2K_SUSPECT_RST;
-        suB.planned = D2K_LINK_PLANNED_NO;
-        int rcB = d2k_sched_event(s, &suB);
+        d2s_ev hB = ev_hello(6, 40701, nm); d2s_sched_event(s, &hB);
+        d2s_ev suB = ev_suspect(6, 40701); suB.code = D2S_SUSPECT_RST;
+        suB.planned = D2S_LINK_PLANNED_NO;
+        int rcB = d2s_sched_event(s, &suB);
         CHECK(rcB == 0, "чистое рукопожатие: RST попал в очередь замеров");
         settle(s);
         CHECK(tcp_calls == 0 && quic_calls == 0,
@@ -5245,17 +5245,17 @@ admission_only_run:
               "чистое рукопожатие: причина гашения не названа");
         /* А обрыв объёма (позднее закрытие) по тому же имени гасить нельзя. */
         tcp_calls = quic_calls = vol_calls = 0; saidbuf[0] = '\0';
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, nm, D2K_SHAPE_MODERN) == 0, "clean-media shape");
-        d2k_sched_event(s, &sh);
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, nm, D2S_SHAPE_MODERN) == 0, "clean-media shape");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, nm, 40702);
-        d2k_ev suV = ev_suspect(6, 40703); suV.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_ev hV = ev_hello(6, 40703, nm); d2k_sched_event(s, &hV);
-        d2k_sched_event(s, &suV);
+        d2s_ev suV = ev_suspect(6, 40703); suV.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_ev hV = ev_hello(6, 40703, nm); d2s_sched_event(s, &hV);
+        d2s_sched_event(s, &suV);
         settle(s);
         CHECK(vol_calls == 1,
               "чистое рукопожатие ошибочно погасило обрыв объёма");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
     }
 
     /* Чистое рукопожатие одного LAN-клиента не доказывает, что другой
@@ -5265,60 +5265,60 @@ admission_only_run:
 
     /* --- своё имя-приманка — не цель ------------------------------------
        Поле 14.10.2026: приветствия с disk.rzd.ru (приманка SCHED_DECOY) шли
-       через роутер от второго D2K за ним (его фальшивки и контроль), коробка
+       через роутер от второго D2S за ним (его фальшивки и контроль), коробка
        их не отвечала, датапат увидел «приветствие повторено», и контроллер
        искал обход своей же приманки по адресам чужих целей. Приманку выбирают
        как имя, которое проходит; поиск по ней ничего не открывает. */
     {
         static const char *const decoys[] = { "disk.rzd.ru", "DISK.RZD.RU" };
         for (size_t i = 0; i < 2; i++) {
-            d2k_catalog empty = {0};
-            d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+            d2s_catalog empty = {0};
+            d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
             uint16_t port = (uint16_t)(40620 + i);
             tcp_calls = quic_calls = 0;
-            d2k_ev h = ev_hello(i ? 17 : 6, port, decoys[i]);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(i ? 17 : 6, port);
-            int rc = d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(i ? 17 : 6, port, decoys[i]);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(i ? 17 : 6, port);
+            int rc = d2s_sched_event(s, &su);
             CHECK(rc == 0, "своя приманка попала в очередь замеров");
             settle(s);
             CHECK(tcp_calls == 0 && quic_calls == 0,
                   "своя приманка запустила сетевое измерение");
-            d2k_sched_free(s);
-            d2k_catalog_free(&empty);
+            d2s_sched_free(s);
+            d2s_catalog_free(&empty);
         }
     }
 
     /* --- подозрение по TCP идёт в дерево вердиктов --------------------- */
     {
         tcp_calls = quic_calls = 0;
-        d2k_sched *s = d2k_sched_new(&cat, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cat, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик не завёлся");
-        d2k_ev h = ev_hello(6, 40001, "instagram.com");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40001);
-        CHECK(d2k_sched_event(s, &su) == 1, "поиск по TCP не начат");
+        d2s_ev h = ev_hello(6, 40001, "instagram.com");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40001);
+        CHECK(d2s_sched_event(s, &su) == 1, "поиск по TCP не начат");
         settle(s);
         CHECK(tcp_calls == 1, "дерево вердиктов TCP не вызвано");
         CHECK(quic_calls == 0, "по TCP-подозрению позван вопросник QUIC");
         CHECK(strcmp(tcp_last_ip, "127.0.0.1") == 0,
               "дереву вердиктов достался не адрес сервера из ключа потока");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- подозрение по UDP идёт в вопросник QUIC ----------------------- */
     {
         tcp_calls = quic_calls = 0;
-        d2k_sched *s = d2k_sched_new(&cat, sv[0], 0x2d);
-        d2k_sched_set_measure_mark(s, 0x2f);
-        d2k_ev h = ev_hello(17, 40002, "instagram.com");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40002);
-        CHECK(d2k_sched_event(s, &su) == 1, "поиск по QUIC не начат");
+        d2s_sched *s = d2s_sched_new(&cat, sv[0], 0x2d);
+        d2s_sched_set_measure_mark(s, 0x2f);
+        d2s_ev h = ev_hello(17, 40002, "instagram.com");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40002);
+        CHECK(d2s_sched_event(s, &su) == 1, "поиск по QUIC не начат");
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "instagram.com") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(quic_calls >= 1, "вопросник QUIC не вызван");
@@ -5327,7 +5327,7 @@ admission_only_run:
         CHECK(tcp_calls == 0, "по UDP-подозрению позвано дерево вердиктов TCP");
         CHECK(strcmp(quic_last_sni, "instagram.com") == 0,
               "вопроснику QUIC досталось не имя цели");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- QUIC НАЧИНАЕТСЯ СВОИМ INITIAL, КАК buildInitial ДОНОРА --------
@@ -5336,15 +5336,15 @@ admission_only_run:
      * настоящим парсером; обе стороны должны быть QUIC, а не просто байты. */
     {
         tcp_calls = quic_calls = 0;
-        d2k_catalog cW;
+        d2s_catalog cW;
         memset(&cW, 0, sizeof cW);
-        d2k_sched *s = d2k_sched_new(&cW, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cW, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(17, 40004, "ждём.форму");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40004);
-        CHECK(d2k_sched_event(s, &su) == 1, "подозрение по QUIC не завело задачу");
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(17, 40004, "ждём.форму");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40004);
+        CHECK(d2s_sched_event(s, &su) == 1, "подозрение по QUIC не завело задачу");
         settle(s);
         CHECK(quic_calls == 1, "оригинальный QUIC-поиск не запущен без снимка");
         CHECK(tcp_calls == 0 && strcmp(quic_last_trig, "ждём.форму") == 0 &&
@@ -5357,9 +5357,9 @@ admission_only_run:
 
         /* Поздний снимок не подменяет вход уже идущего опыта. */
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "ждём.форму") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(quic_calls == 1, "снимок подменил вход текущего QUIC-опыта");
@@ -5370,8 +5370,8 @@ admission_only_run:
            базовая живость не подтверждалась никогда. */
         CHECK(strcmp(quic_last_ctl, "disk.rzd.ru") == 0,
               "контроль по QUIC не собран из входа с именем приманки");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cW);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cW);
     }
 
     /* SHAPE, пришедший ПОКА ИДЁТ QUIC Run, относится к тому же имени и
@@ -5379,19 +5379,19 @@ admission_only_run:
        Нельзя менять вход активного опыта; повтор обязан получить реальные
        байты события, а не пересобранный профиль с тем же SNI. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         tcp_calls = quic_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
         snapshot_enabled = 1;
         snapshot_entered = snapshot_release = snapshot_ok = 0;
-        quic_answer = D2K_V_CLEAR;
-        d2k_ev h = ev_hello(17, 40005, "late.quic.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40005);
-        d2k_sched_event(s, &su);
+        quic_answer = D2S_V_CLEAR;
+        d2s_ev h = ev_hello(17, 40005, "late.quic.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40005);
+        d2s_sched_event(s, &su);
         pthread_mutex_lock(&snapshot_mu);
         struct timespec snapshot_deadline;
         clock_gettime(CLOCK_REALTIME, &snapshot_deadline);
@@ -5404,10 +5404,10 @@ admission_only_run:
         int quic_entered = snapshot_entered;
         pthread_mutex_unlock(&snapshot_mu);
         CHECK(quic_entered, "QUIC worker не достиг контрольного барьера");
-        d2k_ev sh;
+        d2s_ev sh;
         CHECK(quic_shape(&sh, "late.quic.example") == 0,
               "поздний QUIC снимок не собрался");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         pthread_mutex_lock(&snapshot_mu);
         snapshot_release = 1;
         pthread_cond_broadcast(&snapshot_cv);
@@ -5419,32 +5419,32 @@ admission_only_run:
         CHECK(quic_seen_trigger_lens[1] == sh.shape_len &&
               memcmp(quic_seen_triggers[1], sh.shape, sh.shape_len) == 0,
               "повтор QUIC-измерения не получил точные байты позднего снимка");
-        d2k_sched_free(s);
-        d2k_catalog_free(&empty);
+        d2s_sched_free(s);
+        d2s_catalog_free(&empty);
         snapshot_enabled = 0;
-        quic_answer = D2K_V_OPAQUE;
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* Свежий QUIC snapshot во время VERIFY отменяет только поставленный
        кандидат. Без этого барьера scheduler успевал записать профильный
        trial как будто это байты клиента. */
     {
-        d2k_catalog cV;
+        d2s_catalog cV;
         memset(&cV, 0, sizeof cV);
-        d2k_sched *s = d2k_sched_new(&cV, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cV, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         quic_calls = ver_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_answer_port = 40006;
         ver_snapshot_enabled = 1;
         ver_snapshot_entered = ver_snapshot_release = 0;
-        d2k_ev h = ev_hello(17, 40006, "verify.snapshot.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40006);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40006, "verify.snapshot.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40006);
+        d2s_sched_event(s, &su);
         spin(s, 20);
         pthread_mutex_lock(&snapshot_mu);
         struct timespec verify_deadline;
@@ -5457,10 +5457,10 @@ admission_only_run:
         }
         pthread_mutex_unlock(&snapshot_mu);
         CHECK(ver_snapshot_entered, "QUIC VERIFY не достиг контрольного барьера");
-        d2k_ev sh;
+        d2s_ev sh;
         CHECK(quic_shape(&sh, "verify.snapshot.example") == 0,
               "VERIFY snapshot не собрался");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         pthread_mutex_lock(&snapshot_mu);
         ver_snapshot_release = 1;
         pthread_cond_broadcast(&snapshot_cv);
@@ -5472,9 +5472,9 @@ admission_only_run:
               memcmp(quic_seen_triggers[1], sh.shape, sh.shape_len) == 0,
               "повтор после VERIFY не получил точные байты snapshot клиента");
         ver_snapshot_enabled = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cV);
-        quic_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cV);
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* --- СНИМОК СОСЕДА ЗАКРЫВАЕТ ХОЛОДНЫЙ СТАРТ QUIC ---------------------
@@ -5486,36 +5486,36 @@ admission_only_run:
      * секунд листания на живой линии.
      *
      * Байты приветствия задаёт КЛИЕНТ: снимок, снятый с одной цели, годится
-     * соседней с переписанным именем (d2k_quic_hello_rename — им уже
+     * соседней с переписанным именем (d2s_quic_hello_rename — им уже
      * собирается контроль). Проверяем, что вторая цель мерится СРАЗУ и своим
      * именем, а не ждёт собственного снимка. */
     {
         tcp_calls = quic_calls = 0;
-        d2k_catalog cQ;
+        d2s_catalog cQ;
         memset(&cQ, 0, sizeof cQ);
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
 
-        d2k_ev h1 = ev_hello(17, 40201, "первая.цель");
-        d2k_sched_event(s, &h1);
-        d2k_ev su1 = ev_suspect(17, 40201);
-        d2k_sched_event(s, &su1);
+        d2s_ev h1 = ev_hello(17, 40201, "первая.цель");
+        d2s_sched_event(s, &h1);
+        d2s_ev su1 = ev_suspect(17, 40201);
+        d2s_sched_event(s, &su1);
         settle(s);
         CHECK(quic_calls == 1, "первая цель QUIC не начала собственный замер без снимка");
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "первая.цель") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(quic_calls == 1, "после прихода формы поиск первой цели не начался");
 
         /* Вторая цель — своего снимка у неё нет и не будет. */
-        d2k_ev h2 = ev_hello(17, 40202, "вторая.цель");
-        d2k_sched_event(s, &h2);
-        d2k_ev su2 = ev_suspect(17, 40202);
-        d2k_sched_event(s, &su2);
+        d2s_ev h2 = ev_hello(17, 40202, "вторая.цель");
+        d2s_sched_event(s, &h2);
+        d2s_ev su2 = ev_suspect(17, 40202);
+        d2s_sched_event(s, &su2);
         settle(s);
         CHECK(quic_calls == 2,
               "вторая цель QUIC ушла ждать собственный снимок — рилсы так и теряются");
@@ -5523,8 +5523,8 @@ admission_only_run:
               "мерить пошли чужим именем: снимок соседа не переименован");
         CHECK(strcmp(quic_last_ctl, "disk.rzd.ru") == 0,
               "контроль из переписанного снимка не собрался");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cQ);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cQ);
     }
 
     /* --- КОРОБКА НЕ ОБХОДИТ ПРЯМОЙ ЗАМЕР -------------------------------
@@ -5532,15 +5532,15 @@ admission_only_run:
      * блокировки именно у этой цели. */
     {
         tcp_calls = quic_calls = 0;
-        d2k_catalog cK;
+        d2s_catalog cK;
         memset(&cK, 0, sizeof cK);
         cK.boxes = calloc(1, sizeof *cK.boxes);
         CHECK(cK.boxes != NULL, "не удалось создать модель коробки");
         if (cK.boxes) {
             cK.n_boxes = 1;
-            d2k_cat_box *b = &cK.boxes[0];
+            d2s_cat_box *b = &cK.boxes[0];
             snprintf(b->id, sizeof b->id, "box-quic-known");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
             b->fp.sig[0].ttl = 127;
@@ -5554,7 +5554,7 @@ admission_only_run:
                 b->plans[0].successes = 4;
                 snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "quic");
                 b->plans[0].text = strdup(
-                    "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                    "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                     "proto udp quic\npayload 1 aabb\n"
                     "fake payload=1 poison=0 repeats=1 gap_us=0 place=before\n"
                     "order forward\n");
@@ -5565,7 +5565,7 @@ admission_only_run:
                 b->plans[1].successes = 2;
                 snprintf(b->plans[1].proto, sizeof b->plans[1].proto, "tls");
                 b->plans[1].text = strdup(
-                    "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                    "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                     "proto tcp tls\nsplit payload_start +1\norder forward\n");
                 CHECK(b->plans[1].text != NULL, "TLS-план коробки не создался");
             }
@@ -5581,7 +5581,7 @@ admission_only_run:
                 b->binds[0].enabled = 1;
                 b->binds[0].level = 3;
                 b->binds[0].transport = 17;
-                b->binds[0].shape = D2K_LINK_SHAPE_QUIC;
+                b->binds[0].shape = D2S_LINK_SHAPE_QUIC;
                 snprintf(b->binds[1].kind, sizeof b->binds[1].kind, "name");
                 snprintf(b->binds[1].target, sizeof b->binds[1].target,
                          "новый.хост.цдн");
@@ -5590,22 +5590,22 @@ admission_only_run:
                 b->binds[1].enabled = 1;
                 b->binds[1].level = 3;
                 b->binds[1].transport = 6;
-                b->binds[1].shape = D2K_SHAPE_MODERN;
+                b->binds[1].shape = D2S_SHAPE_MODERN;
             }
             if (b->plans && b->plans[0].text) {
                 /* An existing box plan is not evidence that this target is
                    blocked. A clear direct QUIC measurement must stop before
                    installing the catalog plan. */
                 {
-                    d2k_sched *s = d2k_sched_new(&cK, sv[0], 0x2d);
+                    d2s_sched *s = d2s_sched_new(&cK, sv[0], 0x2d);
                     saidbuf[0] = '\0';
-                    d2k_sched_set_say(s, collect_say, NULL);
-                    quic_answer = D2K_V_CLEAR;
+                    d2s_sched_set_say(s, collect_say, NULL);
+                    quic_answer = D2S_V_CLEAR;
                     quic_calls = ver_calls = 0;
-                    d2k_ev h = ev_hello(17, 40202, "новый.хост.цдн");
-                    d2k_sched_event(s, &h);
-                    d2k_ev su = ev_suspect(17, 40202);
-                    d2k_sched_event(s, &su);
+                    d2s_ev h = ev_hello(17, 40202, "новый.хост.цдн");
+                    d2s_sched_event(s, &h);
+                    d2s_ev su = ev_suspect(17, 40202);
+                    d2s_sched_event(s, &su);
                     settle(s);
                     CHECK(quic_calls == 1,
                           "известная коробка обошла прямое QUIC-измерение");
@@ -5621,21 +5621,21 @@ admission_only_run:
                           "прямой проход не пометил старую QUIC-привязку или задел TLS");
                     CHECK(cK.revision > 0,
                           "снятие устаревшей привязки не отметило каталог для сохранения");
-                    d2k_sched_free(s);
+                    d2s_sched_free(s);
                 }
 
                 /* A flaky 2/3 direct measurement is uncertainty, not a
                    license to probe Ozon-like targets with a known bypass. */
                 {
-                    d2k_sched *s = d2k_sched_new(&cK, sv[0], 0x2d);
+                    d2s_sched *s = d2s_sched_new(&cK, sv[0], 0x2d);
                     saidbuf[0] = '\0';
-                    d2k_sched_set_say(s, collect_say, NULL);
-                    quic_answer = D2K_V_FLAKY;
+                    d2s_sched_set_say(s, collect_say, NULL);
+                    quic_answer = D2S_V_FLAKY;
                     quic_calls = ver_calls = 0;
-                    d2k_ev h = ev_hello(17, 40206, "сомнительная.цель");
-                    d2k_sched_event(s, &h);
-                    d2k_ev su = ev_suspect(17, 40206);
-                    d2k_sched_event(s, &su);
+                    d2s_ev h = ev_hello(17, 40206, "сомнительная.цель");
+                    d2s_sched_event(s, &h);
+                    d2s_ev su = ev_suspect(17, 40206);
+                    d2s_sched_event(s, &su);
                     settle(s);
                     CHECK(quic_calls == 1,
                           "неоднозначная коробка не прошла прямой QUIC-замер");
@@ -5643,29 +5643,29 @@ admission_only_run:
                           "при неоднозначном QUIC-замере применялся обход");
                     CHECK(!said("готовых планов узнанной коробки"),
                           "готовый обход применён без подтверждения блокировки");
-                    d2k_sched_free(s);
-                    quic_answer = D2K_V_OPAQUE;
+                    d2s_sched_free(s);
+                    quic_answer = D2S_V_OPAQUE;
                 }
 
                 /* With a positive direct-block verdict, reuse stays first:
                    measure first, then try the box plan before synthesis. */
-                d2k_sched *s = d2k_sched_new(&cK, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&cK, sv[0], 0x2d);
                 saidbuf[0] = '\0';
-                d2k_sched_set_say(s, collect_say, NULL);
-                quic_answer = D2K_V_OPAQUE;
-                ver_answer = D2K_VER_APPLICATION;
+                d2s_sched_set_say(s, collect_say, NULL);
+                quic_answer = D2S_V_OPAQUE;
+                ver_answer = D2S_VER_APPLICATION;
                 ver_fail_first = 0;
                 ver_calls = 0;
                 quic_calls = 0;
                 ver_answer_port = 40203;
-                d2k_ev h = ev_hello(17, 40203, "новый.хост.цдн");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(17, 40203);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(17, 40203, "новый.хост.цдн");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(17, 40203);
+                d2s_sched_event(s, &su);
                 spin_until_installed(s);
                 {
-                    d2k_ev ap = ev_applied(17, 40203);
-                    d2k_sched_event(s, &ap);
+                    d2s_ev ap = ev_applied(17, 40203);
+                    d2s_sched_event(s, &ap);
                     spin(s, 80);
                 }
                 CHECK(said("готовых планов узнанной коробки"),
@@ -5673,10 +5673,10 @@ admission_only_run:
                 CHECK(quic_calls == 1,
                       "прямой QUIC-замер не выполнен до готового плана");
                 CHECK(ver_calls >= 1, "готовый план не дошёл до зонда");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&cK);
+        d2s_catalog_free(&cK);
     }
 
     /* --- ЗАМЕР ПОСЛЕ ПРОВАЛА ГОТОВЫХ ПЛАНОВ ИДЁТ С КОНТРОЛЕМ ------------
@@ -5691,15 +5691,15 @@ admission_only_run:
      * Снимок здесь приезжает ПОСЛЕ входа в испытание — ровно как на линии. */
     {
         tcp_calls = quic_calls = 0;
-        d2k_catalog cR;
+        d2s_catalog cR;
         memset(&cR, 0, sizeof cR);
         cR.boxes = calloc(1, sizeof *cR.boxes);
         CHECK(cR.boxes != NULL, "не удалось создать модель коробки");
         if (cR.boxes) {
             cR.n_boxes = 1;
-            d2k_cat_box *b = &cR.boxes[0];
+            d2s_cat_box *b = &cR.boxes[0];
             snprintf(b->id, sizeof b->id, "box-quic-remeasure");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
             b->fp.sig[0].ttl = 127;
@@ -5713,31 +5713,31 @@ admission_only_run:
                 b->plans[0].successes = 3;
                 snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "quic");
                 b->plans[0].text = strdup(
-                    "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                    "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                     "proto udp quic\npayload 1 aabb\n"
                     "fake payload=1 poison=0 repeats=1 gap_us=0 place=before\n"
                     "order forward\n");
                 CHECK(b->plans[0].text != NULL, "текст плана не создался");
             }
             if (b->plans && b->plans[0].text) {
-                d2k_sched *s = d2k_sched_new(&cR, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&cR, sv[0], 0x2d);
                 saidbuf[0] = '\0';
-                d2k_sched_set_say(s, collect_say, NULL);
+                d2s_sched_set_say(s, collect_say, NULL);
                 quic_calls = 0;
                 memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
                 /* Положительный прямой вердикт допускает повторное применение. */
-                ver_answer = D2K_VER_HANDSHAKE;
+                ver_answer = D2S_VER_HANDSHAKE;
                 ver_fail_first = 0;
                 ver_calls = 0;
                 ver_answer_port = 40205;
-                d2k_ev h = ev_hello(17, 40205, "остыл.снимок.позже");
-                d2k_sched_event(s, &h);
-                d2k_ev sh;
+                d2s_ev h = ev_hello(17, 40205, "остыл.снимок.позже");
+                d2s_sched_event(s, &h);
+                d2s_ev sh;
                 CHECK(quic_shape(&sh, "остыл.снимок.позже") == 0,
                       "снимок QUIC не собрался");
-                d2k_sched_event(s, &sh);
-                d2k_ev su = ev_suspect(17, 40205);
-                d2k_sched_event(s, &su);
+                d2s_sched_event(s, &sh);
+                d2s_ev su = ev_suspect(17, 40205);
+                d2s_sched_event(s, &su);
                 spin_until_installed(s);
                 CHECK(said("готовых планов узнанной коробки"),
                       "готовый план не был проверен после прямого подтверждения блокировки");
@@ -5751,10 +5751,10 @@ admission_only_run:
                       "а кандидаты будут потрачены впустую");
                 CHECK(strcmp(quic_last_trig, "остыл.снимок.позже") == 0,
                       "мерить пошли не приветствием цели");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&cR);
+        d2s_catalog_free(&cR);
     }
 
     /* --- ПРОБНЫЙ ПЛАН СТАВИТСЯ ПОД ПОРТ ЗОНДА, А НЕ ВСЕМ ------------------
@@ -5767,57 +5767,57 @@ admission_only_run:
      * Проверяем, что зонду достаётся УЖЕ ЗАНЯТЫЙ сокет: значит порт известен
      * заранее и план поставлен именно под него. */
     {
-        d2k_catalog cP;
+        d2s_catalog cP;
         memset(&cP, 0, sizeof cP);
-        d2k_sched *s = d2k_sched_new(&cP, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cP, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_last_fd = -2;
         ver_answer_port = 40301;
-        d2k_ev h = ev_hello(6, 40301, "испытание.под.портом");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40301);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40301, "испытание.под.портом");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40301);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls >= 1, "зонд не пошёл вовсе");
         CHECK(ver_last_fd >= 0,
               "зонду достался пустой сокет — порт не занят заранее, значит пробный "
               "план встал ВСЕМ, а не одному потоку");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cP);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cP);
     }
 
     /* То же для QUIC: у него свой сокет внутри рукопожатия, и порт для него
        занимается ДРУГИМ вызовом (датаграммным). Пока этого не было, в журнале
        стояло «порт зонда 0» и испытание по QUIC действовало на всех. */
     {
-        d2k_catalog cQ2;
+        d2s_catalog cQ2;
         memset(&cQ2, 0, sizeof cQ2);
-        d2k_sched *s = d2k_sched_new(&cQ2, sv[0], 0x2d);
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched *s = d2s_sched_new(&cQ2, sv[0], 0x2d);
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_last_fd = -2;
         ver_answer_port = 40302;
-        d2k_ev h = ev_hello(17, 40302, "квик.под.портом");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40302);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40302, "квик.под.портом");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40302);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "квик.под.портом") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(ver_calls >= 1, "зонд QUIC не пошёл вовсе");
         CHECK(ver_last_fd >= 0,
               "зонду QUIC достался пустой сокет — испытание по QUIC действует на всех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cQ2);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cQ2);
     }
 
     /* --- ПОДТВЕРЖДЕНИЕ УСТАНОВКИ ПРОБЫ ПРИВЯЗАНО К СВОЕМУ ОПЫТУ ---------
@@ -5827,61 +5827,61 @@ admission_only_run:
      * несёт trial ID: чужое подтверждение никого не отпускает, своё —
      * только свою задачу. */
     {
-        d2k_catalog cT;
+        d2s_catalog cT;
         memset(&cT, 0, sizeof cT);
-        d2k_sched *s = d2k_sched_new(&cT, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cT, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_answer_port = 40611;
         forget_sent();
-        d2k_ev h1 = ev_hello(6, 40611, "первая.проба");
-        d2k_sched_event(s, &h1);
-        d2k_ev su1 = ev_suspect(6, 40611);
-        d2k_sched_event(s, &su1);
-        d2k_ev h2 = ev_hello(6, 40612, "вторая.проба");
-        d2k_sched_event(s, &h2);
-        d2k_ev su2 = ev_suspect(6, 40612);
-        d2k_sched_event(s, &su2);
+        d2s_ev h1 = ev_hello(6, 40611, "первая.проба");
+        d2s_sched_event(s, &h1);
+        d2s_ev su1 = ev_suspect(6, 40611);
+        d2s_sched_event(s, &su1);
+        d2s_ev h2 = ev_hello(6, 40612, "вторая.проба");
+        d2s_sched_event(s, &h2);
+        d2s_ev su2 = ev_suspect(6, 40612);
+        d2s_sched_event(s, &su2);
         for (int i = 0; i < 4000 && !(said("по первая.проба поставил план") &&
                                       said("по вторая.проба поставил план")); i++) {
             tick_frozen(s);
         }
         CHECK(said("по первая.проба поставил план") && said("по вторая.проба поставил план"),
               "обе задачи не дошли до ожидания приёма пробного плана");
-        uint8_t id1[D2K_TRIAL_ID_LEN], id2[D2K_TRIAL_ID_LEN];
+        uint8_t id1[D2S_TRIAL_ID_LEN], id2[D2S_TRIAL_ID_LEN];
         CHECK(name_probe_trial("первая.проба", id1) && name_probe_trial("вторая.проба", id2),
               "SET_NAME_PROBE опыта ушла без trial ID");
-        CHECK(memcmp(id1, id2, D2K_TRIAL_ID_LEN) != 0, "у двух опытов один trial ID");
+        CHECK(memcmp(id1, id2, D2S_TRIAL_ID_LEN) != 0, "у двух опытов один trial ID");
         int base = ver_calls;
-        uint8_t foreign[D2K_TRIAL_ID_LEN];
+        uint8_t foreign[D2S_TRIAL_ID_LEN];
         memset(foreign, 0x77, sizeof foreign);
-        d2k_ev a = name_probe_ack(foreign, 1, D2K_ACK_OK);
-        d2k_sched_event(s, &a);
-        uint8_t zero[D2K_TRIAL_ID_LEN] = {0};
-        a = name_probe_ack(zero, 1, D2K_ACK_OK);
-        d2k_sched_event(s, &a);
+        d2s_ev a = name_probe_ack(foreign, 1, D2S_ACK_OK);
+        d2s_sched_event(s, &a);
+        uint8_t zero[D2S_TRIAL_ID_LEN] = {0};
+        a = name_probe_ack(zero, 1, D2S_ACK_OK);
+        d2s_sched_event(s, &a);
         for (int i = 0; i < 40; i++) { tick_frozen(s); }
         CHECK(ver_calls == base, "чужое подтверждение установки отпустило ожидание опыта");
         CHECK(!wake_pending(s), "будилка взведена до подтверждения");
-        a = name_probe_ack(id1, 1, D2K_ACK_OK);
-        d2k_sched_event(s, &a);
-        /* Тик d2kc — 3 с; ожидание приёма плана — 50 мс. Подтверждение обязано
+        a = name_probe_ack(id1, 1, D2S_ACK_OK);
+        d2s_sched_event(s, &a);
+        /* Тик d2sc — 3 с; ожидание приёма плана — 50 мс. Подтверждение обязано
            будить цикл, иначе каждый кандидат ждёт до следующего тика. */
         CHECK(wake_pending(s), "подтверждение установки не разбудило цикл");
         for (int i = 0; i < 400 && ver_calls == base; i++) { tick_frozen(s); }
         for (int i = 0; i < 40; i++) { tick_frozen(s); }
         CHECK(ver_calls == base + 1,
               "подтверждение первой задачи отпустило не ровно её одну");
-        a = name_probe_ack(id2, 1, D2K_ACK_OK);
-        d2k_sched_event(s, &a);
+        a = name_probe_ack(id2, 1, D2S_ACK_OK);
+        d2s_sched_event(s, &a);
         for (int i = 0; i < 400 && ver_calls == base + 1; i++) { tick_frozen(s); }
         CHECK(ver_calls == base + 2, "своё подтверждение второй задачи её не отпустило");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cT);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cT);
     }
 
     /* --- ОТКАЗ ИСПОЛНИТЕЛЯ — НЕ ПРОМАХ КАНДИДАТА -------------------------
@@ -5893,21 +5893,21 @@ admission_only_run:
      * а когда отвергнуты все — местный отказ, не «выведенные планы
      * исчерпаны». */
     {
-        d2k_catalog cR;
+        d2s_catalog cR;
         memset(&cR, 0, sizeof cR);
-        d2k_sched *s = d2k_sched_new(&cR, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cR, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_answer_port = 40621;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40621, "отказ.исполнителя");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40621);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40621, "отказ.исполнителя");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40621);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
         CHECK(said("поставил план 1 из"), "первый кандидат не поставлен");
         int base = ver_calls;
@@ -5915,14 +5915,14 @@ admission_only_run:
         CHECK(budget0 > 0, "бюджет зондов не прочитан из живого файла");
         int seen_refused = 0, seen_second = 0, seen_miss = 0, seen_final = 0;
         int seen_exhausted = 0, naks = 0;
-        uint8_t last[D2K_TRIAL_ID_LEN] = {0};
+        uint8_t last[D2S_TRIAL_ID_LEN] = {0};
         for (int round = 0; round < 400 && !seen_final; round++) {
-            uint8_t id[D2K_TRIAL_ID_LEN];
+            uint8_t id[D2S_TRIAL_ID_LEN];
             if (name_probe_trial("отказ.исполнителя", id) &&
                 memcmp(id, last, sizeof id) != 0) {
                 memcpy(last, id, sizeof last);
-                d2k_ev nak = name_probe_ack(id, 0, D2K_ACK_BAD_PLAN);
-                d2k_sched_event(s, &nak);
+                d2s_ev nak = name_probe_ack(id, 0, D2S_ACK_BAD_PLAN);
+                d2s_sched_event(s, &nak);
                 naks++;
             }
             tick_frozen(s);
@@ -5944,14 +5944,14 @@ admission_only_run:
               "отвергнутые исполнителем кандидаты съели бюджет зондов");
         /* Отдых — как у неполного поиска (cooldown kind 2), не CLEAR. */
         saidbuf[0] = '\0';
-        d2k_ev su2 = ev_suspect(6, 40622);
-        d2k_ev h2 = ev_hello(6, 40622, "отказ.исполнителя");
-        d2k_sched_event(s, &h2);
-        d2k_sched_event(s, &su2);
+        d2s_ev su2 = ev_suspect(6, 40622);
+        d2s_ev h2 = ev_hello(6, 40622, "отказ.исполнителя");
+        d2s_sched_event(s, &h2);
+        d2s_sched_event(s, &su2);
         CHECK(said("замер отложен после неподтверждённого прошлого замера"),
               "местный отказ не дал отдыха неполного поиска (kind 2)");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cR);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cR);
     }
 
     /* --- ОТКАЗ ИСПОЛНИТЕЛЯ ДЛЯ АДРЕСНОГО QUIC-ОПЫТА ------------------------
@@ -5960,30 +5960,30 @@ admission_only_run:
      * голоса: QUIC by_addr ждал срок, шёл зондом без плана и выбрасывал
      * кандидата «зонд не дошёл до приложения». */
     {
-        d2k_catalog cA;
+        d2s_catalog cA;
         memset(&cA, 0, sizeof cA);
-        d2k_sched *s = d2k_sched_new(&cA, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cA, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;
         ver_fail_first = 0;
         ver_calls = 0;
         drain(); forget_sent();
-        d2k_ev su = addr_quic_suspect(41031);
-        d2k_sched_event(s, &su);
+        d2s_ev su = addr_quic_suspect(41031);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
         CHECK(said("поставил план 1 из"), "адресный кандидат не поставлен");
         int base = ver_calls;
         int budget0 = live_probes_used(s);
         int seen_refused = 0, seen_miss = 0, seen_final = 0, seen_exhausted = 0, naks = 0;
-        uint8_t last[D2K_TRIAL_ID_LEN] = {0};
+        uint8_t last[D2S_TRIAL_ID_LEN] = {0};
         for (int round = 0; round < 400 && !seen_final; round++) {
-            uint8_t id[D2K_TRIAL_ID_LEN];
+            uint8_t id[D2S_TRIAL_ID_LEN];
             if (last_addr_probe_trial(id) && memcmp(id, last, sizeof id) != 0) {
                 memcpy(last, id, sizeof last);
-                d2k_ev nak = addr_probe_ack(id, 0, D2K_ACK_BAD_PLAN);
-                d2k_sched_event(s, &nak);
+                d2s_ev nak = addr_probe_ack(id, 0, D2S_ACK_BAD_PLAN);
+                d2s_sched_event(s, &nak);
                 naks++;
             }
             tick_frozen(s);
@@ -6001,14 +6001,14 @@ admission_only_run:
         CHECK(live_probes_used(s) == budget0 - 1,
               "отвергнутые адресные кандидаты съели бюджет зондов");
         saidbuf[0] = '\0';
-        d2k_ev again = addr_quic_suspect(41031);
-        d2k_sched_event(s, &again);
+        d2s_ev again = addr_quic_suspect(41031);
+        d2s_sched_event(s, &again);
         CHECK(said("замер отложен после неподтверждённого прошлого замера"),
               "местный отказ адресного опыта не дал отдыха неполного поиска (kind 2)");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cA);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cA);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* --- ПОЗДНИЙ ОТКАЗ: ЗОНД УЖЕ УШЁЛ ПО СРОКУ ОЖИДАНИЯ -------------------
@@ -6017,20 +6017,20 @@ admission_only_run:
      * сети. Зонд шёл без плана — его исход не про кандидата: ни промаха,
      * ни повтора «того же кандидата заново». */
     {
-        d2k_catalog cL;
+        d2s_catalog cL;
         memset(&cL, 0, sizeof cL);
-        d2k_sched *s = d2k_sched_new(&cL, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cL, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;
         ver_fail_first = 0;
         ver_calls = 0;
         drain(); forget_sent();
-        d2k_ev su = addr_quic_suspect(41032);
-        d2k_sched_event(s, &su);
+        d2s_ev su = addr_quic_suspect(41032);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
-        uint8_t id[D2K_TRIAL_ID_LEN];
+        uint8_t id[D2S_TRIAL_ID_LEN];
         CHECK(last_addr_probe_trial(id), "адресный опыт без trial ID");
         int budget0 = live_probes_used(s);
         ver_snapshot_enabled = 1;
@@ -6046,8 +6046,8 @@ admission_only_run:
         }
         pthread_mutex_unlock(&snapshot_mu);
         CHECK(ver_snapshot_entered, "адресный зонд не дошёл до барьера");
-        d2k_ev nak = addr_probe_ack(id, 0, D2K_ACK_BAD_PLAN);
-        d2k_sched_event(s, &nak);
+        d2s_ev nak = addr_probe_ack(id, 0, D2S_ACK_BAD_PLAN);
+        d2s_sched_event(s, &nak);
         pthread_mutex_lock(&snapshot_mu);
         ver_snapshot_release = 1;
         pthread_cond_broadcast(&snapshot_cv);
@@ -6064,10 +6064,10 @@ admission_only_run:
         CHECK(!seen_miss && !seen_retry, "поздний отказ исполнителя засужен кандидату");
         CHECK(live_probes_used(s) <= budget0,
               "поздний отказ исполнителя не вернул бюджет зонда");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cL);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cL);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* --- ПРОБНЫЙ ПЛАН СТАВИТСЯ ПОД ФОРМУ ЗОНДА, А НЕ КЛИЕНТА -------------
@@ -6079,24 +6079,24 @@ admission_only_run:
      * не было», успех выброшен. На роутере владельца 13.09.2026 таких
      * выброшенных успехов набралось 269. */
     {
-        d2k_catalog cS;
+        d2s_catalog cS;
         memset(&cS, 0, sizeof cS);
-        d2k_sched *s = d2k_sched_new(&cS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cS, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_answer_port = 40311;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40311, "форма.зонда");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40311);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40311, "форма.зонда");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40311);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
         CHECK(said("поставил план"), "кандидат не поставлен вовсе");
-        /* Форма стоит байтом сразу ПОСЛЕ имени в теле команды (d2k_ctl.h:
+        /* Форма стоит байтом сразу ПОСЛЕ имени в теле команды (d2s_ctl.h:
            длина имени, имя, ФОРМА, план). Ищем имя прямо в отправленных
            байтах — вторая реализация разбора разошлась бы с первой молча. */
         {
@@ -6110,14 +6110,14 @@ admission_only_run:
                 /* Команд с этим именем в потоке несколько (ARM_SHAPE, DEL_NAME,
                    установка кандидата), и форма есть только у установки.
                    Достаточно, чтобы хоть одна несла форму зонда. */
-                if (sentbuf[i + nl] == (uint8_t)D2K_SHAPE_MODERN) { shaped_ok = 1; }
+                if (sentbuf[i + nl] == (uint8_t)D2S_SHAPE_MODERN) { shaped_ok = 1; }
             }
             CHECK(seen, "имя цели не найдено в отправленном вовсе");
             CHECK(shaped_ok,
                   "пробный план ушёл не формой зонда — к его потоку он не применится");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&cS);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cS);
     }
 
     /* --- ОТКАЗ bind НЕ РАСШИРЯЕТ ПРОБНЫЙ ПЛАН НА ЧУЖИЕ ПОТОКИ ------------
@@ -6130,23 +6130,23 @@ admission_only_run:
      * Проверяем оба пути сразу — и диагностический вопрос, и кандидата: у
      * них общий крючок занятия порта. */
     {
-        d2k_sched_bind_fn saved_bind = d2k_sched_bind_hook;
-        d2k_sched_bind_hook = stub_bind_fail;
-        d2k_catalog cB;
+        d2s_sched_bind_fn saved_bind = d2s_sched_bind_hook;
+        d2s_sched_bind_hook = stub_bind_fail;
+        d2s_catalog cB;
         memset(&cB, 0, sizeof cB);
-        d2k_sched *s = d2k_sched_new(&cB, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cB, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_answer_port = 40401;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40401, "отказ.порта");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40401);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40401, "отказ.порта");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40401);
+        d2s_sched_event(s, &su);
         settle(s);
 
         /* Ни один план не поставлен: ни вопрос, ни кандидат. */
@@ -6170,9 +6170,9 @@ admission_only_run:
             }
             CHECK(!plan_cmd, "команда с планом ушла на провод при неудаче bind");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&cB);
-        d2k_sched_bind_hook = saved_bind;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cB);
+        d2s_sched_bind_hook = saved_bind;
     }
 
     /* --- ПЛАН-ВОПРОС ОБЪЯВЛЯЕТ ФОРМУ ТЕХ БАЙТ, КОТОРЫЕ САМ И ШЛЁТ --------
@@ -6187,40 +6187,40 @@ admission_only_run:
      * Форму читаем ПРЯМО С ПРОВОДА: вторая реализация разбора разошлась бы с
      * первой молча. */
     {
-        d2k_catalog cQS;
+        d2s_catalog cQS;
         memset(&cQS, 0, sizeof cQS);
-        d2k_sched *s = d2k_sched_new(&cQS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cQS, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         /* ИМЕННО OPAQUE, и это не деталь настройки. Вопросы о свойствах
            задаются ТОЛЬКО на этом вердикте: на остальных ответ уже дан
            разрезом или его отсутствием (см. ветку в цикле планировщика).
            С prefix проверка смотрела бы на пробный план — а он по замыслу
            уезжает формой НАШЕГО зонда, и утверждение про форму клиента к нему
            не относится вовсе. */
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_calls = 0;
         ver_answer_port = 40501;
 
-        d2k_ev h = ev_hello(6, 40501, "вопрос.старой.формы");
-        d2k_sched_event(s, &h);
+        d2s_ev h = ev_hello(6, 40501, "вопрос.старой.формы");
+        d2s_sched_event(s, &h);
         /* Снимок живого клиента — СТАРОЙ формы, из того же профиля, что и
            холодный старт, а не собранный тут руками. */
         {
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "вопрос.старой.формы",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "вопрос.старой.формы",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "приветствие старой формы не собралось — проверять нечем");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         forget_sent();
-        d2k_ev su = ev_suspect(6, 40501);
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40501);
+        d2s_sched_event(s, &su);
         settle(s);
         drain();
 
@@ -6231,8 +6231,8 @@ admission_only_run:
             for (size_t i = 0; i + nl + 1 < sent_len; i++) {
                 if (memcmp(sentbuf + i, nm, nl) != 0) { continue; }
                 seen = 1;
-                if (sentbuf[i + nl] == (uint8_t)D2K_SHAPE_LEGACY) { legacy_ok = 1; }
-                if (sentbuf[i + nl] == (uint8_t)D2K_SHAPE_MODERN) { modern_seen = 1; }
+                if (sentbuf[i + nl] == (uint8_t)D2S_SHAPE_LEGACY) { legacy_ok = 1; }
+                if (sentbuf[i + nl] == (uint8_t)D2S_SHAPE_MODERN) { modern_seen = 1; }
             }
             CHECK(seen, "имя цели не найдено в отправленном вовсе");
             CHECK(legacy_ok,
@@ -6241,31 +6241,31 @@ admission_only_run:
             CHECK(!modern_seen || legacy_ok,
                   "вопрос объявил форму собственного зонда вместо формы триггера");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&cQS);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cQS);
     }
 
     /* --- подозрение без предшествующего приветствия: имени нет, искать
      * нечего, и это НЕ отказ ------------------------------------------- */
     {
         tcp_calls = quic_calls = 0;
-        d2k_sched *s = d2k_sched_new(&cat, sv[0], 0x2d);
-        d2k_ev su = ev_suspect(6, 40003);
-        CHECK(d2k_sched_event(s, &su) == 0,
+        d2s_sched *s = d2s_sched_new(&cat, sv[0], 0x2d);
+        d2s_ev su = ev_suspect(6, 40003);
+        CHECK(d2s_sched_event(s, &su) == 0,
               "подозрение по неизвестному потоку начало поиск без имени цели");
         settle(s);
         CHECK(tcp_calls == 0, "поиск без имени всё же позвал дерево вердиктов");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- планы двух транспортов не перетирают друг друга --------------- */
     {
-        d2k_catalog c2;
+        d2s_catalog c2;
         memset(&c2, 0, sizeof c2);
-        d2k_sched *s = d2k_sched_new(&c2, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched *s = d2s_sched_new(&c2, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
 
         /* Зонд «занимает» тот же местный порт, что стоит в ключе событий этой
@@ -6273,39 +6273,39 @@ admission_only_run:
            здесь означал бы чужой поток. */
         ver_answer_port = 40010;
         forget_sent();
-        d2k_ev h1 = ev_hello(6, 40010, "instagram.com");
-        d2k_sched_event(s, &h1);
-        d2k_ev s1 = ev_suspect(6, 40010);
-        d2k_sched_event(s, &s1);
+        d2s_ev h1 = ev_hello(6, 40010, "instagram.com");
+        d2s_sched_event(s, &h1);
+        d2s_ev s1 = ev_suspect(6, 40010);
+        d2s_sched_event(s, &s1);
         settle(s);
-        d2k_ev a1 = ev_applied(6, 40010);
-        d2k_sched_event(s, &a1);
+        d2s_ev a1 = ev_applied(6, 40010);
+        d2s_sched_event(s, &a1);
         spin(s, 40);
 
         ver_answer_port = 40011;
         forget_sent();
-        d2k_ev h2 = ev_hello(17, 40011, "instagram.com");
-        d2k_sched_event(s, &h2);
-        d2k_ev s2 = ev_suspect(17, 40011);
-        d2k_sched_event(s, &s2);
+        d2s_ev h2 = ev_hello(17, 40011, "instagram.com");
+        d2s_sched_event(s, &h2);
+        d2s_ev s2 = ev_suspect(17, 40011);
+        d2s_sched_event(s, &s2);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "instagram.com") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(ver_last_transport == 17,
               "зонду не сказали транспорт — умолчание не смогло бы отказать QUIC");
-        d2k_ev a2 = ev_applied(17, 40011);
-        d2k_sched_event(s, &a2);
+        d2s_ev a2 = ev_applied(17, 40011);
+        d2s_sched_event(s, &a2);
         spin(s, 40);
 
-        const d2k_cat_binding *btcp = binding_of(&c2, "instagram.com", 6);
-        const d2k_cat_binding *budp = binding_of(&c2, "instagram.com", 17);
+        const d2s_cat_binding *btcp = binding_of(&c2, "instagram.com", 6);
+        const d2s_cat_binding *budp = binding_of(&c2, "instagram.com", 17);
         CHECK(btcp != NULL, "привязка по TCP не записана");
         CHECK(budp != NULL, "привязка по QUIC не записана — план одного транспорта затёр другой");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c2);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c2);
     }
 
     /* ПАЧКА ПРИВЕТСТВИЯ — ВХОД КЛИЕНТА (задача 66). Датапат отдаёт весь полёт
@@ -6313,28 +6313,28 @@ admission_only_run:
        собрать по ним ClientHello, взять имя и мерить цель ЭТИМИ байтами, а не
        уходить на собственный Initial. Неполная пачка остаётся обрывком. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         tcp_calls = quic_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
 
         uint8_t d1[1500], d2[1500];
         size_t l1 = 0, l2 = 0;
-        CHECK(d2k_test_pq_initials("pack.example", d1, &l1, d2, &l2) == 0,
+        CHECK(d2s_test_pq_initials("pack.example", d1, &l1, d2, &l2) == 0,
               "стенд двух Initial не собрался");
         const uint8_t *dg[2] = {d1, d2};
         size_t len[2] = {l1, l2};
 
-        d2k_ev sh;
+        d2s_ev sh;
         memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE;
+        sh.kind = D2S_EV_SHAPE;
         sh.transport = 17;
         sh.family = 4;
-        sh.shape_len = d2k_qsnap_pack(dg, len, 2, sh.shape, sizeof sh.shape);
+        sh.shape_len = d2s_qsnap_pack(dg, len, 2, sh.shape, sizeof sh.shape);
         CHECK(sh.shape_len > 0, "пачка не упаковалась");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         CHECK(!said("обрывок ClientHello"), "целая пачка принята за обрывок");
         CHECK(said("снят снимок QUIC") && said("датаграмм"),
               "о принятой пачке не сказано ни слова");
@@ -6342,13 +6342,13 @@ admission_only_run:
         /* Обрывок (одна первая датаграмма) по-прежнему отвергается и целую
            пачку не затирает. */
         saidbuf[0] = '\0';
-        d2k_ev frag;
+        d2s_ev frag;
         memset(&frag, 0, sizeof frag);
-        frag.kind = D2K_EV_SHAPE;
+        frag.kind = D2S_EV_SHAPE;
         frag.transport = 17;
         frag.family = 4;
-        frag.shape_len = d2k_qsnap_pack(dg, len, 1, frag.shape, sizeof frag.shape);
-        d2k_sched_event(s, &frag);
+        frag.shape_len = d2s_qsnap_pack(dg, len, 1, frag.shape, sizeof frag.shape);
+        d2s_sched_event(s, &frag);
         CHECK(said("обрывок ClientHello"), "неполная пачка принята за снимок");
 
         /* ЗАМЕР ПАЧКОЙ ДОХОДИТ ДО ВОПРОСНИКА ЦЕЛИКОМ. Пачка Chrome длиннее
@@ -6358,62 +6358,62 @@ admission_only_run:
         CHECK(sh.shape_len > 2048, "стенд: пачка не длиннее 2048 — путь не проверяется");
         quic_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
-        d2k_ev h = ev_hello(17, 41260, "pack.example"); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 41260); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 41260, "pack.example"); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 41260); d2s_sched_event(s, &su);
         settle(s);
         CHECK(quic_calls >= 1 && quic_seen_trigger_lens[0] == sh.shape_len &&
               memcmp(quic_seen_triggers[0], sh.shape, sh.shape_len) == 0,
               "замер пачкой: вопросник получил не всю пачку клиента");
 
-        d2k_sched_free(s);
-        d2k_catalog_free(&empty);
+        d2s_sched_free(s);
+        d2s_catalog_free(&empty);
     }
 
 shape_test:
     /* СНИМОК — ОДНА ИЗ ДВУХ ДАТАГРАММ ПРИВЕТСТВИЯ (браузер с постквантовым
        key_share). Датапат отдаёт датаграмму, на которой сборка дала имя, и
-       целого ClientHello в ней нет: d2k_quic_hello_rename отказывает. Контроль
+       целого ClientHello в ней нет: d2s_quic_hello_rename отказывает. Контроль
        обязан всё равно быть — собственный Initial донора с именем приманки
        (probe.go:280-321 всегда строит свой), а не пустота с «нет контрольного
        имени» вместо опыта. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         tcp_calls = quic_calls = 0;
         quic_last_ctl[0] = '\0';
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
-        d2k_ev sh;
+        d2s_ev sh;
         char got[256];
         CHECK(quic_shape_first_of_two(&sh, "две.датаграммы.example") == 0 &&
-              d2k_quic_sni(sh.shape, sh.shape_len, got, sizeof got) == 0 &&
+              d2s_quic_sni(sh.shape, sh.shape_len, got, sizeof got) == 0 &&
               strcmp(got, "две.датаграммы.example") == 0,
               "первая датаграмма приветствия не собралась или не даёт имя");
         uint8_t probe[2048];
         size_t probe_len = 0;
-        CHECK(d2k_quic_hello_rename(sh.shape, sh.shape_len, "disk.rzd.ru",
+        CHECK(d2s_quic_hello_rename(sh.shape, sh.shape_len, "disk.rzd.ru",
                                     probe, sizeof probe, &probe_len) != 0,
               "половина приветствия переименовалась — стенд не воспроизводит разрыв");
-        d2k_sched_event(s, &sh);
-        d2k_ev h = ev_hello(17, 40071, "две.датаграммы.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40071);
-        CHECK(d2k_sched_event(s, &su) == 1, "подозрение по QUIC не завело задачу");
+        d2s_sched_event(s, &sh);
+        d2s_ev h = ev_hello(17, 40071, "две.датаграммы.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40071);
+        CHECK(d2s_sched_event(s, &su) == 1, "подозрение по QUIC не завело задачу");
         settle(s);
         CHECK(quic_calls == 1, "QUIC-поиск по снимку из двух датаграмм не запущен");
         CHECK(strcmp(quic_last_ctl, "disk.rzd.ru") == 0,
               "контроль пуст/не QUIC, когда снимок не в одной датаграмме");
         /* ЦЕЛЬ — ТОЖЕ PROFILE, а не обрывок. Обрывок CRYPTO сервер не
            дочитает и промолчит; контроль ответит — и молчание цели станет
-           D2K_V_OPAQUE, «доказанной» блокировкой от пакета, который клиент
+           D2S_V_OPAQUE, «доказанной» блокировкой от пакета, который клиент
            никогда не слал. Проверяется то, что ушло в зонд: целый Initial с
            именем цели, не байты снимка. */
         {
             uint8_t ch[2048];
             size_t ch_len = 0;
             CHECK(quic_seen_trigger_lens[0] > 0 &&
-                  d2k_quic_client_hello(quic_seen_triggers[0], quic_seen_trigger_lens[0],
+                  d2s_quic_client_hello(quic_seen_triggers[0], quic_seen_trigger_lens[0],
                                         ch, sizeof ch, &ch_len) == 0 &&
                   strcmp(quic_seen_targets[0], "две.датаграммы.example") == 0,
                   "зонд цели получил не целый Initial с именем цели");
@@ -6426,17 +6426,17 @@ shape_test:
         CHECK(!said("контроль — PROFILE, снимок не в одной датаграмме"),
               "контроль приписан снимку, которым цель не мерили");
         {
-            d2k_ev whole;
-            CHECK(d2k_quic_hello_incomplete(sh.shape, sh.shape_len) == 1 &&
+            d2s_ev whole;
+            CHECK(d2s_quic_hello_incomplete(sh.shape, sh.shape_len) == 1 &&
                   quic_shape(&whole, "две.датаграммы.example") == 0 &&
-                  d2k_quic_hello_incomplete(whole.shape, whole.shape_len) == 0,
+                  d2s_quic_hello_incomplete(whole.shape, whole.shape_len) == 0,
                   "признак обрывка приветствия перепутан с целым Initial");
         }
         /* Поздний обрывок не заводит «перемер снимком клиента». */
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         settle(s);
         CHECK(quic_calls == 1, "обрывок приветствия запустил перемер как снимок клиента");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* ФИНАЛЬНОЕ РЕВЬЮ CORE, I1: разрез CRYPTO (quicsplit) и клиент, чей
@@ -6445,23 +6445,23 @@ shape_test:
        одной датаграммой и разрез подтверждает. Без защиты цель «подтверждена»
        и пересматривается каждые 10 минут. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_OPAQUE; arm_kind = D2K_QA_SPLIT;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_OPAQUE; arm_kind = D2S_QA_SPLIT;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
 
         /* (a) Снимок клиента — обрывок: разрез не спрашивается и не строится. */
         quic_calls = 0; quic_last_split_unfit = -1; ver_calls = 0;
-        d2k_ev sh;
+        d2s_ev sh;
         CHECK(quic_shape_first_of_two(&sh, "pq.split.example") == 0, "I1: обрывок не собран");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         ver_answer_port = 40081;
-        d2k_ev h = ev_hello(17, 40081, "pq.split.example"); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40081); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40081, "pq.split.example"); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40081); d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(17, 40081); d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(17, 40081); d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(quic_calls == 1 && quic_last_split_unfit == 1,
               "I1: вопроснику не сказано, что разрез клиенту неприменим");
@@ -6473,14 +6473,14 @@ shape_test:
         quic_calls = 0; quic_last_split_unfit = -1;
         ver_answer_port = 40082;
         forget_sent();
-        d2k_ev h2 = ev_hello(17, 40082, "single.split.example"); d2k_sched_event(s, &h2);
-        d2k_ev su2 = ev_suspect(17, 40082); d2k_sched_event(s, &su2);
+        d2s_ev h2 = ev_hello(17, 40082, "single.split.example"); d2s_sched_event(s, &h2);
+        d2s_ev su2 = ev_suspect(17, 40082); d2s_sched_event(s, &su2);
         settle(s);
-        d2k_ev ap2 = ev_applied(17, 40082); d2k_sched_event(s, &ap2);
+        d2s_ev ap2 = ev_applied(17, 40082); d2s_sched_event(s, &ap2);
         spin(s, 40);
         CHECK(quic_calls == 1 && quic_last_split_unfit == 0,
               "I1: однодатаграммному входу разрез запрещён");
-        d2k_cat_binding *bd = binding_mut(&c, "single.split.example", 17);
+        d2s_cat_binding *bd = binding_mut(&c, "single.split.example", 17);
         CHECK(bd && !bd->recheck_since, "I1: разрез CRYPTO для однодатаграммного входа не подтверждён");
         int succ0 = bd ? bd->successes : -1;
 
@@ -6488,15 +6488,15 @@ shape_test:
            (planned=NO): снимок заказан; обрывок — привязка к повторной
            проверке, снята с провода. */
         forget_sent();
-        d2k_ev h3 = ev_hello(17, 40083, "single.split.example"); d2k_sched_event(s, &h3);
-        d2k_ev su3 = ev_suspect(17, 40083); su3.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &su3);
+        d2s_ev h3 = ev_hello(17, 40083, "single.split.example"); d2s_sched_event(s, &h3);
+        d2s_ev su3 = ev_suspect(17, 40083); su3.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &su3);
         spin(s, 5);
-        CHECK(sent_command_count(D2K_CMD_ARM_SHAPE, NULL, 0) == 1,
+        CHECK(sent_command_count(D2S_CMD_ARM_SHAPE, NULL, 0) == 1,
               "I1: неисполненный разрез не заказал снимок клиента");
-        d2k_ev sh3;
+        d2s_ev sh3;
         CHECK(quic_shape_first_of_two(&sh3, "single.split.example") == 0, "I1: обрывок (c) не собран");
-        d2k_sched_event(s, &sh3);
+        d2s_sched_event(s, &sh3);
         spin(s, 5);
         bd = binding_mut(&c, "single.split.example", 17);
         CHECK(bd && bd->recheck_since != 0,
@@ -6504,47 +6504,47 @@ shape_test:
         CHECK(said("привязок к повторной проверке"), "I1: снятие разреза не сказано");
 
         /* (d) Следующий поиск той же цели разрез не переподтверждает. */
-        d2k_ev h4 = ev_hello(17, 40084, "single.split.example"); d2k_sched_event(s, &h4);
-        d2k_ev su4 = ev_suspect(17, 40084); d2k_sched_event(s, &su4); /* наблюдение кончено */
+        d2s_ev h4 = ev_hello(17, 40084, "single.split.example"); d2s_sched_event(s, &h4);
+        d2s_ev su4 = ev_suspect(17, 40084); d2s_sched_event(s, &su4); /* наблюдение кончено */
         spin(s, 5);
         quic_calls = 0; quic_last_split_unfit = -1;
         ver_answer_port = 40085;
-        d2k_ev h5 = ev_hello(17, 40085, "single.split.example"); d2k_sched_event(s, &h5);
-        d2k_ev su5 = ev_suspect(17, 40085); d2k_sched_event(s, &su5);
+        d2s_ev h5 = ev_hello(17, 40085, "single.split.example"); d2s_sched_event(s, &h5);
+        d2s_ev su5 = ev_suspect(17, 40085); d2s_sched_event(s, &su5);
         for (int i = 0; i < 30 && quic_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
         settle(s);
-        d2k_ev ap5 = ev_applied(17, 40085); d2k_sched_event(s, &ap5);
+        d2s_ev ap5 = ev_applied(17, 40085); d2s_sched_event(s, &ap5);
         spin(s, 40);
         bd = binding_mut(&c, "single.split.example", 17);
         CHECK(quic_last_split_unfit == 1 && bd && bd->recheck_since != 0 && bd->successes == succ0,
               "I1: разрез CRYPTO переподтверждён клиенту шире датаграммы");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        arm_kind = D2K_QA_BLOB;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        arm_kind = D2S_QA_BLOB;
     }
 
     /* A late TCP snapshot must stop a search based on the synthetic profile,
        then start exactly one search with the captured ClientHello. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0;
         tcp_last_wire = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 39988, "late.tcp.snapshot.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39988);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 39988, "late.tcp.snapshot.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39988);
+        d2s_sched_event(s, &su);
         spin(s, 30);
         CHECK(tcp_calls == 1, "TCP cold-start classifier did not start");
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "late.tcp.snapshot.example",
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "late.tcp.snapshot.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
               "TCP late-snapshot fixture failed");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         /* On the old implementation this release prevents the test itself
            from waiting forever; only a real stop request satisfies the
            assertion below. */
@@ -6560,37 +6560,37 @@ shape_test:
               "restarted TCP measurement did not use the captured ClientHello");
         CHECK(said("повторяю поиск его байтами"),
               "late TCP snapshot restart was not reported");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Пачка QUIC того же имени не должна менять вход текущего TCP-замера. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0; tcp_last_wire = 0;
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        tcp_answer = D2S_V_INCONCLUSIVE;
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 39990, "pack.cross.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39990);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 39990, "pack.cross.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39990);
+        d2s_sched_event(s, &su);
         spin(s, 30);
         CHECK(tcp_calls == 1, "межпротокольная проверка: TCP-поиск не начался");
         size_t profile_wire = tcp_last_wire;
         uint8_t d1[1500], d2[1500];
         size_t l1 = 0, l2 = 0;
-        CHECK(d2k_test_pq_initials("pack.cross.example", d1, &l1, d2, &l2) == 0,
+        CHECK(d2s_test_pq_initials("pack.cross.example", d1, &l1, d2, &l2) == 0,
               "межпротокольная проверка: не собраны два Initial");
         const uint8_t *dg[2] = {d1, d2};
         size_t len[2] = {l1, l2};
-        d2k_ev q = {0}; q.kind = D2K_EV_SHAPE; q.transport = 17; q.family = 4;
-        q.shape_len = d2k_qsnap_pack(dg, len, 2, q.shape, sizeof q.shape);
+        d2s_ev q = {0}; q.kind = D2S_EV_SHAPE; q.transport = 17; q.family = 4;
+        q.shape_len = d2s_qsnap_pack(dg, len, 2, q.shape, sizeof q.shape);
         CHECK(q.shape_len > 0, "межпротокольная проверка: QUIC-пачка не упакована");
-        d2k_sched_event(s, &q);
+        d2s_sched_event(s, &q);
         spin(s, 30);
         tcp_release_waiters = 1;
         spin(s, 120);
@@ -6599,9 +6599,9 @@ shape_test:
         CHECK(tcp_calls == 1 && tcp_last_wire == profile_wire,
               "TCP-замер повторён QUIC-байтами");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ЗАДАЧА 31. Поле 02.10.2026, i.ytimg.com: классификатор (первый шаг
@@ -6612,36 +6612,36 @@ shape_test:
        подтвердил блокировку» и десять минут покоя. Остановленный ради
        снимка прогон — не замер: он перезапускается байтами клиента. */
     for (int during_volume = 0; during_volume <= 1; during_volume++) {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         tcp_wait_until_stop = !during_volume; tcp_release_waiters = 0;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0;
         tcp_last_wire = 0; vol_calls = 0; vol_entered = 0;
         vol_hold = during_volume;
-        tcp_answer = during_volume ? D2K_V_CLEAR : D2K_V_INCONCLUSIVE;
+        tcp_answer = during_volume ? D2S_V_CLEAR : D2S_V_INCONCLUSIVE;
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 39989, "snap.stop.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 39989);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 39989, "snap.stop.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 39989);
+        d2s_sched_event(s, &su);
         spin(s, 30);
         CHECK(tcp_calls == 1, "task31: профильный классификатор не начался");
         if (during_volume) {
             for (int i = 0; i < 2000 && !vol_entered; i++) usleep(1000);
             CHECK(vol_entered, "task31: объёмный шаг не начался после CLEAR");
         }
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "snap.stop.example",
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "snap.stop.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "task31: снимок");
         /* Клиент повторяет приветствие — несколько снимков одной цели. */
-        for (int k = 0; k < 4; k++) d2k_sched_event(s, &sh);
+        for (int k = 0; k < 4; k++) d2s_sched_event(s, &sh);
         /* Соседнее имя занимает общую ячейку снимка. */
-        d2k_ev other = {0}; other.kind = D2K_EV_SHAPE; other.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "neighbour.other.example",
+        d2s_ev other = {0}; other.kind = D2S_EV_SHAPE; other.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "neighbour.other.example",
               other.shape, sizeof other.shape, &other.shape_len) == 0, "task31: соседний снимок");
-        d2k_sched_event(s, &other);
-        tcp_answer = D2K_V_INCONCLUSIVE;
+        d2s_sched_event(s, &other);
+        tcp_answer = D2S_V_INCONCLUSIVE;
         vol_hold = 0;
         spin(s, 50);
         tcp_wait_until_stop = 0;
@@ -6666,9 +6666,9 @@ shape_test:
         CHECK(!rest || (restart && rest > restart),
               "task31: брошенный прогон отправил цель на покой");
         CHECK(!clear, "task31: брошенный объёмный прогон отправил цель на покой как CLEAR");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         tcp_wait_until_stop = 0; tcp_release_waiters = 0; vol_hold = 0;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ЗАДАЧА 31, поздний обрыв: снимок клиента пришёл во время RX-пары
@@ -6676,33 +6676,33 @@ shape_test:
        подтвердилось» и не покой: повтор снятыми байтами, и это снова
        RX-пара (rx_volume_only сохраняется). */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0; vol_entered = 0; vol_last_wire = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0;
         vol_hold = 1;
         const char *name = "late.rst.snap.example";
-        d2k_ev h1 = ev_hello(6, 41150, name);
-        d2k_sched_event(s, &h1);
-        d2k_ev r1 = ev_suspect(6, 41150); r1.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r1);
-        d2k_ev h2 = ev_hello(6, 41151, name);
-        d2k_sched_event(s, &h2);
-        d2k_ev r2 = ev_suspect(6, 41151); r2.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r2);
+        d2s_ev h1 = ev_hello(6, 41150, name);
+        d2s_sched_event(s, &h1);
+        d2s_ev r1 = ev_suspect(6, 41150); r1.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r1);
+        d2s_ev h2 = ev_hello(6, 41151, name);
+        d2s_sched_event(s, &h2);
+        d2s_ev r2 = ev_suspect(6, 41151); r2.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r2);
         spin(s, 30);
         for (int i = 0; i < 2000 && !vol_entered; i++) usleep(1000);
         CHECK(vol_entered && tcp_calls == 0, "task31/rx: RX-пара позднего закрытия не началась");
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, name,
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, name,
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "task31/rx: снимок");
-        d2k_sched_event(s, &sh);
-        d2k_ev other = {0}; other.kind = D2K_EV_SHAPE; other.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "neighbour.rx.example",
+        d2s_sched_event(s, &sh);
+        d2s_ev other = {0}; other.kind = D2S_EV_SHAPE; other.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "neighbour.rx.example",
               other.shape, sizeof other.shape, &other.shape_len) == 0, "task31/rx: соседний снимок");
-        d2k_sched_event(s, &other);
+        d2s_sched_event(s, &other);
         vol_hold = 0;
         spin(s, 120);
         const char *restart = strstr(saidbuf, "повторяю поиск его байтами");
@@ -6713,7 +6713,7 @@ shape_test:
         const char *rest = strstr(saidbuf, "позднее закрытие не подтвердилось");
         CHECK(!rest || (restart && rest > restart),
               "task31/rx: брошенная RX-пара разобрана как неподтверждённое позднее закрытие");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         vol_hold = 0;
     }
 
@@ -6734,42 +6734,42 @@ shape_test:
        планами — за тем, что от байт клиента действительно зависит, — и
        отвеченный вопрос объёма не переспрашивает. */
     {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0; vol_entered = 0;
         vol_last_wire = 0; tcp_last_wire = 0;
-        vol_answer = D2K_VOL_PASSED;
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 1; vol_rx_cut_first_only = 1; vol_rx_at_kb = 15;
         vol_rx_packet_only = 0; vol_rx_packets = 0; vol_rx_wire_basis = 0;
         vol_rx_short = 0; vol_rx_short_bytes = 0; vol_rx_tls_unavailable = 0;
         vol_partial_bytes = vol_partial_wire_bytes = 0; vol_direct_complete = 0;
         /* Рукопожатие у позднего обрыва проходит — режется только ответ. */
-        tcp_answer = D2K_V_CLEAR;
+        tcp_answer = D2S_V_CLEAR;
         vol_hold = 1;
         const char *name = "late.rst.snap.cut.example";
-        d2k_ev h1 = ev_hello(6, 41152, name);
-        d2k_sched_event(s, &h1);
-        d2k_ev r1 = ev_suspect(6, 41152); r1.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r1);
-        d2k_ev h2 = ev_hello(6, 41153, name);
-        d2k_sched_event(s, &h2);
-        d2k_ev r2 = ev_suspect(6, 41153); r2.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r2);
+        d2s_ev h1 = ev_hello(6, 41152, name);
+        d2s_sched_event(s, &h1);
+        d2s_ev r1 = ev_suspect(6, 41152); r1.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r1);
+        d2s_ev h2 = ev_hello(6, 41153, name);
+        d2s_sched_event(s, &h2);
+        d2s_ev r2 = ev_suspect(6, 41153); r2.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r2);
         spin(s, 30);
         for (int i = 0; i < 2000 && !vol_entered; i++) usleep(1000);
         CHECK(vol_entered && tcp_calls == 0,
               "task31/rx-cut: RX-пара позднего закрытия не началась");
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, name,
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, name,
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "task31/rx-cut: снимок");
-        d2k_sched_event(s, &sh);
-        d2k_ev other = {0}; other.kind = D2K_EV_SHAPE; other.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "neighbour.rx.cut.example",
+        d2s_sched_event(s, &sh);
+        d2s_ev other = {0}; other.kind = D2S_EV_SHAPE; other.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "neighbour.rx.cut.example",
               other.shape, sizeof other.shape, &other.shape_len) == 0,
               "task31/rx-cut: соседний снимок");
-        d2k_sched_event(s, &other);
+        d2s_sched_event(s, &other);
         vol_hold = 0;
         spin(s, 200);
         /* Условие дефекта: снимок пришёл ИМЕННО во время объёмного шага и
@@ -6799,12 +6799,12 @@ shape_test:
         CHECK(!said("прямой замер не подтвердил блокировку") &&
               !said("напрямую проходит") && !said("результат неубедителен"),
               "task31/rx-cut: эпизод с доказанным обрывом кончился отрицательным вердиктом");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
+        d2s_sched_free(s); d2s_catalog_free(&empty);
         vol_hold = 0; vol_rx_cut = 0; vol_rx_cut_first_only = 0; vol_rx_at_kb = 24;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
-    /* ТО ЖЕ, НО С БАЗОВЫМ ВОПРОСОМ ДОНОРА — КАК В БОЕВОМ d2kc.
+    /* ТО ЖЕ, НО С БАЗОВЫМ ВОПРОСОМ ДОНОРА — КАК В БОЕВОМ d2sc.
        Поле 14.10.2026, fast.com: эталон с VPS 26326 байт, с роутера 16384.
        Объёмный замер заготовкой доказал обрыв около 15 КБ при полном
        gzip-контроле, снимок клиента (318 байт) пришёл позже старта, повтор
@@ -6818,41 +6818,41 @@ shape_test:
     {
         /* Свой подтверждённый план той же формы у другой цели — в поле он
            есть всегда, и только он включает базовый вопрос (own_first_plans). */
-        d2k_catalog empty = {0};
+        d2s_catalog empty = {0};
         char own_pid[40];
-        own_box(&empty, "box-own-modern", own_pid, 2, 3, "other.own", 6, D2K_SHAPE_MODERN, 4,
+        own_box(&empty, "box-own-modern", own_pid, 2, 3, "other.own", 6, D2S_SHAPE_MODERN, 4,
                 1790000000, 0);
-        d2k_sched_tcp_fn saved_base = d2k_sched_tcp_base_hook;
-        d2k_sched_tcp_base_hook = stub_base;
+        d2s_sched_tcp_fn saved_base = d2s_sched_tcp_base_hook;
+        d2s_sched_tcp_base_hook = stub_base;
         base_calls = 0; base_blocked_answer = 0; base_wait_until_stop = 0;
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0; vol_entered = 0;
         vol_last_wire = 0; tcp_last_wire = 0;
-        vol_answer = D2K_VOL_PASSED;
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 1; vol_rx_cut_first_only = 1; vol_rx_at_kb = 15;
         vol_rx_packet_only = 0; vol_rx_packets = 0; vol_rx_wire_basis = 0;
         vol_rx_short = 0; vol_rx_short_bytes = 0; vol_rx_tls_unavailable = 0;
         vol_partial_bytes = vol_partial_wire_bytes = 0; vol_direct_complete = 0;
-        tcp_answer = D2K_V_CLEAR;
+        tcp_answer = D2S_V_CLEAR;
         vol_hold = 1;
         const char *name = "late.rst.snap.cut.base.example";
-        d2k_ev h1 = ev_hello(6, 41162, name);
-        d2k_sched_event(s, &h1);
-        d2k_ev r1 = ev_suspect(6, 41162); r1.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r1);
-        d2k_ev h2 = ev_hello(6, 41163, name);
-        d2k_sched_event(s, &h2);
-        d2k_ev r2 = ev_suspect(6, 41163); r2.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &r2);
+        d2s_ev h1 = ev_hello(6, 41162, name);
+        d2s_sched_event(s, &h1);
+        d2s_ev r1 = ev_suspect(6, 41162); r1.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r1);
+        d2s_ev h2 = ev_hello(6, 41163, name);
+        d2s_sched_event(s, &h2);
+        d2s_ev r2 = ev_suspect(6, 41163); r2.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &r2);
         spin(s, 30);
         for (int i = 0; i < 2000 && !vol_entered; i++) usleep(1000);
         CHECK(vol_entered, "task31/rx-cut+base: RX-пара позднего закрытия не началась");
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, name,
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, name,
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "task31/rx-cut+base: снимок");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         vol_hold = 0;
         spin(s, 200);
         const char *restart = strstr(saidbuf, "повторяю поиск его байтами");
@@ -6871,11 +6871,11 @@ shape_test:
            своей лестницы — той, где подбирается белое имя сети. */
         CHECK(said("белое имя сети не известно") || said("fake-SNI + split-лестницу"),
               "task31/rx-cut+base: доказанный обрыв не довёл до лестницы белого имени");
-        d2k_sched_free(s); d2k_catalog_free(&empty);
-        d2k_sched_tcp_base_hook = saved_base;
+        d2s_sched_free(s); d2s_catalog_free(&empty);
+        d2s_sched_tcp_base_hook = saved_base;
         base_calls = 0; base_blocked_answer = 1;
         vol_hold = 0; vol_rx_cut = 0; vol_rx_cut_first_only = 0; vol_rx_at_kb = 24;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* ЗАДАЧА 31, QUIC: Initial клиента этой цели пришёл во время прогона,
@@ -6883,20 +6883,20 @@ shape_test:
        идти Initial клиента цели (он хранится у задачи), без покоя до
        перемера. Обрывок приветствия (задача 12) копией не становится. */
     for (int fragment = 0; fragment <= 1; fragment++) {
-        d2k_catalog empty = {0};
-        d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+        d2s_catalog empty = {0};
+        d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         tcp_calls = quic_calls = 0;
         memset(quic_seen_trigger_lens, 0, sizeof quic_seen_trigger_lens);
         snapshot_enabled = 1;
         snapshot_entered = snapshot_release = snapshot_ok = 0;
-        quic_answer = D2K_V_INCONCLUSIVE;
+        quic_answer = D2S_V_INCONCLUSIVE;
         const char *name = "quic.own.initial.example";
-        d2k_ev h = ev_hello(17, 40115, name);
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40115);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40115, name);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40115);
+        d2s_sched_event(s, &su);
         pthread_mutex_lock(&snapshot_mu);
         struct timespec dl;
         clock_gettime(CLOCK_REALTIME, &dl);
@@ -6907,13 +6907,13 @@ shape_test:
         int entered = snapshot_entered;
         pthread_mutex_unlock(&snapshot_mu);
         CHECK(entered, "task31/quic: QUIC-прогон не начался");
-        d2k_ev sh;
+        d2s_ev sh;
         CHECK((fragment ? quic_shape_first_of_two(&sh, name) : quic_shape(&sh, name)) == 0,
               "task31/quic: снимок цели");
-        d2k_sched_event(s, &sh);
-        d2k_ev other;
+        d2s_sched_event(s, &sh);
+        d2s_ev other;
         CHECK(quic_shape(&other, "neighbour.quic.example") == 0, "task31/quic: соседний снимок");
-        d2k_sched_event(s, &other);
+        d2s_sched_event(s, &other);
         pthread_mutex_lock(&snapshot_mu);
         snapshot_release = 1;
         pthread_cond_broadcast(&snapshot_cv);
@@ -6932,76 +6932,76 @@ shape_test:
             CHECK(remeasure && (!rest || rest > remeasure),
                   "task31/quic: цель ушла на покой до перемера Initial клиента");
         }
-        d2k_sched_free(s); d2k_catalog_free(&empty);
-        quic_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&empty);
+        quic_answer = D2S_V_OPAQUE;
     }
 
     /* A confirmed TLS1.3 task must not hide blocked TLS1.2 of the same name. */
     for (int family = 4; family <= 6; family += 2) {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 1;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 1;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         ver_answer_port = 41017;
         drain(); forget_sent();
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE;
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE;
         sh.transport = 6; sh.family = (uint8_t)family;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "versions.example",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "versions.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "modern snapshot");
-        d2k_sched_event(s, &sh);
-        d2k_ev h = ev_hello(6, 41017, "versions.example");
+        d2s_sched_event(s, &sh);
+        d2s_ev h = ev_hello(6, 41017, "versions.example");
         h.family = (uint8_t)family;
         if (family == 6) {
             (void)inet_pton(AF_INET6, "::1", h.low_ip);
             (void)inet_pton(AF_INET6, "2001:db8::2", h.high_ip);
         }
-        d2k_sched_event(s, &h);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_RST_CUT;
-        d2k_sched_event(s, &su); settle(s);
-        d2k_ev ap = ev_applied(6, 41017);
+        d2s_sched_event(s, &h);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_RST_CUT;
+        d2s_sched_event(s, &su); settle(s);
+        d2s_ev ap = ev_applied(6, 41017);
         ap.family = h.family;
         memcpy(ap.low_ip, h.low_ip, 16); memcpy(ap.high_ip, h.high_ip, 16);
-        d2k_sched_event(s, &ap); spin(s, 40);
+        d2s_sched_event(s, &ap); spin(s, 40);
         CHECK(binding_of(&c, "versions.example", 6) != NULL, "modern binding exists");
         int before = tcp_calls;
         forget_sent();
         h.high_port++; su.high_port++;
-        d2k_sched_event(s, &h);
-        su.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &su); drain();
-        CHECK(sent_command_count(D2K_CMD_ARM_SHAPE, NULL, 0) == 1,
+        d2s_sched_event(s, &h);
+        su.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &su); drain();
+        CHECK(sent_command_count(D2S_CMD_ARM_SHAPE, NULL, 0) == 1,
               "unplanned suspicious flow must request snapshot without discarding binding");
-        d2k_sched_event(s, &sh); spin(s, 10);
+        d2s_sched_event(s, &sh); spin(s, 10);
         CHECK(tcp_calls == before, "same TLS shape must not trigger a new measurement");
-        d2k_sched_event(s, &su);
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "versions.example",
+        d2s_sched_event(s, &su);
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "versions.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "legacy snapshot");
         sh.family = family == 4 ? 6 : 4;
-        d2k_sched_event(s, &sh); spin(s, 10);
+        d2s_sched_event(s, &sh); spin(s, 10);
         CHECK(tcp_calls == before, "other address family cannot resolve pending TLS snapshot");
         sh.family = (uint8_t)family;
-        d2k_sched_event(s, &sh); settle(s);
-        CHECK(tcp_calls > before && ver_last_shape == D2K_SHAPE_LEGACY,
+        d2s_sched_event(s, &sh); settle(s);
+        CHECK(tcp_calls > before && ver_last_shape == D2S_SHAPE_LEGACY,
               "blocked TLS1.2 must be measured and verified as TLS1.2 after TLS1.3");
         ap = ev_applied(6, 41017); ap.family = h.family;
         memcpy(ap.low_ip, h.low_ip, 16); memcpy(ap.high_ip, h.high_ip, 16);
-        d2k_sched_event(s, &ap); spin(s, 40);
+        d2s_sched_event(s, &ap); spin(s, 40);
         unsigned modern = 0, legacy = 0;
         for (size_t b = 0; b < c.n_boxes; b++) {
             for (size_t j = 0; j < c.boxes[b].n_binds; j++) {
-                const d2k_cat_binding *bd = &c.boxes[b].binds[j];
-                modern += bd->shape == D2K_SHAPE_MODERN;
-                legacy += bd->shape == D2K_SHAPE_LEGACY;
+                const d2s_cat_binding *bd = &c.boxes[b].binds[j];
+                modern += bd->shape == D2S_SHAPE_MODERN;
+                legacy += bd->shape == D2S_SHAPE_LEGACY;
             }
         }
         CHECK(modern == 1 && legacy == 1, "both TLS bindings must survive confirmation");
         before = tcp_calls;
-        d2k_sched_event(s, &su);
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "versions.example",
+        d2s_sched_event(s, &su);
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "versions.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "returning modern snapshot");
-        d2k_sched_event(s, &sh); spin(s, 10);
+        d2s_sched_event(s, &sh); spin(s, 10);
         CHECK(tcp_calls == before, "already covered TLS1.3 must not be measured again after TLS1.2");
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     tcp_owns_search = tcp_found_arm = 0;
     if (shape_only) { goto voice_only_done; }
@@ -7011,16 +7011,16 @@ question_test:
     for (int question_run = 0; question_run < 2; question_run++) {
         /* Что здесь проверяется. На вердикт «решает содержимое» разрез коробку
            не берёт — и до появления вопросов планировщик получал от
-           d2k_compose РОВНО ОДИН запасной план (пустой вектор), ставил его и
+           d2s_compose РОВНО ОДИН запасной план (пустой вектор), ставил его и
            на этом сдавался. Вопрос — это план-кандидат, который проходит
            только если коробку можно отравить ИМЕННО ТАК; его проход пишет
-           свойство, и уже по вектору d2k_compose собирает прицельные плечи.
+           свойство, и уже по вектору d2s_compose собирает прицельные плечи.
            Проверяем всю цепочку: вопрос задан → подтверждён → зонд сходил к
            цели → обмен с прикладными данными по ЕГО потоку → свойство
            записано → кандидатов стало больше одного.
 
            Цель — настоящий слушающий сокет на локалхосте: планировщик идёт к
-           ней НАСТОЯЩИМ соединением (d2k_props_contact), и местный порт
+           ней НАСТОЯЩИМ соединением (d2s_props_contact), и местный порт
            назначает ядро. Узнать его вовремя может только тот, кто принял
            соединение, — отсюда стенд, а не догадка. */
         int lfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -7046,18 +7046,18 @@ question_test:
         CHECK(listen(lfd, 4) == 0, "стенд-цель не слушает");
         g_server_port = ntohs(a.sin_port);
 
-        d2k_catalog c8;
+        d2s_catalog c8;
         memset(&c8, 0, sizeof c8);
-        d2k_sched *s = d2k_sched_new(&c8, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c8, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_OPAQUE;
 
-        d2k_ev h = ev_hello(6, 40060, "непрозрачная.цель");
+        d2s_ev h = ev_hello(6, 40060, "непрозрачная.цель");
         mark_calls = 0;
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40060);
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40060);
+        d2s_sched_event(s, &su);
 
         /* Крутим до вопроса: он задаётся, когда вернулся вердикт. */
         for (int i = 0; i < 200 && !said("спрашиваю коробку о свойствах"); i++) {
@@ -7067,7 +7067,7 @@ question_test:
               "на вердикт «решает содержимое» вопросы о свойствах не начались");
         CHECK(mark_calls > 0 && last_mark == 0x2d,
               "property question socket must carry the controller probe mark");
-        uint8_t question_id[D2K_PLAN_ID_LEN] = {0};
+        uint8_t question_id[D2S_PLAN_ID_LEN] = {0};
         CHECK(last_plan_id(question_id), "question identity captured from wire");
         if (question_run) {
             CHECK(memcmp(question_prev_id, question_id, sizeof question_id) != 0,
@@ -7089,7 +7089,7 @@ question_test:
                 if (peer >= 0) { a = pa; }
             }
             g_now_ms += 5;
-            d2k_sched_tick(s, g_now_ms);
+            d2s_sched_tick(s, g_now_ms);
             drain();
         }
         CHECK(peer >= 0, "зонд не пришёл к цели после подтверждения плана-вопроса");
@@ -7108,7 +7108,7 @@ question_test:
             /* Обмен по ЕГО потоку: ключ — настоящий местный порт зонда,
                который знает только принявшая сторона. */
             uint16_t pport = ntohs(a.sin_port);
-            d2k_ev x;
+            d2s_ev x;
             memset(&x, 0, sizeof x);
             x.transport = 6;
             x.low_ip[0] = 127; x.low_ip[3] = 1;
@@ -7119,12 +7119,12 @@ question_test:
             /* СПЕРВА обмен БЕЗ доказательства применения: план мог не встать,
                и тогда зонд шёл к цели голым. Засчитать такой обмен за ответ
                значит записать свойство коробки по измерению не того. */
-            x.kind = D2K_EV_EXCHANGE;
+            x.kind = D2S_EV_EXCHANGE;
             x.code = 22;
             x.num = 1380;
             x.seen_types = 0x0C; /* рукопожатие + прикладные данные */
             x.server_hello = 1;  /* сервер ответил — приёмка вопроса */
-            d2k_sched_event(s, &x);
+            d2s_sched_event(s, &x);
             CHECK(said("жду подтверждения полного исполнения"),
                   "обмен без доказательства применения засчитан за ответ коробки");
             CHECK(!said("перекрытие слева=нет"),
@@ -7132,12 +7132,12 @@ question_test:
 
             /* Последняя посылка завершилась позже ответа: не нужен новый
                вопрос или повторное EXCHANGE для того же полного потока. */
-            x.kind = D2K_EV_APPLIED;
+            x.kind = D2S_EV_APPLIED;
             /* С идентификатором ИМЕННО ТОГО плана, который планировщик
                только что отправил: по одному ключу потока «применён» больше
                не засчитывается (0009, U1). */
             (void)last_plan_id(x.plan_id);
-            d2k_sched_event(s, &x);
+            d2s_sched_event(s, &x);
             spin(s, 40);
 
             CHECK(said("вопрос 1 прошёл"),
@@ -7152,26 +7152,26 @@ question_test:
 
             /* Ответ обязан МЕНЯТЬ план, иначе спрашивать незачем. Число
                кандидатов для этого не годится: на «не держит перекрытие
-               слева» d2k_compose даёт ровно одно прицельное плечо, и пустой
+               слева» d2s_compose даёт ровно одно прицельное плечо, и пустой
                вектор тоже даёт один план — запасной. Различаются они
                СОДЕРЖИМЫМ, и сверять надо его. */
             char empty_plan[8][4096], answered_plan[8][4096];
-            d2k_props none, answered;
+            d2s_props none, answered;
             memset(&none, 0, sizeof none);
             memset(&answered, 0, sizeof answered);
-            d2k_props_question_passed(2, &answered);
-            size_t n_empty = d2k_compose(&none, D2K_SHAPE_MODERN, "disk.rzd.ru", 0, empty_plan, 8);
-            size_t n_answ = d2k_compose(&answered, D2K_SHAPE_MODERN, "disk.rzd.ru", 0, answered_plan, 8);
-            CHECK(n_empty >= 1 && n_answ >= 1, "d2k_compose не собрал план ни там, ни там");
+            d2s_props_question_passed(2, &answered);
+            size_t n_empty = d2s_compose(&none, D2S_SHAPE_MODERN, "disk.rzd.ru", 0, empty_plan, 8);
+            size_t n_answ = d2s_compose(&answered, D2S_SHAPE_MODERN, "disk.rzd.ru", 0, answered_plan, 8);
+            CHECK(n_empty >= 1 && n_answ >= 1, "d2s_compose не собрал план ни там, ни там");
             CHECK(n_empty >= 1 && n_answ >= 1 && strcmp(empty_plan[0], answered_plan[0]) != 0,
                   "план по отвеченному вектору совпал с запасным — ответ коробки ничего не изменил");
             close(peer);
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&c8);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c8);
         close(lfd);
         g_server_port = 1;
-        tcp_answer = D2K_V_OPAQUE;
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     if (question_only) { goto voice_only_done; }
@@ -7185,18 +7185,18 @@ retire_test:
        семейство), прежняя — ДО установки следующей, широкой DEL_NAME нет. */
     {
         /* 1. Провал кандидата → следующий → исчерпание (task_fail). */
-        d2k_catalog cr = {0};
-        d2k_sched *s = d2k_sched_new(&cr, sv[0], 0x2d);
+        d2s_catalog cr = {0};
+        d2s_sched *s = d2s_sched_new(&cr, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_HANDSHAKE; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_HANDSHAKE; ver_fail_first = 0;
         ver_answer_port = 40201; ver_calls = 0;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40201, "снятие.провал");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40201);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40201, "снятие.провал");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40201);
+        d2s_sched_event(s, &su);
         settle(s);
         run_out(s);
         probe_tally pt = name_probe_tally("снятие.провал");
@@ -7208,33 +7208,33 @@ retire_test:
         CHECK(pt.pending == 0, "retire: после task_fail пробные записи кандидатов остались стоять");
         CHECK(pt.stray == 0 && pt.broad == 0,
               "retire: снятие задело запись, которую задача не ставила");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cr);
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cr);
+        ver_answer = D2S_VER_APPLICATION;
     }
     {
         /* 2. Непереносимость: зонду план исполнился, клиенту — нет. Кандидат
            отвергнут в verify_confirm, его запись обязана уйти. */
-        d2k_catalog cr = {0};
-        d2k_sched *s = d2k_sched_new(&cr, sv[0], 0x2d);
+        d2s_catalog cr = {0};
+        d2s_sched *s = d2s_sched_new(&cr, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         ver_answer_port = 40210; ver_calls = 0;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40210, "снятие.непереносимо");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40210);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40210, "снятие.непереносимо");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40210);
+        d2s_sched_event(s, &su);
         settle(s);
         spin_until_installed(s);
-        d2k_ev hc = ev_hello(6, 40211, "снятие.непереносимо");
-        d2k_sched_event(s, &hc);
-        d2k_ev big = ev_refused(6, 40211, D2K_REFUSE_TOO_LONG, 1);
-        d2k_sched_event(s, &big);
-        d2k_ev ap = ev_applied(6, 40210);
-        d2k_sched_event(s, &ap);
+        d2s_ev hc = ev_hello(6, 40211, "снятие.непереносимо");
+        d2s_sched_event(s, &hc);
+        d2s_ev big = ev_refused(6, 40211, D2S_REFUSE_TOO_LONG, 1);
+        d2s_sched_event(s, &big);
+        d2s_ev ap = ev_applied(6, 40210);
+        d2s_sched_event(s, &ap);
         spin(s, 60);
         CHECK(said("потоку клиента"), "retire: непереносимость не сработала — проверять нечего");
         probe_tally mid = name_probe_tally("снятие.непереносимо");
@@ -7246,28 +7246,28 @@ retire_test:
                pt.sets, pt.dels, pt.pending, pt.max_pending, pt.stray, pt.broad);
         CHECK(pt.pending == 0 && pt.stray == 0 && pt.broad == 0,
               "retire: непереносимый кандидат не снят точно");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cr);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cr);
     }
     {
         /* 3. verify_confirm: подтверждённое ставится постоянной записью
            (проход каталога), пробная запись порта зонда снимается точно, и
            ни одной широкой DEL_NAME — подтверждённое не задето. */
-        d2k_catalog cr = {0};
-        d2k_sched *s = d2k_sched_new(&cr, sv[0], 0x2d);
+        d2s_catalog cr = {0};
+        d2s_sched *s = d2s_sched_new(&cr, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         ver_answer_port = 40220; ver_calls = 0;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40220, "снятие.подтверждено");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40220);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40220, "снятие.подтверждено");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40220);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40220);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40220);
+        d2s_sched_event(s, &ap);
         spin(s, 60);
         CHECK(said("ПОДТВЕРЖДЕНО"), "retire: подтверждения не случилось — проверять нечего");
         CHECK(binding_of(&cr, "снятие.подтверждено", 6) != NULL,
@@ -7280,10 +7280,10 @@ retire_test:
               "retire: после подтверждения пробная запись порта зонда осталась стоять");
         CHECK(pt.stray == 0 && pt.broad == 0,
               "retire: подтверждение сняло больше, чем свою пробную запись");
-        CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) >= 1,
+        CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) >= 1,
               "retire: подтверждённый план не поставлен постоянной записью");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cr);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cr);
     }
     /* 4–5. Вопросы о свойствах: каждый следующий вопрос снимает прежний,
        прошедший вопрос снимается до первого кандидата, а task_fail после
@@ -7304,18 +7304,18 @@ retire_test:
         g_server_port = ntohs(a.sin_port);
         const char *qname = qmode ? "снятие.вопрос-прошёл" : "снятие.вопросы";
 
-        d2k_catalog cq = {0};
-        d2k_sched *s = d2k_sched_new(&cq, sv[0], 0x2d);
+        d2s_catalog cq = {0};
+        d2s_sched *s = d2s_sched_new(&cq, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_OPAQUE; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_HANDSHAKE; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_OPAQUE; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_HANDSHAKE; ver_fail_first = 0;
         ver_answer_port = 40230; ver_calls = 0;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40230, qname);
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40230);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40230, qname);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40230);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 200 && !said("спрашиваю коробку о свойствах"); i++) {
             tick_once(s);
         }
@@ -7349,20 +7349,20 @@ retire_test:
             if (peer >= 0) { peers[n_peers++] = peer; }
             for (int i = 0; i < 400 && !said("жду обмена"); i++) { tick_once(s); }
             if (peer >= 0) {
-                d2k_ev x;
+                d2s_ev x;
                 memset(&x, 0, sizeof x);
                 x.transport = 6;
                 x.low_ip[0] = 127; x.low_ip[3] = 1;
                 x.low_port = g_server_port;
                 x.high_ip[0] = 127; x.high_ip[3] = 1;
                 x.high_port = ntohs(pa.sin_port);
-                x.kind = D2K_EV_APPLIED;
+                x.kind = D2S_EV_APPLIED;
                 (void)last_plan_id(x.plan_id);
-                d2k_sched_event(s, &x);
-                x.kind = D2K_EV_EXCHANGE;
+                d2s_sched_event(s, &x);
+                x.kind = D2S_EV_EXCHANGE;
                 x.code = 22; x.num = 1380; x.seen_types = 0x0C; x.server_hello = 1;
                 memset(x.plan_id, 0, sizeof x.plan_id);
-                d2k_sched_event(s, &x);
+                d2s_sched_event(s, &x);
             }
             for (int i = 0; i < 400 && !said("поставил план 1 из"); i++) { tick_once(s); }
             CHECK(said("вопрос 1 прошёл"), "retire: вопрос не прошёл — проверять нечего");
@@ -7389,13 +7389,13 @@ retire_test:
               "retire: task_fail после кандидата оставил пробную запись (вопроса или кандидата)");
         CHECK(pt.stray == 0 && pt.broad == 0,
               "retire: снятие задело запись, которую задача не ставила");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cq);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cq);
         for (int i = 0; i < n_peers; i++) { close(peers[i]); }
         close(lfd);
         g_server_port = 1;
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
     if (retire_only) { goto voice_only_done; }
 recheck_test:
@@ -7404,71 +7404,71 @@ recheck_test:
        независимый проход; повторное подтверждение снимает пометку. ------- */
     {
         const char *nm = "recheck.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0; vol_direct_complete = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0; vol_direct_complete = 0;
         confirm_once(&c, sv[0], nm, 40601);
-        d2k_cat_binding *modern = binding_of(&c, nm, 6) ?
+        d2s_cat_binding *modern = binding_of(&c, nm, 6) ?
             binding_mut(&c, nm, 6) : NULL;
-        CHECK(modern && modern->shape == D2K_SHAPE_MODERN && !modern->recheck_since,
+        CHECK(modern && modern->shape == D2S_SHAPE_MODERN && !modern->recheck_since,
               "recheck: fixture TLS1.3 binding not confirmed");
         if (modern) {
-            d2k_cat_box *box = NULL;
+            d2s_cat_box *box = NULL;
             for (size_t i = 0; i < c.n_boxes; i++)
                 if (modern >= c.boxes[i].binds &&
                     modern < c.boxes[i].binds + c.boxes[i].n_binds) box = &c.boxes[i];
-            d2k_cat_binding proto = *modern;
-            add_binding_like(box, &proto, 6, D2K_SHAPE_LEGACY);
-            add_binding_like(box, &proto, 6, D2K_LINK_SHAPE_ECH_TCP);
-            add_binding_like(box, &proto, 17, D2K_LINK_SHAPE_QUIC);
+            d2s_cat_binding proto = *modern;
+            add_binding_like(box, &proto, 6, D2S_SHAPE_LEGACY);
+            add_binding_like(box, &proto, 6, D2S_LINK_SHAPE_ECH_TCP);
+            add_binding_like(box, &proto, 17, D2S_LINK_SHAPE_QUIC);
         }
         CHECK(total_bindings(&c) == 4, "recheck: four-shape fixture");
 
         /* 1. Первый прямой проход TCP (профиль TLS 1.3). */
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        drain(); d2k_sched_sync(s); sync_out(s);
+        d2s_sched_set_say(s, collect_say, NULL);
+        drain(); d2s_sched_sync(s); sync_out(s);
         forget_sent();
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0;
-        d2k_ev h = ev_hello(6, 40602, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40602);
-        d2k_sched_event(s, &su);
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0;
+        d2s_ev h = ev_hello(6, 40602, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40602);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1, "recheck: direct measurement did not run");
         CHECK(total_bindings(&c) == 4,
               "recheck: a single direct CLEAR deleted a confirmed binding (§9.7)");
-        modern = binding_shape(&c, nm, 6, D2K_SHAPE_MODERN);
-        d2k_cat_binding *legacy = binding_shape(&c, nm, 6, D2K_SHAPE_LEGACY);
-        d2k_cat_binding *ech = binding_shape(&c, nm, 6, D2K_LINK_SHAPE_ECH_TCP);
-        d2k_cat_binding *quic = binding_shape(&c, nm, 17, D2K_LINK_SHAPE_QUIC);
+        modern = binding_shape(&c, nm, 6, D2S_SHAPE_MODERN);
+        d2s_cat_binding *legacy = binding_shape(&c, nm, 6, D2S_SHAPE_LEGACY);
+        d2s_cat_binding *ech = binding_shape(&c, nm, 6, D2S_LINK_SHAPE_ECH_TCP);
+        d2s_cat_binding *quic = binding_shape(&c, nm, 17, D2S_LINK_SHAPE_QUIC);
         CHECK(modern && modern->recheck_since != 0,
               "recheck: measured TLS1.3 binding not marked «требует повторной проверки»");
         CHECK(legacy && !legacy->recheck_since && ech && !ech->recheck_since,
               "recheck: TLS1.3 CLEAR touched TLS1.2/ECH bindings it did not measure");
         CHECK(quic && !quic->recheck_since, "recheck: TCP CLEAR touched the QUIC binding");
-        CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 1 &&
-              sent_del_name_key(nm, 6, D2K_SHAPE_MODERN, 4) == 1,
+        CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 1 &&
+              sent_del_name_key(nm, 6, D2S_SHAPE_MODERN, 4) == 1,
               "recheck: CLEAR must take off the wire exactly (name, TCP, TLS1.3, IPv4)");
-        CHECK(sent_command_count(D2K_CMD_DEL_NAME_PROBE, NULL, 0) == 0,
+        CHECK(sent_command_count(D2S_CMD_DEL_NAME_PROBE, NULL, 0) == 0,
               "recheck: CLEAR removed a trial entry it does not own");
         CHECK(c.revision > 0, "recheck: mark not flagged for persistence");
         CHECK(said("требуют повторной проверки"), "recheck: mark not reported");
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_set_name_shape(nm, D2K_SHAPE_MODERN) == 0,
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_set_name_shape(nm, D2S_SHAPE_MODERN) == 0,
               "recheck: catalog sync put the marked binding back on the wire");
-        CHECK(sent_set_name_shape(nm, D2K_SHAPE_LEGACY) == 1 &&
-              sent_set_name_shape(nm, D2K_LINK_SHAPE_ECH_TCP) == 1 &&
-              sent_set_name_shape(nm, D2K_LINK_SHAPE_QUIC) == 1,
+        CHECK(sent_set_name_shape(nm, D2S_SHAPE_LEGACY) == 1 &&
+              sent_set_name_shape(nm, D2S_LINK_SHAPE_ECH_TCP) == 1 &&
+              sent_set_name_shape(nm, D2S_LINK_SHAPE_QUIC) == 1,
               "recheck: sync lost the other confirmed shapes/transports");
         {
-            char live_path[] = "/tmp/d2k-recheck-live-XXXXXX";
+            char live_path[] = "/tmp/d2s-recheck-live-XXXXXX";
             int live_fd = mkstemp(live_path);
             if (live_fd >= 0) {
                 close(live_fd);
-                CHECK(!d2k_sched_write_live(s, live_path, "catalog.json"), "recheck live write");
+                CHECK(!d2s_sched_write_live(s, live_path, "catalog.json"), "recheck live write");
                 FILE *live = fopen(live_path, "r"); char body[32768] = {0};
                 if (live) { (void)!fread(body, 1, sizeof body - 1, live); fclose(live); }
                 CHECK(strstr(body, "\"recheck\": true") != NULL,
@@ -7479,24 +7479,24 @@ recheck_test:
 
         /* 2. Перезапуск: пометка переживает его, и проход не ставит привязку. */
         {
-            char path[] = "/tmp/d2k-recheck-cat-XXXXXX";
+            char path[] = "/tmp/d2s-recheck-cat-XXXXXX";
             int fd = mkstemp(path);
             char err[200];
             if (fd >= 0) {
                 close(fd);
-                CHECK(d2k_catalog_save(&c, path, err, sizeof err) == 0, "recheck: save");
-                d2k_catalog c2;
-                CHECK(d2k_catalog_load(path, &c2, err, sizeof err) == 0, "recheck: load");
-                d2k_cat_binding *m2 = binding_shape(&c2, nm, 6, D2K_SHAPE_MODERN);
+                CHECK(d2s_catalog_save(&c, path, err, sizeof err) == 0, "recheck: save");
+                d2s_catalog c2;
+                CHECK(d2s_catalog_load(path, &c2, err, sizeof err) == 0, "recheck: load");
+                d2s_cat_binding *m2 = binding_shape(&c2, nm, 6, D2S_SHAPE_MODERN);
                 CHECK(m2 && m2->recheck_since == modern->recheck_since,
                       "recheck: mark lost across restart");
-                d2k_sched *s2 = d2k_sched_new(&c2, sv[0], 0x2d);
-                drain(); forget_sent(); d2k_sched_sync(s2); sync_out(s2);
-                CHECK(sent_set_name_shape(nm, D2K_SHAPE_MODERN) == 0 &&
-                      sent_set_name_shape(nm, D2K_SHAPE_LEGACY) == 1,
+                d2s_sched *s2 = d2s_sched_new(&c2, sv[0], 0x2d);
+                drain(); forget_sent(); d2s_sched_sync(s2); sync_out(s2);
+                CHECK(sent_set_name_shape(nm, D2S_SHAPE_MODERN) == 0 &&
+                      sent_set_name_shape(nm, D2S_SHAPE_LEGACY) == 1,
                       "recheck: after restart the marked binding went back on the wire");
-                d2k_sched_free(s2);
-                d2k_catalog_free(&c2);
+                d2s_sched_free(s2);
+                d2s_catalog_free(&c2);
                 unlink(path);
             }
         }
@@ -7508,131 +7508,131 @@ recheck_test:
         forget_sent();
         tcp_calls = 0;
         h = ev_hello(6, 40603, nm);
-        d2k_sched_event(s, &h);
+        d2s_sched_event(s, &h);
         su = ev_suspect(6, 40603);
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1, "recheck: second direct measurement did not run");
-        CHECK(binding_shape(&c, nm, 6, D2K_SHAPE_MODERN) == NULL,
+        CHECK(binding_shape(&c, nm, 6, D2S_SHAPE_MODERN) == NULL,
               "recheck: second independent CLEAR did not delete the binding");
-        legacy = binding_shape(&c, nm, 6, D2K_SHAPE_LEGACY);
-        ech = binding_shape(&c, nm, 6, D2K_LINK_SHAPE_ECH_TCP);
-        quic = binding_shape(&c, nm, 17, D2K_LINK_SHAPE_QUIC);
+        legacy = binding_shape(&c, nm, 6, D2S_SHAPE_LEGACY);
+        ech = binding_shape(&c, nm, 6, D2S_LINK_SHAPE_ECH_TCP);
+        quic = binding_shape(&c, nm, 17, D2S_LINK_SHAPE_QUIC);
         CHECK(total_bindings(&c) == 3 && legacy && !legacy->recheck_since &&
               ech && !ech->recheck_since && quic && !quic->recheck_since,
               "recheck: second CLEAR touched other shapes/transports");
-        CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) <= 1 &&
-              sent_del_name_key(nm, 6, D2K_SHAPE_LEGACY, 4) == 0 &&
-              sent_del_name_key(nm, 6, D2K_LINK_SHAPE_ECH_TCP, 4) == 0 &&
-              sent_del_name_key(nm, 17, D2K_LINK_SHAPE_QUIC, 4) == 0,
+        CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) <= 1 &&
+              sent_del_name_key(nm, 6, D2S_SHAPE_LEGACY, 4) == 0 &&
+              sent_del_name_key(nm, 6, D2S_LINK_SHAPE_ECH_TCP, 4) == 0 &&
+              sent_del_name_key(nm, 17, D2S_LINK_SHAPE_QUIC, 4) == 0,
               "recheck: second CLEAR sent a delete outside its measured shape");
         CHECK(said("второй независимый"), "recheck: deletion not reported");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
     }
     {
         /* 4. Повторное подтверждение после пометки снимает её и возвращает
            привязку на провод (§3.7: перепроверить сохранённое решение). */
         const char *nm = "recheck-again.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         confirm_once(&c, sv[0], nm, 40611);
         CHECK(bindings_of(&c, nm, 6) == 1, "recheck/again: fixture not confirmed");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_CLEAR;
-        d2k_ev h = ev_hello(6, 40612, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40612);
-        d2k_sched_event(s, &su);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_CLEAR;
+        d2s_ev h = ev_hello(6, 40612, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40612);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_sched_free(s);
-        const d2k_cat_binding *b = binding_of(&c, nm, 6);
+        d2s_sched_free(s);
+        const d2s_cat_binding *b = binding_of(&c, nm, 6);
         CHECK(b && b->recheck_since, "recheck/again: CLEAR did not mark");
-        tcp_answer = D2K_V_PREFIX;
+        tcp_answer = D2S_V_PREFIX;
         confirm_once(&c, sv[0], nm, 40613);
         b = binding_of(&c, nm, 6);
         CHECK(bindings_of(&c, nm, 6) == 1 && b && !b->recheck_since,
               "recheck/again: reconfirmation did not clear the recheck mark");
-        s = d2k_sched_new(&c, sv[0], 0x2d);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        CHECK(sent_set_name_shape(nm, b ? (b->shape ? b->shape : D2K_LINK_SHAPE_GRANDFATHER) : 1) == 1,
+        s = d2s_sched_new(&c, sv[0], 0x2d);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        CHECK(sent_set_name_shape(nm, b ? (b->shape ? b->shape : D2S_LINK_SHAPE_GRANDFATHER) : 1) == 1,
               "recheck/again: reconfirmed binding not back on the wire");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
     }
     {
         /* 5. QUIC мерится без записанной формы (asked_shape = 0): прямой
            проход касается только формы замера — QUIC, — не TLS той же цели. */
         const char *nm = "recheck-quic.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         confirm_once(&c, sv[0], nm, 40621);
-        d2k_cat_binding *modern = binding_mut(&c, nm, 6);
+        d2s_cat_binding *modern = binding_mut(&c, nm, 6);
         CHECK(modern != NULL, "recheck/quic: fixture not confirmed");
         if (modern) {
-            d2k_cat_binding proto = *modern;
-            add_binding_like(&c.boxes[0], &proto, 6, D2K_SHAPE_LEGACY);
-            add_binding_like(&c.boxes[0], &proto, 6, D2K_LINK_SHAPE_ECH_TCP);
-            add_binding_like(&c.boxes[0], &proto, 17, D2K_LINK_SHAPE_QUIC);
+            d2s_cat_binding proto = *modern;
+            add_binding_like(&c.boxes[0], &proto, 6, D2S_SHAPE_LEGACY);
+            add_binding_like(&c.boxes[0], &proto, 6, D2S_LINK_SHAPE_ECH_TCP);
+            add_binding_like(&c.boxes[0], &proto, 17, D2S_LINK_SHAPE_QUIC);
         }
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         drain(); forget_sent();
-        quic_answer = D2K_V_CLEAR; quic_calls = 0;
-        d2k_ev h = ev_hello(17, 40622, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev sh;
+        quic_answer = D2S_V_CLEAR; quic_calls = 0;
+        d2s_ev h = ev_hello(17, 40622, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev sh;
         CHECK(quic_shape(&sh, nm) == 0, "recheck/quic: snapshot fixture");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(17, 40622);
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(17, 40622);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(quic_calls == 1, "recheck/quic: direct QUIC measurement did not run");
-        d2k_cat_binding *q = binding_shape(&c, nm, 17, D2K_LINK_SHAPE_QUIC);
+        d2s_cat_binding *q = binding_shape(&c, nm, 17, D2S_LINK_SHAPE_QUIC);
         CHECK(q && q->recheck_since, "recheck/quic: QUIC binding not marked");
-        CHECK(!binding_shape(&c, nm, 6, D2K_SHAPE_MODERN)->recheck_since &&
-              !binding_shape(&c, nm, 6, D2K_SHAPE_LEGACY)->recheck_since &&
-              !binding_shape(&c, nm, 6, D2K_LINK_SHAPE_ECH_TCP)->recheck_since,
+        CHECK(!binding_shape(&c, nm, 6, D2S_SHAPE_MODERN)->recheck_since &&
+              !binding_shape(&c, nm, 6, D2S_SHAPE_LEGACY)->recheck_since &&
+              !binding_shape(&c, nm, 6, D2S_LINK_SHAPE_ECH_TCP)->recheck_since,
               "recheck/quic: unknown-shape CLEAR touched TLS bindings it did not measure");
-        CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 1 &&
-              sent_del_name_key(nm, 17, D2K_LINK_SHAPE_QUIC, 4) == 1,
+        CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 1 &&
+              sent_del_name_key(nm, 17, D2S_LINK_SHAPE_QUIC, 4) == 1,
               "recheck/quic: QUIC CLEAR must delete exactly (name, UDP, QUIC)");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
-        quic_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
+        quic_answer = D2S_V_OPAQUE;
     }
     {
         /* 6. Вопросы о свойствах: после prop_finish заказан проход каталога,
            и ни одна ветка (в т.ч. prop_sport_be == 0 при props_asked) не
            шлёт DEL_NAME. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        drain(); d2k_sched_sync(s); sync_out(s);
-        CHECK(!d2k_sched_sync_pending(s), "recheck/props: initial sync did not finish");
+        d2s_sched_set_say(s, collect_say, NULL);
+        drain(); d2s_sched_sync(s); sync_out(s);
+        CHECK(!d2s_sched_sync_pending(s), "recheck/props: initial sync did not finish");
         forget_sent();
-        tcp_answer = D2K_V_OPAQUE; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_HANDSHAKE;
-        d2k_ev h = ev_hello(6, 40631, "recheck-props.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40631);
-        d2k_sched_event(s, &su);
+        tcp_answer = D2S_V_OPAQUE; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_HANDSHAKE;
+        d2s_ev h = ev_hello(6, 40631, "recheck-props.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40631);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 300 && !said("поставил план 1 из"); i++) {
             skip_ahead(s, 3000);
             spin(s, 20);
         }
         CHECK(said("спрашиваю коробку о свойствах"), "recheck/props: questions not asked");
         CHECK(said("поставил план 1 из"), "recheck/props: no candidate after questions");
-        CHECK(d2k_sched_sync_pending(s), "recheck/props: prop_finish did not order catalog sync");
+        CHECK(d2s_sched_sync_pending(s), "recheck/props: prop_finish did not order catalog sync");
         run_out(s);
-        CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 0,
+        CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 0,
               "recheck/props: question/candidate cleanup sent a name-wide/permanent DEL_NAME");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
+        ver_answer = D2S_VER_APPLICATION;
     }
     {
         /* 7. Ревью задачи 21: помеченная к перепроверке привязка TLS 1.3
@@ -7640,177 +7640,177 @@ recheck_test:
            TLS 1.2 подтверждён, задача наблюдает; клиент TLS 1.3 без плана
            приходит неприменённым — его снимок обязан завести перемер. */
         const char *nm = "recheck-watch.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         confirm_once(&c, sv[0], nm, 40641);
-        d2k_cat_binding *m = binding_shape(&c, nm, 6, D2K_SHAPE_MODERN);
+        d2s_cat_binding *m = binding_shape(&c, nm, 6, D2S_SHAPE_MODERN);
         CHECK(m != NULL, "recheck/watch: TLS1.3 fixture not confirmed");
         /* Вход «байты клиента»: иначе перемер заводит другая ветка (привязка
            добыта заготовкой), и проверка покрытия не различалась бы. */
         if (m) { m->recheck_since = 1790000000; m->recheck_mono_ms = 0;
-                 m->input = D2K_INPUT_CLIENT; }
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+                 m->input = D2S_INPUT_CLIENT; }
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6; sh.family = 4;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, nm, sh.shape, sizeof sh.shape,
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6; sh.family = 4;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, nm, sh.shape, sizeof sh.shape,
                                      &sh.shape_len) == 0, "recheck/watch: legacy snapshot");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         ver_answer_port = 40642;
-        d2k_ev h = ev_hello(6, 40642, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_RST_CUT;
-        d2k_sched_event(s, &su); settle(s);
-        d2k_ev ap = ev_applied(6, 40642);
-        d2k_sched_event(s, &ap); spin(s, 40);
-        CHECK(binding_shape(&c, nm, 6, D2K_SHAPE_LEGACY) != NULL,
+        d2s_ev h = ev_hello(6, 40642, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_RST_CUT;
+        d2s_sched_event(s, &su); settle(s);
+        d2s_ev ap = ev_applied(6, 40642);
+        d2s_sched_event(s, &ap); spin(s, 40);
+        CHECK(binding_shape(&c, nm, 6, D2S_SHAPE_LEGACY) != NULL,
               "recheck/watch: TLS1.2 not confirmed — nothing to watch");
-        d2k_cat_binding *lg = binding_shape(&c, nm, 6, D2K_SHAPE_LEGACY);
-        if (lg) lg->input = D2K_INPUT_CLIENT;
+        d2s_cat_binding *lg = binding_shape(&c, nm, 6, D2S_SHAPE_LEGACY);
+        if (lg) lg->input = D2S_INPUT_CLIENT;
         int before = tcp_calls;
         saidbuf[0] = '\0';
         forget_sent();
         h.high_port++; su.high_port++;
-        d2k_sched_event(s, &h);
-        su.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &su); drain();
-        CHECK(sent_command_count(D2K_CMD_ARM_SHAPE, NULL, 0) == 1,
+        d2s_sched_event(s, &h);
+        su.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &su); drain();
+        CHECK(sent_command_count(D2S_CMD_ARM_SHAPE, NULL, 0) == 1,
               "recheck/watch: unplanned flow did not request a snapshot");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
                                      &sh.shape_len) == 0, "recheck/watch: modern snapshot");
-        d2k_sched_event(s, &sh); settle(s);
+        d2s_sched_event(s, &sh); settle(s);
         CHECK(tcp_calls > before,
               "recheck/watch: off-wire recheck binding counted as covering TLS1.3 — no remeasure");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
     }
     {
         /* ECH offer GREASE и его снимок должны считаться TLS 1.3, если именно
            такую форму выбирает подтверждённая привязка. */
         const char *nm = "grease-watch.example";
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         char pid[40];
         own_box(&c, "box-grease-watch", pid, 71, 3, "grease-watch.own", 6,
-                D2K_SHAPE_MODERN, 4, 1790000000, 0);
-        d2k_sched_tcp_fn saved_base = d2k_sched_tcp_base_hook;
-        d2k_sched_tcp_base_hook = stub_base;
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
-        tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+                D2S_SHAPE_MODERN, 4, 1790000000, 0);
+        d2s_sched_tcp_fn saved_base = d2s_sched_tcp_base_hook;
+        d2s_sched_tcp_base_hook = stub_base;
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
+        tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
         base_blocked_answer = 1; base_wait_until_stop = 0;
         base_calls = tcp_calls = ver_calls = 0;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6; sh.family = 4;
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6; sh.family = 4;
         CHECK(ech_offer_hello(nm, sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
               "grease/watch: fixture");
         ver_answer_port = 40651;
-        d2k_ev h = ev_hello(6, 40651, nm); d2k_sched_event(s, &h);
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40651); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40651, nm); d2s_sched_event(s, &h);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40651); d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40651); d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40651); d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(said("GREASE") && said("ПОДТВЕРЖДЕНО"),
               "grease/watch: GREASE-клиент не подтверждён своим планом");
-        const d2k_cat_binding *bd = binding_of(&c, nm, 6);
-        CHECK(bd && bd->shape == D2K_SHAPE_MODERN && bd->input == D2K_INPUT_TRANSFER,
+        const d2s_cat_binding *bd = binding_of(&c, nm, 6);
+        CHECK(bd && bd->shape == D2S_SHAPE_MODERN && bd->input == D2S_INPUT_TRANSFER,
               "grease/watch: привязка GREASE-клиента не TLS 1.3/перенос");
         int base_before = base_calls, tcp_before = tcp_calls;
         saidbuf[0] = '\0'; forget_sent();
         h.high_port++; su.high_port++;
-        d2k_sched_event(s, &h);
-        su.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &su); drain();
-        CHECK(sent_command_count(D2K_CMD_ARM_SHAPE, NULL, 0) == 1,
+        d2s_sched_event(s, &h);
+        su.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &su); drain();
+        CHECK(sent_command_count(D2S_CMD_ARM_SHAPE, NULL, 0) == 1,
               "grease/watch: поток без плана не запросил снимок");
-        d2k_sched_event(s, &sh); settle(s);
+        d2s_sched_event(s, &sh); settle(s);
         CHECK(!said("перемеряю снимком") && base_calls == base_before && tcp_calls == tcp_before,
               "grease/watch: снимок подтверждённой цели завёл лишний перемер");
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_tcp_base_hook = saved_base;
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_tcp_base_hook = saved_base;
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
     }
     {
         /* 9. Поздний RST на потоке, к которому подтверждённый план не
            применялся, не является уликой против плана: наблюдение должно
            сохраниться, а снимок формы — запрашиваться. */
         const char *nm = "late-unplanned.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0;
         confirm_once(&c, sv[0], nm, 40661);
-        d2k_cat_binding *m = binding_shape(&c, nm, 6, D2K_SHAPE_MODERN);
+        d2s_cat_binding *m = binding_shape(&c, nm, 6, D2S_SHAPE_MODERN);
         CHECK(m != NULL, "late/unplanned: fixture not confirmed");
-        if (m) m->input = D2K_INPUT_CLIENT;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        if (m) m->input = D2S_INPUT_CLIENT;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         ver_answer_port = 40662;
-        d2k_ev h = ev_hello(6, 40662, nm); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40662); d2k_sched_event(s, &su); settle(s);
-        d2k_ev ap = ev_applied(6, 40662); d2k_sched_event(s, &ap); spin(s, 40);
+        d2s_ev h = ev_hello(6, 40662, nm); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40662); d2s_sched_event(s, &su); settle(s);
+        d2s_ev ap = ev_applied(6, 40662); d2s_sched_event(s, &ap); spin(s, 40);
         CHECK(said("ПОДТВЕРЖДЕНО"), "late/unplanned: цель не подтверждена — наблюдать нечего");
         vol_calls = tcp_calls = 0; saidbuf[0] = '\0'; forget_sent();
         h.high_port++; su.high_port++;
-        su.code = D2K_SUSPECT_RST_AFTER_APP; su.planned = D2K_LINK_PLANNED_NO;
-        d2k_sched_event(s, &h); d2k_sched_event(s, &su); settle(s);
+        su.code = D2S_SUSPECT_RST_AFTER_APP; su.planned = D2S_LINK_PLANNED_NO;
+        d2s_sched_event(s, &h); d2s_sched_event(s, &su); settle(s);
         CHECK(!said("проверяю повторяемость обрыва ответа") && vol_calls == 0 && tcp_calls == 0,
               "late/unplanned: поздний RST на потоке без плана снёс наблюдателя и перемерил");
-        CHECK(said("НЕ ПРИМЕНЯЛСЯ") && sent_command_count(D2K_CMD_ARM_SHAPE, NULL, 0) == 1,
+        CHECK(said("НЕ ПРИМЕНЯЛСЯ") && sent_command_count(D2S_CMD_ARM_SHAPE, NULL, 0) == 1,
               "late/unplanned: наблюдение не продолжено / снимок не запрошен");
         saidbuf[0] = '\0';
-        h.high_port++; su.high_port++; su.planned = D2K_LINK_PLANNED_YES;
-        d2k_sched_event(s, &h); d2k_sched_event(s, &su); settle(s);
+        h.high_port++; su.high_port++; su.planned = D2S_LINK_PLANNED_YES;
+        d2s_sched_event(s, &h); d2s_sched_event(s, &su); settle(s);
         CHECK(said("проверяю повторяемость обрыва ответа") && vol_calls == 1,
               "late/unplanned: поздний RST под планом не перемерен");
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     {
         /* Поток без плана после снятия наблюдателя не должен запускать поиск,
            если подтверждённая форма его покрывает. */
         const char *nm = "unplanned-nowatch.example";
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = 0; tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0;
         confirm_once(&c, sv[0], nm, 40671);
-        d2k_cat_binding *m = binding_shape(&c, nm, 6, D2K_SHAPE_MODERN);
+        d2s_cat_binding *m = binding_shape(&c, nm, 6, D2S_SHAPE_MODERN);
         CHECK(m != NULL, "unplanned/nowatch: fixture not confirmed");
-        if (m) m->input = D2K_INPUT_CLIENT;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        if (m) m->input = D2S_INPUT_CLIENT;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         ver_answer_port = 40672;
-        d2k_ev h = ev_hello(6, 40672, nm); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40672); d2k_sched_event(s, &su); settle(s);
-        d2k_ev ap = ev_applied(6, 40672); d2k_sched_event(s, &ap); spin(s, 40);
+        d2s_ev h = ev_hello(6, 40672, nm); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40672); d2s_sched_event(s, &su); settle(s);
+        d2s_ev ap = ev_applied(6, 40672); d2s_sched_event(s, &ap); spin(s, 40);
         CHECK(said("ПОДТВЕРЖДЕНО"), "unplanned/nowatch: цель не подтверждена");
         saidbuf[0] = '\0';
         h.high_port++;
-        d2k_ev ex = ev_exchange(6, h.high_port, 1);
-        d2k_sched_event(s, &h); d2k_sched_event(s, &ex); settle(s);
+        d2s_ev ex = ev_exchange(6, h.high_port, 1);
+        d2s_sched_event(s, &h); d2s_sched_event(s, &ex); settle(s);
         CHECK(said("замечен последующий TLS-ответ"),
               "unplanned/nowatch: наблюдатель не снят");
         vol_calls = tcp_calls = 0; saidbuf[0] = '\0'; forget_sent();
         h.high_port++; su.high_port++;
-        su.code = D2K_SUSPECT_RST_AFTER_APP;
-        su.planned = D2K_LINK_PLANNED_NO;
-        su.client_shape = D2K_LINK_SHAPE_ECH_TCP;
-        d2k_sched_event(s, &h); d2k_sched_event(s, &su); settle(s);
+        su.code = D2S_SUSPECT_RST_AFTER_APP;
+        su.planned = D2S_LINK_PLANNED_NO;
+        su.client_shape = D2S_LINK_SHAPE_ECH_TCP;
+        d2s_sched_event(s, &h); d2s_sched_event(s, &su); settle(s);
         CHECK(!said("источник нового замера") && vol_calls == 0 && tcp_calls == 0,
               "unplanned/nowatch: покрытый ECH GREASE-поток запустил повторный поиск");
         CHECK(said("не улика, поиск не начинаю"),
               "unplanned/nowatch: причина не названа");
         saidbuf[0] = '\0';
         h.high_port++; su.high_port++;
-        su.client_shape = D2K_SHAPE_LEGACY;
-        d2k_sched_event(s, &h); d2k_sched_event(s, &su); settle(s);
+        su.client_shape = D2S_SHAPE_LEGACY;
+        d2s_sched_event(s, &h); d2s_sched_event(s, &su); settle(s);
         CHECK(said("источник нового замера"),
               "unplanned/nowatch: непокрытая TLS 1.2 форма не измерена");
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     if (recheck_only) { goto voice_only_done; }
 lifecycle_test:
@@ -7826,24 +7826,24 @@ lifecycle_test:
         /* (1) Поздний TCP-снимок перезапускает поиск, а рабочий поток не
            заводится. start_search уже сбросил задачу — продолжать разбор
            старого вердикта занулённой задачей нельзя. */
-        d2k_catalog c1 = {0};
-        d2k_sched *s = d2k_sched_new(&c1, sv[0], 0x2d);
+        d2s_catalog c1 = {0};
+        d2s_sched *s = d2s_sched_new(&c1, sv[0], 0x2d);
         tcp_wait_until_stop = 1; tcp_release_waiters = 0;
         tcp_saw_stop = tcp_stop_count = tcp_calls = 0;
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 41301, "restart.fail.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41301);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 41301, "restart.fail.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41301);
+        d2s_sched_event(s, &su);
         spin(s, 30);
         CHECK(tcp_calls == 1, "lifecycle/restart: первый замер не начался");
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "restart.fail.example",
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "restart.fail.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "lifecycle/restart: снимок");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         spawn_fail = 1;
         tcp_release_waiters = 1;
         drain(); forget_sent();
@@ -7851,7 +7851,7 @@ lifecycle_test:
         tcp_wait_until_stop = 0; tcp_release_waiters = 0;
         CHECK(said("повторяю поиск его байтами"), "lifecycle/restart: перезапуск снимком не начат");
         CHECK(spawn_refused > 0, "lifecycle/restart: отказ запуска потока не случился");
-        CHECK(d2k_sched_active(s) == 0,
+        CHECK(d2s_sched_active(s) == 0,
               "lifecycle/restart: после провала запуска осталась задача-зомби");
         CHECK(live_autopick_reason_is(s, "локальная ошибка: рабочий поток не запустился"),
               "живой статус не объясняет отказ запуска рабочего потока");
@@ -7862,45 +7862,45 @@ lifecycle_test:
         CHECK(!said("по  "), "lifecycle/restart: задача без имени продолжила поиск");
         CHECK(said("по restart.fail.example повтор поиска снимком не запустился"),
               "lifecycle/restart: провал перезапуска не назван");
-        CHECK(sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0) == 0,
+        CHECK(sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0) == 0,
               "lifecycle/restart: задача без имени поставила пробный план");
-        d2k_sched_free(s); d2k_catalog_free(&c1);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c1);
+        tcp_answer = D2S_V_OPAQUE;
     }
     {
         /* (2) Подтверждённое заготовкой после многих промахов (бюджет почти
            потрачен), затем снимок клиента. Перемер — новый поиск: свежий
            бюджет и ранее подтверждённый план — первым кандидатом. */
-        d2k_catalog c2 = {0};
-        d2k_sched *s = d2k_sched_new(&c2, sv[0], 0x2d);
+        d2s_catalog c2 = {0};
+        d2s_sched *s = d2s_sched_new(&c2, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION;
         ver_calls = 0; ver_fail_first = 12;
         ver_answer_port = 41311;
         forget_sent();
-        d2k_ev h = ev_hello(6, 41311, "remeasure.budget.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41311);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 41311, "remeasure.budget.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41311);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 60 && ver_calls <= ver_fail_first; i++) { skip_ahead(s, 6000); spin(s, 40); }
         settle(s);
-        d2k_ev ap = ev_applied(6, 41311);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 41311);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
-        const d2k_cat_binding *bd = binding_of(&c2, "remeasure.budget.example", 6);
-        CHECK(bd != NULL && bd->input == D2K_INPUT_PROFILE,
+        const d2s_cat_binding *bd = binding_of(&c2, "remeasure.budget.example", 6);
+        CHECK(bd != NULL && bd->input == D2S_INPUT_PROFILE,
               "lifecycle/remeasure: подтверждение заготовкой не записано");
         char confirmed_plan[40] = {0};
         if (bd) snprintf(confirmed_plan, sizeof confirmed_plan, "%s", bd->plan_id);
         ver_fail_first = 0;
         ver_answer_port = 41312;
         saidbuf[0] = '\0';
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "remeasure.budget.example",
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "remeasure.budget.example",
               sh.shape, sizeof sh.shape, &sh.shape_len) == 0, "lifecycle/remeasure: снимок");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         CHECK(said("перемеряю снимком"), "lifecycle/remeasure: перемер не начат");
         int probes_after = live_task_probes(s, "remeasure.budget.example");
         printf("lifecycle/remeasure: probes after remeasure start = %d\n", probes_after);
@@ -7909,34 +7909,34 @@ lifecycle_test:
         settle(s);
         CHECK(said("готовых планов узнанной коробки"),
               "lifecycle/remeasure: ранее подтверждённый план не проверен первым");
-        d2k_ev ap2 = ev_applied(6, 41312);
-        d2k_sched_event(s, &ap2);
+        d2s_ev ap2 = ev_applied(6, 41312);
+        d2s_sched_event(s, &ap2);
         spin(s, 40);
         bd = binding_of(&c2, "remeasure.budget.example", 6);
-        CHECK(bd != NULL && bd->input == D2K_INPUT_CLIENT && !strcmp(bd->plan_id, confirmed_plan),
+        CHECK(bd != NULL && bd->input == D2S_INPUT_CLIENT && !strcmp(bd->plan_id, confirmed_plan),
               "lifecycle/remeasure: перемер не подтвердил прежний план байтами клиента");
-        d2k_sched_free(s); d2k_catalog_free(&c2);
+        d2s_sched_free(s); d2s_catalog_free(&c2);
     }
     {
         /* (6) Бюджет зондов кончается раньше кандидатов: каждый кандидат
            переиспытывается после временных отказов отправки. Это неполный
-           поиск, а не «планы исчерпаны» (D2K_SPEC §3). */
-        d2k_catalog c6 = {0};
-        d2k_sched *s = d2k_sched_new(&c6, sv[0], 0x2d);
+           поиск, а не «планы исчерпаны» (D2S_SPEC §3). */
+        d2s_catalog c6 = {0};
+        d2s_sched *s = d2s_sched_new(&c6, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         ver_answer_port = 41361; ver_calls = 0;
-        d2k_ev h = ev_hello(6, 41361, "budget.out.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41361);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 41361, "budget.out.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41361);
+        d2s_sched_event(s, &su);
         settle(s);
         int done = 0;
         for (int i = 0; i < 400 && !done; i++) {
-            d2k_ev tmp = ev_refused(6, 41361, D2K_REFUSE_QUEUE, 1);
-            d2k_sched_event(s, &tmp);
+            d2s_ev tmp = ev_refused(6, 41361, D2S_REFUSE_QUEUE, 1);
+            d2s_sched_event(s, &tmp);
             skip_ahead(s, 6000);
             spin(s, 30);
             done = said("цель отдыхает") || said("бюджет зондов исчерпан") ||
@@ -7948,11 +7948,11 @@ lifecycle_test:
         CHECK(!said("выведенные планы исчерпаны"),
               "lifecycle/budget: исчерпание бюджета выдано за исчерпание планов");
         CHECK(total_bindings(&c6) == 0, "lifecycle/budget: отказ отправки записан успехом");
-        d2k_sched_free(s); d2k_catalog_free(&c6);
+        d2s_sched_free(s); d2s_catalog_free(&c6);
     }
     for (int qmode = 0; qmode < 3; qmode++) {
         /* (4) APPLIED вопроса приходит, пока задача ещё в T_PROPS_CONTACT:
-           рабочий поток вернулся сразу после посылки, а d2kc читает события
+           рабочий поток вернулся сразу после посылки, а d2sc читает события
            связи раньше тика. Применение засчитывается после перехода.
            qmode 1: и ответ сервера (EXCHANGE с ServerHello) пришёл до тика —
            это улика, а не промах. qmode 2: ранний обмен ЧУЖОГО потока с тем
@@ -7973,19 +7973,19 @@ lifecycle_test:
         CHECK(getsockname(lfd, (struct sockaddr *)&a, &al) == 0 && listen(lfd, 4) == 0,
               "lifecycle/question: стенд-цель не слушает");
         g_server_port = ntohs(a.sin_port);
-        d2k_catalog c4 = {0};
-        d2k_sched *s = d2k_sched_new(&c4, sv[0], 0x2d);
+        d2s_catalog c4 = {0};
+        d2s_sched *s = d2s_sched_new(&c4, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
         uint16_t cport = (uint16_t)(41341 + qmode);
-        d2k_ev h = ev_hello(6, cport, "early.question.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, cport);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, cport, "early.question.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, cport);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 200 && !said("спрашиваю коробку о свойствах"); i++) tick_once(s);
         CHECK(said("спрашиваю коробку о свойствах"), "lifecycle/question: вопрос не задан");
-        uint8_t qid[D2K_PLAN_ID_LEN] = {0};
+        uint8_t qid[D2S_PLAN_ID_LEN] = {0};
         CHECK(last_plan_id(qid), "lifecycle/question: id вопроса не прочитан");
         int peer = -1;
         for (int i = 0; i < 400 && peer < 0; i++) {
@@ -8000,23 +8000,23 @@ lifecycle_test:
         }
         CHECK(peer >= 0, "lifecycle/question: зонд вопроса не пришёл к цели");
         CHECK(!said("ушёл с местного порта"), "lifecycle/question: стенд не воспроизводит T_PROPS_CONTACT");
-        d2k_ev x;
+        d2s_ev x;
         memset(&x, 0, sizeof x);
         x.transport = 6;
         x.low_ip[0] = 127; x.low_ip[3] = 1; x.low_port = g_server_port;
         x.high_ip[0] = 127; x.high_ip[3] = 1; x.high_port = ntohs(a.sin_port);
-        x.kind = D2K_EV_APPLIED;
+        x.kind = D2S_EV_APPLIED;
         memcpy(x.plan_id, qid, sizeof qid);
-        d2k_sched_event(s, &x);
-        d2k_ev ex = x;
-        ex.kind = D2K_EV_EXCHANGE;
+        d2s_sched_event(s, &x);
+        d2s_ev ex = x;
+        ex.kind = D2S_EV_EXCHANGE;
         memset(ex.plan_id, 0, sizeof ex.plan_id);
         ex.code = 22; ex.num = 1380; ex.seen_types = 0x0C; ex.server_hello = 1;
-        if (qmode == 1) d2k_sched_event(s, &ex);
+        if (qmode == 1) d2s_sched_event(s, &ex);
         if (qmode == 2) {
-            d2k_ev foreign = ex;
+            d2s_ev foreign = ex;
             foreign.low_port = (uint16_t)(g_server_port + 1);   /* другой сервер */
-            d2k_sched_event(s, &foreign);
+            d2s_sched_event(s, &foreign);
         }
         for (int i = 0; i < 400 && !said("ушёл с местного порта"); i++) tick_once(s);
         CHECK(said("ушёл с местного порта"), "lifecycle/question: переход к ожиданию не случился");
@@ -8024,13 +8024,13 @@ lifecycle_test:
             CHECK(!said("вопрос 1 прошёл") && !said("ответ замечен"),
                   "lifecycle/question: ранний обмен чужого потока засчитан за ответ вопроса");
         }
-        if (qmode != 1) d2k_sched_event(s, &ex);
+        if (qmode != 1) d2s_sched_event(s, &ex);
         CHECK(said("вопрос 1 прошёл"),
               qmode == 1 ? "lifecycle/question: ранний ответ сервера потерян — вопрос станет промахом"
                          : "lifecycle/question: ранний APPLIED вопроса потерян в T_PROPS_CONTACT");
         CHECK(!said("жду подтверждения полного исполнения"),
               "lifecycle/question: ответ ждёт применения, которое уже пришло");
-        d2k_sched_free(s); d2k_catalog_free(&c4);
+        d2s_sched_free(s); d2s_catalog_free(&c4);
         if (peer >= 0) close(peer);
         close(lfd);
         g_server_port = saved_port;
@@ -8039,7 +8039,7 @@ lifecycle_test:
         /* Финальное ревью core, M2: срок жизни истёк, пока вопрос о свойствах
            стоял в T_PROPS_CONTACT (поток обращения вернулся, задача его ещё
            не приняла). Сокет обращения закрывается вместе с задачей, а не
-           остаётся висеть в d2kc, живущем сутками. */
+           остаётся висеть в d2sc, живущем сутками. */
         uint16_t saved_port = g_server_port;
         int lfd = socket(AF_INET, SOCK_STREAM, 0);
         struct sockaddr_in a;
@@ -8055,15 +8055,15 @@ lifecycle_test:
         CHECK(lfd >= 0 && bound && getsockname(lfd, (struct sockaddr *)&a, &al) == 0 &&
               listen(lfd, 4) == 0, "lifecycle/contact-life: стенд-цель не слушает");
         g_server_port = ntohs(a.sin_port);
-        d2k_catalog c4 = {0};
-        d2k_sched *s = d2k_sched_new(&c4, sv[0], 0x2d);
+        d2s_catalog c4 = {0};
+        d2s_sched *s = d2s_sched_new(&c4, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
-        d2k_ev h = ev_hello(6, 41349, "contact-life.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41349);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
+        d2s_ev h = ev_hello(6, 41349, "contact-life.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41349);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 200 && !said("спрашиваю коробку о свойствах"); i++) tick_once(s);
         int peer = -1;
         for (int i = 0; i < 400 && peer < 0; i++) {
@@ -8084,7 +8084,7 @@ lifecycle_test:
             }
         }
         CHECK(closed, "lifecycle/contact-life: сокет обращения пережил задачу (утечка дескриптора)");
-        d2k_sched_free(s); d2k_catalog_free(&c4);
+        d2s_sched_free(s); d2s_catalog_free(&c4);
         if (peer >= 0) close(peer);
         close(lfd);
         g_server_port = saved_port;
@@ -8109,46 +8109,46 @@ lifecycle_test:
                                  variant == 1 ? "www.shape.net" : "www.rechk.net";
             int saved_buf = 256 * 1024;
             (void)setsockopt(sv[0], SOL_SOCKET, SO_SNDBUF, &saved_buf, sizeof saved_buf);
-            tcp_answer = D2K_V_PREFIX; tcp_found_arm = 0; tcp_owns_search = 0; ver_fail_first = 0;
-            d2k_catalog c5 = {0};
+            tcp_answer = D2S_V_PREFIX; tcp_found_arm = 0; tcp_owns_search = 0; ver_fail_first = 0;
+            d2s_catalog c5 = {0};
             for (int i = 0; i < 4; i++) confirm_once(&c5, sv[0], names[i], (uint16_t)(41350 + variant * 10 + i));
             if (variant == 1) {
                 for (int i = 0; i < 4; i++) {
-                    d2k_cat_binding *m = binding_mut(&c5, names[i], 6);
+                    d2s_cat_binding *m = binding_mut(&c5, names[i], 6);
                     CHECK(m != NULL, "lifecycle/family: привязка брата не найдена");
                     if (m) m->shape = 0;
                 }
             }
             if (variant == 2) {
                 for (int i = 0; i < 4; i++) {
-                    d2k_cat_binding *m = binding_mut(&c5, names[i], 6);
+                    d2s_cat_binding *m = binding_mut(&c5, names[i], 6);
                     CHECK(m != NULL, "lifecycle/family: привязка брата не найдена");
                     if (m) { m->recheck_since = 1790000000; m->recheck_mono_ms = 0; }
                 }
             }
-            d2k_group_key key = {0}; key.transport = 6; key.family = 4; key.shape = 1;
+            d2s_group_key key = {0}; key.transport = 6; key.family = 4; key.shape = 1;
             strcpy(key.probe_path, "/");
-            CHECK(d2k_group_match(c5.groups, member, &key) != NULL,
+            CHECK(d2s_group_match(c5.groups, member, &key) != NULL,
                   "lifecycle/family: семейство братьев не выучено");
-            d2k_sched *s = d2k_sched_new(&c5, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c5, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            d2k_ev ack = {0}; ack.kind = D2K_EV_ACK; ack.code = D2K_CMD_SET_SUFFIX; ack.num = 1u << 8;
+            d2s_sched_set_say(s, collect_say, NULL);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            d2s_ev ack = {0}; ack.kind = D2S_EV_ACK; ack.code = D2S_CMD_SET_SUFFIX; ack.num = 1u << 8;
             area_ack_id(&ack);
-            d2k_sched_event(s, &ack); sync_out(s);
+            d2s_sched_event(s, &ack); sync_out(s);
             tcp_calls = vol_calls = ver_calls = 0;
             uint16_t port = (uint16_t)(41358 + variant * 10);
             ver_answer_port = port;
-            d2k_ev h = ev_hello(6, port, member); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); su.planned = D2K_LINK_PLANNED_YES;
-            su.code = D2K_SUSPECT_SILENT; su.client_shape = D2K_SHAPE_MODERN;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, member); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); su.planned = D2S_LINK_PLANNED_YES;
+            su.code = D2S_SUSPECT_SILENT; su.client_shape = D2S_SHAPE_MODERN;
+            d2s_sched_event(s, &su);
             settle(s);
             if (variant == 2) {
                 CHECK(!said("собственных планов семейства"),
                       "lifecycle/family: помеченный к перепроверке брат засчитан подтверждённым покрытием");
-                d2k_sched_free(s); d2k_catalog_free(&c5);
+                d2s_sched_free(s); d2s_catalog_free(&c5);
                 continue;
             }
             CHECK(said("собственных планов семейства"),
@@ -8156,45 +8156,45 @@ lifecycle_test:
                                : "lifecycle/family: совместимая форма привязки брата отвергнута");
             CHECK(ver_calls > 0 && tcp_calls == 0 && vol_calls == 0,
                   "lifecycle/family: восстановление семейства ушло в полный замер");
-            d2k_sched_free(s); d2k_catalog_free(&c5);
+            d2s_sched_free(s); d2s_catalog_free(&c5);
         }
     }
     {
         /* (3) Два слота заняты, в очереди — обычное подозрение O, позже —
            восстановление семейства R. Срок жизни O истекает: O снимается
            в том же круге, а не ждёт, пока R получит слот. */
-        d2k_catalog c3 = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_found_arm = 0; tcp_owns_search = 0; ver_fail_first = 0;
+        d2s_catalog c3 = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_found_arm = 0; tcp_owns_search = 0; ver_fail_first = 0;
         for (int i = 0; i < 4; i++) {
             char nm[64];
             snprintf(nm, sizeof nm, "%c.queue.net", 'a' + i);
             confirm_once(&c3, sv[0], nm, (uint16_t)(41370 + i));
         }
-        d2k_sched *s = d2k_sched_new(&c3, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c3, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-        d2k_ev ack = {0}; ack.kind = D2K_EV_ACK; ack.code = D2K_CMD_SET_SUFFIX; ack.num = 1u << 8;
+        d2s_sched_set_say(s, collect_say, NULL);
+        drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+        d2s_ev ack = {0}; ack.kind = D2S_EV_ACK; ack.code = D2S_CMD_SET_SUFFIX; ack.num = 1u << 8;
         area_ack_id(&ack);
-        d2k_sched_event(s, &ack); sync_out(s);
+        d2s_sched_event(s, &ack); sync_out(s);
         tick_once(s);
         tcp_wait_until_stop = 1; tcp_release_waiters = 0; tcp_calls = 0;
         for (uint16_t port = 41381; port < 41383; port++) {
-            d2k_ev h = ev_hello(6, port, port == 41381 ? "busy-q1.example" : "busy-q2.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, port == 41381 ? "busy-q1.example" : "busy-q2.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
         }
         spin(s, 5);
-        d2k_ev h = ev_hello(6, 41383, "old-queued.example"); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 41383); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 41383, "old-queued.example"); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 41383); d2s_sched_event(s, &su);
         CHECK(said("по old-queued.example подозрение сохранено в ограниченной очереди"),
               "lifecycle/queue: обычное подозрение не встало в очередь");
         int64_t queued_at = g_now_ms;
         skip_ahead(s, 9 * 60 * 1000);
-        h = ev_hello(6, 41384, "new.queue.net"); d2k_sched_event(s, &h);
-        su = ev_suspect(6, 41384); su.planned = D2K_LINK_PLANNED_YES;
-        su.code = D2K_SUSPECT_SILENT; su.client_shape = D2K_SHAPE_MODERN;
-        d2k_sched_event(s, &su);
+        h = ev_hello(6, 41384, "new.queue.net"); d2s_sched_event(s, &h);
+        su = ev_suspect(6, 41384); su.planned = D2S_LINK_PLANNED_YES;
+        su.code = D2S_SUSPECT_SILENT; su.client_shape = D2S_SHAPE_MODERN;
+        d2s_sched_event(s, &su);
         CHECK(said("по new.queue.net подозрение сохранено в ограниченной очереди"),
               "lifecycle/queue: восстановление семейства не ждёт слота");
         saidbuf[0] = '\0';
@@ -8202,32 +8202,32 @@ lifecycle_test:
         CHECK(said("по old-queued.example подозрение устарело в очереди"),
               "lifecycle/queue: просроченное подозрение ждёт слота восстановления семейства");
         tcp_wait_until_stop = 0; tcp_release_waiters = 1;
-        d2k_sched_free(s); d2k_catalog_free(&c3);
+        d2s_sched_free(s); d2s_catalog_free(&c3);
         tcp_release_waiters = 0;
     }
     if (lifecycle_only) { goto voice_only_done; }
     /* --- узнанная коробка отдаёт свои планы, и успех идёт ЕЙ ----------- */
     {
-        d2k_catalog c6;
+        d2s_catalog c6;
         memset(&c6, 0, sizeof c6);
-        d2k_sched *s = d2k_sched_new(&c6, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c6, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
 
         /* Первая цель: коробка ещё не известна — заводится новая, по
            отпечатку. */
         ver_answer_port = 40050;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40050, "первая.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40050);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40050, "первая.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40050);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev x = ev_applied(6, 40050);
-        d2k_sched_event(s, &x);
+        d2s_ev x = ev_applied(6, 40050);
+        d2s_sched_event(s, &x);
         spin(s, 40);
         CHECK(c6.n_boxes == 1, "первый успех не завёл коробку");
         CHECK(c6.n_boxes == 1 && c6.boxes[0].fp.n_sig == 1,
@@ -8242,16 +8242,16 @@ lifecycle_test:
         tcp_calls = vol_calls = 0;
         ver_answer_port = 40051;
         forget_sent();
-        d2k_ev h2 = ev_hello(6, 40051, "вторая.цель");
-        d2k_sched_event(s, &h2);
-        d2k_ev su2 = ev_suspect(6, 40051);
-        d2k_sched_event(s, &su2);
+        d2s_ev h2 = ev_hello(6, 40051, "вторая.цель");
+        d2s_sched_event(s, &h2);
+        d2s_ev su2 = ev_suspect(6, 40051);
+        d2s_sched_event(s, &su2);
         settle(s);
         /* Блок на рукопожатии (PREFIX): объём после него не мерится (задача 30). */
         CHECK(tcp_calls == 1 && vol_calls == 0,
               "узнанная коробка не была проверена прямым замером до готового плана");
-        d2k_ev x2 = ev_applied(6, 40051);
-        d2k_sched_event(s, &x2);
+        d2s_ev x2 = ev_applied(6, 40051);
+        d2s_sched_event(s, &x2);
         spin(s, 40);
         CHECK(c6.n_boxes == boxes_before,
               "вторая цель с тем же отпечатком завела КЛОН коробки вместо узнавания");
@@ -8269,12 +8269,12 @@ lifecycle_test:
         /* Готовый план узнанной коробки третьей цели НЕ помогает: зонд доходит
            до рукопожатия и молчит. Промах виден планировщику сам, без единого
            события от пользователя. */
-        ver_answer = D2K_VER_HANDSHAKE;
+        ver_answer = D2S_VER_HANDSHAKE;
         forget_sent();
-        d2k_ev h3 = ev_hello(6, 40052, "третья.цель");
-        d2k_sched_event(s, &h3);
-        d2k_ev su3 = ev_suspect(6, 40052);
-        d2k_sched_event(s, &su3);
+        d2s_ev h3 = ev_hello(6, 40052, "третья.цель");
+        d2s_sched_event(s, &h3);
+        d2s_ev su3 = ev_suspect(6, 40052);
+        d2s_sched_event(s, &su3);
         settle(s);
         CHECK(tcp_calls == 1 && vol_calls == 0,
               "после промаха готового плана повторно запущено прямое измерение");
@@ -8282,8 +8282,8 @@ lifecycle_test:
               "промах третьей цели повредил подтверждённую вторую");
         CHECK(binding_of(&c6, "третья.цель", 6) == NULL,
               "промах готового плана записан как новая привязка");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c6);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c6);
     }
 
     /* A recognized box whose old plan has gone stale may learn a replacement,
@@ -8291,15 +8291,15 @@ lifecycle_test:
        fingerprint is unchanged; plan identity must not be mixed into box
        identity after a successful re-search. */
     {
-        d2k_catalog cD;
+        d2s_catalog cD;
         memset(&cD, 0, sizeof cD);
         cD.boxes = calloc(1, sizeof *cD.boxes);
         CHECK(cD.boxes != NULL, "не удалось создать коробку для деградации");
         if (cD.boxes) {
             cD.n_boxes = 1;
-            d2k_cat_box *b = &cD.boxes[0];
+            d2s_cat_box *b = &cD.boxes[0];
             snprintf(b->id, sizeof b->id, "box-stable-fingerprint");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
             b->fp.sig[0].ttl = 127;
@@ -8314,17 +8314,17 @@ lifecycle_test:
                 b->plans[0].enabled = 1;
                 b->plans[0].successes = 3;
                 b->plans[0].text = strdup(
-                    "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                    "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                     "proto tcp tls\nsplit payload_start +1\norder forward\n");
             }
-            d2k_sched *s = d2k_sched_new(&cD, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&cD, sv[0], 0x2d);
             CHECK(s != NULL, "планировщик деградации не создан");
             if (s) {
                 saidbuf[0] = '\0';
-                d2k_sched_set_say(s, collect_say, NULL);
-                tcp_answer = D2K_V_PREFIX;
+                d2s_sched_set_say(s, collect_say, NULL);
+                tcp_answer = D2S_V_PREFIX;
                 tcp_calls = vol_calls = 0;
-                ver_answer = D2K_VER_APPLICATION;
+                ver_answer = D2S_VER_APPLICATION;
                 /* The first (catalog) plan fails; the already-measured
                    replacement candidate is independently verifiable. */
                 ver_fail_first = 1;
@@ -8332,16 +8332,16 @@ lifecycle_test:
                 ver_calls = 0;
                 ver_answer_port = 40053;
                 forget_sent();
-                d2k_ev h = ev_hello(6, 40053, "деградировавшая.цель");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, 40053);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, 40053, "деградировавшая.цель");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, 40053);
+                d2s_sched_event(s, &su);
                 /* As with the existing known-box path, wait until the first
                    (catalog) plan is installed and acknowledge its application
                    before expecting the verifier's miss to advance the task. */
                 spin_until_installed(s);
-                d2k_ev old_ap = ev_applied(6, 40053);
-                d2k_sched_event(s, &old_ap);
+                d2s_ev old_ap = ev_applied(6, 40053);
+                d2s_sched_event(s, &old_ap);
                 settle(s);
 
                 CHECK(said("готовых планов узнанной коробки"),
@@ -8350,8 +8350,8 @@ lifecycle_test:
                 CHECK(ver_calls >= 1, "готовый план не был проверен");
 
                 /* The measured replacement has its own apply proof. */
-                d2k_ev ap = ev_applied(6, 40053);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40053);
+                d2s_sched_event(s, &ap);
                 settle(s);
                 CHECK(ver_calls >= 2,
                       "новый измеренный кандидат не проверен после отказа старого плана");
@@ -8366,19 +8366,19 @@ lifecycle_test:
                 CHECK(binding_of(&cD, "деградировавшая.цель", 6) != NULL,
                       "после деградации не сохранена новая подтверждённая привязка");
                 ver_app_after_tcp_search = 0;
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
-            d2k_catalog_free(&cD);
+            d2s_catalog_free(&cD);
         }
     }
 
     /* --- каталог едет датапату при запуске, а не лежит мёртвым грузом --- */
     {
         /* Каталог с одной коробкой, одним планом и двумя привязками: по имени
-           и по адресу. d2k_sched_sync обязан поставить обе — датапат состояния
+           и по адресу. d2s_sched_sync обязан поставить обе — датапат состояния
            между запусками не хранит, и без этого прохода уже изученная цель
            начинала бы поиск заново. */
-        d2k_catalog c7;
+        d2s_catalog c7;
         memset(&c7, 0, sizeof c7);
         c7.boxes = calloc(1, sizeof *c7.boxes);
         CHECK(c7.boxes != NULL, "каталог не завёлся");
@@ -8393,7 +8393,7 @@ lifecycle_test:
             snprintf(c7.boxes[0].plans[0].proto, sizeof c7.boxes[0].plans[0].proto, "tls");
             c7.boxes[0].plans[0].enabled = 1;
             c7.boxes[0].plans[0].text = strdup(
-                "d2k-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
+                "d2s-plan 1 1\nid 00000000000000000000000000000000\nproto tcp tls\n"
                 "split payload_start +1\norder reverse\n");
             c7.boxes[0].binds = calloc(4, sizeof *c7.boxes[0].binds);
             c7.boxes[0].n_binds = 4;
@@ -8425,18 +8425,18 @@ lifecycle_test:
             c7.boxes[0].binds[3].enabled = 1;
             c7.boxes[0].binds[3].level = 2;
 
-            d2k_sched *s = d2k_sched_new(&c7, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c7, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             /* Проход идёт ПОРЦИЯМИ: залпом он создавал бы окно, в котором
-               датапату некуда сказать про живой трафик (см. d2k_sched_sync_step).
-               Крутим его так же, как это делает цикл d2kc — до конца. */
-            (void)d2k_sched_sync(s);
+               датапату некуда сказать про живой трафик (см. d2s_sched_sync_step).
+               Крутим его так же, как это делает цикл d2sc — до конца. */
+            (void)d2s_sched_sync(s);
             int rounds = 0;
-            while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+            while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
             drain();
             CHECK(rounds < 1000, "проход по каталогу не закончился");
-            CHECK(!d2k_sched_sync_pending(s), "проход по каталогу остался незакрытым");
+            CHECK(!d2s_sched_sync_pending(s), "проход по каталогу остался незакрытым");
             /* Задача 16: адресная привязка 1.2.3.4 без формы протокола (TCP,
                старый файл) — неизвестный контекст (§7): общей совместимости
                ей не выдаём, на провод не едет, требуется повторная проверка.
@@ -8445,19 +8445,19 @@ lifecycle_test:
                   "проход по каталогу не сказал, сколько поставил");
             CHECK(said("адресных привязок без формы протокола: 1"),
                   "адресная привязка без формы поставлена как общая либо пропала молча");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0,
                   "адресная привязка без формы ушла на провод");
             CHECK(said("не поставлено привязок со слабым доказательством: 1"),
                   "привязка уровня «сервер ответил» ушла на провод наравне с "
                   "подтверждённой либо пропала молча");
-            d2k_sched_free(s);
-            d2k_catalog_free(&c7);
+            d2s_sched_free(s);
+            d2s_catalog_free(&c7);
         }
     }
 
     /* Отказ датапата на планах каталога виден в сводке прохода. */
     {
-        d2k_catalog c9;
+        d2s_catalog c9;
         memset(&c9, 0, sizeof c9);
         c9.boxes = calloc(1, sizeof *c9.boxes);
         CHECK(c9.boxes != NULL, "каталог для отказов не завёлся");
@@ -8470,35 +8470,35 @@ lifecycle_test:
             if (c9.boxes[0].plans && c9.boxes[0].binds) {
                 c9.boxes[0].n_plans = c9.boxes[0].n_binds = 1;
                 snprintf(c9.boxes[0].id, sizeof c9.boxes[0].id, "box-отказ");
-                d2k_cat_plan *p = &c9.boxes[0].plans[0];
+                d2s_cat_plan *p = &c9.boxes[0].plans[0];
                 snprintf(p->id, sizeof p->id, "plan-отказ");
                 snprintf(p->proto, sizeof p->proto, "tls");
                 p->enabled = 1;
-                p->text = strdup("d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                p->text = strdup("d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                                  "proto tcp tls\nsplit payload_start +1\norder reverse\n");
                 CHECK(p->text != NULL, "текст плана для отказа не завёлся");
-                d2k_cat_binding *bd = &c9.boxes[0].binds[0];
+                d2s_cat_binding *bd = &c9.boxes[0].binds[0];
                 snprintf(bd->plan_id, sizeof bd->plan_id, "%s", p->id);
                 snprintf(bd->kind, sizeof bd->kind, "name");
                 snprintf(bd->target, sizeof bd->target, "отвергнутая.example");
                 bd->transport = 6;
                 bd->enabled = 1;
 
-                d2k_sched *s = d2k_sched_new(&c9, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&c9, sv[0], 0x2d);
                 CHECK(s != NULL, "планировщик для отказов не создался");
                 saidbuf[0] = '\0';
-                d2k_sched_set_say(s, collect_say, NULL);
-                d2k_ev nak = {0};
-                nak.kind = D2K_EV_ACK;
-                nak.code = D2K_CMD_SET_NAME;
-                nak.num = (0u << 8) | D2K_ACK_BAD_PLAN;
-                d2k_sched_event(s, &nak);
-                d2k_sched_event(s, &nak);
+                d2s_sched_set_say(s, collect_say, NULL);
+                d2s_ev nak = {0};
+                nak.kind = D2S_EV_ACK;
+                nak.code = D2S_CMD_SET_NAME;
+                nak.num = (0u << 8) | D2S_ACK_BAD_PLAN;
+                d2s_sched_event(s, &nak);
+                d2s_sched_event(s, &nak);
                 CHECK(!said("датапат отверг планов"),
                       "отказ напечатан до сводки прохода");
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 int rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
                 CHECK(said("поставлено планов по подтверждённым привязкам: 1"),
                       "проход по каталогу не подытожил поставленный план");
@@ -8506,27 +8506,27 @@ lifecycle_test:
                            "годится способу отправки)"),
                       "отказы планов каталога не попали в сводку прохода");
                 saidbuf[0] = '\0';
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
                 CHECK(!said("датапат отверг планов"),
                       "отказ прошлой сводки объявлен повторно");
-                d2k_ev ok = {0};
-                ok.kind = D2K_EV_ACK;
-                ok.code = D2K_CMD_SET_NAME;
+                d2s_ev ok = {0};
+                ok.kind = D2S_EV_ACK;
+                ok.code = D2S_CMD_SET_NAME;
                 ok.num = 1u << 8;
-                d2k_sched_event(s, &ok);
+                d2s_sched_event(s, &ok);
                 saidbuf[0] = '\0';
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
                 CHECK(!said("датапат отверг планов"),
                       "успешное подтверждение посчитано отказом");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
-            d2k_catalog_free(&c9);
+            d2s_catalog_free(&c9);
         }
     }
 
@@ -8540,7 +8540,7 @@ lifecycle_test:
      * провода), а при пределе 1500 или без объявленного предела — ставится
      * как прежде. */
     for (int round = 0; round < 3; round++) {
-        d2k_catalog c9;
+        d2s_catalog c9;
         memset(&c9, 0, sizeof c9);
         c9.boxes = calloc(1, sizeof *c9.boxes);
         CHECK(c9.boxes != NULL, "каталог для невлезающего плана не завёлся");
@@ -8554,7 +8554,7 @@ lifecycle_test:
         c9.boxes[0].plans[0].enabled = 1;
         /* Фальшивка в полный сегмент: 1400 + 20 + 20 = 1440 байт посылки. */
         c9.boxes[0].plans[0].text = strdup(
-            "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\npayload-pad 1 1400 15\npoison 1 badsum\n"
             "fake payload=1 poison=1 repeats=1 gap_us=0 place=before\n"
             "segment 1400\norder forward\n");
@@ -8568,18 +8568,18 @@ lifecycle_test:
         c9.boxes[0].binds[0].enabled = 1;
         uint64_t revision_before = c9.revision;
 
-        d2k_sched *s = d2k_sched_new(&c9, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c9, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         uint32_t cap = round == 0 ? 1280u : round == 1 ? 1500u : 0u;
-        d2k_sched_set_send_cap(s, cap);
+        d2s_sched_set_send_cap(s, cap);
         drain(); forget_sent();
-        (void)d2k_sched_sync(s);
+        (void)d2s_sched_sync(s);
         int rounds = 0;
-        while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+        while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
         drain();
         if (round == 0) {
-            CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 0,
                   "план с посылкой 1440 поставлен при пределе 1280");
             CHECK(said("план plan-1440 для узкий.example не влезает в посылку датапата "
                        "(1440 байт при пределе 1280)"),
@@ -8590,24 +8590,24 @@ lifecycle_test:
                   "привязка невлезающего плана не помечена на повторную проверку");
             CHECK(c9.revision != revision_before,
                   "пометка на повторную проверку не сохраняется в каталоге");
-            CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 1,
                   "привязка невлезающего плана не снята с провода");
             /* Второй проход: привязка уже на повторной проверке — считается там,
                а не как невлезающая, и не снимается второй раз. */
             saidbuf[0] = '\0';
             forget_sent();
-            (void)d2k_sched_sync(s);
+            (void)d2s_sched_sync(s);
             rounds = 0;
-            while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+            while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
             drain();
             CHECK(said("ждущих повторной проверки после прямого прохода: 1"),
                   "помеченная привязка не учтена как ждущая повторной проверки");
             CHECK(!said("не влезает в посылку датапата"),
                   "помеченная привязка второй раз объявлена невлезающей");
-            CHECK(sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 0,
                   "помеченная привязка снята с провода второй раз");
         } else {
-            CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 1,
                   round == 1 ? "план с посылкой 1440 не поставлен при пределе 1500"
                              : "план с посылкой 1440 не поставлен без объявленного предела");
             CHECK(!said("не влезает в посылку датапата"),
@@ -8615,8 +8615,8 @@ lifecycle_test:
             CHECK(c9.boxes[0].binds[0].recheck_since == 0,
                   "влезающий план помечен на повторную проверку");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&c9);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c9);
     }
 
     /* Старый каталог записывал любой UDP EXCHANGE как CLIENT/level=3.
@@ -8625,54 +8625,54 @@ lifecycle_test:
        собственным протокольным зондом это ограничение не затрагивает. */
     for (int by_addr = 0; by_addr < 2; by_addr++) {
         for (int proof = 0; proof < 3; proof++) {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             c.boxes = calloc(1, sizeof *c.boxes);
             CHECK(c.boxes != NULL, "каталог UDP-доказательств не создан");
             if (!c.boxes) { continue; }
             c.n_boxes = 1;
-            d2k_cat_box *box = &c.boxes[0];
+            d2s_cat_box *box = &c.boxes[0];
             snprintf(box->id, sizeof box->id, "udp-box");
             box->plans = calloc(1, sizeof *box->plans);
             box->binds = calloc(1, sizeof *box->binds);
             CHECK(box->plans && box->binds, "записи UDP-каталога не созданы");
             if (box->plans && box->binds) {
                 box->n_plans = box->n_binds = 1;
-                d2k_cat_plan *p = &box->plans[0];
+                d2s_cat_plan *p = &box->plans[0];
                 snprintf(p->id, sizeof p->id, "udp-plan");
                 snprintf(p->proto, sizeof p->proto, "quic");
                 p->enabled = 1;
                 p->successes = 1;
-                p->text = strdup("d2k-plan 1 6\nid 00000000000000000000000000000000\n"
+                p->text = strdup("d2s-plan 1 6\nid 00000000000000000000000000000000\n"
                                  "proto udp quic\ndelay 15000\n");
-                d2k_cat_binding *bd = &box->binds[0];
+                d2s_cat_binding *bd = &box->binds[0];
                 snprintf(bd->kind, sizeof bd->kind, "%s", by_addr ? "addr" : "name");
                 snprintf(bd->target, sizeof bd->target, "%s", by_addr ? "192.0.2.7" : "udp.test");
                 snprintf(bd->plan_id, sizeof bd->plan_id, "%s", p->id);
                 bd->enabled = 1;
                 bd->transport = 17;
                 bd->level = proof == 1 ? 5 : 3;
-                bd->verified_by = proof == 2 ? D2K_VERBY_PROBE : D2K_VERBY_CLIENT;
+                bd->verified_by = proof == 2 ? D2S_VERBY_PROBE : D2S_VERBY_CLIENT;
                 bd->confirmed = 42;
                 bd->successes = 1;
-                d2k_cat_binding before = *bd;
+                d2s_cat_binding before = *bd;
                 saidbuf[0] = '\0';
                 forget_sent();
-                d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
                 CHECK(s != NULL, "планировщик UDP-каталога не создан");
                 if (s) {
-                    d2k_sched_set_say(s, collect_say, NULL);
-                    (void)d2k_sched_sync(s);
+                    d2s_sched_set_say(s, collect_say, NULL);
+                    (void)d2s_sched_sync(s);
                     int rounds = 0;
-                    while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                    while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                     drain();
                     CHECK(rounds < 1000, "проход UDP-каталога не закончился");
-                    size_t sent = sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) +
-                                  sent_command_count(D2K_CMD_SET_NAME, NULL, 0);
+                    size_t sent = sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) +
+                                  sent_command_count(D2S_CMD_SET_NAME, NULL, 0);
                     CHECK(sent == (size_t)(proof == 2),
                           "старый UDP CLIENT восстановлен без доказательства либо потерян PROBE");
                     if (by_addr && proof == 2) {
                         uint8_t ip7[4] = {192, 0, 2, 7};
-                        CHECK(sent_set_addr_shape(4, ip7, D2K_LINK_SHAPE_QUIC) == 1,
+                        CHECK(sent_set_addr_shape(4, ip7, D2S_LINK_SHAPE_QUIC) == 1,
                               "старая адресная UDP-привязка зонда без формы не восстановлена "
                               "однозначной формой QUIC");
                     }
@@ -8680,10 +8680,10 @@ lifecycle_test:
                           "пропуск старого UDP-подтверждения не объяснён");
                     CHECK(memcmp(bd, &before, sizeof before) == 0 && p->successes == 1,
                           "защита восстановления переписала пользовательский каталог");
-                    d2k_sched_free(s);
+                    d2s_sched_free(s);
                 }
             }
-            d2k_catalog_free(&c);
+            d2s_catalog_free(&c);
         }
     }
 
@@ -8693,62 +8693,62 @@ lifecycle_test:
            откроют ещё раз, очередь стояла, а у телевизора «ещё раз» — через
            три минуты. Теперь кандидата испытывает сам планировщик, и промах
            виден через секунды, без единого события от пользователя. */
-        d2k_catalog c5;
+        d2s_catalog c5;
         memset(&c5, 0, sizeof c5);
-        d2k_sched *s = d2k_sched_new(&c5, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_HANDSHAKE;  /* рукопожатие есть, приложение молчит */
+        d2s_sched *s = d2s_sched_new(&c5, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_HANDSHAKE;  /* рукопожатие есть, приложение молчит */
         ver_fail_first = 0;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40040, "instagram.com");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40040);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40040, "instagram.com");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40040);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls >= 1, "планировщик не испытал кандидата сам");
         CHECK(total_bindings(&c5) == 0,
               "рукопожатие без ответа приложения записано как успех");
-        CHECK(d2k_sched_active(s) == 0,
+        CHECK(d2s_sched_active(s) == 0,
               "очередь кандидатов не продвинулась сама — поиск ждёт пользователя");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c5);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c5);
     }
 
     /* --- потерянное применение НЕ улика против кандидата ---------------- */
     {
         /* Датапат держит ровно один исходящий кадр и теряет всё, что не
-           поместилось (d2k_ctl.h). Пропавшее применение снаружи неотличимо от
+           поместилось (d2s_ctl.h). Пропавшее применение снаружи неотличимо от
            «план к зонду не применялся» — и без этой проверки планировщик
            выбрасывал бы РАБОЧИЙ кандидат просто потому, что о его применении
            не смогли сказать. */
-        d2k_catalog c9;
+        d2s_catalog c9;
         memset(&c9, 0, sizeof c9);
-        d2k_sched *s = d2k_sched_new(&c9, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c9, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40070;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40070, "молчащая.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40070);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40070, "молчащая.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40070);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls == 1, "кандидат не испытан");
         CHECK(said("жду применения плана"),
               "зонд дошёл до приложения, а применения плана никто не ждёт");
-        uint8_t first_attempt_id[D2K_PLAN_ID_LEN], second_attempt_id[D2K_PLAN_ID_LEN];
+        uint8_t first_attempt_id[D2S_PLAN_ID_LEN], second_attempt_id[D2S_PLAN_ID_LEN];
         CHECK(last_plan_id(first_attempt_id), "first trial identity captured from wire");
 
         /* Связь сообщает о потерях, и события применения так и нет: считать
            это уликой против кандидата нельзя — испытываем его ЕЩЁ РАЗ. */
-        d2k_ev st;
+        d2s_ev st;
         memset(&st, 0, sizeof st);
-        st.kind = D2K_EV_STATS;
+        st.kind = D2S_EV_STATS;
         st.dropped = 3;
-        d2k_sched_event(s, &st);
+        d2s_sched_event(s, &st);
         skip_ahead(s, 6000); /* перешагнуть потолок ожидания применения */
         settle(s);
         CHECK(said("молчание не в счёт"),
@@ -8758,9 +8758,9 @@ lifecycle_test:
         CHECK(memcmp(first_attempt_id, second_attempt_id, sizeof first_attempt_id) != 0,
               "retry of the same plan must not inherit the previous trial identity");
         CHECK(total_bindings(&c9) == 0, "потеря событий записана как успех");
-        d2k_ev delayed = ev_applied(6, 40070);
+        d2s_ev delayed = ev_applied(6, 40070);
         memcpy(delayed.plan_id, first_attempt_id, sizeof delayed.plan_id);
-        d2k_sched_event(s, &delayed);
+        d2s_sched_event(s, &delayed);
         spin(s, 20);
         CHECK(total_bindings(&c9) == 0,
               "late APPLIED from previous trial cannot confirm reused tuple and plan");
@@ -8770,10 +8770,10 @@ lifecycle_test:
         run_out(s);
         CHECK(total_bindings(&c9) == 0,
               "зонд прошёл, а применения не было — записано как успех");
-        CHECK(d2k_sched_active(s) == 0,
+        CHECK(d2s_sched_active(s) == 0,
               "без потерь связи кандидат так и не сменился — поиск встал");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c9);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c9);
     }
 
     /* --- отказ отправки: временный лечится повтором, постоянный — нет ---
@@ -8788,92 +8788,92 @@ lifecycle_test:
      *   постоянный отказ (посылка длиннее канала) не повторяется вовсе,
      *     кандидат сменяется, и «рабочего обхода нет» никто не объявляет. */
     {
-        d2k_catalog cu;
+        d2s_catalog cu;
         memset(&cu, 0, sizeof cu);
-        d2k_sched *s = d2k_sched_new(&cu, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cu, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40077;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40077, "отказная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40077);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40077, "отказная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40077);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls == 1, "кандидат не испытан");
 
         /* ЧУЖОЙ отказ: ключ наш, идентификатор плана — нет. */
-        d2k_ev alien = ev_refused(6, 40077, D2K_REFUSE_SEND, 0);
-        d2k_sched_event(s, &alien);
+        d2s_ev alien = ev_refused(6, 40077, D2S_REFUSE_SEND, 0);
+        d2s_sched_event(s, &alien);
         skip_ahead(s, 6000);
         settle(s);
         CHECK(!said("посылка плана не ушла на провод"),
               "чужой отказ приписан нашему кандидату");
 
         CHECK(total_bindings(&cu) == 0, "чужой отказ записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cu);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cu);
     }
 
     {
         /* СВОЙ временный отказ — повтор ТОГО ЖЕ кандидата. Отдельный
            планировщик: проверка выше уже израсходовала своё окно ожидания,
            и слать сюда второй отказ было бы некому. */
-        d2k_catalog ct;
+        d2s_catalog ct;
         memset(&ct, 0, sizeof ct);
-        d2k_sched *s = d2k_sched_new(&ct, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&ct, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40079;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40079, "временная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40079);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40079, "временная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40079);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls == 1, "кандидат не испытан");
 
         int before = ver_calls;
-        d2k_ev tmp = ev_refused(6, 40079, D2K_REFUSE_QUEUE, 1);
-        d2k_sched_event(s, &tmp);
+        d2s_ev tmp = ev_refused(6, 40079, D2S_REFUSE_QUEUE, 1);
+        d2s_sched_event(s, &tmp);
         skip_ahead(s, 6000);
         settle(s);
         CHECK(said("посылка плана не ушла на провод"),
               "временный отказ отправки не назван — он неотличим от промаха коробки");
         CHECK(ver_calls > before, "после временного отказа кандидат не переиспытан");
         CHECK(total_bindings(&ct) == 0, "отказ отправки записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&ct);
+        d2s_sched_free(s);
+        d2s_catalog_free(&ct);
     }
 
     {
         /* Постоянный отказ: повторять нечего, тот же план даст то же. */
-        d2k_catalog cp;
+        d2s_catalog cp;
         memset(&cp, 0, sizeof cp);
-        d2k_sched *s = d2k_sched_new(&cp, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cp, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40078;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40078, "длинная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40078);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40078, "длинная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40078);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls == 1, "кандидат не испытан");
 
         int before = ver_calls;
-        d2k_ev big = ev_refused(6, 40078, D2K_REFUSE_TOO_LONG, 1);
-        d2k_sched_event(s, &big);
+        d2s_ev big = ev_refused(6, 40078, D2S_REFUSE_TOO_LONG, 1);
+        d2s_sched_event(s, &big);
         skip_ahead(s, 6000);
         settle(s);
         CHECK(said("опыт невозможен"),
@@ -8883,8 +8883,8 @@ lifecycle_test:
         CHECK(ver_calls == before || ver_calls == before + 1,
               "постоянный отказ породил череду одинаковых повторов");
         CHECK(total_bindings(&cp) == 0, "отказ по длине записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cp);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cp);
     }
 
     /* --- запасной перебор: синтез не помог — поиск продолжается ---------
@@ -8898,30 +8898,30 @@ lifecycle_test:
      * поиск всё равно КОНЧАЕТСЯ — общий бюджет зондов принадлежит
      * планировщику, а не длине списка. */
     {
-        d2k_catalog cf;
+        d2s_catalog cf;
         memset(&cf, 0, sizeof cf);
-        d2k_sched *s = d2k_sched_new(&cf, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cf, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;   /* зонд не доходит до приложения: промах */
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;   /* зонд не доходит до приложения: промах */
         ver_fail_first = 0;
         ver_answer_port = 40081;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40081, "перебор.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40081);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40081, "перебор.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40081);
+        d2s_sched_event(s, &su);
         run_out(s);
 
         CHECK(ver_calls > 1,
               "после синтеза поиск встал — запасной перебор не подхватил");
-        CHECK(d2k_sched_active(s) == 0,
+        CHECK(d2s_sched_active(s) == 0,
               "запасной перебор не кончился — бюджет зондов не ограничил поиск");
         CHECK(total_bindings(&cf) == 0,
               "перебор записал привязку, хотя ни один зонд не дошёл до приложения");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cf);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cf);
     }
 
     /* --- подтверждение из запасного перебора называет путь ----------------
@@ -8934,26 +8934,26 @@ lifecycle_test:
      * журнал не называет — иначе доля перебора считалась бы по всем. */
     for (int mode = 0; mode < 2; mode++) {
         int fails_before = fails;
-        d2k_catalog cf;
+        d2s_catalog cf;
         memset(&cf, 0, sizeof cf);
-        d2k_sched *s = d2k_sched_new(&cf, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cf, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
         tcp_trace_lines = 1;
-        ver_answer = D2K_VER_APPLICATION;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = mode == 0 ? 1 : 0;
         ver_answer_port = (uint16_t)(40082 + mode);
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, ver_answer_port, mode == 0 ? "путь-перебора.цель" : "путь-замера.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, ver_answer_port);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, ver_answer_port, mode == 0 ? "путь-перебора.цель" : "путь-замера.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, ver_answer_port);
+        d2s_sched_event(s, &su);
         for (int i = 0; i < 1500 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 120);
             drain();
-            d2k_ev ap = ev_applied(6, ver_answer_port);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, ver_answer_port);
+            d2s_sched_event(s, &ap);
             spin(s, 5);
         }
         drain();
@@ -8991,8 +8991,8 @@ lifecycle_test:
         if (fails > fails_before) fprintf(stderr, "%s\n", saidbuf);
         ver_fail_first = 0;
         tcp_trace_lines = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cf);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cf);
     }
 
     /* --- отказ отправки + ОБОРВАННЫЙ ЗОНД: кандидат не виноват -----------
@@ -9006,26 +9006,26 @@ lifecycle_test:
      *
      * Временный отказ обязан дать повтор ТОГО ЖЕ кандидата. */
     {
-        d2k_catalog cw;
+        d2s_catalog cw;
         memset(&cw, 0, sizeof cw);
-        d2k_sched *s = d2k_sched_new(&cw, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cw, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;   /* зонд оборван: до приложения не дошёл */
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;   /* зонд оборван: до приложения не дошёл */
         ver_fail_first = 0;
         ver_answer_port = 40091;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40091, "оборванная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40091);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40091, "оборванная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40091);
+        d2s_sched_event(s, &su);
         /* Кандидат обязан уже стоять: отказ относится к ЕГО посылке, и до
            установки приписывать его нечему. */
         spin_until_installed(s);
         /* Отказ приходит, пока задача ещё испытывает кандидата. */
-        d2k_ev tmp = ev_refused(6, 40091, D2K_REFUSE_QUEUE, 1);
-        d2k_sched_event(s, &tmp);
+        d2s_ev tmp = ev_refused(6, 40091, D2S_REFUSE_QUEUE, 1);
+        d2s_sched_event(s, &tmp);
         settle(s);
 
         CHECK(said("посылка плана не ушла на провод"),
@@ -9033,32 +9033,32 @@ lifecycle_test:
               "записана промахом кандидата");
         CHECK(ver_calls > 1, "кандидат не переиспытан после временного отказа");
         CHECK(total_bindings(&cw) == 0, "отказ отправки записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cw);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cw);
     }
 
     {
         /* Тот же путь, но отказ ПОСТОЯННЫЙ: повторять нечего, опыт невозможен,
            и кандидат всё равно не объявляется промахнувшимся. */
-        d2k_catalog cx2;
+        d2s_catalog cx2;
         memset(&cx2, 0, sizeof cx2);
-        d2k_sched *s = d2k_sched_new(&cx2, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cx2, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;
         ver_fail_first = 0;
         ver_answer_port = 40092;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40092, "длинная-оборванная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40092);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40092, "длинная-оборванная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40092);
+        d2s_sched_event(s, &su);
         /* Кандидат обязан уже стоять: отказ относится к ЕГО посылке, и до
            установки приписывать его нечему. */
         spin_until_installed(s);
-        d2k_ev big = ev_refused(6, 40092, D2K_REFUSE_TOO_LONG, 1);
-        d2k_sched_event(s, &big);
+        d2s_ev big = ev_refused(6, 40092, D2S_REFUSE_TOO_LONG, 1);
+        d2s_sched_event(s, &big);
         settle(s);
 
         CHECK(said("опыт невозможен"),
@@ -9074,8 +9074,8 @@ lifecycle_test:
                   "наша неудача объявлена промахом зонда — кандидат обвинён не за что");
         }
         CHECK(total_bindings(&cx2) == 0, "отказ по длине записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cx2);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cx2);
     }
 
     {
@@ -9093,20 +9093,20 @@ lifecycle_test:
          * не видно — «не засчитано». Здесь она была обратной: неудача без
          * применения засчитывалась против кандидата. Асимметрия и выбрасывала
          * рабочие планы. */
-        d2k_catalog cz;
+        d2s_catalog cz;
         memset(&cz, 0, sizeof cz);
-        d2k_sched *s = d2k_sched_new(&cz, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cz, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;   /* зонд не дошёл до приложения */
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;   /* зонд не дошёл до приложения */
         ver_fail_first = 0;
         ver_answer_port = 40097;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40097, "голый-зонд.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40097);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40097, "голый-зонд.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40097);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
         settle(s);
 
@@ -9122,33 +9122,33 @@ lifecycle_test:
             CHECK(notmeas && (!next || notmeas < next),
                   "кандидат сменён раньше, чем сказано, что опыта не было");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&cz);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cz);
     }
 
     {
         /* ЧУЖОЙ ранний отказ на том же потоке не должен трогать кандидата:
            зонд оборван по своей причине, и объяснение обязано остаться про
            зонд, а не про нашу отправку. */
-        d2k_catalog cy;
+        d2s_catalog cy;
         memset(&cy, 0, sizeof cy);
-        d2k_sched *s = d2k_sched_new(&cy, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cy, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;
         ver_fail_first = 0;
         ver_answer_port = 40093;
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40093, "чужой-отказ.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40093);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40093, "чужой-отказ.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40093);
+        d2s_sched_event(s, &su);
         /* Кандидат обязан уже стоять: отказ относится к ЕГО посылке, и до
            установки приписывать его нечему. */
         spin_until_installed(s);
-        d2k_ev alien = ev_refused(6, 40093, D2K_REFUSE_SEND, 0);
-        d2k_sched_event(s, &alien);
+        d2s_ev alien = ev_refused(6, 40093, D2S_REFUSE_SEND, 0);
+        d2s_sched_event(s, &alien);
         settle(s);
 
         CHECK(!said("посылка плана не ушла на провод"),
@@ -9156,8 +9156,8 @@ lifecycle_test:
         CHECK(said("зонд не дошёл до приложения"),
               "объяснение промаха подменено чужим отказом");
         CHECK(total_bindings(&cy) == 0, "чужой отказ записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cy);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cy);
     }
 
     /* --- ЧУЖОЙ ОТКАЗ С НАШИМ ПЛАНОМ (0009, U2-R1) ----------------------
@@ -9172,25 +9172,25 @@ lifecycle_test:
      * кандидата; при постоянном коде объявил бы опыт невозможным там, где он
      * состоялся. */
     {
-        d2k_catalog cr;
+        d2s_catalog cr;
         memset(&cr, 0, sizeof cr);
-        d2k_sched *s = d2k_sched_new(&cr, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cr, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_TRANSPORT;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_TRANSPORT;
         ver_fail_first = 0;
         ver_answer_port = 40091;   /* местный порт НАШЕГО зонда */
         ver_calls = 0;
-        d2k_ev h = ev_hello(6, 40091, "чужой-порт.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40091);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40091, "чужой-порт.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40091);
+        d2s_sched_event(s, &su);
         spin_until_installed(s);
 
         /* Цель и идентификатор плана НАШИ, клиентский порт ДРУГОЙ. */
-        d2k_ev alien = ev_refused(6, 49999, D2K_REFUSE_QUEUE, 1);
-        d2k_sched_event(s, &alien);
+        d2s_ev alien = ev_refused(6, 49999, D2S_REFUSE_QUEUE, 1);
+        d2s_sched_event(s, &alien);
         settle(s);
 
         CHECK(!said("посылка плана не ушла на провод"),
@@ -9199,8 +9199,8 @@ lifecycle_test:
         CHECK(said("зонд не дошёл до приложения"),
               "объяснение промаха подменено чужим отказом");
         CHECK(total_bindings(&cr) == 0, "чужой отказ записан как успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cr);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cr);
     }
 
     /* --- дата подтверждения — стенная, а не монотонная ------------------ */
@@ -9211,13 +9211,13 @@ lifecycle_test:
            Живая приёмка 12.09.2026 показала, чем это кончается: у всех новых
            подтверждений в файле стояло «1970-01-01T04:14:39Z» — монотонные
            миллисекунды, записанные как секунды эпохи. */
-        d2k_catalog cC;
+        d2s_catalog cC;
         memset(&cC, 0, sizeof cC);
-        ver_answer = D2K_VER_APPLICATION;
-        tcp_answer = D2K_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
         confirm_once(&cC, sv[0], "часы.цель", 40120);
 
-        const d2k_cat_binding *bd = binding_of(&cC, "часы.цель", 6);
+        const d2s_cat_binding *bd = binding_of(&cC, "часы.цель", 6);
         CHECK(bd != NULL, "часы: привязка не записана");
         /* Живая приёмка 12.09.2026 поймала ВТОРУЮ половину той же ошибки:
            CLOCK_MONOTONIC на Linux отсчитывается от ЗАГРУЗКИ, и привязка,
@@ -9226,10 +9226,10 @@ lifecycle_test:
            ровно на 4,5 часа работы роутера вперёд. Здесь роутер «уже работает»
            четыре часа: часы приходят аргументом, как в проде. */
         g_now_ms += 4 * 60 * 60 * 1000;
-        d2k_catalog cD;
+        d2s_catalog cD;
         memset(&cD, 0, sizeof cD);
         confirm_once(&cD, sv[0], "часы.уптайм", 40121);
-        const d2k_cat_binding *bu = binding_of(&cD, "часы.уптайм", 6);
+        const d2s_cat_binding *bu = binding_of(&cD, "часы.уптайм", 6);
         CHECK(bu != NULL, "часы: привязка при ненулевом уптайме не записана");
         if (bu) {
             int64_t now = (int64_t)time(NULL);
@@ -9239,7 +9239,7 @@ lifecycle_test:
                   "дата подтверждения разошлась с настоящей больше чем на две "
                   "минуты — уптайм посчитан дважды");
         }
-        d2k_catalog_free(&cD);
+        d2s_catalog_free(&cD);
         if (bd) {
             /* 2026-01-01 в секундах эпохи. Всё, что меньше, — это не дата, а
                время с загрузки, попавшее в файл как дата. */
@@ -9247,7 +9247,7 @@ lifecycle_test:
                   "дата подтверждения меньше 2026 года — в каталог уехали "
                   "монотонные часы вместо стенных");
         }
-        d2k_catalog_free(&cC);
+        d2s_catalog_free(&cC);
     }
 
     /* --- сначала донорская классификация, объём — только после CLEAR (задача 30) */
@@ -9257,49 +9257,49 @@ lifecycle_test:
            (z2k «Поиск по домену») сразу задаёт вопросы классификатора; объём
            — отдельный вопрос, осмысленный лишь когда рукопожатие и запись
            проходят. */
-        d2k_catalog cH = {0};
-        d2k_sched *s = d2k_sched_new(&cH, sv[0], 0x2d);
+        d2s_catalog cH = {0};
+        d2s_sched *s = d2s_sched_new(&cH, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0;
-        vol_answer = D2K_VOL_UNREACHABLE; vol_rx_tls_unavailable = 1; vol_rx_cut = 0;
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_NOT_MEASURED;
+        vol_answer = D2S_VOL_UNREACHABLE; vol_rx_tls_unavailable = 1; vol_rx_cut = 0;
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_NOT_MEASURED;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40090, "рукопожатие.режут");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40090);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40090, "рукопожатие.режут");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40090);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1, "заблокированная на рукопожатии цель не прошла классификацию");
         CHECK(vol_calls == 0,
               "объёмный замер запущен при вердикте классификатора, не равном CLEAR");
         CHECK(!said("подбор и применение обхода не запускаю"),
               "блок на рукопожатии не повёл к подбору");
-        d2k_sched_free(s); d2k_catalog_free(&cH);
-        vol_answer = D2K_VOL_PASSED; vol_rx_tls_unavailable = 0;
+        d2s_sched_free(s); d2s_catalog_free(&cH);
+        vol_answer = D2S_VOL_PASSED; vol_rx_tls_unavailable = 0;
     }
     {
         /* CLEAR без обрыва объёма — прямой путь, подбор не запускается. */
-        d2k_catalog cP = {0};
-        d2k_sched *s = d2k_sched_new(&cP, sv[0], 0x2d);
+        d2s_catalog cP = {0};
+        d2s_sched *s = d2s_sched_new(&cP, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0;
-        tcp_answer = D2K_V_CLEAR;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0;
+        tcp_answer = D2S_V_CLEAR;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40091, "напрямую.проходит");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40091);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40091, "напрямую.проходит");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40091);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1 && vol_calls == 1,
               "CLEAR классификатора не дополнен объёмным замером");
         CHECK(said("напрямую проходит") && total_bindings(&cP) == 0,
               "CLEAR без обрыва объёма не остался прямым путём");
-        d2k_sched_free(s); d2k_catalog_free(&cP);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&cP);
+        tcp_answer = D2S_V_OPAQUE;
     }
     {
         const int other_shape = 0;
@@ -9308,22 +9308,22 @@ lifecycle_test:
            второй раз. Другая форма здесь объёма не застаёт: устаревший
            прогон останавливается до объёмного замера — разная форма
            проверяется ниже, после подтверждения. */
-        d2k_catalog cR = {0};
-        d2k_sched *s = d2k_sched_new(&cR, sv[0], 0x2d);
+        d2s_catalog cR = {0};
+        d2s_sched *s = d2s_sched_new(&cR, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0;
-        vol_answer = D2K_VOL_CUT; vol_rx_cut = 0;
-        tcp_answer = D2K_V_CLEAR;
-        ver_answer = D2K_VER_NOT_MEASURED;
+        vol_answer = D2S_VOL_CUT; vol_rx_cut = 0;
+        tcp_answer = D2S_V_CLEAR;
+        ver_answer = D2S_VER_NOT_MEASURED;
         tcp_last_wire = 0;
         forget_sent();
         snapshot_enabled = 1; snapshot_entered = snapshot_release = snapshot_ok = 0;
-        d2k_ev h = ev_hello(6, (uint16_t)(40092 + other_shape),
+        d2s_ev h = ev_hello(6, (uint16_t)(40092 + other_shape),
                             other_shape ? "объём.другая.форма" : "объём.без.повтора");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, (uint16_t)(40092 + other_shape));
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, (uint16_t)(40092 + other_shape));
+        d2s_sched_event(s, &su);
         int entered = 0;
         for (int i = 0; i < 3000 && !entered; i++) {
             tick_once(s);
@@ -9333,12 +9333,12 @@ lifecycle_test:
         }
         CHECK(entered, "классификатор не позван первым — объём шёл до вопросов донора");
         size_t template_wire = tcp_last_wire;
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, h.name, other_shape ? D2K_SHAPE_LEGACY : D2K_SHAPE_MODERN) == 0,
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, h.name, other_shape ? D2S_SHAPE_LEGACY : D2S_SHAPE_MODERN) == 0,
               "snapshot fixture failed");
         CHECK(other_shape || sh.shape_len == template_wire,
               "предпосылка: снимок TLS 1.3 должен совпасть с заготовкой по длине");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         pthread_mutex_lock(&snapshot_mu);
         snapshot_release = 1; pthread_cond_broadcast(&snapshot_cv);
         pthread_mutex_unlock(&snapshot_mu);
@@ -9349,9 +9349,9 @@ lifecycle_test:
         CHECK(said("исходящая лестница оборвалась"),
               "повтор снимком потерял обрыв объёмного замера");
         if (tcp_calls != 2 || vol_calls != 1) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&cR);
+        d2s_sched_free(s); d2s_catalog_free(&cR);
         snapshot_enabled = 0;
-        vol_answer = D2K_VOL_PASSED; tcp_answer = D2K_V_OPAQUE;
+        vol_answer = D2S_VOL_PASSED; tcp_answer = D2S_V_OPAQUE;
     }
     for (int other_shape = 0; other_shape < 2; other_shape++) {
         /* Подтверждено заготовкой TLS 1.3 после обрыва объёма; затем пришёл
@@ -9359,42 +9359,42 @@ lifecycle_test:
            (TLS 1.3, та же длина) берёт выполненный замер; снимок TLS 1.2 —
            другая версия, обрыв заготовки ему не улика: объём мерится заново
            (после CLEAR классификатора). */
-        d2k_catalog cW = {0};
-        d2k_sched *s = d2k_sched_new(&cW, sv[0], 0x2d);
+        d2s_catalog cW = {0};
+        d2s_sched *s = d2s_sched_new(&cW, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0;
-        vol_answer = D2K_VOL_CUT; vol_rx_cut = 0;
-        tcp_answer = D2K_V_CLEAR; tcp_last_wire = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        vol_answer = D2S_VOL_CUT; vol_rx_cut = 0;
+        tcp_answer = D2S_V_CLEAR; tcp_last_wire = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         uint16_t port = (uint16_t)(40095 + other_shape);
         ver_answer_port = port;
         forget_sent();
-        d2k_ev h = ev_hello(6, port, other_shape ? "объём.tls12.снимок" : "объём.tls13.снимок");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, port);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, port, other_shape ? "объём.tls12.снимок" : "объём.tls13.снимок");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, port);
+        d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 2000 && !total_bindings(&cW); i++) {
             tick_once(s);
-            int n = (int)sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = (int)sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, port);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, port);
+                d2s_sched_event(s, &ap);
             }
         }
         spin(s, 40);
         CHECK(total_bindings(&cW) == 1 && vol_calls == 1 && tcp_calls == 1,
               "предпосылка: объёмный обрыв заготовкой не подтвердился");
         size_t template_wire = tcp_last_wire;
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, h.name, other_shape ? D2K_SHAPE_LEGACY : D2K_SHAPE_MODERN) == 0,
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, h.name, other_shape ? D2S_SHAPE_LEGACY : D2S_SHAPE_MODERN) == 0,
               "snapshot fixture failed");
         CHECK(other_shape || sh.shape_len == template_wire,
               "предпосылка: снимок TLS 1.3 должен совпасть с заготовкой по длине");
-        d2k_sched_event(s, &sh);
-        installed = (int)sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+        d2s_sched_event(s, &sh);
+        installed = (int)sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
         for (int i = 0; i < 2000 && tcp_calls < 2; i++) tick_once(s);
         settle(s);
         CHECK(tcp_calls == 2, "снимок после подтверждения не повторил классификацию");
@@ -9404,8 +9404,8 @@ lifecycle_test:
               "обрыв, измеренный приветствием другой версии TLS, приложен к снимку");
         if (tcp_calls != 2 || vol_calls != 1 + other_shape)
             fprintf(stderr, "shape=%d tcp=%d vol=%d\n%s\n", other_shape, tcp_calls, vol_calls, saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&cW);
-        vol_answer = D2K_VOL_PASSED; tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&cW);
+        vol_answer = D2S_VOL_PASSED; tcp_answer = D2S_V_OPAQUE;
     }
     {
         /* OPAQUE: прямое рукопожатие не прошло, объём не мерился, флаг
@@ -9413,30 +9413,30 @@ lifecycle_test:
            RX-проверку под кандидатом. Если под кандидатом TLS доходит и
            identity-тело приходит целиком, это обычное подтверждение —
            без RX-лестницы и без RX-улики. */
-        d2k_catalog cO2 = {0};
-        d2k_sched *s = d2k_sched_new(&cO2, sv[0], 0x2d);
+        d2s_catalog cO2 = {0};
+        d2s_sched *s = d2s_sched_new(&cO2, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0;
-        tcp_answer = D2K_V_OPAQUE; vol_rx_cut = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_answer_port = 40094; ver_fail_first = 0;
+        tcp_answer = D2S_V_OPAQUE; vol_rx_cut = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_answer_port = 40094; ver_fail_first = 0;
         layered_identity_calls = layered_gzip_calls = 0;
-        d2k_sched_rx_ver_hook = stub_rx_counting;
+        d2s_sched_rx_ver_hook = stub_rx_counting;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40094, "opaque.tls.reachable"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "OPAQUE shape fixture");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40094);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40094, "opaque.tls.reachable"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "OPAQUE shape fixture");
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40094);
+        d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 2000 && !total_bindings(&cO2); i++) {
             tick_once(s);
-            int n = (int)sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = (int)sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40094);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40094);
+                d2s_sched_event(s, &ap);
             }
         }
         CHECK(vol_calls == 0 && tcp_calls == 1, "OPAQUE: объём мерился после блока рукопожатия");
@@ -9445,8 +9445,8 @@ lifecycle_test:
               !sent_contains_plan_payload("hcaptcha.com"),
               "OPAQUE с доступным TLS под кандидатом не подтвердился обычным путём");
         if (total_bindings(&cO2) != 1) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&cO2);
-        d2k_sched_rx_ver_hook = stub_ver;
+        d2s_sched_free(s); d2s_catalog_free(&cO2);
+        d2s_sched_rx_ver_hook = stub_ver;
     }
 
     /* --- TX-volume не открывает RX-volume-лестницу ---------------------- */
@@ -9454,23 +9454,23 @@ lifecycle_test:
         /* Один только обрыв исходящей лестницы не эквивалентен подтверждённому
            срезу входящего ответа. Специальная fake-SNI/split-лестница не
            должна попадать в очередь по этому другому профилю. */
-        d2k_catalog cA;
+        d2s_catalog cA;
         memset(&cA, 0, sizeof cA);
-        d2k_sched *s = d2k_sched_new(&cA, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cA, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0;
-        vol_answer = D2K_VOL_CUT;
+        vol_answer = D2S_VOL_CUT;
         /* Объём мерится после CLEAR донорского классификатора (задача 30). */
-        tcp_answer = D2K_V_CLEAR;
-        ver_answer = D2K_VER_NOT_MEASURED;
+        tcp_answer = D2S_V_CLEAR;
+        ver_answer = D2S_VER_NOT_MEASURED;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40080, "режут.по.объёму");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40080);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40080, "режут.по.объёму");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40080);
+        d2s_sched_event(s, &su);
         settle(s);
 
         CHECK(vol_calls == 1, "проба на объём не вызвана");
@@ -9480,11 +9480,11 @@ lifecycle_test:
               "TX-volume ошибочно запустил профильную RX fake-SNI-лестницу");
         CHECK(total_bindings(&cA) == 0, "обрыв по объёму записан в каталог");
         CHECK(said("исходящая лестница оборвалась"), "TX-volume не назван в отчёте");
-        vol_answer = D2K_VOL_PASSED;
-        tcp_answer = D2K_V_OPAQUE;
+        vol_answer = D2S_VOL_PASSED;
+        tcp_answer = D2S_V_OPAQUE;
         vol_rx_cut = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cA);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cA);
     }
 
     /* --- объёмные коробки не сливаются по одному плану (задача 23) ------ */
@@ -9494,17 +9494,17 @@ lifecycle_test:
            не сливать разные случаи из-за одного плана): у каждой свой
            отпечаток в каталоге. Третья цель с обрывом около 16 КБ узнаёт
            коробку A и сначала проверяет её сохранённый план. */
-        d2k_catalog cV;
+        d2s_catalog cV;
         memset(&cV, 0, sizeof cV);
-        vol_answer = D2K_VOL_CUT;
-        tcp_answer = D2K_V_CLEAR; /* рукопожатие проходит — объём мерится (задача 30) */
-        ver_answer = D2K_VER_APPLICATION;
+        vol_answer = D2S_VOL_CUT;
+        tcp_answer = D2S_V_CLEAR; /* рукопожатие проходит — объём мерится (задача 30) */
+        ver_answer = D2S_VER_APPLICATION;
         vol_at_kb = 16;
         confirm_once(&cV, sv[0], "a.vol-16.test", 40610);
         vol_at_kb = 128;
         confirm_once(&cV, sv[0], "b.vol-128.test", 40611);
 
-        const d2k_cat_box *ba = NULL, *bb = NULL;
+        const d2s_cat_box *ba = NULL, *bb = NULL;
         for (size_t i = 0; i < cV.n_boxes; i++) {
             for (size_t j = 0; j < cV.boxes[i].n_binds; j++) {
                 if (!strcmp(cV.boxes[i].binds[j].target, "a.vol-16.test")) ba = &cV.boxes[i];
@@ -9535,7 +9535,7 @@ lifecycle_test:
         snprintf(want, sizeof want, "совпал с коробкой %s", ida);
         CHECK(ida[0] && said(want),
               "цель с обрывом ~16 КБ не начала с планов коробки A");
-        const d2k_cat_box *bc = NULL;
+        const d2s_cat_box *bc = NULL;
         for (size_t i = 0; i < cV.n_boxes; i++)
             for (size_t j = 0; j < cV.boxes[i].n_binds; j++)
                 if (!strcmp(cV.boxes[i].binds[j].target, "c.vol-17.test")) bc = &cV.boxes[i];
@@ -9547,7 +9547,7 @@ lifecycle_test:
            противоречит — заводится отдельная коробка, A не трогается. */
         vol_at_kb = 30;
         confirm_once(&cV, sv[0], "d.vol-30.test", 40613);
-        const d2k_cat_box *bd30 = NULL, *ba2 = NULL;
+        const d2s_cat_box *bd30 = NULL, *ba2 = NULL;
         for (size_t i = 0; i < cV.n_boxes; i++) {
             if (!strcmp(cV.boxes[i].id, ida)) ba2 = &cV.boxes[i];
             for (size_t j = 0; j < cV.boxes[i].n_binds; j++)
@@ -9564,8 +9564,8 @@ lifecycle_test:
         CHECK(va2 == 16, "отпечаток коробки A переписан чужой приметой");
 
         vol_at_kb = 20;
-        vol_answer = D2K_VOL_PASSED;
-        d2k_catalog_free(&cV);
+        vol_answer = D2S_VOL_PASSED;
+        d2s_catalog_free(&cV);
     }
 
     /* --- очерёдность сохранённых планов идёт по корзине порога ---------- */
@@ -9573,16 +9573,16 @@ lifecycle_test:
         /* Обрыв 19 КБ совместим по допуску с обеими коробками: X (15 КБ,
            корзина [8,16)) и Y (21 КБ, корзина [16,32)). У X больше успехов,
            но ближайшая модель — Y той же корзины: её план проверяется первым. */
-        d2k_catalog cO;
+        d2s_catalog cO;
         memset(&cO, 0, sizeof cO);
         cO.boxes = calloc(2, sizeof *cO.boxes);
         CHECK(cO.boxes != NULL, "не удалось создать коробки очерёдности");
         int ready = cO.boxes != NULL;
         for (unsigned bi = 0; ready && bi < 2; bi++) {
-            d2k_cat_box *b = &cO.boxes[bi];
+            d2s_cat_box *b = &cO.boxes[bi];
             cO.n_boxes++;
             snprintf(b->id, sizeof b->id, bi == 0 ? "box-vol-x15" : "box-vol-y21");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "volume");
             b->fp.sig[0].volume = bi == 0 ? 15 : 21;
@@ -9595,7 +9595,7 @@ lifecycle_test:
             snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
             char plan[256];
             snprintf(plan, sizeof plan,
-                     "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                     "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                      "proto tcp tls\nsplit payload_start +%u\norder forward\n", 31 + bi);
             b->plans[0].text = strdup(plan);
             if (!b->plans[0].text) { ready = 0; }
@@ -9603,9 +9603,9 @@ lifecycle_test:
         CHECK(ready, "не удалось подготовить планы очерёдности");
         if (ready) {
             saidbuf[0] = '\0';
-            vol_answer = D2K_VOL_CUT;
-            tcp_answer = D2K_V_CLEAR;
-            ver_answer = D2K_VER_APPLICATION;
+            vol_answer = D2S_VOL_CUT;
+            tcp_answer = D2S_V_CLEAR;
+            ver_answer = D2S_VER_APPLICATION;
             vol_at_kb = 19;
             confirm_once(&cO, sv[0], "e.vol-19.test", 40614);
             CHECK(said("совпал с коробкой box-vol-y21"),
@@ -9613,123 +9613,123 @@ lifecycle_test:
             if (!said("совпал с коробкой box-vol-y21")) fprintf(stderr, "%s\n", saidbuf);
         }
         vol_at_kb = 20;
-        vol_answer = D2K_VOL_PASSED;
-        tcp_answer = D2K_V_PREFIX; /* прежнее состояние для следующих проверок */
-        d2k_catalog_free(&cO);
+        vol_answer = D2S_VOL_PASSED;
+        tcp_answer = D2S_V_PREFIX; /* прежнее состояние для следующих проверок */
+        d2s_catalog_free(&cO);
     }
 
 rx_volume_tests:
     /* Field j: a framed 23KB partial followed by an unavailable repeat is
        inconclusive, never proof that the target works without its plan. */
     for (int opaque = 0; opaque < 2; opaque++) {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         vol_partial_bytes = opaque ? 0 : 23900;
-        vol_partial_wire_bytes = opaque ? 14005 : 0; vol_rx_cut = 0; vol_answer = D2K_VOL_UNREACHABLE;
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0;
-        d2k_ev h = ev_hello(6, 40379, "partial-rx.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40379); d2k_sched_event(s, &su);
+        vol_partial_wire_bytes = opaque ? 14005 : 0; vol_rx_cut = 0; vol_answer = D2S_VOL_UNREACHABLE;
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0;
+        d2s_ev h = ev_hello(6, 40379, "partial-rx.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40379); d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1 && total_bindings(&c) == 0,
               "unpaired RX cut must not invent a bypass");
         CHECK(!said("напрямую проходит") && said("результат неубедителен"),
               "partial RX body was incorrectly classified as direct success");
-        vol_partial_bytes = vol_partial_wire_bytes = 0; vol_answer = D2K_VOL_PASSED;
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        vol_partial_bytes = vol_partial_wire_bytes = 0; vol_answer = D2S_VOL_PASSED;
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     {
         /* FLAKY сам по себе не отменяет RX-пару позднего закрытия; локальный
            срок подключения означает, что замер не состоялся и RX не нужен. */
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = '\0'; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = '\0'; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         vol_rx_unmeasured = 0; vol_rx_cut = 1; vol_rx_at_kb = 18;
-        vol_direct_complete = 0; vol_answer = D2K_VOL_PASSED; vol_calls = 0;
-        tcp_answer = D2K_V_FLAKY; tcp_dial_deadline = 0; tcp_calls = 0;
+        vol_direct_complete = 0; vol_answer = D2S_VOL_PASSED; vol_calls = 0;
+        tcp_answer = D2S_V_FLAKY; tcp_dial_deadline = 0; tcp_calls = 0;
         uint8_t ech_bytes[2048]; size_t ech_len = 0;
         CHECK(ech_offer_hello("flaky-vol.example", ech_bytes,
                               sizeof ech_bytes, &ech_len) == 0,
               "flaky-vol: ECH fixture не собрался");
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
-        d2k_ev h = ev_hello(6, 40383, "flaky-vol.example");
-        d2k_sched_event(s, &h);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
+        d2s_ev h = ev_hello(6, 40383, "flaky-vol.example");
+        d2s_sched_event(s, &h);
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, ech_bytes, ech_len); sh.shape_len = ech_len;
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40383);
-        su.code = D2K_SUSPECT_RST_AFTER_APP; su.planned = D2K_LINK_PLANNED_YES;
-        d2k_sched_event(s, &su); settle(s);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40383);
+        su.code = D2S_SUSPECT_RST_AFTER_APP; su.planned = D2S_LINK_PLANNED_YES;
+        d2s_sched_event(s, &su); settle(s);
         CHECK(vol_calls >= 1,
               "flaky-vol: поздний обрыв после FLAKY не запустил RX-пару");
         CHECK(!said("напрямую проходит"), "flaky-vol: неполная пара объявлена прямым проходом");
-        vol_rx_cut = 0; vol_answer = D2K_VOL_PASSED;
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        vol_rx_cut = 0; vol_answer = D2S_VOL_PASSED;
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     {
         /* Таймаут локального подключения не является основанием для RX-пары. */
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         char pid[40];
         own_box(&c, "box-flaky-deadline", pid, 2, 3, "flaky-deadline.example", 6,
-                D2K_SHAPE_MODERN, 4, 1790000000, 0);
+                D2S_SHAPE_MODERN, 4, 1790000000, 0);
         CHECK(total_bindings(&c) == 1, "flaky-deadline: начальная привязка не создана");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = '\0'; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = '\0'; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         vol_rx_unmeasured = 0; vol_rx_cut = 1; vol_direct_complete = 0;
-        vol_answer = D2K_VOL_PASSED; vol_calls = 0;
-        tcp_answer = D2K_V_FLAKY; tcp_dial_deadline = 1; tcp_calls = 0;
+        vol_answer = D2S_VOL_PASSED; vol_calls = 0;
+        tcp_answer = D2S_V_FLAKY; tcp_dial_deadline = 1; tcp_calls = 0;
         uint8_t ech_bytes[2048]; size_t ech_len = 0;
         CHECK(ech_offer_hello("flaky-deadline.example", ech_bytes,
                               sizeof ech_bytes, &ech_len) == 0,
               "flaky-deadline: ECH fixture не собрался");
-        d2k_sched_ech_resolve_hook = stub_ech_resolve;
-        d2k_ev h = ev_hello(6, 40387, "flaky-deadline.example");
-        d2k_sched_event(s, &h);
-        d2k_ev sh = {0}; sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+        d2s_sched_ech_resolve_hook = stub_ech_resolve;
+        d2s_ev h = ev_hello(6, 40387, "flaky-deadline.example");
+        d2s_sched_event(s, &h);
+        d2s_ev sh = {0}; sh.kind = D2S_EV_SHAPE; sh.transport = 6;
         memcpy(sh.shape, ech_bytes, ech_len); sh.shape_len = ech_len;
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40387);
-        su.code = D2K_SUSPECT_RST_AFTER_APP; su.planned = D2K_LINK_PLANNED_YES;
-        d2k_sched_event(s, &su); settle(s);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40387);
+        su.code = D2S_SUSPECT_RST_AFTER_APP; su.planned = D2S_LINK_PLANNED_YES;
+        d2s_sched_event(s, &su); settle(s);
         CHECK(tcp_calls == 1, "flaky-deadline: TCP-замер не вызван");
         CHECK(vol_calls == 0, "flaky-deadline: после таймаута подключения запущен RX-замер");
         CHECK(total_bindings(&c) == 1,
               "flaky-deadline: не состоявшийся замер удалил подтверждённую привязку");
         CHECK(said("outcome=unknown path=none"),
               "flaky-deadline: исход замера не отмечен как unknown");
-        tcp_dial_deadline = 0; vol_rx_cut = 0; vol_answer = D2K_VOL_PASSED;
-        d2k_sched_ech_resolve_hook = d2k_ech_resolve;
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        tcp_dial_deadline = 0; vol_rx_cut = 0; vol_answer = D2S_VOL_PASSED;
+        d2s_sched_ech_resolve_hook = d2s_ech_resolve;
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     {
         /* Полный ответ без прикладного успеха (например, 403) не даёт
            оснований объявлять поздний RX-прогон прямым проходом. TLS 1.2
            исключает отдельный ECH-baseline: здесь проверяется именно RX-only. */
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         const char *nm = "complete-403.example";
         char pid[40];
         own_box(&c, "box-complete-403", pid, 2, 3, nm, 6,
-                D2K_SHAPE_LEGACY, 4, 1790000000, 0);
+                D2S_SHAPE_LEGACY, 4, 1790000000, 0);
         CHECK(total_bindings(&c) == 1, "complete-403: начальная привязка не создана");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = '\0'; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = '\0'; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         vol_rx_cut = 0; vol_rx_unmeasured = 0; vol_rx_tls_unavailable = 0;
         vol_rx_short = 0; vol_rx_short_bytes = 0; vol_direct_complete = 0;
         vol_partial_bytes = vol_partial_wire_bytes = 0;
-        vol_answer = D2K_VOL_PASSED;
-        tcp_answer = D2K_V_CLEAR;
+        vol_answer = D2S_VOL_PASSED;
+        tcp_answer = D2S_V_CLEAR;
         tcp_calls = vol_calls = 0; saidbuf[0] = '\0'; forget_sent();
-        d2k_ev h = ev_hello(6, 40386, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_LEGACY) == 0,
+        d2s_ev h = ev_hello(6, 40386, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_LEGACY) == 0,
               "complete-403: TLS fixture не собрался");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40386);
-        su.code = D2K_SUSPECT_RST_AFTER_APP;
-        su.planned = D2K_LINK_PLANNED_YES;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40386);
+        su.code = D2S_SUSPECT_RST_AFTER_APP;
+        su.planned = D2S_LINK_PLANNED_YES;
+        d2s_sched_event(s, &su);
         settle(s);
         int inconclusive = said("outcome=inconclusive path=none");
         int probe_direct = said("outcome=probe-direct") || said("напрямую проходит");
@@ -9745,47 +9745,47 @@ rx_volume_tests:
               "complete-403: неприкладной RX-ответ объявлен прямым проходом");
         CHECK(total_bindings(&c) == 1,
               "complete-403: незавершённый RX повредил подтверждённую привязку");
-        vol_direct_complete = 0; vol_answer = D2K_VOL_PASSED;
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        vol_direct_complete = 0; vol_answer = D2S_VOL_PASSED;
+        d2s_sched_free(s); d2s_catalog_free(&c);
     }
     if (partial_only) goto voice_only_done;
     /* A hint never launches its target. A subsequent live public TLS target
        measures and verifies the same resource, then persists its witness. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
-        resource_fixture = 1; vol_rx_cut = 0; vol_answer = D2K_VOL_PASSED;
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0;
-        d2k_ev parent = ev_hello(6, 40381, "parent.example");
-        d2k_sched_event(s, &parent);
-        d2k_ev su = ev_suspect(6, 40381); d2k_sched_event(s, &su);
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
+        resource_fixture = 1; vol_rx_cut = 0; vol_answer = D2S_VOL_PASSED;
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0;
+        d2s_ev parent = ev_hello(6, 40381, "parent.example");
+        d2s_sched_event(s, &parent);
+        d2s_ev su = ev_suspect(6, 40381); d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1 && total_bindings(&c) == 0,
               "CSS hint invented a target or confirmed an unrelated bypass");
         resource_fixture = 0;
         uint16_t saved = g_server_port; g_server_port = 443;
-        d2k_sched_vol_path_hook = stub_resource_volume;
-        d2k_sched_path_ver_hook = stub_resource_verify;
+        d2s_sched_vol_path_hook = stub_resource_volume;
+        d2s_sched_path_ver_hook = stub_resource_verify;
         resource_volume_calls = resource_verify_calls = 0;
         ver_calls = 0; ver_fail_first = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_answer_port = 40382;
-        d2k_ev h = ev_hello(6, 40382, "assets.example"), sh;
+        ver_answer = D2S_VER_APPLICATION; ver_answer_port = 40382;
+        d2s_ev h = ev_hello(6, 40382, "assets.example"), sh;
         inet_pton(AF_INET, "8.8.8.8", h.low_ip);
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "CSS task TLS fixture");
-        d2k_sched_event(s, &sh);
-        su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_FIN_RETRY;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "CSS task TLS fixture");
+        d2s_sched_event(s, &sh);
+        su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_FIN_RETRY;
+        d2s_sched_event(s, &su);
         size_t installed = 0;
         for (int i = 0; i < 2000 && !total_bindings(&c); i++) {
             tick_once(s);
-            size_t n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            size_t n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40382);
+                d2s_ev ap = ev_applied(6, 40382);
                 memcpy(ap.low_ip, h.low_ip, 4);
-                d2k_sched_event(s, &ap);
+                d2s_sched_event(s, &ap);
             }
         }
         CHECK(resource_volume_calls == 1 && resource_verify_calls >= 1,
@@ -9793,9 +9793,9 @@ rx_volume_tests:
         CHECK(total_bindings(&c) == 1 &&
               !strcmp(c.boxes[0].binds[0].probe_path, "/public/app.min.css"),
               "confirmed resource witness lost on binding");
-        d2k_sched_free(s); d2k_catalog_free(&c); g_server_port = saved;
-        d2k_sched_vol_path_hook = d2k_volume_probe_path;
-        d2k_sched_path_ver_hook = d2k_verify_probe_path_on;
+        d2s_sched_free(s); d2s_catalog_free(&c); g_server_port = saved;
+        d2s_sched_vol_path_hook = d2s_volume_probe_path;
+        d2s_sched_path_ver_hook = d2s_verify_probe_path_on;
         vol_rx_cut = 0;
     }
     /* ЗАДАЧА 26: ИЗМЕРЕННЫЙ ПУТЬ ОБЪЁМА ДОХОДИТ ДО ПЛАНИРОВЩИКА. Поле
@@ -9805,37 +9805,37 @@ rx_volume_tests:
        403 придёт и под планом: доказанный обрыв не превратится в
        подтверждённое решение, а путь не попадёт в привязку и следующий эпизод
        начнёт заново с «/». Подсказки от самого хоста здесь не было и быть не
-       может — путь приносит результат замера (d2k_vol_result.measured_path). */
+       может — путь приносит результат замера (d2s_vol_result.measured_path). */
     {
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         uint16_t saved = g_server_port; g_server_port = 443;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
-        d2k_sched_path_ver_hook = stub_proven_verify;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
+        d2s_sched_path_ver_hook = stub_proven_verify;
         proven_ver_calls = 0; proven_ver_path[0] = '\0';
         vol_measured_path = "/css/soehne-web.css";
         vol_rx_cut = 1; vol_rx_packet_only = 0; vol_rx_packets = 0;
-        vol_rx_at_kb = 15; vol_answer = D2K_VOL_PASSED;
-        tcp_answer = D2K_V_CLEAR; tcp_calls = 0;
-        ver_calls = 0; ver_fail_first = 0; ver_answer = D2K_VER_APPLICATION;
+        vol_rx_at_kb = 15; vol_answer = D2S_VOL_PASSED;
+        tcp_answer = D2S_V_CLEAR; tcp_calls = 0;
+        ver_calls = 0; ver_fail_first = 0; ver_answer = D2S_VER_APPLICATION;
         ver_answer_port = 40390;
-        d2k_ev h = ev_hello(6, 40390, "proven.example"), sh;
+        d2s_ev h = ev_hello(6, 40390, "proven.example"), sh;
         inet_pton(AF_INET, "8.8.8.8", h.low_ip);
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
               "proven-path TLS fixture");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_FIN_RETRY;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_FIN_RETRY;
+        d2s_sched_event(s, &su);
         size_t installed = 0;
         for (int i = 0; i < 2000 && !total_bindings(&c); i++) {
             tick_once(s);
-            size_t n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            size_t n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40390);
+                d2s_ev ap = ev_applied(6, 40390);
                 memcpy(ap.low_ip, h.low_ip, 4);
-                d2k_sched_event(s, &ap);
+                d2s_sched_event(s, &ap);
             }
         }
         CHECK(proven_ver_calls >= 1 && !strcmp(proven_ver_path, "/css/soehne-web.css"),
@@ -9851,43 +9851,43 @@ rx_volume_tests:
             strcmp(c.boxes[0].binds[0].probe_path, "/css/soehne-web.css"))
             fprintf(stderr, "привязка держит probe_path=\"%s\"\n",
                     c.boxes[0].binds[0].probe_path);
-        d2k_sched_free(s); d2k_catalog_free(&c); g_server_port = saved;
-        d2k_sched_path_ver_hook = d2k_verify_probe_path_on;
+        d2s_sched_free(s); d2s_catalog_free(&c); g_server_port = saved;
+        d2s_sched_path_ver_hook = d2s_verify_probe_path_on;
         vol_measured_path = NULL; vol_rx_cut = 0; vol_rx_at_kb = 24;
-        vol_answer = D2K_VOL_PASSED;
+        vol_answer = D2S_VOL_PASSED;
     }
     /* Задача 39, раунд 2: сохранённый путь подтверждённой QUIC-привязки
        читается обратно, когда HTML-подсказки TCP уже нет (новый
        планировщик — как после перезапуска). Ключ формы у QUIC-привязки —
-       D2K_LINK_SHAPE_QUIC, не форма TLS-приветствия. Путь идёт и в этап
+       D2S_LINK_SHAPE_QUIC, не форма TLS-приветствия. Путь идёт и в этап
        данных плеча, и в проверку плана; в ключ семейства QUIC он не входит. */
     {
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         uint16_t saved = g_server_port; g_server_port = 443;
         static const char *names[3] = {"a1.cdn-qres.com", "b1.cdn-qres.com", "c1.cdn-qres.com"};
-        quic_answer = D2K_V_OPAQUE; arm_kind = D2K_QA_BLOB;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        quic_answer = D2S_V_OPAQUE; arm_kind = D2S_QA_BLOB;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         /* 1. Подтверждаем QUIC-привязки на публичном адресе (подсказки нет — «/»). */
         for (int n = 0; n < 3; n++) {
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_set_say(s, collect_say, NULL);
             uint16_t cport = (uint16_t)(41700 + n);
             ver_answer_port = cport; forget_sent();
-            d2k_ev h = ev_hello(17, cport, names[n]);
+            d2s_ev h = ev_hello(17, cport, names[n]);
             inet_pton(AF_INET, "8.8.8.8", h.low_ip);
-            d2k_sched_event(s, &h);
-            d2k_ev sh; CHECK(quic_shape(&sh, names[n]) == 0, "QUIC shape fixture");
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(17, cport); memcpy(su.low_ip, h.low_ip, 4);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &h);
+            d2s_ev sh; CHECK(quic_shape(&sh, names[n]) == 0, "QUIC shape fixture");
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(17, cport); memcpy(su.low_ip, h.low_ip, 4);
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(17, cport); memcpy(ap.low_ip, h.low_ip, 4);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(17, cport); memcpy(ap.low_ip, h.low_ip, 4);
+            d2s_sched_event(s, &ap);
             spin(s, 40);
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        const d2k_cat_binding *qb = binding_of(&c, names[0], 17);
-        CHECK(qb && qb->shape == D2K_LINK_SHAPE_QUIC, "QUIC binding fixture confirmed");
+        const d2s_cat_binding *qb = binding_of(&c, names[0], 17);
+        CHECK(qb && qb->shape == D2S_LINK_SHAPE_QUIC, "QUIC binding fixture confirmed");
         /* 2. Сохранённый свидетель-ресурс на привязках, подсказок нет. */
         for (size_t i = 0; i < c.n_boxes; i++)
             for (size_t j = 0; j < c.boxes[i].n_binds; j++)
@@ -9896,21 +9896,21 @@ rx_volume_tests:
                              sizeof c.boxes[i].binds[j].probe_path, "/static/app.css");
         for (int n = 0; n < 3; n++) {
             quic_last_path[0] = 0; quic_path_ver_calls = 0; quic_path_ver_last[0] = 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-            saidbuf[0] = 0; d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+            saidbuf[0] = 0; d2s_sched_set_say(s, collect_say, NULL);
             uint16_t cport = (uint16_t)(41710 + n);
             ver_answer_port = cport; forget_sent();
-            d2k_ev h = ev_hello(17, cport, names[n]);
+            d2s_ev h = ev_hello(17, cport, names[n]);
             inet_pton(AF_INET, "8.8.8.8", h.low_ip);
-            d2k_sched_event(s, &h);
-            d2k_ev sh; CHECK(quic_shape(&sh, names[n]) == 0, "QUIC shape fixture");
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(17, cport); memcpy(su.low_ip, h.low_ip, 4);
-            su.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &h);
+            d2s_ev sh; CHECK(quic_shape(&sh, names[n]) == 0, "QUIC shape fixture");
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(17, cport); memcpy(su.low_ip, h.low_ip, 4);
+            su.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(17, cport); memcpy(ap.low_ip, h.low_ip, 4);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(17, cport); memcpy(ap.low_ip, h.low_ip, 4);
+            d2s_sched_event(s, &ap);
             spin(s, 40);
             char want[160];
             snprintf(want, sizeof want, "по %s RX и кандидат проверяются по публичному stylesheet /static/app.css", names[n]);
@@ -9921,76 +9921,76 @@ rx_volume_tests:
             CHECK(quic_path_ver_calls > 0 && !strcmp(quic_path_ver_last, "/static/app.css"),
                   "QUIC plan verification did not go by the saved resource path");
             if (!said("публичному stylesheet /static/app.css")) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         /* 3. Ключ семейства QUIC — «/», путь-подсказка в него не входит. */
-        d2k_group_key gk = {0}; gk.transport = 17; gk.family = 4; gk.shape = D2K_LINK_SHAPE_QUIC;
+        d2s_group_key gk = {0}; gk.transport = 17; gk.family = 4; gk.shape = D2S_LINK_SHAPE_QUIC;
         strcpy(gk.probe_path, "/static/app.css");
-        CHECK(c.groups && !d2k_group_match(c.groups, "d1.cdn-qres.com", &gk),
+        CHECK(c.groups && !d2s_group_match(c.groups, "d1.cdn-qres.com", &gk),
               "QUIC family key must not carry the resource path");
         strcpy(gk.probe_path, "/");
-        CHECK(c.groups && d2k_group_match(c.groups, "d1.cdn-qres.com", &gk),
+        CHECK(c.groups && d2s_group_match(c.groups, "d1.cdn-qres.com", &gk),
               "QUIC family learned with \"/\" despite the resource path (previous matching)");
         printf("QUIC resource path: binding read back, measure=%s, verify calls %d (%s)\n",
                quic_last_path, quic_path_ver_calls, quic_path_ver_last);
-        d2k_catalog_free(&c); g_server_port = saved;
+        d2s_catalog_free(&c); g_server_port = saved;
     }
     /* IPv4 success is only a candidate for IPv6. A failed native baseline
        checks it on an isolated native socket; own APPLIED and complete
        identity are required. Failure resumes the original classifier once. */
     for (int outcome = 0; outcome < 4; outcome++) {
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         c.boxes = calloc(1, sizeof *c.boxes);
         CHECK(c.boxes != NULL, "family reuse fixture allocation");
         if (!c.boxes) continue;
         c.n_boxes = 1;
-        d2k_cat_box *b = c.boxes;
+        d2s_cat_box *b = c.boxes;
         snprintf(b->id, sizeof b->id, "box-v4-only");
         b->plans = calloc(1, sizeof *b->plans);
         b->binds = calloc(1, sizeof *b->binds);
         CHECK(b->plans && b->binds, "family reuse plan fixture allocation");
-        if (!b->plans || !b->binds) { d2k_catalog_free(&c); continue; }
+        if (!b->plans || !b->binds) { d2s_catalog_free(&c); continue; }
         b->n_plans = b->n_binds = 1;
         snprintf(b->plans[0].id, sizeof b->plans[0].id, "own-v4-plan");
         snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
         b->plans[0].enabled = 1;
-        b->plans[0].text = strdup("d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+        b->plans[0].text = strdup("d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                                  "proto tcp tls\nsplit payload_start +2\norder forward\n");
-        d2k_cat_binding *bd = b->binds;
+        d2s_cat_binding *bd = b->binds;
         snprintf(bd->kind, sizeof bd->kind, "name");
         snprintf(bd->target, sizeof bd->target, "family-reuse.test");
         snprintf(bd->plan_id, sizeof bd->plan_id, "own-v4-plan");
         bd->enabled = 1; bd->level = 3; bd->transport = 6;
-        bd->shape = D2K_SHAPE_MODERN; bd->family = 4;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        bd->shape = D2S_SHAPE_MODERN; bd->family = 4;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = ver_calls = 0;
-        vol_answer = outcome == 3 ? D2K_VOL_PASSED : D2K_VOL_UNREACHABLE;
+        vol_answer = outcome == 3 ? D2S_VOL_PASSED : D2S_VOL_UNREACHABLE;
         vol_rx_tls_unavailable = outcome != 3; vol_rx_cut = 0;
-        tcp_answer = outcome == 3 ? D2K_V_CLEAR : D2K_V_INCONCLUSIVE;
-        ver_answer = outcome == 1 ? D2K_VER_HANDSHAKE : D2K_VER_APPLICATION;
+        tcp_answer = outcome == 3 ? D2S_V_CLEAR : D2S_V_INCONCLUSIVE;
+        ver_answer = outcome == 1 ? D2S_VER_HANDSHAKE : D2S_VER_APPLICATION;
         ver_answer_port = 40311; ver_fail_first = 0;
-        d2k_sched_rx_ver_hook = stub_family_identity;
-        d2k_ev h = ev_hello(6, 40311, "family-reuse.test"), sh;
+        d2s_sched_rx_ver_hook = stub_family_identity;
+        d2s_ev h = ev_hello(6, 40311, "family-reuse.test"), sh;
         h.family = 6; h.low_port = 443;
         CHECK(inet_pton(AF_INET6, "::1", h.low_ip) == 1, "reuse destination fixture");
         CHECK(inet_pton(AF_INET6, "2001:db8::2", h.high_ip) == 1, "reuse client fixture");
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "reuse shape fixture");
-        sh.family = 6; d2k_sched_event(s, &sh);
-        d2k_ev su = h; su.kind = D2K_EV_SUSPECT; su.code = D2K_SUSPECT_REPEAT;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "reuse shape fixture");
+        sh.family = 6; d2s_sched_event(s, &sh);
+        d2s_ev su = h; su.kind = D2S_EV_SUSPECT; su.code = D2S_SUSPECT_REPEAT;
+        d2s_sched_event(s, &su);
         size_t installed = 0;
         for (int i = 0; i < 2000; i++) {
             tick_once(s);
-            size_t n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            size_t n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40311); ap.family = 6;
+                d2s_ev ap = ev_applied(6, 40311); ap.family = 6;
                 ap.low_port = h.low_port;
                 memcpy(ap.low_ip, h.low_ip, 16); memcpy(ap.high_ip, h.high_ip, 16);
                 if (outcome == 2) ap.plan_id[0] ^= 1;
-                d2k_sched_event(s, &ap);
+                d2s_sched_event(s, &ap);
             }
             if ((outcome == 0 && total_bindings(&c) == 2) ||
                 (outcome != 0 && tcp_calls)) break;
@@ -10017,67 +10017,67 @@ rx_volume_tests:
             CHECK(!strcmp(c.boxes[0].id, "box-v4-only") && c.boxes[0].n_binds == 1,
                   "unmeasured IPv6 fingerprint merged into IPv4 box");
         }
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_rx_ver_hook = stub_ver;
-        vol_rx_tls_unavailable = 0; vol_answer = D2K_VOL_PASSED;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_rx_ver_hook = stub_ver;
+        vol_rx_tls_unavailable = 0; vol_answer = D2S_VOL_PASSED;
     }
     /* A bootstrap must not be saved merely because gzip completed. Only
        two own applied identity cuts plus actual gzip admit the RX ladder. */
     for (int bad = 0; bad < 6; bad++) {
-        d2k_catalog c = {0};
+        d2s_catalog c = {0};
         if (bad >= 4) {
             c.boxes = calloc(1, sizeof *c.boxes);
             CHECK(c.boxes != NULL, "late bootstrap box allocation failed");
             if (!c.boxes) continue;
             c.n_boxes = 1;
-            d2k_cat_box *b = c.boxes;
+            d2s_cat_box *b = c.boxes;
             snprintf(b->id, sizeof b->id, "box-layered-bootstrap");
             b->plans = calloc(1, sizeof *b->plans);
             b->binds = calloc(1, sizeof *b->binds);
             CHECK(b->plans && b->binds, "late bootstrap fixture allocation failed");
-            if (!b->plans || !b->binds) { d2k_catalog_free(&c); continue; }
+            if (!b->plans || !b->binds) { d2s_catalog_free(&c); continue; }
             b->n_plans = b->n_binds = 1;
             snprintf(b->plans[0].id, sizeof b->plans[0].id, "plan-bootstrap");
             snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
             b->plans[0].enabled = 1;
-            b->plans[0].text = strdup("d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+            b->plans[0].text = strdup("d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                 "proto tcp tls\nsplit payload_start +2\norder forward\n");
-            d2k_cat_binding *bd = b->binds;
+            d2s_cat_binding *bd = b->binds;
             snprintf(bd->kind, sizeof bd->kind, "name");
             snprintf(bd->target, sizeof bd->target, "layered-rx.test");
             snprintf(bd->plan_id, sizeof bd->plan_id, "plan-bootstrap");
             bd->enabled = 1; bd->level = 3; bd->transport = 6;
-            bd->shape = D2K_SHAPE_MODERN; bd->family = 4;
+            bd->shape = D2S_SHAPE_MODERN; bd->family = 4;
         }
         net_name_known(&c, "hcaptcha.com");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_UNREACHABLE; vol_rx_cut = 0;
-        vol_rx_tls_unavailable = 1; tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_UNREACHABLE; vol_rx_cut = 0;
+        vol_rx_tls_unavailable = 1; tcp_answer = D2S_V_OPAQUE;
         ver_answer_port = 40241; ver_fail_first = 0;
-        ver_answer = D2K_VER_HANDSHAKE;
+        ver_answer = D2S_VER_HANDSHAKE;
         layered_identity_calls = layered_gzip_calls = 0;
         layered_bad_control = bad;
-        d2k_sched_rx_ver_hook = stub_layered_identity;
-        d2k_sched_rx_gzip_ver_hook = stub_layered_gzip;
-        d2k_ev h = ev_hello(6, 40241, "layered-rx.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+        d2s_sched_rx_ver_hook = stub_layered_identity;
+        d2s_sched_rx_gzip_ver_hook = stub_layered_gzip;
+        d2s_ev h = ev_hello(6, 40241, "layered-rx.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
               "layered RX shape fixture failed");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40241);
-        if (bad >= 4) su.code = D2K_SUSPECT_FIN_RETRY;
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40241);
+        if (bad >= 4) su.code = D2S_SUSPECT_FIN_RETRY;
+        d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 4000; i++) {
             tick_once(s);
-            int n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40241);
+                d2s_ev ap = ev_applied(6, 40241);
                 if (bad == 2) ap.plan_id[0] ^= 1;
-                d2k_sched_event(s, &ap);
+                d2s_sched_event(s, &ap);
             }
             if (layered_gzip_calls && ((bad == 1 || bad == 5) ? said("не подтверждён полным gzip") :
                     sent_contains_plan_payload("hcaptcha.com"))) break;
@@ -10090,10 +10090,10 @@ rx_volume_tests:
         CHECK(sent_contains_plan_payload("hcaptcha.com") == (bad == 0 || bad == 4),
               "RX ladder admission ignored paired identity/gzip evidence");
         if (bad < 2 && !layered_gzip_calls) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        d2k_sched_rx_ver_hook = stub_ver;
-        d2k_sched_rx_gzip_ver_hook = stub_ver;
-        vol_rx_tls_unavailable = 0; vol_answer = D2K_VOL_PASSED;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        d2s_sched_rx_ver_hook = stub_ver;
+        d2s_sched_rx_gzip_ver_hook = stub_ver;
+        vol_rx_tls_unavailable = 0; vol_answer = D2S_VOL_PASSED;
     }
     /* Поле 14.10.2026, www.bbc.com: позднее закрытие, прямой RX-зонд получил
        сброс до TLS, свой план цели не дошёл до приложения — и следующей
@@ -10101,14 +10101,14 @@ rx_volume_tests:
        замера. Перебор — только когда замер доказал блок и выразить его
        нечем; здесь замера не было, значит дальше идёт он. */
     {
-        d2k_verdict old_tcp = tcp_answer;
-        d2k_ver_level old_ver = ver_answer;
-        d2k_catalog c = {0};
+        d2s_verdict old_tcp = tcp_answer;
+        d2s_ver_level old_ver = ver_answer;
+        d2s_catalog c = {0};
         c.boxes = calloc(1, sizeof *c.boxes);
         CHECK(c.boxes != NULL, "late bootstrap box allocation failed");
         if (c.boxes) {
             c.n_boxes = 1;
-            d2k_cat_box *b = c.boxes;
+            d2s_cat_box *b = c.boxes;
             snprintf(b->id, sizeof b->id, "box-late-boot");
             b->plans = calloc(1, sizeof *b->plans);
             b->binds = calloc(1, sizeof *b->binds);
@@ -10117,37 +10117,37 @@ rx_volume_tests:
             snprintf(b->plans[0].id, sizeof b->plans[0].id, "plan-late-boot");
             snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
             b->plans[0].enabled = 1;
-            b->plans[0].text = strdup("d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+            b->plans[0].text = strdup("d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                 "proto tcp tls\nsplit payload_start +2\norder forward\n");
-            d2k_cat_binding *bd = b->binds;
+            d2s_cat_binding *bd = b->binds;
             snprintf(bd->kind, sizeof bd->kind, "name");
             snprintf(bd->target, sizeof bd->target, "late-boot-fails.test");
             snprintf(bd->plan_id, sizeof bd->plan_id, "plan-late-boot");
             bd->enabled = 1; bd->level = 3; bd->transport = 6;
-            bd->shape = D2K_SHAPE_MODERN; bd->family = 4;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            bd->shape = D2S_SHAPE_MODERN; bd->family = 4;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0'; forget_sent();
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             vol_calls = tcp_calls = 0;
-            vol_answer = D2K_VOL_UNREACHABLE; vol_rx_cut = 0;
-            vol_rx_tls_unavailable = 1; tcp_answer = D2K_V_CLEAR;
-            ver_answer = D2K_VER_TRANSPORT; ver_answer_port = 40251; ver_fail_first = 0;
-            d2k_ev h = ev_hello(6, 40251, "late-boot-fails.test"), sh;
-            d2k_sched_event(s, &h);
-            CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+            vol_answer = D2S_VOL_UNREACHABLE; vol_rx_cut = 0;
+            vol_rx_tls_unavailable = 1; tcp_answer = D2S_V_CLEAR;
+            ver_answer = D2S_VER_TRANSPORT; ver_answer_port = 40251; ver_fail_first = 0;
+            d2s_ev h = ev_hello(6, 40251, "late-boot-fails.test"), sh;
+            d2s_sched_event(s, &h);
+            CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
                   "late bootstrap shape fixture failed");
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, 40251);
-            su.code = D2K_SUSPECT_FIN_RETRY;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, 40251);
+            su.code = D2S_SUSPECT_FIN_RETRY;
+            d2s_sched_event(s, &su);
             int installed = 0;
             for (int i = 0; i < 4000 && tcp_calls == 0 && !said("из запасного перебора"); i++) {
                 tick_once(s);
-                int n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+                int n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
                 if (n > installed) {
                     installed = n;
-                    d2k_ev ap = ev_applied(6, 40251);
-                    d2k_sched_event(s, &ap);
+                    d2s_ev ap = ev_applied(6, 40251);
+                    d2s_sched_event(s, &ap);
                 }
             }
             CHECK(said("без нового общего перебора"),
@@ -10156,10 +10156,10 @@ rx_volume_tests:
                   "позднее закрытие открыло запасной перебор без замера");
             CHECK(tcp_calls >= 1,
                   "после неудачи своего плана позднего закрытия не запущен полный замер");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        vol_rx_tls_unavailable = 0; vol_answer = D2K_VOL_PASSED;
+        d2s_catalog_free(&c);
+        vol_rx_tls_unavailable = 0; vol_answer = D2S_VOL_PASSED;
         tcp_answer = old_tcp; ver_answer = old_ver;
     }
     /* Парный RX-замер тоже поднимает поиск без доменного списка и сохраняет
@@ -10167,27 +10167,27 @@ rx_volume_tests:
        критерия, не просто статус заголовков. */
     for (int wire_basis = 0; wire_basis < 2; wire_basis++) {
         vol_rx_wire_basis = wire_basis;
-        d2k_catalog cRx = {0};
+        d2s_catalog cRx = {0};
         net_name_known(&cRx, "hcaptcha.com");
-        d2k_sched *s = d2k_sched_new(&cRx, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cRx, sv[0], 0x2d);
         saidbuf[0] = '\0';
         forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED;
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 1;
         vol_rx_packets = 26; /* задача 55: бюджет коробки из её замера */
         tcp_calls = 0; ver_calls = 0;
         memset(ver_budget_seen, 0, sizeof ver_budget_seen);
-        d2k_verdict rx_tcp_was = tcp_answer;
-        tcp_answer = D2K_V_CLEAR; /* объём — после CLEAR классификатора (задача 30) */
-        d2k_ev h = ev_hello(6, 40081, "непрофильная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+        d2s_verdict rx_tcp_was = tcp_answer;
+        tcp_answer = D2S_V_CLEAR; /* объём — после CLEAR классификатора (задача 30) */
+        d2s_ev h = ev_hello(6, 40081, "непрофильная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
               "не удалось собрать TLS 1.3 shape для RX-volume-теста");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, 40081);
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, 40081);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(tcp_calls == 1, "RX-обрыв измерен без предшествующей донорской классификации");
         CHECK(wire_basis || (said("identity-тело дважды оборвалось") && said("gzip завершился")),
@@ -10199,32 +10199,32 @@ rx_volume_tests:
               "задача 55: кандидат испытан не с бюджетом из замера коробки (пакеты на обрыве identity)");
         vol_rx_cut = 0; vol_rx_packets = 0; vol_rx_wire_basis = 0;
         tcp_answer = rx_tcp_was;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cRx);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cRx);
     }
 
     /* Поздний RST после TLS app-data не считается блокировкой сам по себе:
        он допускает только RX-volume-пару, а общий классификатор и кандидаты
        запускаются лишь после воспроизводимого identity-cut + полного gzip. */
     {
-        d2k_catalog cLate = {0};
-        d2k_sched *s = d2k_sched_new(&cLate, sv[0], 0x2d);
+        d2s_catalog cLate = {0};
+        d2s_sched *s = d2s_sched_new(&cLate, sv[0], 0x2d);
         saidbuf[0] = '\0';
         forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched_set_say(s, collect_say, NULL);
         vol_calls = tcp_calls = 0;
-        vol_answer = D2K_VOL_PASSED;
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 0;
-        d2k_ev h = ev_hello(6, 40082, "late-reset-volume.test");
-        d2k_sched_event(s, &h);
-        d2k_ev sh;
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+        d2s_ev h = ev_hello(6, 40082, "late-reset-volume.test");
+        d2s_sched_event(s, &h);
+        d2s_ev sh;
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
               "не удалось собрать TLS 1.3 shape для позднего RST");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40182);
-        d2k_ev su = ev_suspect(6, 40082);
-        su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40082);
+        su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(vol_calls == 1, "поздний RST не запустил узкую RX-volume-пару");
         CHECK(tcp_calls == 0, "поздний RST без RX-cut запустил общий перебор");
@@ -10239,42 +10239,42 @@ rx_volume_tests:
         saidbuf[0] = '\0';
         prime_late_rst(s, h.name, 40184);
         su = ev_suspect(6, 40085);
-        su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_ev h3 = ev_hello(6, 40085, h.name);
-        d2k_sched_event(s, &h3);
-        d2k_sched_event(s, &su);
+        su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_ev h3 = ev_hello(6, 40085, h.name);
+        d2s_sched_event(s, &h3);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(vol_calls == 0 && tcp_calls == 0 && said("замер отложен"),
               "повторная пара поздних RST не отложена после неубедительного замера");
         saidbuf[0] = '\0';
-        d2k_ev h4 = ev_hello(6, 40086, h.name);
-        d2k_sched_event(s, &h4);
-        d2k_ev su4 = ev_suspect(6, 40086);       /* обычный сброс на рукопожатии */
-        d2k_sched_event(s, &su4);
+        d2s_ev h4 = ev_hello(6, 40086, h.name);
+        d2s_sched_event(s, &h4);
+        d2s_ev su4 = ev_suspect(6, 40086);       /* обычный сброс на рукопожатии */
+        d2s_sched_event(s, &su4);
         settle(s);
         CHECK(!said("замер отложен") && said("источник нового замера"),
               "неубедительный поздний RST заглушил блокировку на рукопожатии на 10 мин");
         vol_calls = tcp_calls = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cLate);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cLate);
 
-        d2k_catalog cLateConfirmed = {0};
+        d2s_catalog cLateConfirmed = {0};
         net_name_known(&cLateConfirmed, "hcaptcha.com");
-        s = d2k_sched_new(&cLateConfirmed, sv[0], 0x2d);
+        s = d2s_sched_new(&cLateConfirmed, sv[0], 0x2d);
         saidbuf[0] = '\0';
         forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED;
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED;
         vol_rx_cut = 1;
-        d2k_ev h2 = ev_hello(6, 40083, "late-reset-volume-confirmed.test");
-        d2k_sched_event(s, &h2);
-        CHECK(tls_shape_event(&sh, h2.name, D2K_SHAPE_MODERN) == 0,
+        d2s_ev h2 = ev_hello(6, 40083, "late-reset-volume-confirmed.test");
+        d2s_sched_event(s, &h2);
+        CHECK(tls_shape_event(&sh, h2.name, D2S_SHAPE_MODERN) == 0,
               "не удалось собрать TLS 1.3 shape для подтверждённого позднего RST");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h2.name, 40183);
-        d2k_ev su2 = ev_suspect(6, 40083);
-        su2.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su2);
+        d2s_ev su2 = ev_suspect(6, 40083);
+        su2.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su2);
         settle(s);
         CHECK(vol_calls == 1, "подтверждённый поздний RST замерен не один раз");
         CHECK(tcp_calls == 0,
@@ -10282,8 +10282,8 @@ rx_volume_tests:
         CHECK(sent_contains_plan_payload("hcaptcha.com"),
               "подтверждённый RX-volume не открыл очередь volume-кандидатов");
         vol_rx_cut = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cLateConfirmed);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cLateConfirmed);
     }
 
     /* ПОВТОР ПРОВЕРКИ КАНДИДАТА ИЗ ЗАМЕРА (поле 14.10.2026, fost.club): вечером
@@ -10291,24 +10291,24 @@ rx_volume_tests:
        неудачная проверка выведенного плана открывала запасной список; теперь
        тот же кандидат проверяется ещё раз и подтверждается. */
     {
-        d2k_catalog c = {0};
-        d2k_verdict old_tcp = tcp_answer;
-        d2k_ver_level old_ver = ver_answer;
-        tcp_answer = D2K_V_PREFIX; tcp_found_arm = 1; tcp_owns_search = 1;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 1; ver_calls = 0;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = '\0'; forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_catalog c = {0};
+        d2s_verdict old_tcp = tcp_answer;
+        d2s_ver_level old_ver = ver_answer;
+        tcp_answer = D2S_V_PREFIX; tcp_found_arm = 1; tcp_owns_search = 1;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 1; ver_calls = 0;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = '\0'; forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         ver_answer_port = 40611;
-        d2k_ev h = ev_hello(6, 40611, "arm-retry.test"); d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40611); d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40611, "arm-retry.test"); d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40611); d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 20000 && !said("итог поиска"); i++) {
             tick_once(s);
-            int n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40611);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40611);
+                d2s_sched_event(s, &ap);
             }
             if (i % 400 == 399) skip_ahead(s, 6000);
         }
@@ -10317,7 +10317,7 @@ rx_volume_tests:
         CHECK(said("ПОДТВЕРЖДЕНО") && !said("из запасного перебора"),
               "arm-retry: одна неудачная проверка выведенного плана открыла запасной список");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
+        d2s_sched_free(s); d2s_catalog_free(&c);
         tcp_found_arm = 0; tcp_owns_search = 0; ver_fail_first = 0;
         tcp_answer = old_tcp; ver_answer = old_ver;
     }
@@ -10328,30 +10328,30 @@ rx_volume_tests:
        перебирает только имя; ни одна ступень не помогла — запасного списка
        нет. */
     {
-        d2k_catalog cS = {0};
+        d2s_catalog cS = {0};
         snprintf(cS.net.name, sizeof cS.net.name, "learned-white.example");
         cS.net.searched = 1; cS.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cS, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ver_level old_ver = ver_answer;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1; vol_rx_at_kb = 14;
-        ver_answer = D2K_VER_TRANSPORT; ver_fail_first = 0; ver_answer_port = 40089;
-        d2k_ev h = ev_hello(6, 40089, "sni-only.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "sni-only shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ver_level old_ver = ver_answer;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1; vol_rx_at_kb = 14;
+        ver_answer = D2S_VER_TRANSPORT; ver_fail_first = 0; ver_answer_port = 40089;
+        d2s_ev h = ev_hello(6, 40089, "sni-only.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "sni-only shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40189);
-        d2k_ev su = ev_suspect(6, 40089); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40089); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 40000 && !said("итог поиска"); i++) {
             tick_once(s);
-            int n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40089);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40089);
+                d2s_sched_event(s, &ap);
             }
             if (i % 400 == 399) skip_ahead(s, 6000);
         }
@@ -10362,36 +10362,36 @@ rx_volume_tests:
               "sni-only: после лестницы SNI открыт запасной перебор");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
         vol_rx_cut = 0; vol_rx_at_kb = 24; ver_answer = old_ver;
-        d2k_sched_free(s); d2k_catalog_free(&cS);
+        d2s_sched_free(s); d2s_catalog_free(&cS);
     }
 
     /* Успех лестницы SNI — не перебор (поле 15.10.2026, rua.gr: «путь:
        RX-лестница», а итог «path=fallback»). Подпись итога своя — ladder. */
     {
-        d2k_catalog cS = {0};
+        d2s_catalog cS = {0};
         snprintf(cS.net.name, sizeof cS.net.name, "learned-white.example");
         cS.net.searched = 1; cS.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cS, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ver_level old_ver = ver_answer;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1; vol_rx_at_kb = 14;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0; ver_answer_port = 40090;
-        d2k_ev h = ev_hello(6, 40090, "sni-ok.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "sni-ok shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ver_level old_ver = ver_answer;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1; vol_rx_at_kb = 14;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0; ver_answer_port = 40090;
+        d2s_ev h = ev_hello(6, 40090, "sni-ok.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "sni-ok shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40190);
-        d2k_ev su = ev_suspect(6, 40090); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40090); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         int installed = 0;
         for (int i = 0; i < 40000 && !said("итог поиска"); i++) {
             tick_once(s);
-            int n = sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+            int n = sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
             if (n > installed) {
                 installed = n;
-                d2k_ev ap = ev_applied(6, 40090);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40090);
+                d2s_sched_event(s, &ap);
             }
             if (i % 400 == 399) skip_ahead(s, 6000);
         }
@@ -10399,7 +10399,7 @@ rx_volume_tests:
               "sni-ok: успех лестницы SNI записан как запасной перебор");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
         vol_rx_cut = 0; vol_rx_at_kb = 24; ver_answer = old_ver;
-        d2k_sched_free(s); d2k_catalog_free(&cS);
+        d2s_sched_free(s); d2s_catalog_free(&cS);
     }
 
     /* ПОДБОР БЕЛОГО ИМЕНИ СЕТИ (поле 10.10.2026). Когда у цели измерен
@@ -10407,18 +10407,18 @@ rx_volume_tests:
        из встроенного списка приманкой; решено — берёт готовое/семя. */
     {
         /* net не решён → первая приманка из списка (9gag.com), не hcaptcha. */
-        d2k_catalog cN = {0};
-        d2k_sched *s = d2k_sched_new(&cN, sv[0], 0x2d);
+        d2s_catalog cN = {0};
+        d2s_sched *s = d2s_sched_new(&cN, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-        d2k_ev h = ev_hello(6, 40087, "net-probe.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "net-probe shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+        d2s_ev h = ev_hello(6, 40087, "net-probe.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "net-probe shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40187);
-        d2k_ev su = ev_suspect(6, 40087); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40087); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(said("белое имя сети не известно — подбираю"),
               "подбор белого имени не запущен при RX-обрыве и неизвестном имени");
@@ -10427,7 +10427,7 @@ rx_volume_tests:
         CHECK(!sent_contains_plan_payload("hcaptcha.com"),
               "подбор послал семя hcaptcha вместо кандидата списка");
         vol_rx_cut = 0;
-        d2k_sched_free(s); d2k_catalog_free(&cN);
+        d2s_sched_free(s); d2s_catalog_free(&cN);
     }
     {
         /* --- БЕЛОЕ ИМЯ СЕТИ: TX-ДОКАЗАТЕЛЬСТВО НЕ ГОДИТСЯ ДЛЯ ВХОДЯЩЕГО ОБРЫВА
@@ -10436,24 +10436,24 @@ rx_volume_tests:
            на spzh.eu, подбор закрылся, и семь целей, чья беда — ВХОДЯЩИЙ обрыв
            тела, унаследовали имя, против их обрыва не проверенное: тела рвались
            на 13–17 КБ при ответе 200. Само поле определено как имя, под которым
-           коробка пропускает поток за RX-обрыв (d2k_catalog.h).
+           коробка пропускает поток за RX-обрыв (d2s_catalog.h).
            Требование: имя с пометкой tx_only при измеренном RX-обрыве подбор
            открывает заново. Зеркало (tx_only=0 — подбора нет) проверяет
            соседний блок «net.name известно». */
-        d2k_catalog cT = {0};
+        d2s_catalog cT = {0};
         snprintf(cT.net.name, sizeof cT.net.name, "learned-white.example");
         cT.net.searched = 1; cT.net.tx_only = 1; cT.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cT, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cT, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-        d2k_ev h = ev_hello(6, 40098, "tx-only.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "tx-only shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+        d2s_ev h = ev_hello(6, 40098, "tx-only.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "tx-only shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40198);
-        d2k_ev su = ev_suspect(6, 40098); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40098); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(said("белое имя сети не известно — подбираю"),
               "имя доказано лишь исходящей лестницей, но подбор под входящий "
@@ -10461,7 +10461,7 @@ rx_volume_tests:
         CHECK(sent_contains_plan_payload("9gag.com"),
               "подбор не пошёл по списку имён");
         vol_rx_cut = 0;
-        d2k_sched_free(s); d2k_catalog_free(&cT);
+        d2s_sched_free(s); d2s_catalog_free(&cT);
     }
     {
         /* --- ЗАПАСНАЯ ЛЕСТНИЦА ИДЁТ ПОД КЛИЕНТА (поле issue #7, 23.10.2026).
@@ -10469,30 +10469,30 @@ rx_volume_tests:
            у ПК на Windows её нет, и датапат такой план отвергает кодом
            FLOW_UNFIT (13 отказов из 13 при работающих телефонах). Клиент без
            метки обязан получить ту же программу с TTL по измеренному пути. */
-        d2k_catalog cC = {0};
+        d2s_catalog cC = {0};
         snprintf(cC.net.name, sizeof cC.net.name, "learned-white.example");
         cC.net.searched = 1; cC.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cC, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cC, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-        d2k_ev h = ev_hello(6, 40099, "no-ts.client.test"), sh;
-        d2k_sched_event(s, &h);
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+        d2s_ev h = ev_hello(6, 40099, "no-ts.client.test"), sh;
+        d2s_sched_event(s, &h);
         /* Набор опций клиента БЕЗ метки времени — как у ПК репортёра. */
-        d2k_ev ct = h; ct.kind = D2K_EV_CLIENT_TCP; ct.name[0] = 0;
+        d2s_ev ct = h; ct.kind = D2S_EV_CLIENT_TCP; ct.name[0] = 0;
         ct.tcp_options_len = 0;
-        d2k_sched_event(s, &ct);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "no-ts shape fixture");
+        d2s_sched_event(s, &ct);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "no-ts shape fixture");
         /* Ключ снимка — тот же, что у набора опций: датапат шлёт их парой по
            одному потоку, и связывает их именно ключ (on_shape). */
         sh.family = h.family;
         memcpy(sh.low_ip, h.low_ip, 16); memcpy(sh.high_ip, h.high_ip, 16);
         sh.low_port = h.low_port; sh.high_port = h.high_port;
         sh.transport = 6;
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40199);
-        d2k_ev su = ev_suspect(6, 40099); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40099); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         /* Журнал обязан называть программу: разные программы — разные опыты. */
         CHECK(said("лестница идёт с TTL по измеренному пути"),
@@ -10502,24 +10502,24 @@ rx_volume_tests:
            (rx_ladder_follows_client); здесь проверяется ВЫБОР программы. */
         if (fails) fprintf(stderr, "%s\n", saidbuf);
         vol_rx_cut = 0;
-        d2k_sched_free(s); d2k_catalog_free(&cC);
+        d2s_sched_free(s); d2s_catalog_free(&cC);
     }
     {
         /* net.name известно → лестница берёт его, подбора нет. */
-        d2k_catalog cL = {0};
+        d2s_catalog cL = {0};
         snprintf(cL.net.name, sizeof cL.net.name, "learned-white.example");
         cL.net.searched = 1; cL.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cL, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cL, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-        d2k_ev h = ev_hello(6, 40088, "net-known.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "net-known shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+        d2s_ev h = ev_hello(6, 40088, "net-known.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "net-known shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40188);
-        d2k_ev su = ev_suspect(6, 40088); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40088); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(!said("подбираю его из"), "известное белое имя всё равно подбиралось заново");
         CHECK(sent_contains_plan_payload("learned-white.example"),
@@ -10527,29 +10527,29 @@ rx_volume_tests:
         CHECK(!sent_contains_plan_payload("9gag.com"),
               "при известном имени лестница перебрала список");
         vol_rx_cut = 0;
-        d2k_sched_free(s); d2k_catalog_free(&cL);
+        d2s_sched_free(s); d2s_catalog_free(&cL);
     }
     {
         /* net: честное «не найдено» записано → подбора нет, лестница на семени. */
-        d2k_catalog cS = {0};
+        d2s_catalog cS = {0};
         cS.net.searched = 1; cS.net.name[0] = '\0'; cS.net.confirmed_at = 1791593321;
-        d2k_sched *s = d2k_sched_new(&cS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cS, sv[0], 0x2d);
         saidbuf[0] = '\0'; forget_sent();
-        d2k_sched_set_say(s, collect_say, NULL);
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-        d2k_ev h = ev_hello(6, 40089, "net-none.test"), sh;
-        d2k_sched_event(s, &h);
-        CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0, "net-none shape fixture");
-        d2k_sched_event(s, &sh);
+        d2s_sched_set_say(s, collect_say, NULL);
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+        d2s_ev h = ev_hello(6, 40089, "net-none.test"), sh;
+        d2s_sched_event(s, &h);
+        CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0, "net-none shape fixture");
+        d2s_sched_event(s, &sh);
         prime_late_rst(s, h.name, 40189);
-        d2k_ev su = ev_suspect(6, 40089); su.code = D2K_SUSPECT_RST_AFTER_APP;
-        d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, 40089); su.code = D2S_SUSPECT_RST_AFTER_APP;
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(!said("подбираю его из"), "при записанном «не найдено» подбор запустился заново");
         CHECK(sent_contains_plan_payload("hcaptcha.com") && !sent_contains_plan_payload("9gag.com"),
               "после «не найдено» лестница не на семени");
         vol_rx_cut = 0;
-        d2k_sched_free(s); d2k_catalog_free(&cS);
+        d2s_sched_free(s); d2s_catalog_free(&cS);
     }
 
     /* Полная очередь сохранённых планов коробки не должна вытеснять новый
@@ -10557,16 +10557,16 @@ rx_volume_tests:
        первыми; после восьми отказов в проводной очереди появляется профильная
        fake-SNI/split-лестница. */
     {
-        d2k_catalog cFull;
+        d2s_catalog cFull;
         memset(&cFull, 0, sizeof cFull);
         net_name_known(&cFull, "hcaptcha.com");
         cFull.boxes = calloc(1, sizeof *cFull.boxes);
         CHECK(cFull.boxes != NULL, "не удалось создать коробку для полной очереди");
         if (cFull.boxes) {
             cFull.n_boxes = 1;
-            d2k_cat_box *b = &cFull.boxes[0];
+            d2s_cat_box *b = &cFull.boxes[0];
             snprintf(b->id, sizeof b->id, "box-rx-volume-full");
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rx-volume");
             b->fp.sig[0].volume = 24;
@@ -10577,13 +10577,13 @@ rx_volume_tests:
                 b->n_plans = 8;
                 int ready = 1;
                 for (unsigned i = 0; i < 8; i++) {
-                    d2k_cat_plan *p = &b->plans[i];
+                    d2s_cat_plan *p = &b->plans[i];
                     p->enabled = 1;
                     p->successes = (int)(8 - i);
                     snprintf(p->proto, sizeof p->proto, "tls");
                     char plan[256];
                     snprintf(plan, sizeof plan,
-                             "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                             "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                              "proto tcp tls\nsplit payload_start +%u\norder forward\n",
                              i + 11);
                     p->text = strdup(plan);
@@ -10591,27 +10591,27 @@ rx_volume_tests:
                 }
                 CHECK(ready, "не удалось подготовить планы полной очереди");
                 if (ready) {
-                    d2k_sched *s = d2k_sched_new(&cFull, sv[0], 0x2d);
+                    d2s_sched *s = d2s_sched_new(&cFull, sv[0], 0x2d);
                     saidbuf[0] = '\0';
                     forget_sent();
-                    d2k_sched_set_say(s, collect_say, NULL);
+                    d2s_sched_set_say(s, collect_say, NULL);
                     vol_calls = tcp_calls = 0;
-                    vol_answer = D2K_VOL_PASSED;
+                    vol_answer = D2S_VOL_PASSED;
                     vol_rx_cut = 1;
-                    ver_answer = D2K_VER_HANDSHAKE;
+                    ver_answer = D2S_VER_HANDSHAKE;
                     ver_fail_first = 0;
                     ver_calls = 0;
                     ver_answer_port = 40240;
-                    d2k_ev h = ev_hello(6, 40240, "full-rx-box.test");
-                    d2k_sched_event(s, &h);
-                    d2k_ev sh;
-                    CHECK(tls_shape_event(&sh, h.name, D2K_SHAPE_MODERN) == 0,
+                    d2s_ev h = ev_hello(6, 40240, "full-rx-box.test");
+                    d2s_sched_event(s, &h);
+                    d2s_ev sh;
+                    CHECK(tls_shape_event(&sh, h.name, D2S_SHAPE_MODERN) == 0,
                           "не удалось собрать TLS 1.3 shape для полной коробки");
-                    d2k_sched_event(s, &sh);
+                    d2s_sched_event(s, &sh);
                     prime_late_rst(s, h.name, 40340);
-                    d2k_ev su = ev_suspect(6, 40240);
-                    su.code = D2K_SUSPECT_RST_AFTER_APP;
-                    d2k_sched_event(s, &su);
+                    d2s_ev su = ev_suspect(6, 40240);
+                    su.code = D2S_SUSPECT_RST_AFTER_APP;
+                    d2s_sched_event(s, &su);
                     settle(s);
                     CHECK(vol_calls == 1 && tcp_calls == 0,
                           "поздний RST не остался в парном RX-измерении");
@@ -10619,19 +10619,19 @@ rx_volume_tests:
                           sent_plan_index("hcaptcha.com", 0, 3) >= 8,
                           "RX-volume-кандидат поставлен раньше восьми сохранённых планов коробки");
                     for (unsigned i = 0; i < 8; i++) {
-                        d2k_ev ap = ev_applied(6, 40240);
-                        d2k_sched_event(s, &ap);
+                        d2s_ev ap = ev_applied(6, 40240);
+                        d2s_sched_event(s, &ap);
                         spin(s, 40);
                     }
                     CHECK(sent_contains_plan_payload("hcaptcha.com"),
                           "после всех сохранённых планов не долита RX-volume-лестница");
                     ver_fail_first = 0;
                     vol_rx_cut = 0;
-                    d2k_sched_free(s);
+                    d2s_sched_free(s);
                 }
             }
         }
-        d2k_catalog_free(&cFull);
+        d2s_catalog_free(&cFull);
     }
 
     if (rx_only) { goto voice_only_done; }
@@ -10643,47 +10643,47 @@ rx_volume_tests:
            в каталоге накопились 4796 «успехов» по instagram при мёртвом
            плане (§1 спецификации). Событие обмена по потоку задачи обязано
            остаться НАБЛЮДЕНИЕМ и привязку не заводить. */
-        d2k_catalog c4;
+        d2s_catalog c4;
         memset(&c4, 0, sizeof c4);
-        d2k_sched *s = d2k_sched_new(&c4, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_HANDSHAKE; /* зонд до приложения НЕ дошёл */
+        d2s_sched *s = d2s_sched_new(&c4, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_HANDSHAKE; /* зонд до приложения НЕ дошёл */
         ver_fail_first = 0;
-        d2k_ev h = ev_hello(6, 40030, "instagram.com");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40030);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40030, "instagram.com");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40030);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev x = ev_exchange(6, 40030, 1); /* внешний тип 23 по потоку цели */
-        d2k_sched_event(s, &x);
+        d2s_ev x = ev_exchange(6, 40030, 1); /* внешний тип 23 по потоку цели */
+        d2s_sched_event(s, &x);
         spin(s, 40);
         CHECK(total_bindings(&c4) == 0,
               "внешний тип 23 записан как подтверждение — это только наблюдение (RFC 8446 §5.2)");
-        d2k_ev x0 = ev_exchange(6, 40030, 0); /* и рукопожатие тем более */
-        d2k_sched_event(s, &x0);
+        d2s_ev x0 = ev_exchange(6, 40030, 0); /* и рукопожатие тем более */
+        d2s_sched_event(s, &x0);
         spin(s, 40);
         CHECK(total_bindings(&c4) == 0, "обмен без внешнего типа 23 засчитан за успех");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c4);
+        d2s_sched_free(s);
+        d2s_catalog_free(&c4);
     }
 
     /* --- отрицательный результат не сохраняется (§10) ------------------ */
     {
-        d2k_catalog c3;
+        d2s_catalog c3;
         memset(&c3, 0, sizeof c3);
-        d2k_sched *s = d2k_sched_new(&c3, sv[0], 0x2d);
-        tcp_answer = D2K_V_INCONCLUSIVE;
-        d2k_ev h = ev_hello(6, 40020, "безнадёжная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40020);
-        d2k_sched_event(s, &su);
+        d2s_sched *s = d2s_sched_new(&c3, sv[0], 0x2d);
+        tcp_answer = D2S_V_INCONCLUSIVE;
+        d2s_ev h = ev_hello(6, 40020, "безнадёжная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40020);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(total_bindings(&c3) == 0,
               "неудачный поиск оставил след в каталоге — §10 это запрещает");
         CHECK(c3.n_boxes == 0, "неудачный поиск завёл коробку");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c3);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s);
+        d2s_catalog_free(&c3);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* A direct CLEAR is not a catalog fact, but it is a short-lived scheduler
@@ -10691,178 +10691,178 @@ rx_volume_tests:
        suspicion while it is already known to pass. It becomes eligible again
        after the backoff expires. */
     {
-        d2k_catalog c;
+        d2s_catalog c;
         memset(&c, 0, sizeof c);
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_CLEAR;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_CLEAR;
         tcp_calls = 0;
         CHECK(s != NULL, "планировщик CLEAR-backoff не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 40201, "clear-backoff.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40201);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40201, "clear-backoff.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40201);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(tcp_calls == 1, "первый CLEAR не выполнил прямой замер");
 
             /* First clean result must suppress the same repeated signal for
                longer than the old two-minute task rest. */
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h2 = ev_hello(6, 40202, "clear-backoff.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 40202);
-            d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(6, 40202, "clear-backoff.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 40202);
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(tcp_calls == 1,
                   "повторный CLEAR по той же цели начал замер внутри cooldown");
 
             /* The cooldown expires; a new observation can measure again. */
             skip_ahead(s, 8 * 60 * 1000);
-            d2k_ev h3 = ev_hello(6, 40203, "clear-backoff.example");
-            d2k_sched_event(s, &h3);
-            d2k_ev su3 = ev_suspect(6, 40203);
-            d2k_sched_event(s, &su3);
+            d2s_ev h3 = ev_hello(6, 40203, "clear-backoff.example");
+            d2s_sched_event(s, &h3);
+            d2s_ev su3 = ev_suspect(6, 40203);
+            d2s_sched_event(s, &su3);
             settle(s);
             CHECK(tcp_calls == 2, "первый CLEAR-backoff не истёк через 10 минут");
 
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h4 = ev_hello(6, 40204, "clear-backoff.example");
-            d2k_sched_event(s, &h4);
-            d2k_ev su4 = ev_suspect(6, 40204);
-            d2k_sched_event(s, &su4);
+            d2s_ev h4 = ev_hello(6, 40204, "clear-backoff.example");
+            d2s_sched_event(s, &h4);
+            d2s_ev su4 = ev_suspect(6, 40204);
+            d2s_sched_event(s, &su4);
             settle(s);
             CHECK(tcp_calls == 2,
                   "повторный CLEAR не увеличил cooldown: частота не снижается");
 
             skip_ahead(s, 28 * 60 * 1000);
-            d2k_ev h5 = ev_hello(6, 40205, "clear-backoff.example");
-            d2k_sched_event(s, &h5);
-            d2k_ev su5 = ev_suspect(6, 40205);
-            d2k_sched_event(s, &su5);
+            d2s_ev h5 = ev_hello(6, 40205, "clear-backoff.example");
+            d2s_sched_event(s, &h5);
+            d2s_ev su5 = ev_suspect(6, 40205);
+            d2s_sched_event(s, &su5);
             settle(s);
             CHECK(tcp_calls == 3,
                   "увеличенный CLEAR-backoff не истёк после 30 минут");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* A genuinely different datapath signal may bypass a prior CLEAR; the
        cooldown is target-local and must not suppress unrelated sites. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_CLEAR;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_CLEAR;
         tcp_calls = 0;
         CHECK(s != NULL, "планировщик проверки усиленного сигнала не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 40231, "changed-signal.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40231);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40231, "changed-signal.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40231);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(tcp_calls == 1, "первый direct CLEAR не измерен");
 
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h2 = ev_hello(6, 40232, "changed-signal.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev stronger = ev_suspect(6, 40232);
-            stronger.code = D2K_SUSPECT_SILENT;
-            d2k_sched_event(s, &stronger);
+            d2s_ev h2 = ev_hello(6, 40232, "changed-signal.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev stronger = ev_suspect(6, 40232);
+            stronger.code = D2S_SUSPECT_SILENT;
+            d2s_sched_event(s, &stronger);
             settle(s);
             CHECK(tcp_calls == 2,
                   "новый тип сигнала был подавлен старым CLEAR-backoff");
 
-            d2k_ev h3 = ev_hello(6, 40233, "unrelated-site.example");
-            d2k_sched_event(s, &h3);
-            d2k_ev su3 = ev_suspect(6, 40233);
-            d2k_sched_event(s, &su3);
+            d2s_ev h3 = ev_hello(6, 40233, "unrelated-site.example");
+            d2s_sched_event(s, &h3);
+            d2s_ev su3 = ev_suspect(6, 40233);
+            d2s_sched_event(s, &su3);
             settle(s);
             CHECK(tcp_calls == 3,
                   "cooldown одной цели остановил измерение другого сайта");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Новый IP того же имени — отдельная цель: CLEAR старого endpoint и
        оставшаяся после него задача отдыха не должны глушить новое соединение. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_CLEAR;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_CLEAR;
         tcp_calls = 0;
         CHECK(s != NULL, "планировщик проверки смены endpoint не завёлся");
         if (s) {
-            d2k_ev h1 = ev_hello(6, 40261, "меняющийся-endpoint.example");
-            d2k_sched_event(s, &h1);
-            d2k_ev su1 = ev_suspect(6, 40261);
-            d2k_sched_event(s, &su1);
+            d2s_ev h1 = ev_hello(6, 40261, "меняющийся-endpoint.example");
+            d2s_sched_event(s, &h1);
+            d2s_ev su1 = ev_suspect(6, 40261);
+            d2s_sched_event(s, &su1);
             settle(s);
             CHECK(tcp_calls == 1, "первый endpoint не получил прямую проверку");
 
-            d2k_ev h2 = ev_hello(6, 40262, "меняющийся-endpoint.example");
+            d2s_ev h2 = ev_hello(6, 40262, "меняющийся-endpoint.example");
             h2.low_ip[3] = 2;
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 40262);
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 40262);
             su2.low_ip[3] = 2;
-            d2k_sched_event(s, &su2);
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(tcp_calls == 2,
                   "CLEAR и отдых старого IP подавили поиск по новому endpoint того же имени");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
+        d2s_catalog_free(&c);
     }
 
     /* An anti-bot challenge gets a longer target-local cooldown than an
        ordinary CLEAR, and must not be treated as a failed strategy to retry. */
     {
-        d2k_catalog c;
+        d2s_catalog c;
         memset(&c, 0, sizeof c);
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_CHALLENGE;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_CHALLENGE;
         ver_fail_first = 0;
         ver_answer_port = 40210;
         ver_calls = 0;
         forget_sent();
         CHECK(s != NULL, "планировщик challenge-backoff не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 40210, "challenge-backoff.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40210);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40210, "challenge-backoff.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40210);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(ver_calls == 1, "первый challenge не был получен");
 
             skip_ahead(s, 3 * 60 * 1000);
-            d2k_ev h2 = ev_hello(6, 40211, "challenge-backoff.example");
+            d2s_ev h2 = ev_hello(6, 40211, "challenge-backoff.example");
             h2.low_ip[3] = 2;
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 40211);
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 40211);
             su2.low_ip[3] = 2;
-            su2.code = D2K_SUSPECT_SILENT;
-            d2k_sched_event(s, &su2);
+            su2.code = D2S_SUSPECT_SILENT;
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(ver_calls == 1,
                   "антибот-челлендж вызвал повторный активный зонд внутри cooldown");
 
             skip_ahead(s, 58 * 60 * 1000);
-            d2k_ev h3 = ev_hello(6, 40212, "challenge-backoff.example");
-            d2k_sched_event(s, &h3);
-            d2k_ev su3 = ev_suspect(6, 40212);
-            d2k_sched_event(s, &su3);
+            d2s_ev h3 = ev_hello(6, 40212, "challenge-backoff.example");
+            d2s_sched_event(s, &h3);
+            d2s_ev su3 = ev_suspect(6, 40212);
+            d2s_sched_event(s, &su3);
             settle(s);
             CHECK(ver_calls == 2,
                   "challenge-backoff не истёк: цель навсегда исключена из перепроверки");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* Финальное ревью core, M6: кольцо отсрочек конечно (128), но
@@ -10871,23 +10871,23 @@ rx_volume_tests:
        не-антибот. Прежде кольцо писалось по кругу, и 128 прямых CLEAR
        снимали паузу раньше срока. */
     {
-        d2k_catalog c = {0};
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_CHALLENGE;
+        d2s_catalog c = {0};
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_CHALLENGE;
         ver_fail_first = 0;
         ver_answer_port = 40250;
         ver_calls = tcp_calls = 0;
         forget_sent();
         CHECK(s != NULL, "планировщик кольца отсрочек не завёлся");
         if (s) {
-            d2k_ev h = ev_hello(6, 40250, "challenge-ring.example");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40250);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40250, "challenge-ring.example");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40250);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(ver_calls == 1, "кольцо: антибот-челлендж не получен");
-            tcp_answer = D2K_V_CLEAR;
+            tcp_answer = D2S_V_CLEAR;
             /* Половина CLEAR истекает (10 мин), затем ещё 128 — кольцо
                переполняется и истёкшими, и действующими записями. */
             for (int round = 0; round < 2; round++) {
@@ -10897,34 +10897,34 @@ rx_volume_tests:
                     uint16_t port = (uint16_t)(43000 + round * 200 + k);
                     int before = tcp_calls;
                     skip_ahead(s, 300);
-                    d2k_ev hk = ev_hello(6, port, nm);
-                    d2k_sched_event(s, &hk);
-                    d2k_ev sk = ev_suspect(6, port);
-                    d2k_sched_event(s, &sk);
+                    d2s_ev hk = ev_hello(6, port, nm);
+                    d2s_sched_event(s, &hk);
+                    d2s_ev sk = ev_suspect(6, port);
+                    d2s_sched_event(s, &sk);
                     for (int i = 0; i < 400 && tcp_calls == before; i++) tick_once(s);
                     spin(s, 4);
                 }
                 if (round == 0) skip_ahead(s, 11 * 60 * 1000);
             }
             int t0 = tcp_calls, v0 = ver_calls;
-            tcp_answer = D2K_V_PREFIX;
-            d2k_ev h2 = ev_hello(6, 40251, "challenge-ring.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 40251);
-            d2k_sched_event(s, &su2);
+            tcp_answer = D2S_V_PREFIX;
+            d2s_ev h2 = ev_hello(6, 40251, "challenge-ring.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 40251);
+            d2s_sched_event(s, &su2);
             settle(s);
             CHECK(tcp_calls == t0 && ver_calls == v0,
                   "кольцо отсрочек вытеснило действующую антибот-паузу");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* Two compatible models are alternatives, not "first match wins". */
     {
-        d2k_catalog c;
+        d2s_catalog c;
         memset(&c, 0, sizeof c);
         c.boxes = calloc(2, sizeof *c.boxes);
         CHECK(c.boxes != NULL, "не удалось создать две модели");
@@ -10932,9 +10932,9 @@ rx_volume_tests:
             c.n_boxes = 2;
             int ready = 1;
             for (size_t i = 0; i < 2; i++) {
-                d2k_cat_box *b = &c.boxes[i];
+                d2s_cat_box *b = &c.boxes[i];
                 snprintf(b->id, sizeof b->id, "box-alternative-%u", (unsigned)i);
-                b->fp.method = D2K_FP_METHOD;
+                b->fp.method = D2S_FP_METHOD;
                 b->fp.n_sig = 1;
                 snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
                 b->fp.sig[0].ttl = 127;
@@ -10948,7 +10948,7 @@ rx_volume_tests:
                 snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
                 char plan[256];
                 snprintf(plan, sizeof plan,
-                         "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                         "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                          "proto tcp tls\nsplit payload_start +%u\norder reverse\n",
                          (unsigned)(i + 1));
                 b->plans[0].text = strdup(plan);
@@ -10956,78 +10956,78 @@ rx_volume_tests:
             }
             CHECK(ready, "не удалось создать планы альтернативных моделей");
             if (ready) {
-                d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+                d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
                 tcp_calls = vol_calls = 0;
                 /* Первый кандидат (план модели с бо́льшим числом успехов) не
                    помогает: зонд доходит только до рукопожатия. Второй —
                    помогает. Обе развилки видит сам планировщик. */
-                ver_answer = D2K_VER_APPLICATION;
+                ver_answer = D2S_VER_APPLICATION;
                 ver_fail_first = 1;
                 ver_calls = 0;
                 ver_answer_port = 40101;
                 forget_sent();
-                d2k_ev h = ev_hello(6, 40101, "неоднозначная.цель");
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(6, 40101);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(6, 40101, "неоднозначная.цель");
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(6, 40101);
+                d2s_sched_event(s, &su);
                 settle(s);
                 CHECK(tcp_calls == 1 && vol_calls == 0,
                       "модели не проверялись после прямого подтверждения блокировки");
-                d2k_ev ap = ev_applied(6, 40101);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40101);
+                d2s_sched_event(s, &ap);
                 spin(s, 40);
                 CHECK(c.boxes[0].n_binds == 0 && c.boxes[1].n_binds == 1,
                       "результат второго плана записан не в его модель");
                 ver_fail_first = 0;
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
-            d2k_catalog_free(&c);
+            d2s_catalog_free(&c);
         }
     }
 
     /* An inconclusive direct measurement is not evidence to apply a bypass. */
     {
-        d2k_catalog c;
+        d2s_catalog c;
         memset(&c, 0, sizeof c);
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_INCONCLUSIVE;
-        ver_answer = D2K_VER_HANDSHAKE;
-        d2k_ev h = ev_hello(6, 40100, "без.контроля");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40100);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_INCONCLUSIVE;
+        ver_answer = D2S_VER_HANDSHAKE;
+        d2s_ev h = ev_hello(6, 40100, "без.контроля");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40100);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(!said("поставил план 1 из"),
               "без положительного диагноза план ошибочно применён");
         CHECK(said("не подтвердил блокировку"),
               "неопределённый замер не остановил подбор");
         CHECK(c.n_boxes == 0, "непроверенная гипотеза попала в каталог");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* Явный ответ Cloudflare challenge — не успех и не повод перебрать
        остальные кандидаты: все они упрётся в ту же проверку ботов. */
     {
-        d2k_catalog c;
+        d2s_catalog c;
         memset(&c, 0, sizeof c);
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_CHALLENGE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_CHALLENGE;
         ver_fail_first = 0;
         ver_answer_port = 40105;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40105, "challenge.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40105);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40105, "challenge.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40105);
+        d2s_sched_event(s, &su);
         settle(s);
 
         CHECK(ver_calls == 1, "challenge привёл к перебору следующих кандидатов");
@@ -11035,10 +11035,10 @@ rx_volume_tests:
         CHECK(said("перебор остановлен"), "поиск не остановлен на challenge");
         CHECK(binding_of(&c, "challenge.example", 6) == NULL,
               "challenge записан в каталог как подтверждённый обход");
-        d2k_sched_free(s);
-        d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_free(s);
+        d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
     }
 
     /* --- редкую цель планировщик испытывает САМ (задача 3) -------------- */
@@ -11048,36 +11048,36 @@ rx_volume_tests:
            зонде. Спецификация (§4) прямо отказывается от того, чтобы цель
            открывали несколько раз ради перебора: у телевизора одно обращение,
            следующее через три минуты. */
-        d2k_catalog cB;
+        d2s_catalog cB;
         memset(&cB, 0, sizeof cB);
-        d2k_sched *s = d2k_sched_new(&cB, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cB, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40090;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40090, "редкая.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40090);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40090, "редкая.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40090);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls >= 1, "планировщик не испытал кандидата сам");
 
         /* Датапат говорит, что план применился к пакетам ЭТОГО потока. */
-        d2k_ev ap = ev_applied(6, 40090);
+        d2s_ev ap = ev_applied(6, 40090);
         CHECK(memcmp(ap.plan_id, (const uint8_t[16]){0}, 16) != 0,
               "кандидат ушёл на провод без идентификатора — сверять применение нечем");
-        d2k_sched_event(s, &ap);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(total_bindings(&cB) == 1,
               "успех собственного испытания не записан — перебор снова ждёт пользователя");
         CHECK(said("ПОДТВЕРЖДЕНО собственным зондом"),
               "подтверждение не названо тем, чем оно является");
-        const d2k_cat_binding *bd = binding_of(&cB, "редкая.цель", 6);
+        const d2s_cat_binding *bd = binding_of(&cB, "редкая.цель", 6);
         CHECK(bd != NULL && bd->level == 3,
               "уровень записи не третий («обмен прошёл») — именно это и доказано зондом");
 
@@ -11087,37 +11087,37 @@ rx_volume_tests:
         ver_answer_port = 40091;
         ver_calls = 0;
         forget_sent();
-        d2k_ev h2 = ev_hello(6, 40091, "чужой.поток");
-        d2k_sched_event(s, &h2);
-        d2k_ev su2 = ev_suspect(6, 40091);
-        d2k_sched_event(s, &su2);
+        d2s_ev h2 = ev_hello(6, 40091, "чужой.поток");
+        d2s_sched_event(s, &h2);
+        d2s_ev su2 = ev_suspect(6, 40091);
+        d2s_sched_event(s, &su2);
         settle(s);
-        d2k_ev ap2 = ev_applied(6, 40091);
+        d2s_ev ap2 = ev_applied(6, 40091);
         ap2.high_port = 40099; /* тот же план и та же цель, но ЧУЖОЙ поток */
-        d2k_sched_event(s, &ap2);
+        d2s_sched_event(s, &ap2);
         run_out(s);
         CHECK(binding_of(&cB, "чужой.поток", 6) == NULL,
               "применение по ЧУЖОМУ потоку засчитано за испытание нашего зонда");
 
         /* Применение ЧУЖОГО плана по НАШЕМУ потоку — тоже не испытание: так
            выглядит опоздавшее событие предыдущего кандидата (ради этого
-           различия идентификатор и завели, d2k_link.h). */
+           различия идентификатор и завели, d2s_link.h). */
         ver_answer_port = 40092;
         ver_calls = 0;
         forget_sent();
-        d2k_ev h3 = ev_hello(6, 40092, "старый.план");
-        d2k_sched_event(s, &h3);
-        d2k_ev su3 = ev_suspect(6, 40092);
-        d2k_sched_event(s, &su3);
+        d2s_ev h3 = ev_hello(6, 40092, "старый.план");
+        d2s_sched_event(s, &h3);
+        d2s_ev su3 = ev_suspect(6, 40092);
+        d2s_sched_event(s, &su3);
         settle(s);
-        d2k_ev ap3 = ev_applied(6, 40092);
+        d2s_ev ap3 = ev_applied(6, 40092);
         memcpy(ap3.plan_id, "plan-deadbeef\0\0", 16); /* идентификатор другого плана */
-        d2k_sched_event(s, &ap3);
+        d2s_sched_event(s, &ap3);
         run_out(s);
         CHECK(binding_of(&cB, "старый.план", 6) == NULL,
               "применение ЧУЖОГО плана засчитано за испытание нашего кандидата");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cB);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cB);
     }
 
     /* СЕДЬМАЯ НАХОДКА ЛАБОРАТОРИИ: подтверждение на зонде ≠ работа у клиента.
@@ -11127,37 +11127,37 @@ rx_volume_tests:
        длине. Записать такое подтверждённым значит выдать человеку каталог с
        «подтверждено» и отсутствием обхода. */
     {
-        d2k_catalog cuf;
+        d2s_catalog cuf;
         memset(&cuf, 0, sizeof cuf);
-        d2k_sched *s = d2k_sched_new(&cuf, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cuf, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;   /* зонду план исполнился до конца */
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;   /* зонду план исполнился до конца */
         ver_fail_first = 0;
         ver_answer_port = 40160;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40160, "непереносимая.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40160);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40160, "непереносимая.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40160);
+        d2s_sched_event(s, &su);
         settle(s);
         spin_until_installed(s);
 
         /* Второй поток к ТОЙ ЖЕ цели — его открыл клиент, а не зонд. Имя за
            ним планировщик знает из приветствия, как и на живой линии. */
-        d2k_ev hc = ev_hello(6, 40161, "непереносимая.цель");
-        d2k_sched_event(s, &hc);
-        d2k_ev big = ev_refused(6, 40161, D2K_REFUSE_TOO_LONG, 1);
+        d2s_ev hc = ev_hello(6, 40161, "непереносимая.цель");
+        d2s_sched_event(s, &hc);
+        d2s_ev big = ev_refused(6, 40161, D2S_REFUSE_TOO_LONG, 1);
         CHECK(memcmp(big.plan_id, (const uint8_t[16]){0}, 16) != 0,
               "кандидат ушёл на провод без идентификатора — приписать отказ нечему");
-        d2k_sched_event(s, &big);
+        d2s_sched_event(s, &big);
 
         /* А зонду тот же план исполнился: полное доказательство на руках. */
-        d2k_ev ap = ev_applied(6, 40160);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40160);
+        d2s_sched_event(s, &ap);
         run_out(s);
 
         CHECK(said("потоку клиента"),
@@ -11165,63 +11165,63 @@ rx_volume_tests:
         CHECK(binding_of(&cuf, "непереносимая.цель", 6) == NULL,
               "план, не исполнимый потоку клиента, записан подтверждённым — "
               "в каталоге «подтверждено», у человека обхода нет");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cuf);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cuf);
     }
 
     /* Тот же ход, но отказ у клиента ВРЕМЕННЫЙ: очередь переполнилась, к
        переносимости это отношения не имеет, и подтверждение обязано пройти. */
     {
-        d2k_catalog ctq;
+        d2s_catalog ctq;
         memset(&ctq, 0, sizeof ctq);
-        d2k_sched *s = d2k_sched_new(&ctq, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&ctq, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40162;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40162, "временная.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40162);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40162, "временная.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40162);
+        d2s_sched_event(s, &su);
         settle(s);
         spin_until_installed(s);
 
-        d2k_ev hc = ev_hello(6, 40163, "временная.цель");
-        d2k_sched_event(s, &hc);
-        d2k_ev tmp = ev_refused(6, 40163, D2K_REFUSE_QUEUE, 1);
-        d2k_sched_event(s, &tmp);
+        d2s_ev hc = ev_hello(6, 40163, "временная.цель");
+        d2s_sched_event(s, &hc);
+        d2s_ev tmp = ev_refused(6, 40163, D2S_REFUSE_QUEUE, 1);
+        d2s_sched_event(s, &tmp);
 
-        d2k_ev ap = ev_applied(6, 40162);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40162);
+        d2s_sched_event(s, &ap);
         run_out(s);
 
         CHECK(binding_of(&ctq, "временная.цель", 6) != NULL,
               "временный отказ у клиента отменил состоявшееся подтверждение — "
               "всплеск очереди объявлен непереносимостью");
-        d2k_sched_free(s);
-        d2k_catalog_free(&ctq);
+        d2s_sched_free(s);
+        d2s_catalog_free(&ctq);
     }
 
     /* Ранние APPLIED: два клиента вправе иметь одинаковый местный порт.
        События подаются до следующего tick: результат worker ещё не принят. */
     for (int with_own = 0; with_own < 2; with_own++) {
-        d2k_catalog early;
+        d2s_catalog early;
         memset(&early, 0, sizeof early);
-        d2k_sched *s = d2k_sched_new(&early, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched *s = d2s_sched_new(&early, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40109;
         forget_sent();
-        d2k_ev h = ev_hello(6, 40109, "early.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40109);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40109, "early.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40109);
+        d2s_sched_event(s, &su);
         uint8_t id[16];
         int installed = 0;
         for (int i = 0; i < 400 && !installed; i++) {
@@ -11229,21 +11229,21 @@ rx_volume_tests:
             installed = last_plan_id(id);
         }
         CHECK(installed, "кандидат для ранних событий не установлен");
-        d2k_ev ap = ev_applied(6, 40109);
+        d2s_ev ap = ev_applied(6, 40109);
         ap.high_ip[3] = 68;
-        d2k_sched_event(s, &ap); /* правильные цель/план/порт, но чужой IP */
+        d2s_sched_event(s, &ap); /* правильные цель/план/порт, но чужой IP */
         ap.high_ip[3] = 67;
         memset(ap.plan_id, 0, sizeof ap.plan_id);
-        d2k_sched_event(s, &ap); /* свой поток без идентификатора не доказательство */
+        d2s_sched_event(s, &ap); /* свой поток без идентификатора не доказательство */
         if (with_own) {
             ap = ev_applied(6, 40109);
-            d2k_sched_event(s, &ap);
+            d2s_sched_event(s, &ap);
         }
         settle(s);
         CHECK((binding_of(&early, "early.example", 6) != NULL) == with_own,
               "раннее применение перепутало клиентов или потеряло своё за чужим");
-        d2k_sched_free(s);
-        d2k_catalog_free(&early);
+        d2s_sched_free(s);
+        d2s_catalog_free(&early);
     }
 
     /* --- живой TLS-ответ ПОСЛЕ подтверждения остаётся наблюдением ------- */
@@ -11253,56 +11253,56 @@ rx_volume_tests:
            трафик». Наблюдение внешнего типа 23 привязку не заводит (проверено
            выше), но уже подтверждённой поднять уровень может — это и есть
            пятый уровень, «подтверждён последующими соединениями». */
-        d2k_catalog cC;
+        d2s_catalog cC;
         memset(&cC, 0, sizeof cC);
-        d2k_sched *s = d2k_sched_new(&cC, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cC, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40110;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40110, "подтверждённая.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40110);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40110, "подтверждённая.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40110);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40110);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40110);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
-        const d2k_cat_binding *bd = binding_of(&cC, "подтверждённая.цель", 6);
+        const d2s_cat_binding *bd = binding_of(&cC, "подтверждённая.цель", 6);
         CHECK(bd != NULL && bd->level == 3, "подтверждение зондом не записано третьим уровнем");
 
         /* Обмен по потоку САМОГО зонда уровень не поднимает: это он и был
            доказательством, и считать его ещё и «последующим соединением»
            значит подтвердить себя собой. */
-        d2k_ev own = ev_exchange(6, 40110, 1);
-        d2k_sched_event(s, &own);
+        d2s_ev own = ev_exchange(6, 40110, 1);
+        d2s_sched_event(s, &own);
         bd = binding_of(&cC, "подтверждённая.цель", 6);
         CHECK(bd != NULL && bd->level == 3,
               "обмен по потоку самого зонда поднял уровень — запись подтвердила себя собой");
 
         /* Другое соединение тоже могло оборваться на рукопожатии. */
-        d2k_ev h2 = ev_hello(6, 40111, "подтверждённая.цель");
-        d2k_sched_event(s, &h2);
-        d2k_ev live = ev_exchange(6, 40111, 1);
-        d2k_sched_event(s, &live);
+        d2s_ev h2 = ev_hello(6, 40111, "подтверждённая.цель");
+        d2s_sched_event(s, &h2);
+        d2s_ev live = ev_exchange(6, 40111, 1);
+        d2s_sched_event(s, &live);
         bd = binding_of(&cC, "подтверждённая.цель", 6);
         CHECK(bd != NULL && bd->level == 3,
               "пассивный TLS-ответ ошибочно повысил уровень доказательства");
         CHECK(said("это не доказательство"), "граница наблюдения не названа в отчёте");
-        CHECK(bd != NULL && bd->verified_by == D2K_VERBY_PROBE,
+        CHECK(bd != NULL && bd->verified_by == D2S_VERBY_PROBE,
               "пассивный TLS-ответ затёр источник прикладного подтверждения");
         /* А форма осталась той, что ИЗМЕРЕНА зондом: приветствие живого
            клиента датапат не присылал, и «не измерено» не отменяет
            измеренного (§2.4). */
-        CHECK(bd != NULL && bd->shape == (uint8_t)D2K_SHAPE_MODERN,
+        CHECK(bd != NULL && bd->shape == (uint8_t)D2S_SHAPE_MODERN,
               "измеренная форма затёрта нулём от клиента, чьё приветствие не снято");
 
-        d2k_sched_free(s);
-        d2k_catalog_free(&cC);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cC);
     }
 
     /* --- ОТКАЗ ПОДТВЕРЖДЁННОГО ПЛАНА СРАЗУ ЗАПУСКАЕТ ПЕРЕПРОВЕРКУ ----------
@@ -11312,48 +11312,48 @@ rx_volume_tests:
      * достоверный отказ должен запустить проверку этим же событием. Иначе
      * каждое новое подозрение только закрывает наблюдение. */
     {
-        d2k_catalog cG;
+        d2s_catalog cG;
         memset(&cG, 0, sizeof cG);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
-        d2k_sched *s = d2k_sched_new(&cG, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cG, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для проверки деградации не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             ver_answer_port = 40310;
             ver_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(6, 40310, "деградация.цель");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40310);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40310, "деградация.цель");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40310);
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 40310);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 40310);
+            d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(binding_of(&cG, "деградация.цель", 6) != NULL,
                   "цель не подтверждена — проверять деградацию не на чем");
 
             /* Второй поток той же цели: приветствие по нему датапат прислал,
                значит имя известно и подозрение дойдёт до задачи. */
-            d2k_ev h2 = ev_hello(6, 40311, "деградация.цель");
-            d2k_sched_event(s, &h2);
+            d2s_ev h2 = ev_hello(6, 40311, "деградация.цель");
+            d2s_sched_event(s, &h2);
             saidbuf[0] = '\0';
 
-            d2k_ev sn = ev_suspect(6, 40311);
-            sn.planned = D2K_LINK_PLANNED_NO;
-            d2k_sched_event(s, &sn);
+            d2s_ev sn = ev_suspect(6, 40311);
+            sn.planned = D2S_LINK_PLANNED_NO;
+            d2s_sched_event(s, &sn);
             CHECK(!said("наблюдение прекращаю"),
                   "поток, шедший БЕЗ плана, объявлен деградацией подтверждённой цели");
             CHECK(said("план НЕ ПРИМЕНЯЛСЯ"),
                   "не сказано, почему подозрение уликой не считается");
 
-            d2k_ev sy = ev_suspect(6, 40311);
-            sy.planned = D2K_LINK_PLANNED_YES;
+            d2s_ev sy = ev_suspect(6, 40311);
+            sy.planned = D2S_LINK_PLANNED_YES;
             int verifies_before = ver_calls;
-            d2k_sched_event(s, &sy);
+            d2s_sched_event(s, &sy);
             CHECK(said("запускаю повторную проверку"),
                   "первый отказ подтверждённого плана потерян вместо перепроверки");
             CHECK(said("источник нового замера"),
@@ -11364,9 +11364,9 @@ rx_volume_tests:
             CHECK(ver_calls > verifies_before,
                   "новый замер не дошёл до проверки ранее подтверждённого Plan");
             drain(); /* Не оставляем команды этого поиска соседним фикстурам. */
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cG);
+        d2s_catalog_free(&cG);
     }
 
     /* --- контекст проверки записан в привязке (задача 5) ---------------- */
@@ -11376,24 +11376,24 @@ rx_volume_tests:
            добытый зондом, нельзя молча переносить на произвольную форму: в
            привязке обязан стоять контекст, в котором проверка ДЕЙСТВИТЕЛЬНО
            состоялась. */
-        d2k_shape probe_shape = probe_hello_shape();
-        CHECK(probe_shape == D2K_SHAPE_MODERN,
+        d2s_shape probe_shape = probe_hello_shape();
+        CHECK(probe_shape == D2S_SHAPE_MODERN,
               "приветствие собственного зонда оказалось не современной формы — "
               "константа планировщика разошлась с тем, что уходит на провод");
 
-        d2k_catalog cD;
+        d2s_catalog cD;
         memset(&cD, 0, sizeof cD);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
 
         confirm_once(&cD, sv[0], "контекст.цель", 40130);
         CHECK(bindings_of(&cD, "контекст.цель", 6) == 1, "подтверждение не записано");
-        const d2k_cat_binding *bd = binding_of(&cD, "контекст.цель", 6);
+        const d2s_cat_binding *bd = binding_of(&cD, "контекст.цель", 6);
         CHECK(bd != NULL && bd->shape == (uint8_t)probe_shape,
               "в привязке не та форма приветствия, которой зонд ходил на самом деле");
-        CHECK(bd != NULL && bd->verified_by == D2K_VERBY_PROBE,
+        CHECK(bd != NULL && bd->verified_by == D2S_VERBY_PROBE,
               "в привязке не записано, что проверял собственный зонд");
 
         /* Файл, снятый ДО появления полей: форма не записана. Такая привязка
@@ -11401,7 +11401,7 @@ rx_volume_tests:
            ОБНОВИТЬ, а не завести рядом вторую. Иначе каталог роутера (376
            подтверждённых целей, копившихся неделями) удвоился бы на первой же
            проверке. */
-        d2k_cat_binding *m = binding_mut(&cD, "контекст.цель", 6);
+        d2s_cat_binding *m = binding_mut(&cD, "контекст.цель", 6);
         CHECK(m != NULL, "нечего помечать под старый файл");
         if (m) { m->shape = 0; m->verified_by = 0; }
         confirm_once(&cD, sv[0], "контекст.цель", 40131);
@@ -11417,7 +11417,7 @@ rx_volume_tests:
            (цель, транспорт, форма приветствия). Успех современной формы не
            имеет права лечь в запись, добытую старой. */
         m = binding_mut(&cD, "контекст.цель", 6);
-        if (m) { m->shape = (uint8_t)D2K_SHAPE_LEGACY; }
+        if (m) { m->shape = (uint8_t)D2S_SHAPE_LEGACY; }
         confirm_once(&cD, sv[0], "контекст.цель", 40132);
         CHECK(bindings_of(&cD, "контекст.цель", 6) == 2,
               "успех одной формы приветствия лёг в запись, добытую другой");
@@ -11425,16 +11425,16 @@ rx_volume_tests:
             int legacy_kept = 0, modern_new = 0;
             for (size_t i = 0; i < cD.n_boxes; i++) {
                 for (size_t j = 0; j < cD.boxes[i].n_binds; j++) {
-                    const d2k_cat_binding *x = &cD.boxes[i].binds[j];
+                    const d2s_cat_binding *x = &cD.boxes[i].binds[j];
                     if (strcmp(x->target, "контекст.цель") != 0) { continue; }
-                    if (x->shape == (uint8_t)D2K_SHAPE_LEGACY && x->successes == 2) { legacy_kept++; }
+                    if (x->shape == (uint8_t)D2S_SHAPE_LEGACY && x->successes == 2) { legacy_kept++; }
                     if (x->shape == (uint8_t)probe_shape && x->successes == 1) { modern_new++; }
                 }
             }
             CHECK(legacy_kept == 1, "чужая по форме запись изменена, а не оставлена в покое");
             CHECK(modern_new == 1, "новая форма не завела своей записи");
         }
-        d2k_catalog_free(&cD);
+        d2s_catalog_free(&cD);
     }
 
     /* --- живой клиент ДРУГОЙ формы уровень не поднимает ------------------ */
@@ -11445,60 +11445,60 @@ rx_volume_tests:
            не говорит о записанном. Уровень остаётся третьим.
            Пара к проверке выше по файлу, где форма живого клиента не снята
            вовсе («не измерено») и уровень поднимается. */
-        d2k_catalog cE;
+        d2s_catalog cE;
         memset(&cE, 0, sizeof cE);
-        d2k_sched *s = d2k_sched_new(&cE, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cE, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40140;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40140, "форма.важна");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40140);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40140, "форма.важна");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40140);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40140);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40140);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
-        const d2k_cat_binding *bd = binding_of(&cE, "форма.важна", 6);
+        const d2s_cat_binding *bd = binding_of(&cE, "форма.важна", 6);
         CHECK(bd != NULL && bd->level == 3, "подтверждение зондом не записано третьим уровнем");
 
         /* Датапат снял приветствие живого клиента — и оно СТАРОЙ формы.
            Профиль берётся тот же, что у холодного старта (core/profiles), а
            не собирается в тесте руками. */
         {
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "форма.важна",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "форма.важна",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "приветствие старой формы не собралось — проверять нечем");
-            CHECK(d2k_hello_shape(sh.shape, sh.shape_len) == D2K_SHAPE_LEGACY,
+            CHECK(d2s_hello_shape(sh.shape, sh.shape_len) == D2S_SHAPE_LEGACY,
                   "собранное приветствие оказалось не старой формы");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             CHECK(said("сохранён целый снимок для следующего поиска"),
                   "снимок приветствия не сохранён для следующего поиска");
         }
 
-        d2k_ev h2 = ev_hello(6, 40141, "форма.важна");
-        d2k_sched_event(s, &h2);
-        d2k_ev live = ev_exchange(6, 40141, 1);
-        d2k_sched_event(s, &live);
+        d2s_ev h2 = ev_hello(6, 40141, "форма.важна");
+        d2s_sched_event(s, &h2);
+        d2s_ev live = ev_exchange(6, 40141, 1);
+        d2s_sched_event(s, &live);
         bd = binding_of(&cE, "форма.важна", 6);
         CHECK(bd != NULL && bd->level == 3,
               "обмен клиента ДРУГОЙ формы поднял уровень записи, добытой не им");
-        CHECK(bd != NULL && bd->verified_by == D2K_VERBY_PROBE,
+        CHECK(bd != NULL && bd->verified_by == D2S_VERBY_PROBE,
               "контекст проверки переписан обменом клиента другой формы");
         CHECK(bindings_of(&cE, "форма.важна", 6) == 1,
               "наблюдение завело привязку — заводить её может только подтверждение");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cE);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cE);
     }
 
     /* --- ЧЕМ МЕРИЛИ, ТО И ЗАПИСАНО (полнота входа, пункт 3) ------------ */
@@ -11508,52 +11508,52 @@ rx_volume_tests:
            холодного старта: форма та же, байты не те. Коробка вправе смотреть
            на содержимое, а не только на длину (§6), поэтому доказательства
            разной силы, и привязка обязана помнить, какое у неё. */
-        d2k_catalog cI;
+        d2s_catalog cI;
         memset(&cI, 0, sizeof cI);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         confirm_once(&cI, sv[0], "холодная.цель", 40150);
-        const d2k_cat_binding *bd = binding_of(&cI, "холодная.цель", 6);
-        CHECK(bd != NULL && bd->input == D2K_INPUT_PROFILE,
+        const d2s_cat_binding *bd = binding_of(&cI, "холодная.цель", 6);
+        CHECK(bd != NULL && bd->input == D2S_INPUT_PROFILE,
               "замер заготовкой записан как замер байтами клиента");
         CHECK(said("ЗАГОТОВКОЙ холодного старта"),
               "слабость входа не названа вслух — из отчёта её не узнать");
-        d2k_catalog_free(&cI);
+        d2s_catalog_free(&cI);
 
-        d2k_catalog cJ;
+        d2s_catalog cJ;
         memset(&cJ, 0, sizeof cJ);
         saidbuf[0] = '\0';
-        d2k_sched *s = d2k_sched_new(&cJ, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cJ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для замера снимком не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             ver_answer_port = 40151;
             ver_calls = 0;
             forget_sent();
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "снятая.цель",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "снятая.цель",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "снимок для замера не собрался");
-            d2k_sched_event(s, &sh);
-            d2k_ev h = ev_hello(6, 40151, "снятая.цель");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40151);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &sh);
+            d2s_ev h = ev_hello(6, 40151, "снятая.цель");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40151);
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 40151);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 40151);
+            d2s_sched_event(s, &ap);
             spin(s, 40);
-            const d2k_cat_binding *b2 = binding_of(&cJ, "снятая.цель", 6);
-            CHECK(b2 != NULL && b2->input == D2K_INPUT_CLIENT,
+            const d2s_cat_binding *b2 = binding_of(&cJ, "снятая.цель", 6);
+            CHECK(b2 != NULL && b2->input == D2S_INPUT_CLIENT,
                   "замер снятыми байтами клиента записан как замер заготовкой");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cJ);
+        d2s_catalog_free(&cJ);
     }
 
     /* --- СЛАБЫЙ ВХОД ПЕРЕМЕРЯЕТСЯ, КОГДА ПРИХОДИТ СНИМОК --------------- */
@@ -11561,55 +11561,55 @@ rx_volume_tests:
         /* Обещание «перемеряю снимком» обязано быть механизмом, а не
            оговоркой в отчёте: пока привязка добыта заготовкой, байты
            настоящего клиента не проверял никто. */
-        d2k_catalog cK;
+        d2s_catalog cK;
         memset(&cK, 0, sizeof cK);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
-        d2k_sched *s = d2k_sched_new(&cK, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cK, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для перемера не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             ver_answer_port = 40160;
             ver_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(6, 40160, "перемерю.цель");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40160);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40160, "перемерю.цель");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40160);
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 40160);
-            d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 40160);
+            d2s_sched_event(s, &ap);
             spin(s, 40);
-            const d2k_cat_binding *bd = binding_of(&cK, "перемерю.цель", 6);
-            CHECK(bd != NULL && bd->input == D2K_INPUT_PROFILE,
+            const d2s_cat_binding *bd = binding_of(&cK, "перемерю.цель", 6);
+            CHECK(bd != NULL && bd->input == D2S_INPUT_PROFILE,
                   "холодный старт не записан заготовкой — перемерять нечего");
 
             /* Датапат снял приветствие этой цели. */
             ver_answer_port = 40161;
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "перемерю.цель",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "перемерю.цель",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "снимок для перемера не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             CHECK(said("перемеряю снимком"),
                   "снимок пришёл, а обещанного перемера не случилось");
             settle(s);
-            d2k_ev ap2 = ev_applied(6, 40161);
-            d2k_sched_event(s, &ap2);
+            d2s_ev ap2 = ev_applied(6, 40161);
+            d2s_sched_event(s, &ap2);
             spin(s, 40);
             bd = binding_of(&cK, "перемерю.цель", 6);
-            CHECK(bd != NULL && bd->input == D2K_INPUT_CLIENT,
+            CHECK(bd != NULL && bd->input == D2S_INPUT_CLIENT,
                   "перемер снимком не поднял полноту входа привязки");
             CHECK(bindings_of(&cK, "перемерю.цель", 6) == 1,
                   "перемер завёл вторую привязку вместо обновления прежней");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cK);
+        d2s_catalog_free(&cK);
     }
 
     /* --- QUIC БЕЗ ЧИТАЕМОГО ИМЕНИ: ЦЕЛЬ ПО АДРЕСУ --------------------------
@@ -11622,21 +11622,21 @@ rx_volume_tests:
     {
         uint16_t saved_port = g_server_port;
         g_server_port = 443;
-        d2k_catalog cQ;
+        d2s_catalog cQ;
         memset(&cQ, 0, sizeof cQ);
         saidbuf[0] = '\0';
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для адресной цели не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             tcp_calls = quic_calls = vol_calls = 0;
             ver_calls = 0;
             quic_calls = 0;
-            quic_answer = D2K_V_CLEAR;
+            quic_answer = D2S_V_CLEAR;
             forget_sent();
             /* Приветствия по этому потоку НЕ было: имя не прочиталось. */
-            d2k_ev su = ev_suspect(17, 40400);
-            d2k_sched_event(s, &su);
+            d2s_ev su = ev_suspect(17, 40400);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
             CHECK(quic_calls == 1 && strcmp(quic_last_ip, "127.0.0.1") == 0 &&
@@ -11645,25 +11645,25 @@ rx_volume_tests:
             CHECK(strcmp(quic_last_trig, "<без SNI>") == 0 &&
                   strcmp(quic_last_ctl, "<без SNI>") != 0,
                   "адресный Run не сохранил SNI-less trigger и отдельный контроль");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0,
                   "неизмеренный delay установлен вместо donor Run");
             CHECK(ver_calls == 0,
                   "чистый donor verdict неожиданно запустил кандидатную верификацию");
 
-            d2k_ev ap = ev_applied(17, 40401);
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 40401, 0);
+            d2s_ev ap = ev_applied(17, 40401);
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 40401, 0);
             ex.num = 0; /* даже пустая обратная датаграмма порождает событие */
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ex);
             spin(s, 20);
-            const d2k_cat_binding *bd = binding_of(&cQ, "127.0.0.1", 17);
+            const d2s_cat_binding *bd = binding_of(&cQ, "127.0.0.1", 17);
             CHECK(bd == NULL && cQ.n_boxes == 0,
                   "произвольный UDP-ответ создал подтверждение/коробку адресной цели");
             CHECK(!said("ПОДТВЕРЖДЕНО"),
                   "произвольный UDP-ответ назван подтверждением QUIC-успеха");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
         g_server_port = saved_port;
     }
 
@@ -11673,19 +11673,19 @@ rx_volume_tests:
     {
         uint16_t saved_port = g_server_port;
         g_server_port = 443;
-        d2k_catalog cQ = {0};
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_catalog cQ = {0};
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик нескольких адресных целей не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_CLEAR;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_CLEAR;
             quic_calls = 0;
             forget_sent();
-            d2k_ev a = ev_suspect(17, 40410);
-            d2k_sched_event(s, &a);
-            d2k_ev b = ev_suspect(17, 40411);
+            d2s_ev a = ev_suspect(17, 40410);
+            d2s_sched_event(s, &a);
+            d2s_ev b = ev_suspect(17, 40411);
             b.low_ip[3] = 2;
-            d2k_sched_event(s, &b);
+            d2s_sched_event(s, &b);
             spin(s, 20);
             CHECK(quic_calls == 2, "два адреса не получили два независимых QUIC Run");
             CHECK(strcmp(quic_seen_ips[0], "127.0.0.1") == 0 &&
@@ -11696,12 +11696,12 @@ rx_volume_tests:
                   strcmp(quic_seen_snis[1], "127.0.0.2") == 0 &&
                   strcmp(quic_seen_targets[1], "<без SNI>") == 0,
                   "второй адресный Run потерял собственный target context");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0 &&
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0 &&
                   cQ.n_boxes == 0,
                   "подозрение или UDP EXCHANGE создали неизмеренный address Plan/успех");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
         g_server_port = saved_port;
     }
 
@@ -11710,78 +11710,78 @@ rx_volume_tests:
        потоки к тому же IP). Для него нужен отдельный exact-flow probe overlay. */
     {
         uint16_t saved_port = g_server_port;
-        d2k_sched_ver_fn saved_ver = d2k_sched_ver_hook;
+        d2s_sched_ver_fn saved_ver = d2s_sched_ver_hook;
         uint8_t saved_local_ip4[4];
         memcpy(saved_local_ip4, ver_local_ip4, sizeof saved_local_ip4);
         g_server_port = 443;
-        d2k_catalog cQ = {0};
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_catalog cQ = {0};
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик адресного кандидата не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            ver_answer = D2K_VER_APPLICATION;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            ver_answer = D2S_VER_APPLICATION;
             ver_answer_port = 40450;
             quic_calls = 0;
             ver_calls = 0;
             forget_sent();
-            d2k_ev su = ev_suspect(17, 40450);
+            d2s_ev su = ev_suspect(17, 40450);
             su.low_ip[3] = 9;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             spin_until_installed(s);
             CHECK(quic_calls == 1,
                   "безымянная QUIC-цель не прошла через donor Run");
-            uint8_t src_ip4[4], trial_id[D2K_TRIAL_ID_LEN];
+            uint8_t src_ip4[4], trial_id[D2S_TRIAL_ID_LEN];
             uint16_t src_port_be = 0;
             CHECK(last_addr_probe_endpoint(src_ip4, &src_port_be, trial_id),
                   "SET_ADDR_PROBE не несёт зарезервированный endpoint и trial ID");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) >= 1,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) >= 1,
                   "адресный кандидат не установлен отдельной SET_ADDR_PROBE-командой");
-            CHECK(sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0) == 0,
                   "адресный кандидат ошибочно установлен как проба по имени");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0,
                   "временный адресный кандидат утёк в постоянную таблицу адресов");
             if (src_port_be != 0) {
                 memcpy(ver_local_ip4, src_ip4, 4);
                 ver_answer_port = ntohs(src_port_be);
-                d2k_ev applied = ev_applied(17, ver_answer_port);
+                d2s_ev applied = ev_applied(17, ver_answer_port);
                 applied.low_ip[0] = 127; applied.low_ip[1] = 0;
                 applied.low_ip[2] = 0; applied.low_ip[3] = 9;
                 applied.low_port = 443;
                 memcpy(applied.high_ip, src_ip4, 4);
                 applied.high_port = ntohs(src_port_be);
                 memcpy(applied.trial_id, trial_id, sizeof trial_id);
-                d2k_ev stale = applied;
+                d2s_ev stale = applied;
                 stale.trial_id[0] ^= 0x80u;
-                d2k_sched_event(s, &stale);
+                d2s_sched_event(s, &stale);
                 spin(s, 20);
                 CHECK(binding_of(&cQ, "127.0.0.9", 17) == NULL &&
-                      sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0,
+                      sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0,
                       "stale APPLIED с тем же Plan/flow, но чужим trial ID не должен promote-ить адрес");
-                d2k_sched_event(s, &applied);
-                d2k_ev ack;
+                d2s_sched_event(s, &applied);
+                d2s_ev ack;
                 memset(&ack, 0, sizeof ack);
-                ack.kind = D2K_EV_ACK;
-                ack.code = D2K_CMD_SET_ADDR_PROBE;
+                ack.kind = D2S_EV_ACK;
+                ack.code = D2S_CMD_SET_ADDR_PROBE;
                 ack.num = 0x100u;
                 memcpy(ack.trial_id, trial_id, sizeof trial_id);
-                d2k_sched_event(s, &ack);
+                d2s_sched_event(s, &ack);
                 spin(s, 20);
-                const d2k_cat_binding *bd = binding_of(&cQ, "127.0.0.9", 17);
+                const d2s_cat_binding *bd = binding_of(&cQ, "127.0.0.9", 17);
                 CHECK(bd && strcmp(bd->kind, "addr") == 0 &&
                       strcmp(bd->target, "127.0.0.9") == 0,
                       "QUIC application proof + exact Plan/trial evidence не создали addr binding");
-                CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 1,
+                CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 1,
                       "подтверждённый адресный план не продвинут в постоянную таблицу");
                 drain();
-                CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) >= 1,
+                CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) >= 1,
                       "успешный адресный trial не удалил только свою временную пробу");
             }
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
         memcpy(ver_local_ip4, saved_local_ip4, sizeof saved_local_ip4);
-        d2k_catalog_free(&cQ);
-        d2k_sched_ver_hook = saved_ver;
+        d2s_catalog_free(&cQ);
+        d2s_sched_ver_hook = saved_ver;
         g_server_port = saved_port;
     }
 
@@ -11790,26 +11790,26 @@ rx_volume_tests:
     {
         uint16_t saved_port = g_server_port;
         g_server_port = 443;
-        d2k_catalog cQ = {0};
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_catalog cQ = {0};
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик параллельных адресных опытов не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            ver_answer = D2K_VER_APPLICATION;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            ver_answer = D2S_VER_APPLICATION;
             ver_fail_first = 1; /* first candidate fails, next one is usable */
             quic_calls = ver_calls = 0;
             forget_sent();
-            d2k_ev a = ev_suspect(17, 40460);
-            d2k_ev b = ev_suspect(17, 40461);
+            d2s_ev a = ev_suspect(17, 40460);
+            d2s_ev b = ev_suspect(17, 40461);
             b.low_ip[3] = 2;
-            d2k_sched_event(s, &a);
-            d2k_sched_event(s, &b);
+            d2s_sched_event(s, &a);
+            d2s_sched_event(s, &b);
             for (int i = 0; i < 400 &&
-                 sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) < 2; i++) {
+                 sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) < 2; i++) {
                 tick_once(s);
             }
-            uint8_t ips[4][4], ids[4][D2K_TRIAL_ID_LEN];
+            uint8_t ips[4][4], ids[4][D2S_TRIAL_ID_LEN];
             uint16_t sports[4] = {0};
             size_t n = collect_addr_probes(ips, ids, sports, 4);
             CHECK(n >= 2, "две адресные задачи не получили независимые SET_ADDR_PROBE");
@@ -11817,14 +11817,14 @@ rx_volume_tests:
                 CHECK((ips[0][3] == 1 && ips[1][3] == 2) ||
                       (ips[0][3] == 2 && ips[1][3] == 1),
                       "параллельные адресные пробы потеряли destination");
-                CHECK(memcmp(ids[0], ids[1], D2K_TRIAL_ID_LEN) != 0,
+                CHECK(memcmp(ids[0], ids[1], D2S_TRIAL_ID_LEN) != 0,
                       "параллельные адресные пробы разделяют trial generation");
                 CHECK(sports[0] != 0 && sports[1] != 0 && sports[0] != sports[1],
                       "параллельные адресные пробы разделяют локальный verifier port");
             }
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
         g_server_port = saved_port;
     }
 
@@ -11833,48 +11833,48 @@ rx_volume_tests:
     {
         uint16_t saved_port = g_server_port;
         g_server_port = 443;
-        d2k_catalog cQ = {0};
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_catalog cQ = {0};
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик retry адресной пробы не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            ver_answer = D2K_VER_HANDSHAKE;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            ver_answer = D2S_VER_HANDSHAKE;
             ver_fail_first = 0;
             quic_calls = ver_calls = 0;
             forget_sent();
-            d2k_ev su = ev_suspect(17, 40470);
+            d2s_ev su = ev_suspect(17, 40470);
             su.low_ip[3] = 7;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 400 &&
-                 sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) < 1; i++) {
+                 sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) < 1; i++) {
                 tick_once(s);
             }
             drain();
-            uint8_t first_ip[4], first_id[D2K_TRIAL_ID_LEN];
+            uint8_t first_ip[4], first_id[D2S_TRIAL_ID_LEN];
             uint16_t first_port = 0;
             CHECK(last_addr_probe_endpoint(first_ip, &first_port, first_id),
                   "первое поколение адресной пробы не зафиксировано");
-            size_t before_del = sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0);
+            size_t before_del = sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0);
             for (int i = 0; i < 500 &&
-                 sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) < 2; i++) {
+                 sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) < 2; i++) {
                 tick_once(s);
             }
-            uint8_t ips[4][4], ids[4][D2K_TRIAL_ID_LEN];
+            uint8_t ips[4][4], ids[4][D2S_TRIAL_ID_LEN];
             uint16_t sports[4] = {0};
             size_t n = collect_addr_probes(ips, ids, sports, 4);
             CHECK(n == 1, "после исчерпания единственного измеренного arm появился чужой retry");
             if (n == 1) {
-                CHECK(memcmp(ids[0], first_id, D2K_TRIAL_ID_LEN) == 0,
+                CHECK(memcmp(ids[0], first_id, D2S_TRIAL_ID_LEN) == 0,
                       "единственный address trial изменился сам по себе");
                 CHECK(sports[0] == first_port,
                       "единственный address trial получил неожиданный порт");
             }
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) > before_del,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) > before_del,
                   "старое поколение адресной пробы не снято перед retry");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
         g_server_port = saved_port;
     }
 
@@ -11883,39 +11883,39 @@ rx_volume_tests:
     {
         uint16_t saved_port = g_server_port;
         g_server_port = 443;
-        d2k_catalog cQ = {0};
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_catalog cQ = {0};
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик timeout адресной пробы не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
-            quic_answer = D2K_V_PREFIX;
-            ver_answer = D2K_VER_APPLICATION;
+            d2s_sched_set_say(s, collect_say, NULL);
+            quic_answer = D2S_V_PREFIX;
+            ver_answer = D2S_VER_APPLICATION;
             /* Keep the verifier unsuccessful while the task itself reaches
                its ten-minute lifetime; the first probe must still remain
                observable before that timeout. */
             ver_fail_first = 100000;
             quic_calls = ver_calls = 0;
             forget_sent();
-            d2k_ev su = ev_suspect(17, 40480);
+            d2s_ev su = ev_suspect(17, 40480);
             su.low_ip[3] = 8;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 400 &&
-                 sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) < 1; i++) {
+                 sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) < 1; i++) {
                 tick_once(s);
             }
             drain();
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) == 1,
                   "timeout-тест не дошёл до единственной адресной пробы");
-            size_t del_before = sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0);
+            size_t del_before = sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0);
             skip_ahead(s, 10 * 60 * 1000 + 1);
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) > del_before,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) > del_before,
                   "истёкшая адресная задача не сняла exact address probe");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0 &&
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0 &&
                   cQ.n_boxes == 0,
                   "таймаут адресной пробы создал постоянное знание");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
         g_server_port = saved_port;
     }
 
@@ -11928,16 +11928,16 @@ rx_volume_tests:
 voice_only_run:
     {
         uint16_t saved_port = g_server_port;
-        d2k_sched_voice_fn saved_voice_hook = d2k_sched_voice_hook;
-        d2k_sched_voice_hook = stub_voice;
+        d2s_sched_voice_fn saved_voice_hook = d2s_sched_voice_hook;
+        d2s_sched_voice_hook = stub_voice;
         g_server_port = 50004;
-        d2k_catalog cV;
+        d2s_catalog cV;
         memset(&cV, 0, sizeof cV);
         saidbuf[0] = '\0';
-        d2k_sched *s = d2k_sched_new(&cV, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cV, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для голоса не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             const uint8_t expected_arm[] = {0xa1, 0xb2, 0xc3, 0xd4};
             const uint8_t expected_fake[] = {
                 0x01, 0x01, 0x00, 0x0a, 0x00, 0x01, 0x00, 0x01,
@@ -11946,10 +11946,10 @@ voice_only_run:
             tcp_calls = quic_calls = vol_calls = 0;
             ver_calls = voice_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(17, 40200, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 40200);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 40200, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 40200);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
             CHECK(voice_calls == 1, "scheduler не вызвал C voice-измеритель");
@@ -11965,10 +11965,10 @@ voice_only_run:
                порт, с trial ID. Портовая запись имени пользовательскому
                трафику не видна, а разговор во время замера уже за окном
                экрана (первые 8 пакетов) — опыт ждёт следующего потока. */
-            uint8_t vsrc[4], vtrial[D2K_TRIAL_ID_LEN];
+            uint8_t vsrc[4], vtrial[D2S_TRIAL_ID_LEN];
             uint16_t vsport = 0;
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) == 1 &&
-                  sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0) == 0 &&
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) == 1 &&
+                  sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0) == 0 &&
                   last_addr_probe_endpoint(vsrc, &vsport, vtrial) &&
                   memcmp(vsrc, "\xc0\xa8\x01\x43", 4) == 0 &&
                   vsport == 0,
@@ -11976,9 +11976,9 @@ voice_only_run:
             /* Опыт ждёт дольше lease датапата — продление тем же поколением. */
             forget_sent();
             skip_ahead(s, 61 * 1000);
-            uint8_t rsrc[4], rtrial[D2K_TRIAL_ID_LEN];
+            uint8_t rsrc[4], rtrial[D2S_TRIAL_ID_LEN];
             uint16_t rsport = 1;
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) == 1 &&
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) == 1 &&
                   last_addr_probe_endpoint(rsrc, &rsport, rtrial) && rsport == 0 &&
                   memcmp(rtrial, vtrial, sizeof vtrial) == 0,
                   "голосовой опыт не продлён тем же trial ID");
@@ -11988,16 +11988,16 @@ voice_only_run:
                   "голос принят за QUIC и ждёт снимка Initial");
             /* Посторонний голосовой поток не должен забрать план, найденный
                измерением конкретной conntrack-пятёрки. */
-            d2k_ev ap = ev_applied(17, 40201);
+            d2s_ev ap = ev_applied(17, 40201);
             memcpy(ap.trial_id, vtrial, sizeof vtrial);
             ap.high_ip[3] = 68;                 /* другой клиент LAN */
-            d2k_sched_event(s, &ap);
+            d2s_sched_event(s, &ap);
             ap = ev_applied(17, 40201);
             memcpy(ap.trial_id, vtrial, sizeof vtrial);
             ap.low_port = 50005;                /* другая точка сервера */
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 40201, 0);
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 40201, 0);
+            d2s_sched_event(s, &ex);
             spin(s, 20);
             CHECK(!said("UDP-ответ наблюдался"),
                   "посторонний голосовой поток выбран для измеренного arm");
@@ -12005,9 +12005,9 @@ voice_only_run:
                опыта — это не наш опыт: один plan hash опыта не называет. */
             ap = ev_applied(17, 40201);
             memset(ap.trial_id, 0, sizeof ap.trial_id);
-            d2k_sched_event(s, &ap);
+            d2s_sched_event(s, &ap);
             ex = ev_exchange(17, 40201, 0);
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ex);
             spin(s, 20);
             CHECK(!said("UDP-ответ наблюдался"),
                   "APPLIED без trial ID опыта признан применением голосового опыта");
@@ -12015,126 +12015,126 @@ voice_only_run:
                клиентский порт) с trial ID опыта становится WATCH. */
             ap = ev_applied(17, 40201);
             memcpy(ap.trial_id, vtrial, sizeof vtrial);
-            d2k_sched_event(s, &ap);
+            d2s_sched_event(s, &ap);
             ex = ev_exchange(17, 40201, 0);
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ex);
             spin(s, 20);
-            const d2k_cat_binding *bd = binding_of(&cV, D2K_LINK_VOICE_CLASS, 17);
+            const d2s_cat_binding *bd = binding_of(&cV, D2S_LINK_VOICE_CLASS, 17);
             CHECK(bd == NULL && cV.n_boxes == 0,
                   "произвольный UDP-ответ записал голос подтверждённым");
             CHECK(said("UDP-ответ наблюдался") && !said("ПОДТВЕРЖДЕНО"),
                   "UDP-наблюдение голоса потеряно либо названо подтверждением");
             forget_sent();
             skip_ahead(s, 10 * 60 * 1000 + 1);
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 1 &&
-                  sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 0 &&
-                  sent_command_count(D2K_CMD_DEL_NAME_PROBE, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 1 &&
+                  sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 0 &&
+                  sent_command_count(D2S_CMD_DEL_NAME_PROBE, NULL, 0) == 0,
                   "UDP-ответ оставил неподтверждённый голосовой кандидат навсегда");
             CHECK(said("не проверено") && !said("не пробил"),
                   "истёкший голосовой опыт не назван «не проверено» либо назван провалом");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cV);
+        d2s_catalog_free(&cV);
 
-        d2k_catalog cS;
+        d2s_catalog cS;
         memset(&cS, 0, sizeof cS);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cS, sv[0], 0x2d);
+        s = d2s_sched_new(&cS, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
             /* Оба порта выше эфемерной границы: server_of выбирает меньший,
                то есть адрес сервера 127.0.0.1, а не клиента 192.168.1.67. */
-            d2k_ev h = ev_hello(17, 52005, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 52005);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 52005, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 52005);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
-            uint8_t ssrc_ip[4], strial[D2K_TRIAL_ID_LEN];
+            uint8_t ssrc_ip[4], strial[D2S_TRIAL_ID_LEN];
             uint16_t ssport = 0;
             CHECK(last_addr_probe_endpoint(ssrc_ip, &ssport, strial),
                   "STUN-опыт не поставлен на точную пятёрку");
-            d2k_ev ap = ev_applied(17, 52005);
+            d2s_ev ap = ev_applied(17, 52005);
             memcpy(ap.trial_id, strial, sizeof strial);
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 52005, 0);
-            ex.code = D2K_UDP_PROOF_STUN;
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 52005, 0);
+            ex.code = D2S_UDP_PROOF_STUN;
+            d2s_sched_event(s, &ex);
             spin(s, 20);
-            const d2k_cat_binding *bd = binding_of(&cS, "127.0.0.1", 17);
+            const d2s_cat_binding *bd = binding_of(&cS, "127.0.0.1", 17);
             CHECK(bd != NULL && strcmp(bd->kind, "addr") == 0 &&
                   strcmp(bd->target, "127.0.0.1") == 0 &&
-                  bd->verified_by == D2K_VERBY_STUN,
+                  bd->verified_by == D2S_VERBY_STUN,
                   "валидный STUN proof не создал адресную STUN-привязку");
-            CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 1 &&
-                  sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 1 &&
+                  sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 0,
                   "STUN proof записал общий voice class вместо IP цели");
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
                   "подтверждённый STUN оставил временный опыт пятёрки");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cS);
+        d2s_catalog_free(&cS);
 
         /* A sustained Discovery remedy is scoped to the measured address,
            not the global @discord-voice classifier label. */
         memset(&cS, 0, sizeof cS);
         voice_discovery_fixture = 1;
-        s = d2k_sched_new(&cS, sv[0], 0x2d);
+        s = d2s_sched_new(&cS, sv[0], 0x2d);
         if (s) {
             forget_sent();
-            d2k_ev h = ev_hello(17, 52005, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 52005);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 52005, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 52005);
+            d2s_sched_event(s, &su);
             spin(s, 20); drain();
-            uint8_t src[4], trial[D2K_TRIAL_ID_LEN]; uint16_t sport = 0;
+            uint8_t src[4], trial[D2S_TRIAL_ID_LEN]; uint16_t sport = 0;
             CHECK(last_addr_probe_endpoint(src, &sport, trial), "Discovery trial missing");
-            d2k_ev ap = ev_applied(17, 52005);
+            d2s_ev ap = ev_applied(17, 52005);
             memcpy(ap.trial_id, trial, sizeof trial);
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 52005, 0);
-            ex.code = D2K_UDP_PROOF_VOICE_DISCOVERY;
-            d2k_sched_event(s, &ex); spin(s, 20); drain();
-            const d2k_cat_binding *bd = binding_of(&cS, "127.0.0.1", 17);
-            CHECK(bd && !strcmp(bd->kind, "addr") && bd->verified_by == D2K_VERBY_VOICE_DISCOVERY,
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 52005, 0);
+            ex.code = D2S_UDP_PROOF_VOICE_DISCOVERY;
+            d2s_sched_event(s, &ex); spin(s, 20); drain();
+            const d2s_cat_binding *bd = binding_of(&cS, "127.0.0.1", 17);
+            CHECK(bd && !strcmp(bd->kind, "addr") && bd->verified_by == D2S_VERBY_VOICE_DISCOVERY,
                   "sustained Discovery did not retain address scope");
-            CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 0,
                   "one Discovery endpoint became a global voice policy");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        s = d2k_sched_new(&cS, sv[0], 0x2d);
+        s = d2s_sched_new(&cS, sv[0], 0x2d);
         if (s) {
-            forget_sent(); (void)d2k_sched_sync(s);
+            forget_sent(); (void)d2s_sched_sync(s);
             int rounds = 0;
-            while (d2k_sched_sync_step(s) && rounds++ < 1000) drain();
+            while (d2s_sched_sync_step(s) && rounds++ < 1000) drain();
             drain(); const uint8_t target[4] = {127,0,0,1};
-            CHECK(sent_set_addr_shape(4, target, D2K_LINK_SHAPE_VOICE) == 1,
+            CHECK(sent_set_addr_shape(4, target, D2S_LINK_SHAPE_VOICE) == 1,
                   "saved Discovery remedy did not restore as address/voice");
-            CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 0,
                   "restored Discovery remedy became a global voice policy");
             forget_sent(); voice_seen_known=0;
-            d2k_ev h=ev_hello(17,52005,D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s,&h);
-            d2k_ev su=ev_suspect(17,52005);
-            d2k_sched_event(s,&su);spin(s,20);drain();
-            CHECK(voice_seen_known && sent_command_count(D2K_CMD_SET_ADDR_PROBE,NULL,0)==0,
+            d2s_ev h=ev_hello(17,52005,D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s,&h);
+            d2s_ev su=ev_suspect(17,52005);
+            d2s_sched_event(s,&su);spin(s,20);drain();
+            CHECK(voice_seen_known && sent_command_count(D2S_CMD_SET_ADDR_PROBE,NULL,0)==0,
                   "working saved Discovery remedy restarted candidate search");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cS);
+        d2s_catalog_free(&cS);
         voice_discovery_fixture = 0;
 
         /* Задача 16: подтверждённый STUN/голос того же IP не затирает
            подтверждённую QUIC-привязку по адресу. Каждая едет со своей формой
            протокола, DEL_ADDR не посылается, обе переживают перезапуск. */
-        d2k_catalog cQ;
+        d2s_catalog cQ;
         memset(&cQ, 0, sizeof cQ);
         cQ.boxes = calloc(1, sizeof *cQ.boxes);
         CHECK(cQ.boxes != NULL, "каталог QUIC-по-адресу не создан");
         if (cQ.boxes) {
             cQ.n_boxes = 1;
-            d2k_cat_box *qb = &cQ.boxes[0];
+            d2s_cat_box *qb = &cQ.boxes[0];
             snprintf(qb->id, sizeof qb->id, "quic-addr-box");
             qb->plans = calloc(1, sizeof *qb->plans);
             qb->binds = calloc(1, sizeof *qb->binds);
@@ -12144,85 +12144,85 @@ voice_only_run:
                 snprintf(qb->plans[0].proto, sizeof qb->plans[0].proto, "quic");
                 qb->plans[0].enabled = 1;
                 qb->plans[0].successes = 1;
-                qb->plans[0].text = strdup("d2k-plan 1 6\nid 00000000000000000000000000000000\n"
+                qb->plans[0].text = strdup("d2s-plan 1 6\nid 00000000000000000000000000000000\n"
                                            "proto udp quic\ndelay 15000\n");
-                d2k_cat_binding *qbd = &qb->binds[0];
+                d2s_cat_binding *qbd = &qb->binds[0];
                 snprintf(qbd->kind, sizeof qbd->kind, "addr");
                 snprintf(qbd->target, sizeof qbd->target, "127.0.0.1");
                 snprintf(qbd->plan_id, sizeof qbd->plan_id, "quic-addr-plan");
                 qbd->enabled = 1; qbd->level = 3; qbd->confirmed = 42; qbd->successes = 1;
                 qbd->transport = 17; qbd->family = 4;
-                qbd->shape = D2K_LINK_SHAPE_QUIC; qbd->verified_by = D2K_VERBY_PROBE;
+                qbd->shape = D2S_LINK_SHAPE_QUIC; qbd->verified_by = D2S_VERBY_PROBE;
             }
             const uint8_t lo[4] = {127, 0, 0, 1};
-            d2k_cat_binding quic_before = qb->binds ? qb->binds[0] : (d2k_cat_binding){0};
+            d2s_cat_binding quic_before = qb->binds ? qb->binds[0] : (d2s_cat_binding){0};
             saidbuf[0] = '\0';
-            s = d2k_sched_new(&cQ, sv[0], 0x2d);
+            s = d2s_sched_new(&cQ, sv[0], 0x2d);
             if (s) {
-                d2k_sched_set_say(s, collect_say, NULL);
+                d2s_sched_set_say(s, collect_say, NULL);
                 forget_sent();
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 int rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
-                CHECK(sent_set_addr_shape(4, lo, D2K_LINK_SHAPE_QUIC) == 1,
+                CHECK(sent_set_addr_shape(4, lo, D2S_LINK_SHAPE_QUIC) == 1,
                       "QUIC-привязка по адресу не восстановлена со своей формой");
                 forget_sent();
-                d2k_ev h = ev_hello(17, 52005, D2K_LINK_VOICE_CLASS);
-                d2k_sched_event(s, &h);
-                d2k_ev su = ev_suspect(17, 52005);
-                d2k_sched_event(s, &su);
+                d2s_ev h = ev_hello(17, 52005, D2S_LINK_VOICE_CLASS);
+                d2s_sched_event(s, &h);
+                d2s_ev su = ev_suspect(17, 52005);
+                d2s_sched_event(s, &su);
                 spin(s, 20);
                 drain();
-                uint8_t ssrc_ip[4], strial[D2K_TRIAL_ID_LEN];
+                uint8_t ssrc_ip[4], strial[D2S_TRIAL_ID_LEN];
                 uint16_t ssport = 0;
                 CHECK(last_addr_probe_endpoint(ssrc_ip, &ssport, strial),
                       "STUN-опыт рядом с QUIC-привязкой не поставлен");
-                d2k_ev ap = ev_applied(17, 52005);
+                d2s_ev ap = ev_applied(17, 52005);
                 memcpy(ap.trial_id, strial, sizeof strial);
-                d2k_sched_event(s, &ap);
-                d2k_ev ex = ev_exchange(17, 52005, 0);
-                ex.code = D2K_UDP_PROOF_STUN;
-                d2k_sched_event(s, &ex);
+                d2s_sched_event(s, &ap);
+                d2s_ev ex = ev_exchange(17, 52005, 0);
+                ex.code = D2S_UDP_PROOF_STUN;
+                d2s_sched_event(s, &ex);
                 spin(s, 20);
                 drain();
-                CHECK(sent_set_addr_shape(4, lo, D2K_LINK_SHAPE_VOICE) == 1 &&
-                      sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 1,
+                CHECK(sent_set_addr_shape(4, lo, D2S_LINK_SHAPE_VOICE) == 1 &&
+                      sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 1,
                       "подтверждённый STUN ушёл не формой голоса");
-                CHECK(sent_command_count(D2K_CMD_DEL_ADDR, NULL, 0) == 0,
+                CHECK(sent_command_count(D2S_CMD_DEL_ADDR, NULL, 0) == 0,
                       "подтверждение STUN сняло адресную привязку");
                 CHECK(bindings_of(&cQ, "127.0.0.1", 17) == 2,
                       "STUN-привязка слилась с QUIC-привязкой того же IP");
                 /* box_ensure мог переложить массив коробок — берём заново. */
-                const d2k_cat_binding *qnow = cQ.boxes[0].binds;
+                const d2s_cat_binding *qnow = cQ.boxes[0].binds;
                 CHECK(qnow && !strcmp(qnow->plan_id, quic_before.plan_id) &&
-                      qnow->shape == D2K_LINK_SHAPE_QUIC &&
-                      qnow->verified_by == D2K_VERBY_PROBE &&
+                      qnow->shape == D2S_LINK_SHAPE_QUIC &&
+                      qnow->verified_by == D2S_VERBY_PROBE &&
                       qnow->successes == quic_before.successes,
                       "подтверждение STUN переписало QUIC-привязку");
                 forget_sent();
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
-                CHECK(sent_set_addr_shape(4, lo, D2K_LINK_SHAPE_QUIC) == 1 &&
-                      sent_set_addr_shape(4, lo, D2K_LINK_SHAPE_VOICE) == 1,
+                CHECK(sent_set_addr_shape(4, lo, D2S_LINK_SHAPE_QUIC) == 1 &&
+                      sent_set_addr_shape(4, lo, D2S_LINK_SHAPE_VOICE) == 1,
                       "после перезапуска QUIC и STUN одного IP не восстановлены раздельно");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&cQ);
+        d2s_catalog_free(&cQ);
 
         /* Старые адресные привязки без формы: форма выводится только там, где
            она однозначна (STUN-подтверждение — голос, UDP-зонд по адресу —
            QUIC, см. выше); прочие не получают «подходит всем» (§7, §9.11). */
         for (int legacy = 0; legacy < 2; legacy++) {
-            d2k_catalog cL;
+            d2s_catalog cL;
             memset(&cL, 0, sizeof cL);
             cL.boxes = calloc(1, sizeof *cL.boxes);
             if (!cL.boxes) { continue; }
             cL.n_boxes = 1;
-            d2k_cat_box *lb = &cL.boxes[0];
+            d2s_cat_box *lb = &cL.boxes[0];
             snprintf(lb->id, sizeof lb->id, "legacy-addr-box");
             lb->plans = calloc(1, sizeof *lb->plans);
             lb->binds = calloc(1, sizeof *lb->binds);
@@ -12231,137 +12231,137 @@ voice_only_run:
                 snprintf(lb->plans[0].id, sizeof lb->plans[0].id, "legacy-plan");
                 snprintf(lb->plans[0].proto, sizeof lb->plans[0].proto, "stun");
                 lb->plans[0].enabled = 1;
-                lb->plans[0].text = strdup("d2k-plan 1 6\nid 00000000000000000000000000000000\n"
+                lb->plans[0].text = strdup("d2s-plan 1 6\nid 00000000000000000000000000000000\n"
                                            "proto udp quic\ndelay 15000\n");
-                d2k_cat_binding *lbd = &lb->binds[0];
+                d2s_cat_binding *lbd = &lb->binds[0];
                 snprintf(lbd->kind, sizeof lbd->kind, "addr");
                 snprintf(lbd->target, sizeof lbd->target, "203.0.113.5");
                 snprintf(lbd->plan_id, sizeof lbd->plan_id, "legacy-plan");
                 lbd->enabled = 1; lbd->level = 3; lbd->transport = 17;
-                lbd->verified_by = legacy == 0 ? D2K_VERBY_STUN : 0;
+                lbd->verified_by = legacy == 0 ? D2S_VERBY_STUN : 0;
             }
             saidbuf[0] = '\0';
-            s = d2k_sched_new(&cL, sv[0], 0x2d);
+            s = d2s_sched_new(&cL, sv[0], 0x2d);
             if (s) {
-                d2k_sched_set_say(s, collect_say, NULL);
+                d2s_sched_set_say(s, collect_say, NULL);
                 forget_sent();
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 int rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
                 const uint8_t ip5[4] = {203, 0, 113, 5};
                 if (legacy == 0) {
-                    CHECK(sent_set_addr_shape(4, ip5, D2K_LINK_SHAPE_VOICE) == 1 &&
-                          sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 1,
+                    CHECK(sent_set_addr_shape(4, ip5, D2S_LINK_SHAPE_VOICE) == 1 &&
+                          sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 1,
                           "старая STUN-привязка без формы не восстановлена формой голоса");
                 } else {
-                    CHECK(sent_command_count(D2K_CMD_SET_ADDR, NULL, 0) == 0 &&
+                    CHECK(sent_command_count(D2S_CMD_SET_ADDR, NULL, 0) == 0 &&
                           said("адресных привязок без формы протокола: 1"),
                           "неоднозначная адресная привязка без формы поставлена как общая");
                 }
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
-            d2k_catalog_free(&cL);
+            d2s_catalog_free(&cL);
         }
 
         /* Задача 15, сквозной путь Дискорда: опыт на пятёрке разговора →
            APPLIED с trial ID → настоящий IP Discovery response → постоянная
            привязка класса; временный опыт снят точно, своим trial ID. */
-        d2k_catalog cD;
+        d2s_catalog cD;
         memset(&cD, 0, sizeof cD);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cD, sv[0], 0x2d);
+        s = d2s_sched_new(&cD, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
-            d2k_ev h = ev_hello(17, 52006, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 52006);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 52006, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 52006);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
-            uint8_t dsrc[4], dtrial[D2K_TRIAL_ID_LEN];
+            uint8_t dsrc[4], dtrial[D2S_TRIAL_ID_LEN];
             uint16_t dsport = 0;
             CHECK(last_addr_probe_endpoint(dsrc, &dsport, dtrial) && dsport == 0,
                   "голосовой опыт Дискорда не поставлен на клиента и точку сервера");
             /* Следующий разговор: новый клиентский порт, первый IP Discovery. */
-            d2k_ev ap = ev_applied(17, 52016);
+            d2s_ev ap = ev_applied(17, 52016);
             memcpy(ap.trial_id, dtrial, sizeof dtrial);
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 52016, 0);
-            ex.code = D2K_UDP_PROOF_VOICE_DISCOVERY;
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 52016, 0);
+            ex.code = D2S_UDP_PROOF_VOICE_DISCOVERY;
+            d2s_sched_event(s, &ex);
             spin(s, 20);
-            const d2k_cat_binding *bd = binding_of(&cD, D2K_LINK_VOICE_CLASS, 17);
+            const d2s_cat_binding *bd = binding_of(&cD, D2S_LINK_VOICE_CLASS, 17);
             CHECK(bd != NULL && strcmp(bd->kind, "name") == 0 &&
                   said("подтверждён ответ Discord Discovery"),
                   "IP Discovery response после APPLIED опыта не подтвердил голос");
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 1 &&
-                  sent_command_count(D2K_CMD_DEL_NAME, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 1 &&
+                  sent_command_count(D2S_CMD_DEL_NAME, NULL, 0) == 0,
                   "подтверждённый голос оставил временный опыт или задел имя");
             /* Задача 17, п.1: доказательство IP Discovery записано своим
                видом, а не «UDP CLIENT», и переживает перезапуск. */
-            CHECK(bd != NULL && bd->verified_by == D2K_VERBY_VOICE_DISCOVERY,
+            CHECK(bd != NULL && bd->verified_by == D2S_VERBY_VOICE_DISCOVERY,
                   "подтверждение IP Discovery записано не видом VOICE_DISCOVERY");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
             saidbuf[0] = '\0';
-            s = d2k_sched_new(&cD, sv[0], 0x2d);
+            s = d2s_sched_new(&cD, sv[0], 0x2d);
             if (s) {
-                d2k_sched_set_say(s, collect_say, NULL);
+                d2s_sched_set_say(s, collect_say, NULL);
                 drain();
                 forget_sent();
-                (void)d2k_sched_sync(s);
+                (void)d2s_sched_sync(s);
                 int rounds = 0;
-                while (d2k_sched_sync_step(s) && rounds++ < 1000) { drain(); }
+                while (d2s_sched_sync_step(s) && rounds++ < 1000) { drain(); }
                 drain();
-                CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) == 1 &&
+                CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) == 1 &&
                       !said("UDP CLIENT без протокольного"),
                       "после перезапуска подтверждённый IP Discovery голос не поставлен на провод");
-                d2k_sched_free(s);
+                d2s_sched_free(s);
             }
         }
-        d2k_catalog_free(&cD);
+        d2s_catalog_free(&cD);
 
         /* При чередовании двух Discord relay новый endpoint сохраняется в
            ограниченном слоте: он не должен снимать каждый опыт до следующего
            разговора. После срока опыта A запускается сохранённая проверка B. */
-        d2k_catalog cR;
+        d2s_catalog cR;
         memset(&cR, 0, sizeof cR);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cR, sv[0], 0x2d);
+        s = d2s_sched_new(&cR, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
             voice_calls = 0;
             g_server_port = 50004;
-            d2k_ev h = ev_hello(17, 52040, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 52040);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 52040, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 52040);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
-            uint8_t adst[2][4], atrial[2][D2K_TRIAL_ID_LEN];
+            uint8_t adst[2][4], atrial[2][D2S_TRIAL_ID_LEN];
             CHECK(voice_calls == 1 &&
                   collect_addr_probes(adst, atrial, NULL, 2) == 1,
                   "голосовой опыт к точке A не поставлен");
             g_server_port = 50008;              /* другая точка сервера B */
-            h = ev_hello(17, 52041, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
+            h = ev_hello(17, 52041, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
             su = ev_suspect(17, 52041);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             spin(s, 400);
             drain();
             CHECK(voice_calls == 1,
                   "чередование endpoint сняло опыт A до следующего разговора");
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 0,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 0,
                   "ждущий опыт A снят раньше срока после сигнала B");
 
             /* Повторное подозрение к B обновляет один ограниченный слот, а
                не создаёт бесконечную очередь голосовых задач. */
-            h = ev_hello(17, 52042, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
+            h = ev_hello(17, 52042, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
             su = ev_suspect(17, 52042);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             CHECK(voice_calls == 1,
                   "повторный endpoint B отменил или продублировал опыт A");
@@ -12373,23 +12373,23 @@ voice_only_run:
             spin(s, 20);
             drain();
             uint16_t target_port_be = 0;
-            uint8_t btrial[D2K_TRIAL_ID_LEN] = {0};
+            uint8_t btrial[D2S_TRIAL_ID_LEN] = {0};
             int have_b = last_addr_probe_target(&target_port_be, btrial);
             CHECK(said("не проверено"), "истечение голосового опыта A не названо");
             CHECK(voice_calls == 2,
                   "сохранённое подозрение B не запустилось после срока опыта A");
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
                   "по истечении срока не снят ровно опыт A");
             CHECK(have_b && ntohs(target_port_be) == 50008,
                   "сохранённое подозрение B не поставило Plan на порт B");
-            CHECK(have_b && memcmp(btrial, atrial[0], D2K_TRIAL_ID_LEN) != 0,
+            CHECK(have_b && memcmp(btrial, atrial[0], D2S_TRIAL_ID_LEN) != 0,
                   "адресная проба B повторно использовала trial ID точки A");
 
             /* Та же точка B, пока её опыт ждёт: подозрение не дублирует замер. */
-            h = ev_hello(17, 52043, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
+            h = ev_hello(17, 52043, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
             su = ev_suspect(17, 52043);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             CHECK(voice_calls == 2,
                   "подозрение к той же точке сбросило ждущий опыт B");
@@ -12399,84 +12399,84 @@ voice_only_run:
             skip_ahead(s, 10 * 60 * 1000 + 1);
             CHECK(said("не проверено"), "истечение голосового опыта B не названо");
             forget_sent();
-            h = ev_hello(17, 52044, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
+            h = ev_hello(17, 52044, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
             su = ev_suspect(17, 52044);
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
             CHECK(voice_calls == 3 && !said("замер отложен"),
                   "истёкший «не проверено» голосовой опыт заморозил голос на 10 мин");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
             g_server_port = 50004;
         }
-        d2k_catalog_free(&cR);
+        d2s_catalog_free(&cR);
 
         /* Датапат отверг опыт (NAK) — местный отказ, а не провал кандидата. */
-        d2k_catalog cN;
+        d2s_catalog cN;
         memset(&cN, 0, sizeof cN);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cN, sv[0], 0x2d);
+        s = d2s_sched_new(&cN, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
-            d2k_ev h = ev_hello(17, 52007, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 52007);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 52007, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 52007);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
-            uint8_t nsrc[4], ntrial[D2K_TRIAL_ID_LEN];
+            uint8_t nsrc[4], ntrial[D2S_TRIAL_ID_LEN];
             uint16_t nsport = 1;
             CHECK(last_addr_probe_endpoint(nsrc, &nsport, ntrial),
                   "голосовой опыт для NAK-проверки не ушёл");
             forget_sent();
-            d2k_ev nak;
+            d2s_ev nak;
             memset(&nak, 0, sizeof nak);
-            nak.kind = D2K_EV_ACK;
-            nak.code = D2K_CMD_SET_ADDR_PROBE;
-            nak.num = D2K_ACK_NO_ROOM;          /* ok = 0 в старшем байте */
+            nak.kind = D2S_EV_ACK;
+            nak.code = D2S_CMD_SET_ADDR_PROBE;
+            nak.num = D2S_ACK_NO_ROOM;          /* ok = 0 в старшем байте */
             memcpy(nak.trial_id, ntrial, sizeof ntrial);
-            d2k_sched_event(s, &nak);
+            d2s_sched_event(s, &nak);
             spin(s, 5);
             CHECK(said("местный отказ") && !said("не пробил") &&
-                  binding_of(&cN, D2K_LINK_VOICE_CLASS, 17) == NULL,
+                  binding_of(&cN, D2S_LINK_VOICE_CLASS, 17) == NULL,
                   "NAK голосового опыта не назван местным отказом");
             /* Задача освобождена: APPLIED с этим trial ID ничего не двигает. */
-            d2k_ev ap = ev_applied(17, 52017);
+            d2s_ev ap = ev_applied(17, 52017);
             memcpy(ap.trial_id, ntrial, sizeof ntrial);
-            d2k_sched_event(s, &ap);
-            d2k_ev ex = ev_exchange(17, 52017, 0);
-            ex.code = D2K_UDP_PROOF_VOICE_DISCOVERY;
-            d2k_sched_event(s, &ex);
+            d2s_sched_event(s, &ap);
+            d2s_ev ex = ev_exchange(17, 52017, 0);
+            ex.code = D2S_UDP_PROOF_VOICE_DISCOVERY;
+            d2s_sched_event(s, &ex);
             spin(s, 5);
             CHECK(!said("ПОДТВЕРЖДЕНО"), "отвергнутый опыт подтвердился");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cN);
+        d2s_catalog_free(&cN);
 
         /* Тот же путь, но поток разговора с приёмом МОЛЧИТ. */
-        d2k_catalog cW;
+        d2s_catalog cW;
         memset(&cW, 0, sizeof cW);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cW, sv[0], 0x2d);
+        s = d2s_sched_new(&cW, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
-            d2k_ev h = ev_hello(17, 40210, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 40210);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 40210, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 40210);
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
-            d2k_ev h2 = ev_hello(17, 40210, D2K_LINK_VOICE_CLASS);
-            d2k_sched_event(s, &h2);
-            uint8_t wsrc[4], wtrial[D2K_TRIAL_ID_LEN];
+            d2s_ev h2 = ev_hello(17, 40210, D2S_LINK_VOICE_CLASS);
+            d2s_sched_event(s, &h2);
+            uint8_t wsrc[4], wtrial[D2S_TRIAL_ID_LEN];
             uint16_t wsport = 0;
             (void)last_addr_probe_endpoint(wsrc, &wsport, wtrial);
-            d2k_ev ap = ev_applied(17, 40210);
+            d2s_ev ap = ev_applied(17, 40210);
             memcpy(ap.trial_id, wtrial, sizeof wtrial);
-            d2k_sched_event(s, &ap);
+            d2s_sched_event(s, &ap);
             /* Задача 17, п.8: снятие опыта не дошло до датапата (связь
                оборвана) — опыт остаётся своим и снимается при следующей
                возможности, а не забывается. */
@@ -12488,51 +12488,51 @@ voice_only_run:
             close(broken[1]);
             dup2(broken[0], sv[0]);
             close(broken[0]);
-            d2k_ev su2 = ev_suspect(17, 40210);
-            d2k_sched_event(s, &su2);
+            d2s_ev su2 = ev_suspect(17, 40210);
+            d2s_sched_event(s, &su2);
             spin(s, 20);
             dup2(saved_link, sv[0]);
             close(saved_link);
-            CHECK(binding_of(&cW, D2K_LINK_VOICE_CLASS, 17) == NULL,
+            CHECK(binding_of(&cW, D2S_LINK_VOICE_CLASS, 17) == NULL,
                   "молчание разговора с приёмом записано подтверждением");
             CHECK(said("не пробил"), "провал приёма голоса не назван");
             forget_sent();
-            d2k_sched_free(s);
+            d2s_sched_free(s);
             drain();
-            CHECK(sent_command_count(D2K_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
+            CHECK(sent_command_count(D2S_CMD_DEL_ADDR_PROBE, NULL, 0) == 1,
                   "неудачное снятие адресной пробы сбросило её принадлежность — "
                   "повторного снятия нет");
         }
-        d2k_catalog_free(&cW);
+        d2s_catalog_free(&cW);
 
         /* Задача 17, п.7: STUN вне голоса Дискорда приходит безымянным с
            формой голоса/STUN. Это не @discord-voice и не QUIC: поиск не
            запускается, пробел оригинала назван вслух. */
-        d2k_catalog cG;
+        d2s_catalog cG;
         memset(&cG, 0, sizeof cG);
         saidbuf[0] = '\0';
-        s = d2k_sched_new(&cG, sv[0], 0x2d);
+        s = d2s_sched_new(&cG, sv[0], 0x2d);
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
             tcp_calls = quic_calls = vol_calls = 0;
             ver_calls = voice_calls = 0;
-            d2k_ev su = ev_suspect(17, 52031);
-            su.code = D2K_SUSPECT_SILENT;
-            su.client_shape = D2K_LINK_SHAPE_VOICE;
-            d2k_sched_event(s, &su);
+            d2s_ev su = ev_suspect(17, 52031);
+            su.code = D2S_SUSPECT_SILENT;
+            su.client_shape = D2S_LINK_SHAPE_VOICE;
+            d2s_sched_event(s, &su);
             spin(s, 20);
             drain();
             CHECK(voice_calls == 0 && quic_calls == 0 &&
-                  sent_command_count(D2K_CMD_SET_ADDR_PROBE, NULL, 0) == 0 &&
-                  binding_of(&cG, D2K_LINK_VOICE_CLASS, 17) == NULL,
+                  sent_command_count(D2S_CMD_SET_ADDR_PROBE, NULL, 0) == 0 &&
+                  binding_of(&cG, D2S_LINK_VOICE_CLASS, 17) == NULL,
                   "безымянный STUN завёл голосовую или QUIC-задачу");
             CHECK(said("не поддержано"),
                   "пробел оригинала для произвольного STUN не назван");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cG);
-        d2k_sched_voice_hook = saved_voice_hook;
+        d2s_catalog_free(&cG);
+        d2s_sched_voice_hook = saved_voice_hook;
         g_server_port = saved_port;
     }
     if (voice_only) { goto voice_only_done; }
@@ -12545,47 +12545,47 @@ voice_only_run:
        существовал: привязка легла заготовкой при снимке на руках. Приём тот
        же, но доказан он не на том, что шлёт клиент. */
     {
-        d2k_catalog cL;
+        d2s_catalog cL;
         memset(&cL, 0, sizeof cL);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
-        d2k_sched *s = d2k_sched_new(&cL, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cL, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для позднего снимка не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             ver_answer_port = 40180;
             ver_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(6, 40180, "поздний.снимок");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40180);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40180, "поздний.снимок");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40180);
+            d2s_sched_event(s, &su);
             /* Замер уже идёт заготовкой — и тут снимок. */
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "поздний.снимок",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "поздний.снимок",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "поздний снимок не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             for (int round = 0; round < 3; round++) {
                 settle(s);
-                d2k_ev ap = ev_applied(6, 40180);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40180);
+                d2s_sched_event(s, &ap);
                 spin(s, 40);
             }
-            const d2k_cat_binding *bd = binding_of(&cL, "поздний.снимок", 6);
+            const d2s_cat_binding *bd = binding_of(&cL, "поздний.снимок", 6);
             CHECK(bd != NULL, "поздний снимок: подтверждения нет вовсе");
-            CHECK(bd != NULL && bd->input == D2K_INPUT_CLIENT,
+            CHECK(bd != NULL && bd->input == D2S_INPUT_CLIENT,
                   "снимок пришёл во время замера, а привязка легла заготовкой");
             CHECK(bindings_of(&cL, "поздний.снимок", 6) == 1,
                   "повтор завёл вторую привязку вместо обновления прежней");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cL);
+        d2s_catalog_free(&cL);
     }
 
     /* --- СНИМОК, ПРИШЕДШИЙ ВО ВРЕМЯ ИСПЫТАНИЯ, ТОЖЕ НЕ ПРОПАДАЕТ ---------
@@ -12594,45 +12594,45 @@ voice_only_run:
        взведён; без отдельной проверки у подтверждения привязка легла бы
        заготовкой при снимке на руках. */
     {
-        d2k_catalog cM;
+        d2s_catalog cM;
         memset(&cM, 0, sizeof cM);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
-        d2k_sched *s = d2k_sched_new(&cM, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cM, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для снимка во время испытания не завёлся");
         if (s) {
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             ver_answer_port = 40190;
             ver_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(6, 40190, "снимок.при.испытании");
-            d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 40190);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 40190, "снимок.при.испытании");
+            d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 40190);
+            d2s_sched_event(s, &su);
             settle(s);   /* замер кончился, кандидат на испытании */
-            d2k_ev sh;
+            d2s_ev sh;
             memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE;
+            sh.kind = D2S_EV_SHAPE;
             sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "снимок.при.испытании",
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "снимок.при.испытании",
                                          sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
                   "снимок при испытании не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             for (int round = 0; round < 3; round++) {
-                d2k_ev ap = ev_applied(6, 40190);
-                d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 40190);
+                d2s_sched_event(s, &ap);
                 spin(s, 40);
                 settle(s);
             }
-            const d2k_cat_binding *bd = binding_of(&cM, "снимок.при.испытании", 6);
+            const d2s_cat_binding *bd = binding_of(&cM, "снимок.при.испытании", 6);
             CHECK(bd != NULL, "снимок при испытании: подтверждения нет вовсе");
-            CHECK(bd != NULL && bd->input == D2K_INPUT_CLIENT,
+            CHECK(bd != NULL && bd->input == D2S_INPUT_CLIENT,
                   "снимок пришёл во время испытания, а привязка осталась заготовкой");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cM);
+        d2s_catalog_free(&cM);
     }
 
     /* --- ДВЕ ФОРМЫ ОДНОЙ ЦЕЛИ ЕДУТ ДАТАПАТУ КАЖДАЯ СО СВОЕЙ ------------
@@ -12642,34 +12642,34 @@ voice_only_run:
        обязана уехать под СВОЕЙ формой. Датапат держит запись на имя+форму
        (test_plans.c), здесь проверяется, что контроллер ему это и шлёт. */
     {
-        d2k_catalog cF;
+        d2s_catalog cF;
         memset(&cF, 0, sizeof cF);
         saidbuf[0] = '\0';
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         confirm_once(&cF, sv[0], "две.формы", 40170);
-        d2k_cat_binding *m = binding_mut(&cF, "две.формы", 6);
-        CHECK(m != NULL && m->shape == (uint8_t)D2K_SHAPE_MODERN,
+        d2s_cat_binding *m = binding_mut(&cF, "две.формы", 6);
+        CHECK(m != NULL && m->shape == (uint8_t)D2S_SHAPE_MODERN,
               "первая привязка не современной формы — проверять нечего");
         if (m && cF.n_boxes == 1) {
-            d2k_cat_box *b = &cF.boxes[0];
-            d2k_cat_binding *grown = realloc(b->binds, (b->n_binds + 1) * sizeof *grown);
+            d2s_cat_box *b = &cF.boxes[0];
+            d2s_cat_binding *grown = realloc(b->binds, (b->n_binds + 1) * sizeof *grown);
             CHECK(grown != NULL, "не хватило памяти на вторую форму");
             if (grown) {
                 b->binds = grown;
                 b->binds[b->n_binds] = b->binds[0];
-                b->binds[b->n_binds].shape = (uint8_t)D2K_SHAPE_LEGACY;
+                b->binds[b->n_binds].shape = (uint8_t)D2S_SHAPE_LEGACY;
                 b->n_binds++;
             }
         }
-        d2k_sched *s = d2k_sched_new(&cF, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cF, sv[0], 0x2d);
         CHECK(s != NULL, "планировщик для двух форм не завёлся");
         if (s) {
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             forget_sent();
-            (void)d2k_sched_sync(s);
+            (void)d2s_sched_sync(s);
             sync_out(s);
             CHECK(said("поставлено планов по подтверждённым привязкам: 2"),
                   "из двух форм одной цели поставлена не каждая");
@@ -12677,15 +12677,15 @@ voice_only_run:
             char want_modern[64], want_legacy[64];
             size_t nl = strlen("две.формы");
             snprintf(want_modern, sizeof want_modern, "%c%s%c",
-                     (char)nl, "две.формы", (char)D2K_SHAPE_MODERN);
+                     (char)nl, "две.формы", (char)D2S_SHAPE_MODERN);
             snprintf(want_legacy, sizeof want_legacy, "%c%s%c",
-                     (char)nl, "две.формы", (char)D2K_SHAPE_LEGACY);
+                     (char)nl, "две.формы", (char)D2S_SHAPE_LEGACY);
             CHECK(sent_has(want_modern), "современная форма цели не уехала датапату");
             CHECK(sent_has(want_legacy),
                   "старая форма цели не уехала датапату — её клиент останется без обхода");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
         }
-        d2k_catalog_free(&cF);
+        d2s_catalog_free(&cF);
     }
 
     /* --- снимок приветствия не уходит на ЧУЖОЙ транспорт --------------- */
@@ -12693,46 +12693,46 @@ voice_only_run:
         /* Приветствие TLS поверх TCP и Initial поверх UDP — разные байты
            разной формы. Пока снимок раздавался всем задачам имени, QUIC-задача
            уходила мерить TLS-приветствием, и первый же разбор его отвергал. */
-        d2k_catalog cS;
+        d2s_catalog cS;
         memset(&cS, 0, sizeof cS);
-        d2k_sched *s = d2k_sched_new(&cS, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cS, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_HANDSHAKE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_HANDSHAKE;
         ver_fail_first = 0;
         ver_answer_port = 40210;
         forget_sent();
 
         /* Две задачи одного имени: по TCP и по QUIC. */
-        d2k_ev h1 = ev_hello(6, 40210, "оба.транспорта");
-        d2k_sched_event(s, &h1);
-        d2k_ev s1 = ev_suspect(6, 40210);
-        d2k_sched_event(s, &s1);
-        d2k_ev h2 = ev_hello(17, 40211, "оба.транспорта");
-        d2k_sched_event(s, &h2);
-        d2k_ev s2 = ev_suspect(17, 40211);
-        d2k_sched_event(s, &s2);
+        d2s_ev h1 = ev_hello(6, 40210, "оба.транспорта");
+        d2s_sched_event(s, &h1);
+        d2s_ev s1 = ev_suspect(6, 40210);
+        d2s_sched_event(s, &s1);
+        d2s_ev h2 = ev_hello(17, 40211, "оба.транспорта");
+        d2s_sched_event(s, &h2);
+        d2s_ev s2 = ev_suspect(17, 40211);
+        d2s_sched_event(s, &s2);
         settle(s);
 
         /* Снимок приходит с транспортом TCP. */
-        d2k_ev sh;
+        d2s_ev sh;
         memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE;
+        sh.kind = D2S_EV_SHAPE;
         sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "оба.транспорта",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "оба.транспорта",
                                      sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
               "приветствие для снимка не собралось");
         saidbuf[0] = '\0';
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
 
         CHECK(said("(TCP) сохранён целый снимок"),
               "снимок своего транспорта не сохранён");
         CHECK(!said("(QUIC) поймана форма приветствия"),
               "снимок TCP положили QUIC-задаче — она пойдёт мерить чужими байтами");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cS);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cS);
     }
 
     /* --- неудачный ВТОРОЙ поиск не уносит подтверждённый план ---------- */
@@ -12742,48 +12742,48 @@ voice_only_run:
            план такого поиска встаёт на то же имя ПОВЕРХ подтверждённого, а
            снятие уносит их вместе: в каталоге «подтверждено», в датапате
            пусто, у человека обхода нет. Поймано лабораторией с памятью. */
-        d2k_catalog cR;
+        d2s_catalog cR;
         memset(&cR, 0, sizeof cR);
-        d2k_sched *s = d2k_sched_new(&cR, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cR, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40200;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40200, "второй.поиск");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40200);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40200, "второй.поиск");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40200);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40200);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40200);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(binding_of(&cR, "второй.поиск", 6) != NULL, "первый поиск не подтвердился");
         /* Проход по каталогу, заказанный подтверждением, надо ДОКРУТИТЬ: его
-           порции крутит цикл d2kc, а не тик, и недокрученный проход не даст
+           порции крутит цикл d2sc, а не тик, и недокрученный проход не даст
            начаться следующему. */
         sync_out(s);
 
         /* Коробка вмешалась снова: наблюдение прекращается. */
-        d2k_ev su2 = ev_suspect(6, 40200);
-        d2k_sched_event(s, &su2);
+        d2s_ev su2 = ev_suspect(6, 40200);
+        d2s_sched_event(s, &su2);
         spin(s, 5);
 
         /* И ещё раз — заводится ВТОРОЙ поиск, который ничем не кончится. */
-        ver_answer = D2K_VER_HANDSHAKE;   /* зонд до приложения не доходит */
+        ver_answer = D2S_VER_HANDSHAKE;   /* зонд до приложения не доходит */
         ver_answer_port = 40201;
-        d2k_ev h3 = ev_hello(6, 40201, "второй.поиск");
-        d2k_sched_event(s, &h3);
-        d2k_ev su3 = ev_suspect(6, 40201);
-        d2k_sched_event(s, &su3);
+        d2s_ev h3 = ev_hello(6, 40201, "второй.поиск");
+        d2s_sched_event(s, &h3);
+        d2s_ev su3 = ev_suspect(6, 40201);
+        d2s_sched_event(s, &su3);
         /* Дольше, чем run_out: задача сдаётся либо по бюджету зондов, либо по
            сроку жизни (десять минут модельных часов), и до этого места надо
            дожить. */
-        for (int i = 0; i < 300 && d2k_sched_active(s); i++) {
+        for (int i = 0; i < 300 && d2s_sched_active(s); i++) {
             skip_ahead(s, 6000);
             spin(s, 20);
         }
@@ -12791,60 +12791,60 @@ voice_only_run:
         /* Задача сдалась. Знание каталога обязано вернуться на провод. */
         forget_sent();
         spin(s, 5);
-        /* Проход по каталогу разложен на порции, и крутит их цикл d2kc
-           (d2k_sched_sync_step) — здесь за него это делает тест, ровно как в
+        /* Проход по каталогу разложен на порции, и крутит их цикл d2sc
+           (d2s_sched_sync_step) — здесь за него это делает тест, ровно как в
            проверке синхронизации выше. */
         sync_out(s);
-        /* Ищем на проводе САМ ПЛАН (заголовок "D2KP"), а не идентификатор:
+        /* Ищем на проводе САМ ПЛАН (заголовок "D2SP"), а не идентификатор:
            план каталога несёт ту идентичность, что записана в его тексте, и у
            подтверждённого она нулевая — «plan-…» подставляется только пробному
            при установке (install_next). Присутствие тела плана отличает
            SET_NAME от DEL_NAME, а имя цели проверяется рядом. */
-        CHECK(sent_has("D2KP"),
+        CHECK(sent_has("D2SP"),
               "после неудачного второго поиска цель осталась БЕЗ плана — "
               "в каталоге «подтверждено», в датапате пусто");
         CHECK(sent_has("второй.поиск"),
               "на провод вернулся план не той цели");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cR);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cR);
     }
 
     /* --- ПЕТЛЯ ПО QUIC ЗАМКНУТА: плечо → план → подтверждение ---------- */
     {
-        /* До этой правки задача транспорта 17 шла в d2k_compose, который про
+        /* До этой правки задача транспорта 17 шла в d2s_compose, который про
            QUIC не знает, и получала разрезы — а датаграмму резать нельзя.
            Подбор плеча был написан и не звался ниоткуда, кроме тестов. */
-        d2k_catalog cQ;
+        d2s_catalog cQ;
         memset(&cQ, 0, sizeof cQ);
-        d2k_sched *s = d2k_sched_new(&cQ, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cQ, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40220;
         ver_calls = 0;
         arm_calls = 0;
-        arm_kind = D2K_QA_COPIES;
+        arm_kind = D2S_QA_COPIES;
         forget_sent();
 
-        d2k_ev h = ev_hello(17, 40220, "квик.обход");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40220);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40220, "квик.обход");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40220);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "квик.обход") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(arm_calls >= 1, "плечо QUIC не подбиралось вовсе");
         CHECK(said("плечо подобрано"), "подбор плеча не назван вслух");
 
-        d2k_ev ap = ev_applied(17, 40220);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(17, 40220);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
-        const d2k_cat_binding *bd = binding_of(&cQ, "квик.обход", 17);
+        const d2s_cat_binding *bd = binding_of(&cQ, "квик.обход", 17);
         CHECK(bd != NULL, "подтверждённый обход по QUIC не записан в каталог");
         CHECK(bd != NULL && bd->level == 3, "уровень записи по QUIC не третий");
         /* Текст записанного плана — из плеча, а не из разрезов: датаграмму
@@ -12867,21 +12867,21 @@ voice_only_run:
             CHECK(quic_text,
                   "записанный план не объявляет udp/quic — он собран не из плеча");
         }
-        d2k_sched_free(s);
-        d2k_catalog_free(&cQ);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cQ);
     }
 
     for(int fake=0;fake<2;fake++) {
-        d2k_catalog c={0};d2k_sched *s=d2k_sched_new(&c,sv[0],0x2d);
-        quic_answer=D2K_V_OPAQUE;ver_answer=D2K_VER_APPLICATION;
+        d2s_catalog c={0};d2s_sched *s=d2s_sched_new(&c,sv[0],0x2d);
+        quic_answer=D2S_V_OPAQUE;ver_answer=D2S_VER_APPLICATION;
         ver_fail_first=0;ver_answer_port=(uint16_t)(40225+fake);
-        arm_kind=fake?D2K_QA_COPIES:D2K_QA_FRAG;arm_fragment_shape=4;
+        arm_kind=fake?D2S_QA_COPIES:D2S_QA_FRAG;arm_fragment_shape=4;
         forget_sent();
-        d2k_ev h=ev_hello(17,ver_answer_port,"original.fragment");d2k_sched_event(s,&h);
-        d2k_ev su=ev_suspect(17,ver_answer_port);d2k_sched_event(s,&su);
-        d2k_ev sh;CHECK(quic_shape(&sh,"original.fragment")==0,"fragment shape fixture");
-        d2k_sched_event(s,&sh);settle(s);
-        d2k_ev ap=ev_applied(17,ver_answer_port);d2k_sched_event(s,&ap);spin(s,40);
+        d2s_ev h=ev_hello(17,ver_answer_port,"original.fragment");d2s_sched_event(s,&h);
+        d2s_ev su=ev_suspect(17,ver_answer_port);d2s_sched_event(s,&su);
+        d2s_ev sh;CHECK(quic_shape(&sh,"original.fragment")==0,"fragment shape fixture");
+        d2s_sched_event(s,&sh);settle(s);
+        d2s_ev ap=ev_applied(17,ver_answer_port);d2s_sched_event(s,&ap);spin(s,40);
         CHECK(binding_of(&c,"original.fragment",17)!=NULL,"scheduler discarded fragment-only/combo result");
         int found=0;
         for(size_t i=0;i<c.n_boxes;i++)for(size_t j=0;j<c.boxes[i].n_plans;j++) {
@@ -12892,30 +12892,30 @@ voice_only_run:
             }
         }
         CHECK(found,"learned catalog lost original fragment shape");
-        d2k_sched_free(s);d2k_catalog_free(&c);arm_fragment_shape=0;
+        d2s_sched_free(s);d2s_catalog_free(&c);arm_fragment_shape=0;
     }
 
     /* --- невыразимое плечо QUIC не подменяется похожим ------------------ */
     {
-        d2k_catalog cF2;
+        d2s_catalog cF2;
         memset(&cF2, 0, sizeof cF2);
-        d2k_sched *s = d2k_sched_new(&cF2, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cF2, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
         ver_answer_port = 40221;
-        arm_kind = D2K_QA_FRAG;     /* нет измеренной формы/выживания */
+        arm_kind = D2S_QA_FRAG;     /* нет измеренной формы/выживания */
         forget_sent();
 
-        d2k_ev h = ev_hello(17, 40221, "фрагмент.квик");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40221);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40221, "фрагмент.квик");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40221);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "фрагмент.квик") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         run_out(s);
 
@@ -12925,10 +12925,10 @@ voice_only_run:
               "невыразимое плечо выдано за ненайденное — это разные факты");
         CHECK(binding_of(&cF2, "фрагмент.квик", 17) == NULL,
               "по невыразимому плечу появилась привязка");
-        arm_kind = D2K_QA_BLOB;
-        quic_answer = D2K_V_CLEAR;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cF2);
+        arm_kind = D2S_QA_BLOB;
+        quic_answer = D2S_V_CLEAR;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cF2);
     }
 
     /* --- «не нашлось» и «не выразимо» — РАЗНЫЕ ответы --------------------
@@ -12939,24 +12939,24 @@ voice_only_run:
      * кончился бюджет развёртки TTL, — то есть отчиталась нашим пробелом
      * вместо свойства сети. */
     {
-        d2k_catalog cNF;
+        d2s_catalog cNF;
         memset(&cNF, 0, sizeof cNF);
-        d2k_sched *s = d2k_sched_new(&cNF, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cNF, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_OPAQUE;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_OPAQUE;
         ver_answer_port = 40222;
-        arm_kind = D2K_QA_NOT_FOUND;
+        arm_kind = D2S_QA_NOT_FOUND;
         forget_sent();
 
-        d2k_ev h = ev_hello(17, 40222, "нечем.квик");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40222);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40222, "нечем.квик");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40222);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "нечем.квик") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         run_out(s);
 
@@ -12966,12 +12966,12 @@ voice_only_run:
               "ненайденное плечо выдано за пробел реализации");
         CHECK(binding_of(&cNF, "нечем.квик", 17) == NULL,
               "по ненайденному плечу появилась привязка");
-        CHECK(sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0) == 0,
+        CHECK(sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0) == 0,
               "QUIC без найденного плеча получил резервный TCP/TLS-план");
-        arm_kind = D2K_QA_BLOB;
-        quic_answer = D2K_V_CLEAR;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cNF);
+        arm_kind = D2S_QA_BLOB;
+        quic_answer = D2S_V_CLEAR;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cNF);
     }
 
     /* --- ПЛЕЧА НЕТ, А «МУСОР»/«ДЛИНА» ПОДТВЕРЖДЕНЫ — ЭТО ПЛАН ------------
@@ -12983,38 +12983,38 @@ voice_only_run:
        провенанс обязан остаться в журнале и НЕ менять текст/имя плана. */
     char len_text[2][4096] = {{0}}, len_id[2][40] = {{0}};
     for (int which = 0; which < 3; which++) {
-        d2k_catalog cJ;
+        d2s_catalog cJ;
         memset(&cJ, 0, sizeof cJ);
-        d2k_sched *s = d2k_sched_new(&cJ, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cJ, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = (uint16_t)(40223 + which);
-        arm_kind = D2K_QA_NOT_FOUND;
+        arm_kind = D2S_QA_NOT_FOUND;
         memset(&quic_props_answer, 0, sizeof quic_props_answer);
-        if (which == 0) { quic_props_answer.junk_ahead = D2K_PROP_YES; }
+        if (which == 0) { quic_props_answer.junk_ahead = D2S_PROP_YES; }
         else {
-            quic_props_answer.longer = D2K_PROP_YES;
+            quic_props_answer.longer = D2S_PROP_YES;
             quic_props_answer.longer_profile = which == 1;
         }
         forget_sent();
         const char *nm = which == 0 ? "мусор.квик" : which == 1 ? "длина.квик" : "длина2.квик";
-        d2k_ev h = ev_hello(17, ver_answer_port, nm);
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, ver_answer_port);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, ver_answer_port, nm);
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, ver_answer_port);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, nm) == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
         CHECK(!said("плечо не нашлось за"),
               "подтверждённое свойство коробки выдано за «плечо не нашлось»");
-        d2k_ev ap = ev_applied(17, ver_answer_port);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(17, ver_answer_port);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(binding_of(&cJ, nm, 17) != NULL,
               "план из свойств «мусор»/«длина» не дошёл до подтверждённой привязки");
@@ -13048,75 +13048,75 @@ voice_only_run:
                   "одна и та же «длина» с PROFILE и без дала разное имя плана");
         }
         memset(&quic_props_answer, 0, sizeof quic_props_answer);
-        arm_kind = D2K_QA_BLOB;
-        quic_answer = D2K_V_CLEAR;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cJ);
+        arm_kind = D2S_QA_BLOB;
+        quic_answer = D2S_V_CLEAR;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cJ);
     }
     /* План из свойств — такая же гипотеза, как любой другой: ответ UDP и
        даже завершённое рукопожатие без прикладного ответа его не
        подтверждают. */
     {
-        d2k_catalog cH;
+        d2s_catalog cH;
         memset(&cH, 0, sizeof cH);
-        d2k_sched *s = d2k_sched_new(&cH, sv[0], 0x2d);
-        quic_answer = D2K_V_OPAQUE;
-        ver_answer = D2K_VER_HANDSHAKE;
+        d2s_sched *s = d2s_sched_new(&cH, sv[0], 0x2d);
+        quic_answer = D2S_V_OPAQUE;
+        ver_answer = D2S_VER_HANDSHAKE;
         ver_fail_first = 0;
         ver_answer_port = 40227;
-        arm_kind = D2K_QA_NOT_FOUND;
+        arm_kind = D2S_QA_NOT_FOUND;
         memset(&quic_props_answer, 0, sizeof quic_props_answer);
-        quic_props_answer.junk_ahead = D2K_PROP_YES;
+        quic_props_answer.junk_ahead = D2S_PROP_YES;
         forget_sent();
-        d2k_ev h = ev_hello(17, 40227, "рукопожатие.квик");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40227);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40227, "рукопожатие.квик");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40227);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "рукопожатие.квик") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         settle(s);
-        d2k_ev ap = ev_applied(17, 40227);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(17, 40227);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
         CHECK(binding_of(&cH, "рукопожатие.квик", 17) == NULL,
               "план из свойств подтверждён без прикладного ответа QUIC");
         memset(&quic_props_answer, 0, sizeof quic_props_answer);
-        ver_answer = D2K_VER_APPLICATION;
-        arm_kind = D2K_QA_BLOB;
-        quic_answer = D2K_V_CLEAR;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cH);
+        ver_answer = D2S_VER_APPLICATION;
+        arm_kind = D2S_QA_BLOB;
+        quic_answer = D2S_V_CLEAR;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cH);
     }
 
     /* Терминальные исходы QUIC не превращаются обратно в подбор обвязкой.
        Само получение этих исходов сверялось с Go донора (обвязка удалена 06.10.2026). */
     {
-        const d2k_verdict terminal[] = { D2K_V_CLEAR, D2K_V_ADDRESS, D2K_V_NO_QUIC };
+        const d2s_verdict terminal[] = { D2S_V_CLEAR, D2S_V_ADDRESS, D2S_V_NO_QUIC };
         for (size_t i = 0; i < sizeof terminal / sizeof terminal[0]; i++) {
-            d2k_catalog empty = {0};
-            d2k_sched *s = d2k_sched_new(&empty, sv[0], 0x2d);
+            d2s_catalog empty = {0};
+            d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
             CHECK(s != NULL, "планировщик терминального QUIC-исхода не создался");
             if (!s) { continue; }
             quic_answer = terminal[i];
             quic_calls = arm_calls = ver_calls = 0;
             forget_sent();
-            d2k_ev h = ev_hello(17, 40230, "terminal.example");
-            d2k_ev su = ev_suspect(17, 40230);
-            d2k_sched_event(s, &h);
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 40230, "terminal.example");
+            d2s_ev su = ev_suspect(17, 40230);
+            d2s_sched_event(s, &h);
+            d2s_sched_event(s, &su);
             settle(s);
             CHECK(quic_calls == 1, "терминальный QUIC-исход не получен либо запускается повторно");
             CHECK(arm_calls == 0 && ver_calls == 0,
                   "обвязка начала подбор/подтверждение после CLEAR, ADDRESS или NO_QUIC");
             CHECK(empty.n_boxes == 0 && binding_of(&empty, "terminal.example", 17) == NULL,
                   "терминальный QUIC-исход записан найденным обходом");
-            d2k_sched_free(s);
-            d2k_catalog_free(&empty);
+            d2s_sched_free(s);
+            d2s_catalog_free(&empty);
         }
-        quic_answer = D2K_V_CLEAR;
+        quic_answer = D2S_V_CLEAR;
     }
 
     /* --- подтверждать нечем: перебор кандидатов не начинается ---------- */
@@ -13124,27 +13124,27 @@ voice_only_run:
         /* У QUIC вопросник есть, а зонда подтверждения нет. Перебор в такой
            задаче потратил бы весь бюджет зондов на установку планов, которых
            никто не проверит, — а на живом роутере таких целей десятки. */
-        d2k_catalog cU;
+        d2s_catalog cU;
         memset(&cU, 0, sizeof cU);
-        d2k_sched *s = d2k_sched_new(&cU, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cU, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        quic_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;   /* не важно: до ответа не дойдёт */
+        d2s_sched_set_say(s, collect_say, NULL);
+        quic_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;   /* не важно: до ответа не дойдёт */
         ver_fail_first = 0;
         ver_answer_port = 40190;
         ver_calls = 0;
         ver_unsupported = 1;
         forget_sent();
 
-        d2k_ev h = ev_hello(17, 40190, "квик.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(17, 40190);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(17, 40190, "квик.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(17, 40190);
+        d2s_sched_event(s, &su);
         {
-            d2k_ev sh;
+            d2s_ev sh;
             CHECK(quic_shape(&sh, "квик.цель") == 0, "снимок QUIC не собрался");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
         }
         run_out(s);
 
@@ -13156,33 +13156,33 @@ voice_only_run:
         CHECK(binding_of(&cU, "квик.цель", 17) == NULL,
               "непроверяемый транспорт дал запись в каталоге");
         ver_unsupported = 0;
-        quic_answer = D2K_V_CLEAR;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cU);
+        quic_answer = D2S_V_CLEAR;
+        d2s_sched_free(s);
+        d2s_catalog_free(&cU);
     }
 
     /* --- Cloudflare challenge не подтверждает обход и останавливает поиск --- */
     {
-        d2k_catalog cC;
+        d2s_catalog cC;
         memset(&cC, 0, sizeof cC);
-        d2k_sched *s = d2k_sched_new(&cC, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cC, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40175;
         ver_calls = 0;
         ver_cloudflare_challenge = 1;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40175, "challenge.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40175);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40175, "challenge.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40175);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40175);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40175);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
 
         CHECK(said("Cloudflare challenge"),
@@ -13191,42 +13191,42 @@ voice_only_run:
               "страница Cloudflare challenge записана как подтверждённый обход");
         CHECK(ver_calls == 1,
               "после challenge был испытан ещё один кандидат и послан лишний запрос");
-        /* Финальное ревью, п.5: как у соседней ветки D2K_VER_CHALLENGE,
+        /* Финальное ревью, п.5: как у соседней ветки D2S_VER_CHALLENGE,
            цель получает антибот-паузу, а не только 2-минутный отдых. */
         skip_ahead(s, 3 * 60 * 1000);
         spin(s, 5);
         saidbuf[0] = '\0';
         h = ev_hello(6, 40176, "challenge.example");
-        d2k_sched_event(s, &h);
+        d2s_sched_event(s, &h);
         su = ev_suspect(6, 40176);
-        d2k_sched_event(s, &su);
+        d2s_sched_event(s, &su);
         spin(s, 5);
         CHECK(said("замер отложен после антибот-ответа"),
               "Cloudflare challenge не поставил антибот-паузу цели");
 
         ver_cloudflare_challenge = 0;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cC);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cC);
     }
 
     /* Explicit HTTP denial cannot promote a plan, even with APPLIED. */
     for (int denied = 0; denied < 2; denied++) {
-        d2k_catalog cB = {0};
-        d2k_sched *s = d2k_sched_new(&cB, sv[0], 0x2d);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = denied ? D2K_VER_DENIED : D2K_VER_BLOCKPAGE;
+        d2s_catalog cB = {0};
+        d2s_sched *s = d2s_sched_new(&cB, sv[0], 0x2d);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = denied ? D2S_VER_DENIED : D2S_VER_BLOCKPAGE;
         ver_fail_first = 0; ver_calls = 0;
         ver_answer_port = (uint16_t)(40178 + denied);
         ver_name_ok = 1;
         forget_sent(); saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, ver_answer_port, "blocked.example");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, ver_answer_port);
-        d2k_sched_event(s, &su);
+        d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, ver_answer_port, "blocked.example");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, ver_answer_port);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, ver_answer_port);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, ver_answer_port);
+        d2s_sched_event(s, &ap);
         run_out(s);
         CHECK(binding_of(&cB, "blocked.example", 6) == NULL,
               "явная заглушка/451 сохранены как подтверждённый обход");
@@ -13244,41 +13244,41 @@ voice_only_run:
             saidbuf[0] = '\0';
             skip_ahead(s, 60 * 1000);
             spin(s, 5);
-            d2k_ev h2 = ev_hello(6, ver_answer_port, "blocked.example");
-            d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, ver_answer_port);
-            d2k_sched_event(s, &su2);
+            d2s_ev h2 = ev_hello(6, ver_answer_port, "blocked.example");
+            d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, ver_answer_port);
+            d2s_sched_event(s, &su2);
             spin(s, 5);
             CHECK(said("замер отложен после юридического отказа сервиса"),
                   "451 не поставил паузу цели — перемеряем сервис, который нам отказал");
         }
-        d2k_sched_free(s); d2k_catalog_free(&cB);
+        d2s_sched_free(s); d2s_catalog_free(&cB);
     }
-    ver_answer = D2K_VER_APPLICATION; ver_name_ok = -1;
+    ver_answer = D2S_VER_APPLICATION; ver_name_ok = -1;
 
     /* --- mismatch alone is diagnostic, not evidence of a block page ---- */
     {
         /* Complete ordinary response from a shared/default TLS frontend. */
-        d2k_catalog cN;
+        d2s_catalog cN;
         memset(&cN, 0, sizeof cN);
-        d2k_sched *s = d2k_sched_new(&cN, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cN, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40180;
         ver_calls = 0;
         ver_name_ok = 0;                 /* ИЗМЕРЕННОЕ несовпадение */
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40180, "подмена.цель");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40180);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40180, "подмена.цель");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40180);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40180);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40180);
+        d2s_sched_event(s, &ap);
         run_out(s);
 
         CHECK(said("сертификат не совпал"),
@@ -13286,8 +13286,8 @@ voice_only_run:
         CHECK(binding_of(&cN, "подмена.цель", 6) != NULL,
               "полный ответ и исполненный план отвергнуты только из-за имени сертификата");
         ver_name_ok = -1;
-        d2k_sched_free(s);
-        d2k_catalog_free(&cN);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cN);
     }
 
     /* --- зонд ходит ДЛИНОЙ КЛИЕНТА, а не своей ------------------------- */
@@ -13298,23 +13298,23 @@ voice_only_run:
            помещается вовсе. Поэтому длина снятого с клиента приветствия
            обязана доехать до зонда — проверяем, что доезжает именно она, а не
            ноль и не своя. */
-        d2k_catalog cW;
+        d2s_catalog cW;
         memset(&cW, 0, sizeof cW);
-        d2k_sched *s = d2k_sched_new(&cW, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cW, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40170;
         ver_calls = 0;
         ver_last_wire = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40170, "длина.клиента");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40170);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40170, "длина.клиента");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40170);
+        d2s_sched_event(s, &su);
         settle(s);
         CHECK(ver_calls >= 1, "зонд не позван — длину проверять не на чем");
         CHECK(ver_last_wire > 0,
@@ -13324,14 +13324,14 @@ voice_only_run:
         /* A late observation belongs to the NEXT search, not to another
            candidate of the experiment already measured on different bytes. */
         size_t measured_wire = ver_last_wire;
-        d2k_ev sh;
+        d2s_ev sh;
         memset(&sh, 0, sizeof sh);
-        sh.kind = D2K_EV_SHAPE;
+        sh.kind = D2S_EV_SHAPE;
         sh.transport = 6;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "длина.клиента",
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "длина.клиента",
                                      sh.shape, sizeof sh.shape, &sh.shape_len) == 0,
               "приветствие клиента не собралось — проверять нечем");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
         CHECK(said("сохранён целый снимок"), "снимок не сохранён");
 
         CHECK(sh.shape_len != measured_wire, "fixture must change the input length");
@@ -13340,8 +13340,8 @@ voice_only_run:
         run_out(s);
         CHECK(ver_last_wire == measured_wire,
               "late SHAPE changed the input length inside the measured experiment");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cW);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cW);
     }
 
     /* --- живой обмен не ВЫДУМЫВАЕТ форму клиента ------------------------ */
@@ -13352,44 +13352,44 @@ voice_only_run:
            нельзя: заготовка — это то, чем планировщик ходит сам, а не то, чем
            ходит клиент. Запись изображает старый файл (формы в ней нет), и
            после наблюдения формы в ней по-прежнему быть не должно. */
-        d2k_catalog cF;
+        d2s_catalog cF;
         memset(&cF, 0, sizeof cF);
-        d2k_sched *s = d2k_sched_new(&cF, sv[0], 0x2d);
+        d2s_sched *s = d2s_sched_new(&cF, sv[0], 0x2d);
         saidbuf[0] = '\0';
-        d2k_sched_set_say(s, collect_say, NULL);
-        tcp_answer = D2K_V_PREFIX;
-        ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_set_say(s, collect_say, NULL);
+        tcp_answer = D2S_V_PREFIX;
+        ver_answer = D2S_VER_APPLICATION;
         ver_fail_first = 0;
         ver_answer_port = 40150;
         ver_calls = 0;
         forget_sent();
 
-        d2k_ev h = ev_hello(6, 40150, "снимка.нет");
-        d2k_sched_event(s, &h);
-        d2k_ev su = ev_suspect(6, 40150);
-        d2k_sched_event(s, &su);
+        d2s_ev h = ev_hello(6, 40150, "снимка.нет");
+        d2s_sched_event(s, &h);
+        d2s_ev su = ev_suspect(6, 40150);
+        d2s_sched_event(s, &su);
         settle(s);
-        d2k_ev ap = ev_applied(6, 40150);
-        d2k_sched_event(s, &ap);
+        d2s_ev ap = ev_applied(6, 40150);
+        d2s_sched_event(s, &ap);
         spin(s, 40);
 
-        d2k_cat_binding *m = binding_mut(&cF, "снимка.нет", 6);
+        d2s_cat_binding *m = binding_mut(&cF, "снимка.нет", 6);
         CHECK(m != NULL, "подтверждение не записано");
         if (m) { m->shape = 0; }   /* запись из файла, снятого до появления поля */
 
-        d2k_ev h2 = ev_hello(6, 40151, "снимка.нет");
-        d2k_sched_event(s, &h2);
-        d2k_ev live = ev_exchange(6, 40151, 1);
-        d2k_sched_event(s, &live);
-        const d2k_cat_binding *bd = binding_of(&cF, "снимка.нет", 6);
+        d2s_ev h2 = ev_hello(6, 40151, "снимка.нет");
+        d2s_sched_event(s, &h2);
+        d2s_ev live = ev_exchange(6, 40151, 1);
+        d2s_sched_event(s, &live);
+        const d2s_cat_binding *bd = binding_of(&cF, "снимка.нет", 6);
         CHECK(bd != NULL && bd->level == 3,
               "TLS-ответ повысил уровень записи без записанной формы");
         CHECK(bd != NULL && bd->shape == 0,
               "форма клиента не измерена, а в записи появилась — заготовка выдана за замер");
-        CHECK(bd != NULL && bd->verified_by == D2K_VERBY_PROBE,
+        CHECK(bd != NULL && bd->verified_by == D2S_VERBY_PROBE,
               "наблюдение подменило источник проверки");
-        d2k_sched_free(s);
-        d2k_catalog_free(&cF);
+        d2s_sched_free(s);
+        d2s_catalog_free(&cF);
     }
 
 measured_test:
@@ -13403,7 +13403,7 @@ measured_test:
         tcp_wait_until_stop = 0; tcp_block_until_stop = 0;
         ver_fail_first = 0; ver_unsupported = 0; ver_cloudflare_challenge = 0;
         ver_app_after_tcp_search = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0; vol_rx_tls_unavailable = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0; vol_rx_tls_unavailable = 0;
         snapshot_enabled = 0;
         tcp_trace_lines = 1; /* поле 10.10.2026: трасса вопросов и в ветке узнанной коробки */
         for (int mode = 0; mode < 8; mode++) {
@@ -13420,14 +13420,14 @@ measured_test:
                5 — тот же OOB без APPLIED: опыта нет, не сетевой промах;
                6 — OOB применён, но verifier упёрся в местный предел;
                7 — измеренный OOB подтверждён, запасной поиск не нужен. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             c.boxes = calloc(1, sizeof *c.boxes);
             CHECK(c.boxes != NULL, "t37: коробка не создалась");
             if (!c.boxes) break;
             c.n_boxes = 1;
-            d2k_cat_box *b = &c.boxes[0];
+            d2s_cat_box *b = &c.boxes[0];
             snprintf(b->id, sizeof b->id, "box-mqtt-%d", mode);
-            b->fp.method = D2K_FP_METHOD;
+            b->fp.method = D2S_FP_METHOD;
             b->fp.n_sig = 1;
             snprintf(b->fp.sig[0].kind, sizeof b->fp.sig[0].kind, "rst");
             b->fp.sig[0].ttl = 127;
@@ -13435,27 +13435,27 @@ measured_test:
             b->fp.sig[0].ipid = 54321;
             b->plans = calloc(1, sizeof *b->plans);
             CHECK(b->plans != NULL, "t37: план коробки не создался");
-            if (!b->plans) { d2k_catalog_free(&c); break; }
+            if (!b->plans) { d2s_catalog_free(&c); break; }
             b->n_plans = 1;
             snprintf(b->plans[0].id, sizeof b->plans[0].id, "plan-mqtt-saved");
             snprintf(b->plans[0].proto, sizeof b->plans[0].proto, "tls");
             b->plans[0].enabled = 1;
             b->plans[0].successes = 2;
             b->plans[0].text = strdup(
-                "d2k-plan 1 1\nid 00000000000000000000000000000000\n"
+                "d2s-plan 1 1\nid 00000000000000000000000000000000\n"
                 "proto tcp tls\nsplit payload_start +7\norder forward\n");
-            tcp_answer = mode == 2 ? D2K_V_PREFIX : D2K_V_OPAQUE;
+            tcp_answer = mode == 2 ? D2S_V_PREFIX : D2S_V_OPAQUE;
             tcp_owns_search = mode != 2 && mode != 4;
             tcp_found_arm = mode == 0 || mode >= 5 ? 2 : mode == 3;
             ver_snapshot_enabled = ver_snapshot_repeat = mode == 0 || mode >= 5;
             ver_snapshot_entered = ver_snapshot_release = 0;
             ver_local_limit = mode == 6;
-            ver_answer = mode == 7 ? D2K_VER_APPLICATION : D2K_VER_HANDSHAKE;
+            ver_answer = mode == 7 ? D2S_VER_APPLICATION : D2S_VER_HANDSHAKE;
             ver_fail_first = mode == 7; /* stored plan fails, measured OOB succeeds */
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            if (mode == 3) d2k_sched_set_send_cap(s, 1400);
+            d2s_sched_set_say(s, collect_say, NULL);
+            if (mode == 3) d2s_sched_set_send_cap(s, 1400);
             tcp_calls = ver_calls = vol_calls = 0;
             uint16_t cport = (uint16_t)(42401 + mode);
             ver_answer_port = cport;
@@ -13465,15 +13465,15 @@ measured_test:
                                mode == 2 ? "edge-legacy.facebook.example" :
                                mode == 3 ? "edge-mqtt-narrow.facebook.example" :
                                            "edge-nft.facebook.example";
-            d2k_ev h = ev_hello(6, cport, name); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, cport); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, cport, name); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, cport); d2s_sched_event(s, &su);
             int used = 0;
             for (int i = 0; i < 1500 && !said("отложен") &&
                             !said("ПОДТВЕРЖДЕНО собственным зондом"); i++) {
                 spin(s, 120);
                 drain();
                 if (mode != 5) {
-                    d2k_ev ap = ev_applied(6, cport); d2k_sched_event(s, &ap);
+                    d2s_ev ap = ev_applied(6, cport); d2s_sched_event(s, &ap);
                 }
                 if (ver_snapshot_repeat) {
                     pthread_mutex_lock(&snapshot_mu);
@@ -13535,7 +13535,7 @@ measured_test:
             } else if (mode == 3) {
                 /* Поле 22.10.2026 (issue #5/#7): узкий канал (предел 1400) больше
                    не выбрасывает приём замера — сегмент укладывается под предел
-                   (1400 − 72 = 1328, d2k_arm_segment), план задаётся и
+                   (1400 − 72 = 1328, d2s_arm_segment), план задаётся и
                    испытывается как на обычном канале. Прежде плечо «не
                    помещалось в предел отправки», и цель уходила в перебор. */
                 CHECK(!said("не помещается в предел отправки"),
@@ -13566,98 +13566,98 @@ measured_test:
                       "t37: запасной перебор начался раньше вопросов о свойствах");
             }
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_snapshot_enabled = ver_snapshot_repeat = ver_local_limit = ver_fail_first = 0;
         }
-        tcp_answer = D2K_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
+        tcp_answer = D2S_V_OPAQUE; tcp_owns_search = tcp_found_arm = 0;
         tcp_trace_lines = 0;
-        ver_answer = D2K_VER_APPLICATION;
+        ver_answer = D2S_VER_APPLICATION;
 
         /* A direct result must not acquire the generic task_fail label;
            resting cleanup and shutdown must not emit it a second time. */
         {
-            d2k_catalog c = {0};
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_catalog c = {0};
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            tcp_answer = D2K_V_CLEAR;
+            d2s_sched_set_say(s, collect_say, NULL);
+            tcp_answer = D2S_V_CLEAR;
             spin(s, 1);
-            d2k_ev h = ev_hello(6, 42429, "summary-direct.example");
-            d2k_ev su = ev_suspect(6, 42429);
-            d2k_sched_event(s, &h); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42429, "summary-direct.example");
+            d2s_ev su = ev_suspect(6, 42429);
+            d2s_sched_event(s, &h); d2s_sched_event(s, &su);
             settle(s);
             CHECK(said("outcome=probe-direct path=direct") && !said("outcome=failed"),
                   "summary: direct success was lost or reported as failure");
-            d2k_sched_free(s);
+            d2s_sched_free(s);
             const char *row = strstr(saidbuf, "итог поиска:");
             CHECK(row && !strstr(row + 1, "итог поиска:"),
                   "summary: terminal outcome duplicated on cleanup");
-            d2k_catalog_free(&c);
-            tcp_answer = D2K_V_OPAQUE;
+            d2s_catalog_free(&c);
+            tcp_answer = D2S_V_OPAQUE;
         }
 
         {
-            d2k_catalog c = {0};
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_catalog c = {0};
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             tcp_block_until_stop = 1;
             spin(s, 1);
             for (uint16_t i = 0; i < 2; i++) {
-                d2k_ev h = ev_hello(6, (uint16_t)(42427 + i),
+                d2s_ev h = ev_hello(6, (uint16_t)(42427 + i),
                     i ? "summary-queued.example" : "summary-active.example");
-                d2k_ev su = ev_suspect(6, (uint16_t)(42427 + i));
-                d2k_sched_event(s, &h); d2k_sched_event(s, &su);
+                d2s_ev su = ev_suspect(6, (uint16_t)(42427 + i));
+                d2s_sched_event(s, &h); d2s_sched_event(s, &su);
             }
             skip_ahead(s, 100); /* still inside the 250 ms admission gap */
-            d2k_sched_free(s);
+            d2s_sched_free(s);
             const char *row = strstr(saidbuf, "target=summary-queued.example");
             CHECK(row && strstr(row, "outcome=shutdown path=none") &&
                   strstr(row, "elapsed_ms=100 queue_ms=100 live=unknown"),
                   "summary: shutdown omitted queued work or lost queue time");
             tcp_block_until_stop = 0;
-            d2k_catalog_free(&c);
+            d2s_catalog_free(&c);
         }
 
         /* F3: клиент — MQTT поверх TLS 1.3 (ALPN «mqtt», «mqttv5»). Зонд
            подтверждения предлагает ЕГО ALPN, а не http/1.1, и засчитывает
            завершённое рукопожатие как доказательство уровня рукопожатия:
-           привязка — D2K_VERBY_PROBE_HANDSHAKE, не PROBE (приложение не
+           привязка — D2S_VERBY_PROBE_HANDSHAKE, не PROBE (приложение не
            измерено). HTTP-зонд не зовётся. */
         {
-            d2k_sched_alpn_ver_fn saved_alpn = d2k_sched_alpn_ver_hook;
-            d2k_sched_alpn_ver_hook = stub_alpn_ver;
-            d2k_catalog c = {0};
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_alpn_ver_fn saved_alpn = d2s_sched_alpn_ver_hook;
+            d2s_sched_alpn_ver_hook = stub_alpn_ver;
+            d2s_catalog c = {0};
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-            ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+            d2s_sched_set_say(s, collect_say, NULL);
+            tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+            ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
             tcp_calls = ver_calls = alpn_ver_calls = 0; alpn_ver_seen_len = 0;
             const char *nm = "edge-mqtt-alpn.facebook.example";
             uint16_t cport = 42431;
             ver_answer_port = cport;
-            d2k_ev sh; memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE; sh.transport = 6;
-            CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
+            d2s_ev sh; memset(&sh, 0, sizeof sh);
+            sh.kind = D2S_EV_SHAPE; sh.transport = 6;
+            CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
                                          &sh.shape_len) == 0, "t37/F3: снимок не собрался");
             uint8_t list[256]; size_t ll = 0;
-            CHECK(d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 &&
+            CHECK(d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 &&
                   ll == 12, "t37/F3: в профиле нет ожидаемого ALPN h2,http/1.1");
             static const uint8_t mqtt[12] = { 4,'m','q','t','t', 6,'m','q','t','t','v','5' };
             for (size_t i = 0; ll == 12 && i + 12 <= sh.shape_len; i++) {
                 if (!memcmp(sh.shape + i, list, 12)) { memcpy(sh.shape + i, mqtt, 12); break; }
             }
-            CHECK(d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 &&
-                  ll == 12 && !memcmp(list, mqtt, 12) && !d2k_alpn_is_http(list, ll),
+            CHECK(d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 &&
+                  ll == 12 && !memcmp(list, mqtt, 12) && !d2s_alpn_is_http(list, ll),
                   "t37/F3: ALPN снимка не переписан на mqtt");
             drain(); forget_sent();
-            d2k_ev h = ev_hello(6, cport, nm); d2k_sched_event(s, &h);
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, cport); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, cport, nm); d2s_sched_event(s, &h);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, cport); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, cport); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, cport); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(alpn_ver_calls >= 1 && alpn_ver_seen_len == 12 &&
@@ -13669,13 +13669,13 @@ measured_test:
             CHECK(said("outcome=probe-confirmed path=property") &&
                   said("live=unknown") && !said("elapsed_ms=-1"),
                   "t37/F3: property summary loses clock or claims live proof");
-            const d2k_cat_binding *bd = binding_of(&c, nm, 6);
-            CHECK(bd && bd->verified_by == D2K_VERBY_PROBE_HANDSHAKE,
+            const d2s_cat_binding *bd = binding_of(&c, nm, 6);
+            CHECK(bd && bd->verified_by == D2S_VERBY_PROBE_HANDSHAKE,
                   "t37/F3: привязка не помечена уровнем рукопожатия (выдана за приложение)");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_alpn_ver_hook = saved_alpn;
-            tcp_answer = D2K_V_OPAQUE;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_alpn_ver_hook = saved_alpn;
+            tcp_answer = D2S_V_OPAQUE;
         }
         /* ПОЛЕ 07.10.2026 (KN-1811, edge-mqtt.facebook.com): приложение
            Facebook шлёт ClientHello БЕЗ ALPN (запись с провода: TLS 1.3 и
@@ -13685,22 +13685,22 @@ measured_test:
            повторяет его как есть — без ALPN, и при доказанном блоке
            рукопожатия засчитывает завершённое рукопожатие. */
         {
-            d2k_sched_alpn_ver_fn saved_alpn = d2k_sched_alpn_ver_hook;
-            d2k_sched_alpn_ver_hook = stub_alpn_ver;
-            d2k_catalog c = {0};
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_alpn_ver_fn saved_alpn = d2s_sched_alpn_ver_hook;
+            d2s_sched_alpn_ver_hook = stub_alpn_ver;
+            d2s_catalog c = {0};
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-            ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+            d2s_sched_set_say(s, collect_say, NULL);
+            tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+            ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
             tcp_calls = ver_calls = alpn_ver_calls = 0; alpn_ver_seen_len = 99;
             const char *nm = "edge-mqtt-noalpn.facebook.example";
             uint16_t cport = 42435;
             ver_answer_port = cport;
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, nm, D2K_SHAPE_MODERN) == 0, "noalpn: снимок");
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, nm, D2S_SHAPE_MODERN) == 0, "noalpn: снимок");
             uint8_t list[256]; size_t ll = 0;
-            CHECK(d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 && ll == 12,
+            CHECK(d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 && ll == 12,
                   "noalpn: ALPN профиля");
             for (size_t i = 0; ll == 12 && i + 18 <= sh.shape_len; i++) {
                 if (sh.shape[i] == 0x00 && sh.shape[i + 1] == 0x10 && sh.shape[i + 2] == 0 &&
@@ -13709,15 +13709,15 @@ measured_test:
                     break;
                 }
             }
-            CHECK(d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 0,
+            CHECK(d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 0,
                   "noalpn: в снимке остался ALPN");
             drain(); forget_sent();
-            d2k_ev h = ev_hello(6, cport, nm); d2k_sched_event(s, &h);
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, cport); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, cport, nm); d2s_sched_event(s, &h);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, cport); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, cport); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, cport); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(alpn_ver_calls >= 1 && alpn_ver_seen_len == 0,
@@ -13726,9 +13726,9 @@ measured_test:
             CHECK(said("ПОДТВЕРЖДЕНО собственным зондом на уровне рукопожатия"),
                   "noalpn: рукопожатие без ALPN не подтвердило план");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_alpn_ver_hook = saved_alpn;
-            tcp_answer = D2K_V_OPAQUE;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_alpn_ver_hook = saved_alpn;
+            tcp_answer = D2S_V_OPAQUE;
         }
         /* F3, раунд 2: рукопожатие НЕ было заблокировано (CLEAR), блок
            доказан обрывом объёма (RX-cut, мерился по HTTP — сервер говорит
@@ -13736,23 +13736,23 @@ measured_test:
            рукопожатием» было бы ложным подтверждением. Ни клиент без ALPN,
            ни даже явный не-HTTP ALPN не уводят такое испытание с RX-пути. */
         for (int variant = 0; variant < 2; variant++) {
-            d2k_sched_alpn_ver_fn saved_alpn = d2k_sched_alpn_ver_hook;
-            d2k_sched_alpn_ver_hook = stub_alpn_ver;
-            d2k_catalog c = {0};
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_alpn_ver_fn saved_alpn = d2s_sched_alpn_ver_hook;
+            d2s_sched_alpn_ver_hook = stub_alpn_ver;
+            d2s_catalog c = {0};
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
-            tcp_answer = D2K_V_CLEAR; tcp_owns_search = tcp_found_arm = 0;
-            vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1;
-            ver_answer = D2K_VER_HANDSHAKE; ver_fail_first = 0;
+            d2s_sched_set_say(s, collect_say, NULL);
+            tcp_answer = D2S_V_CLEAR; tcp_owns_search = tcp_found_arm = 0;
+            vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1;
+            ver_answer = D2S_VER_HANDSHAKE; ver_fail_first = 0;
             tcp_calls = ver_calls = alpn_ver_calls = 0;
             const char *nm = variant ? "rxcut-mqtt.example" : "rxcut-noalpn.example";
             uint16_t cport = (uint16_t)(42441 + variant);
             ver_answer_port = cport;
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, nm, D2K_SHAPE_MODERN) == 0, "t37/F3r2: снимок");
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, nm, D2S_SHAPE_MODERN) == 0, "t37/F3r2: снимок");
             uint8_t list[256]; size_t ll = 0;
-            CHECK(d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 && ll == 12,
+            CHECK(d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll) == 1 && ll == 12,
                   "t37/F3r2: ALPN профиля");
             for (size_t i = 0; ll == 12 && i + 18 <= sh.shape_len; i++) {
                 /* тип 0x0010, длина 14, список 12 */
@@ -13764,16 +13764,16 @@ measured_test:
                     break;
                 }
             }
-            int arc = d2k_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll);
-            CHECK(variant ? (arc == 1 && !d2k_alpn_is_http(list, ll)) : arc == 0,
+            int arc = d2s_hello_alpn(sh.shape, sh.shape_len, list, sizeof list, &ll);
+            CHECK(variant ? (arc == 1 && !d2s_alpn_is_http(list, ll)) : arc == 0,
                   "t37/F3r2: снимок не переписан");
             drain(); forget_sent();
-            d2k_ev h = ev_hello(6, cport, nm); d2k_sched_event(s, &h);
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, cport); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, cport, nm); d2s_sched_event(s, &h);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, cport); d2s_sched_event(s, &su);
             for (int i = 0; i < 20; i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, cport); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, cport); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(tcp_calls == 1 && ver_calls >= 1,
@@ -13784,12 +13784,12 @@ measured_test:
                   "t37/F3r2: план подтверждён рукопожатием, которое проходит и без него");
             for (size_t bi = 0; bi < c.n_boxes; bi++)
                 for (size_t j = 0; j < c.boxes[bi].n_binds; j++)
-                    CHECK(c.boxes[bi].binds[j].verified_by != D2K_VERBY_PROBE_HANDSHAKE,
+                    CHECK(c.boxes[bi].binds[j].verified_by != D2S_VERBY_PROBE_HANDSHAKE,
                           "t37/F3r2: привязка записана уровнем рукопожатия");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_alpn_ver_hook = saved_alpn;
-            vol_rx_cut = 0; tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_alpn_ver_hook = saved_alpn;
+            vol_rx_cut = 0; tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
         }
         if (measured_only) { goto voice_only_done; }
     }
@@ -13802,34 +13802,34 @@ client_tcp_test:
        CLIENT. Снимок без набора (старый датапат, холодный старт) — зонд
        прежним набором, привязка PROFILE, не CLIENT. */
     for (int with_opts = 1; with_opts >= 0; with_opts--) {
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         tcp_calls = 0; tcp_last_opts_known = -1; tcp_last_opts_len = 99;
         uint16_t port = (uint16_t)(40430 + with_opts);
         ver_answer_port = port;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; drain(); forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; drain(); forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
         const char *nm = with_opts ? "opts.client.example" : "noopts.client.example";
-        d2k_ev h = ev_hello(6, port, nm); d2k_sched_event(s, &h);
+        d2s_ev h = ev_hello(6, port, nm); d2s_sched_event(s, &h);
         if (with_opts) {
-            d2k_ev ct = h; ct.kind = D2K_EV_CLIENT_TCP; ct.name[0] = 0;
+            d2s_ev ct = h; ct.kind = D2S_EV_CLIENT_TCP; ct.name[0] = 0;
             memcpy(ct.tcp_options, (uint8_t[]){1, 1, 8, 10, 0, 0, 0x23, 0x28, 0, 0, 0, 0}, 12);
             ct.tcp_options_len = 12;
-            d2k_sched_event(s, &ct);
+            d2s_sched_event(s, &ct);
         }
-        d2k_ev sh = h; sh.kind = D2K_EV_SHAPE; sh.name[0] = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
+        d2s_ev sh = h; sh.kind = D2S_EV_SHAPE; sh.name[0] = 0;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
                                      &sh.shape_len) == 0, "client-tcp: снимок");
-        d2k_sched_event(s, &sh);
-        d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+        d2s_sched_event(s, &sh);
+        d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
         for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 200);
-            d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
         }
         spin(s, 40);
         CHECK(tcp_calls >= 1, "client-tcp: замер не шёл");
-        const d2k_cat_binding *bd = binding_of(&c, nm, 6);
+        const d2s_cat_binding *bd = binding_of(&c, nm, 6);
         if (with_opts) {
             CHECK(tcp_last_opts_known == 1 && tcp_last_opts_len == 12,
                   "client-tcp: зонд пошёл не набором клиента");
@@ -13841,11 +13841,11 @@ client_tcp_test:
            независимо от того, доехал ли набор опций (решение ниже в журнале
            работ). Набор не снят бывает только у старой пары провода, которую
            сверка версии (v21) и так не допускает. */
-        CHECK(bd && bd->input == D2K_INPUT_CLIENT,
+        CHECK(bd && bd->input == D2S_INPUT_CLIENT,
               "client-tcp: привязка по снимку клиента не CLIENT");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
     }
 
     /* --- ОТВЕРГНУТЫЙ СНИМОК НЕ СЪЕДАЕТ И НЕ ПОДМЕНЯЕТ НАБОР ОПЦИЙ (ревью
@@ -13857,43 +13857,43 @@ client_tcp_test:
        ожидавший следующий, годный снимок. Правило: набор связывается только с
        тем снимком, который действительно сохранён. */
     {
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
-        ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; tcp_owns_search = tcp_found_arm = 0;
+        ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         tcp_calls = 0; tcp_last_opts_known = -1; tcp_last_opts_len = 99;
         const char *nm = "cut.client.example";
         uint16_t port = 40440;
         ver_answer_port = port;
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; drain(); forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; drain(); forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
 
         /* Годный снимок БЕЗ набора опций: набор не снят. */
-        d2k_ev h = ev_hello(6, port, nm); d2k_sched_event(s, &h);
-        d2k_ev sh = h; sh.kind = D2K_EV_SHAPE; sh.name[0] = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
+        d2s_ev h = ev_hello(6, port, nm); d2s_sched_event(s, &h);
+        d2s_ev sh = h; sh.kind = D2S_EV_SHAPE; sh.name[0] = 0;
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, nm, sh.shape, sizeof sh.shape,
                                      &sh.shape_len) == 0, "cut: снимок");
-        d2k_sched_event(s, &sh);
+        d2s_sched_event(s, &sh);
 
         /* Набор опций ЧУЖОГО (обрезанного) приветствия и сам обрезанный снимок. */
-        d2k_ev ct = h; ct.kind = D2K_EV_CLIENT_TCP; ct.name[0] = 0;
+        d2s_ev ct = h; ct.kind = D2S_EV_CLIENT_TCP; ct.name[0] = 0;
         memcpy(ct.tcp_options, (uint8_t[]){1, 1, 8, 10, 0, 0, 0x23, 0x28, 0, 0, 0, 0}, 12);
         ct.tcp_options_len = 12;
-        d2k_sched_event(s, &ct);
-        d2k_ev cut = sh; cut.shape_len = sh.shape_len / 2;   /* целого ClientHello нет */
-        d2k_sched_event(s, &cut);
+        d2s_sched_event(s, &ct);
+        d2s_ev cut = sh; cut.shape_len = sh.shape_len / 2;   /* целого ClientHello нет */
+        d2s_sched_event(s, &cut);
 
-        d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+        d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
         for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 200);
-            d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
         }
         spin(s, 40);
         CHECK(tcp_calls >= 1, "cut: замер не шёл");
         CHECK(tcp_last_opts_known == 0,
               "cut: опции обрезанного приветствия привязаны к ранее снятому снимку");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        d2k_sched_free(s); d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        d2s_sched_free(s); d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
         if (client_tcp_only) { goto voice_only_done; }
     }
 
@@ -13902,26 +13902,26 @@ unfit_test:
        Поле issue #7 (22.10.2026): план с меткой времени подтверждён зондом,
        телефоны его исполняют, а ПК без метки времени получает 13 из 13 «план
        не применён». Датапат теперь отвечает на таком потоке кодом
-       D2K_REFUSE_FLOW_UNFIT. Ядро обязано: не писать свойство коробки и не
+       D2S_REFUSE_FLOW_UNFIT. Ядро обязано: не писать свойство коробки и не
        судить план, а пометить привязку на повторную проверку и начать замер
        цели для этого клиента — вместо «план подтверждён, датапат его не
        применял». Привязка при этом цела (каталог сохранён, план не стёрт). */
     {
-        d2k_catalog c = {0};
-        tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+        d2s_catalog c = {0};
+        tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
         confirm_once(&c, sv[0], "pc.unfit.net", 40420);
-        const d2k_cat_binding *bd0 = binding_of(&c, "pc.unfit.net", 6);
+        const d2s_cat_binding *bd0 = binding_of(&c, "pc.unfit.net", 6);
         CHECK(bd0 && bd0->level >= 3 && bd0->enabled && !bd0->recheck_since,
               "unfit: fixture — привязка не подтверждена");
-        d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-        saidbuf[0] = 0; drain(); forget_sent(); d2k_sched_set_say(s, collect_say, NULL);
-        d2k_ev h = ev_hello(6, 40421, "pc.unfit.net"); d2k_sched_event(s, &h);
-        d2k_ev unfit = h; unfit.kind = D2K_EV_REFUSED; unfit.code = D2K_REFUSE_FLOW_UNFIT;
+        d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+        saidbuf[0] = 0; drain(); forget_sent(); d2s_sched_set_say(s, collect_say, NULL);
+        d2s_ev h = ev_hello(6, 40421, "pc.unfit.net"); d2s_sched_event(s, &h);
+        d2s_ev unfit = h; unfit.kind = D2S_EV_REFUSED; unfit.code = D2S_REFUSE_FLOW_UNFIT;
         unfit.client_shape = bd0 ? bd0->shape : 0;
         memset(unfit.plan_id, 0, sizeof unfit.plan_id);
         if (bd0) memcpy(unfit.plan_id, bd0->plan_id, strlen(bd0->plan_id));
-        d2k_sched_event(s, &unfit);
-        const d2k_cat_binding *bd = binding_of(&c, "pc.unfit.net", 6);
+        d2s_sched_event(s, &unfit);
+        const d2s_cat_binding *bd = binding_of(&c, "pc.unfit.net", 6);
         CHECK(bd && bd->enabled && bd->level >= 3 && bd->plan_id[0],
               "unfit: привязка стёрта или понижена — отказ клиента не улика против плана");
         CHECK(bd && bd->recheck_since,
@@ -13930,13 +13930,13 @@ unfit_test:
               "unfit: причина не названа — клиент без того, что план требует");
         CHECK(!said("не помещается в посылку"),
               "unfit: отказ клиента выдан за непоместившуюся посылку");
-        CHECK(d2k_sched_active(s) > 0,
+        CHECK(d2s_sched_active(s) > 0,
               "unfit: замер цели для этого клиента не начат");
         /* Второй такой же отказ (следующее соединение того же ПК) не плодит
            ни второй пометки, ни второй строки. */
         int64_t marked = bd ? bd->recheck_since : 0;
-        d2k_ev h2 = ev_hello(6, 40422, "pc.unfit.net"); d2k_sched_event(s, &h2);
-        d2k_ev unfit2 = unfit; unfit2.high_port = 40422; d2k_sched_event(s, &unfit2);
+        d2s_ev h2 = ev_hello(6, 40422, "pc.unfit.net"); d2s_sched_event(s, &h2);
+        d2s_ev unfit2 = unfit; unfit2.high_port = 40422; d2s_sched_event(s, &unfit2);
         bd = binding_of(&c, "pc.unfit.net", 6);
         CHECK(bd && bd->recheck_since == marked, "unfit: повторный отказ перепометил привязку");
 
@@ -13951,7 +13951,7 @@ unfit_test:
         ver_answer_port = 40423;
         for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
             spin(s, 200);
-            d2k_ev ap = ev_applied(6, 40423); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 40423); d2s_sched_event(s, &ap);
         }
         spin(s, 40);
         CHECK(!said("потоку клиента — нет"),
@@ -13965,7 +13965,7 @@ unfit_test:
         char clean_plan[40] = "";
         for (size_t bi = 0; bi < c.n_boxes; bi++)
             for (size_t j = 0; j < c.boxes[bi].n_binds; j++) {
-                const d2k_cat_binding *q = &c.boxes[bi].binds[j];
+                const d2s_cat_binding *q = &c.boxes[bi].binds[j];
                 if (strcmp(q->target, "pc.unfit.net") || q->transport != 6) { continue; }
                 if (q->enabled && q->level >= 3 && !q->recheck_since) {
                     clean_rows++;
@@ -13985,21 +13985,21 @@ unfit_test:
         CHECK(said("уже перемеряна"),
               "unfit: детерминированность повторного отказа не названа в журнале");
         saidbuf[0] = 0;
-        size_t active_before = d2k_sched_active(s);
-        d2k_ev h3 = ev_hello(6, 40424, "pc.unfit.net"); d2k_sched_event(s, &h3);
-        d2k_ev unfit3 = unfit; unfit3.high_port = 40424;
+        size_t active_before = d2s_sched_active(s);
+        d2s_ev h3 = ev_hello(6, 40424, "pc.unfit.net"); d2s_sched_event(s, &h3);
+        d2s_ev unfit3 = unfit; unfit3.high_port = 40424;
         memset(unfit3.plan_id, 0, sizeof unfit3.plan_id);
         memcpy(unfit3.plan_id, clean_plan, strlen(clean_plan));
-        d2k_sched_event(s, &unfit3);
+        d2s_sched_event(s, &unfit3);
         spin(s, 40);
         CHECK(!said("помечена на повторную проверку"),
               "unfit: тот же отказ того же плана снова помечает цель — цикл перемера");
-        CHECK(d2k_sched_active(s) <= active_before,
+        CHECK(d2s_sched_active(s) <= active_before,
               "unfit: тот же отказ того же плана завёл второй замер");
         int still_clean = 0;
         for (size_t bi = 0; bi < c.n_boxes; bi++)
             for (size_t j = 0; j < c.boxes[bi].n_binds; j++) {
-                const d2k_cat_binding *q = &c.boxes[bi].binds[j];
+                const d2s_cat_binding *q = &c.boxes[bi].binds[j];
                 if (!strcmp(q->target, "pc.unfit.net") && q->transport == 6 &&
                     q->enabled && q->level >= 3 && !q->recheck_since &&
                     !strcmp(q->plan_id, clean_plan)) { still_clean = 1; }
@@ -14007,8 +14007,8 @@ unfit_test:
         CHECK(still_clean,
               "unfit: повторный отказ снял с провода работающую привязку");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
-        settle(s); d2k_sched_free(s); d2k_catalog_free(&c);
-        tcp_answer = D2K_V_OPAQUE;
+        settle(s); d2s_sched_free(s); d2s_catalog_free(&c);
+        tcp_answer = D2S_V_OPAQUE;
         if (unfit_only) { goto voice_only_done; }
     }
 
@@ -14023,36 +14023,36 @@ own_first_test:
        рукопожатии — и до продолжения классификации пробуются не больше трёх
        своих подтверждённых планов той же формы. */
     {
-        d2k_sched_tcp_fn saved_base = d2k_sched_tcp_base_hook;
-        d2k_sched_ver_fn saved_rx = d2k_sched_rx_ver_hook;
-        d2k_sched_ver_fn saved_gzip = d2k_sched_rx_gzip_ver_hook;
-        d2k_sched_tcp_base_hook = stub_base;
+        d2s_sched_tcp_fn saved_base = d2s_sched_tcp_base_hook;
+        d2s_sched_ver_fn saved_rx = d2s_sched_rx_ver_hook;
+        d2s_sched_ver_fn saved_gzip = d2s_sched_rx_gzip_ver_hook;
+        d2s_sched_tcp_base_hook = stub_base;
         tcp_found_arm = 0; tcp_owns_search = 0;
         tcp_wait_until_stop = 0; tcp_block_until_stop = 0;
         ver_fail_first = 0; ver_unsupported = 0; ver_cloudflare_challenge = 0;
-        vol_answer = D2K_VOL_PASSED; vol_rx_cut = 0; vol_rx_tls_unavailable = 0;
+        vol_answer = D2S_VOL_PASSED; vol_rx_cut = 0; vol_rx_tls_unavailable = 0;
         snapshot_enabled = 0;
 
         /* (a) Свой план другой цели подтверждается собственным зондом раньше
            полного замера: классификатор не зовётся, привязка ложится под
            коробку плана с происхождением «перенесено, проверено зондом». */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-cf-own", pid, 2, 3, "rutracker.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-cf-own", pid, 2, 3, "rutracker.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched_rx_ver_hook = stub_rx_counting;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_rx_ver_hook = stub_rx_counting;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = layered_identity_calls = 0;
             ver_answer_port = 42101;
-            d2k_ev h = ev_hello(6, 42101, "static.rutracker.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42101); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42101, "static.rutracker.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42101); d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42101); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42101); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(base_calls == 1, "own-first: базовый вопрос донора не задан один раз");
             CHECK(said("пробую свои подтверждённые планы до полного замера: 1"),
@@ -14061,7 +14061,7 @@ own_first_test:
                   "own-first: подтверждённый свой план не остановил полный замер");
             CHECK(layered_identity_calls >= 1,
                   "own-first: свой план испытан не RX-путём (identity) при закрытом рукопожатии");
-            const d2k_cat_binding *bd = binding_of(&c, "static.rutracker.own", 6);
+            const d2s_cat_binding *bd = binding_of(&c, "static.rutracker.own", 6);
             CHECK(bd != NULL && !strcmp(bd->plan_id, pid),
                   "own-first: цель не привязана к своему подтверждённому плану");
             const char *owner = NULL;
@@ -14071,14 +14071,14 @@ own_first_test:
                         owner = c.boxes[i].id;
             CHECK(owner && !strcmp(owner, "box-cf-own"),
                   "own-first: привязка легла не под коробку плана");
-            CHECK(bd && bd->verified_by == D2K_VERBY_PROBE && bd->input == D2K_INPUT_TRANSFER &&
-                  bd->level >= 3 && bd->shape == D2K_SHAPE_MODERN && bd->family == 4,
+            CHECK(bd && bd->verified_by == D2S_VERBY_PROBE && bd->input == D2S_INPUT_TRANSFER &&
+                  bd->level >= 3 && bd->shape == D2S_SHAPE_MODERN && bd->family == 4,
                   "own-first: происхождение не «перенесено, проверено зондом»");
             CHECK(said("ПОДТВЕРЖДЕНО собственным зондом"),
                   "own-first: подтверждение не сказано");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_rx_ver_hook = saved_rx;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_rx_ver_hook = saved_rx;
         }
 
         /* (a-fam) Блок доказан базовым вопросом (0/3), свой план подтверждён
@@ -14088,22 +14088,22 @@ own_first_test:
            плане, записан только rr16). Имя в настоящей зоне: у выдуманной нет
            базового домена, и семейства там не бывает вовсе. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-fam-own", pid, 2, 3, "a.famtest.org", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-fam-own", pid, 2, 3, "a.famtest.org", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched_rx_ver_hook = stub_rx_counting;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_rx_ver_hook = stub_rx_counting;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = layered_identity_calls = 0;
             ver_answer_port = 42109;
-            d2k_ev h = ev_hello(6, 42109, "b.famtest.org"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42109); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42109, "b.famtest.org"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42109); d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42109); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42109); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(said("ПОДТВЕРЖДЕНО собственным зондом") && tcp_calls == 0,
                   "own-first fam: свой план не подтвердился до полного замера");
@@ -14111,11 +14111,11 @@ own_first_test:
             for (size_t i = 0; c.groups && i < c.groups->n_observations; i++)
                 if (!strcmp(c.groups->observations[i].name, "b.famtest.org") &&
                     !strcmp(c.groups->observations[i].plan_id, pid) &&
-                    (c.groups->observations[i].evidence & D2K_GROUP_BLOCKED_CONFIRMED)) own_vote = 1;
+                    (c.groups->observations[i].evidence & D2S_GROUP_BLOCKED_CONFIRMED)) own_vote = 1;
             CHECK(own_vote, "own-first fam: подтверждение своим планом не записано опытом семейства");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_rx_ver_hook = saved_rx;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_rx_ver_hook = saved_rx;
         }
 
         /* (a2) ЗАДАЧА 49: GREASE ECH (любой Chromium) — те же свои планы до
@@ -14125,71 +14125,71 @@ own_first_test:
            ech_offer, а GREASE распознаётся позже, в рабочем потоке, после
            чего поток сразу шёл в полный классификатор. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-cf-grease", pid, 2, 3, "rutracker.grease", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-cf-grease", pid, 2, 3, "rutracker.grease", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched_rx_ver_hook = stub_rx_counting;
-            d2k_sched_ech_resolve_hook = stub_ech_resolve;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_rx_ver_hook = stub_rx_counting;
+            d2s_sched_ech_resolve_hook = stub_ech_resolve;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42105;
             uint8_t eb[2048]; size_t el = 0;
             CHECK(ech_offer_hello("grease-own.example", eb, sizeof eb, &el) == 0 &&
-                  d2k_hello_ech_offer(eb, el, NULL) == 1, "own-first GREASE: fixture");
-            d2k_ev h = ev_hello(6, 42105, "grease-own.example"); d2k_sched_event(s, &h);
-            d2k_ev sh; memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+                  d2s_hello_ech_offer(eb, el, NULL) == 1, "own-first GREASE: fixture");
+            d2s_ev h = ev_hello(6, 42105, "grease-own.example"); d2s_sched_event(s, &h);
+            d2s_ev sh; memset(&sh, 0, sizeof sh);
+            sh.kind = D2S_EV_SHAPE; sh.transport = 6;
             memcpy(sh.shape, eb, el); sh.shape_len = el;
-            d2k_sched_event(s, &sh);
-            d2k_ev su = ev_suspect(6, 42105); d2k_sched_event(s, &su);
+            d2s_sched_event(s, &sh);
+            d2s_ev su = ev_suspect(6, 42105); d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42105); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42105); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(said("GREASE"), "own-first GREASE: GREASE не распознан");
             CHECK(base_calls == 1, "own-first GREASE: базовый вопрос донора не задан");
             CHECK(said("пробую свои подтверждённые планы до полного замера: 1"),
                   "own-first GREASE: свои планы не пробовались до полного замера");
             CHECK(tcp_calls == 0, "own-first GREASE: полный классификатор пошёл раньше своих планов");
-            const d2k_cat_binding *bd = binding_of(&c, "grease-own.example", 6);
+            const d2s_cat_binding *bd = binding_of(&c, "grease-own.example", 6);
             CHECK(bd != NULL && !strcmp(bd->plan_id, pid),
                   "own-first GREASE: цель не подтверждена своим планом");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_rx_ver_hook = saved_rx;
-            d2k_sched_ech_resolve_hook = d2k_ech_resolve;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_rx_ver_hook = saved_rx;
+            d2s_sched_ech_resolve_hook = d2s_ech_resolve;
         }
 
         /* (a3) GREASE, свой план не помог: ровно один полный прогон с ответом
            базы, HTTPS RR второй раз не спрашивается. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
             own_box(&c, "box-cf-grease-miss", pid, 2, 3, "rutracker.grease-miss", 6,
-                    D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+                    D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched_tcp_seeded_hook = stub_tcp_seeded;
+            d2s_sched_tcp_seeded_hook = stub_tcp_seeded;
             seeded_calls = 0;
-            d2k_sched_ech_resolve_hook = stub_ech_resolve;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_ech_resolve_hook = stub_ech_resolve;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             uint8_t eb[2048]; size_t el = 0;
             CHECK(ech_offer_hello("grease-miss.example", eb, sizeof eb, &el) == 0,
                   "own-first GREASE miss: fixture");
-            d2k_ev h = ev_hello(6, 42106, "grease-miss.example"); d2k_sched_event(s, &h);
-            d2k_ev sh; memset(&sh, 0, sizeof sh);
-            sh.kind = D2K_EV_SHAPE; sh.transport = 6;
+            d2s_ev h = ev_hello(6, 42106, "grease-miss.example"); d2s_sched_event(s, &h);
+            d2s_ev sh; memset(&sh, 0, sizeof sh);
+            sh.kind = D2S_EV_SHAPE; sh.transport = 6;
             memcpy(sh.shape, eb, el); sh.shape_len = el;
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             ech_resolve_calls = 0;
-            d2k_ev su = ev_suspect(6, 42106); d2k_sched_event(s, &su);
+            d2s_ev su = ev_suspect(6, 42106); d2s_sched_event(s, &su);
             for (int i = 0; i < 30 && tcp_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
             settle(s);
             int resolves = ech_resolve_calls;
@@ -14201,33 +14201,33 @@ own_first_test:
                   "own-first GREASE miss: HTTPS RR спрошен повторно после regrade");
             CHECK(said("свои подтверждённые планы не подтвердились"),
                   "own-first GREASE miss: неудача своих планов не видна");
-            d2k_sched_tcp_seeded_hook = NULL;
+            d2s_sched_tcp_seeded_hook = NULL;
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_ech_resolve_hook = d2k_ech_resolve;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_ech_resolve_hook = d2s_ech_resolve;
         }
 
         /* (b) Свой план не подтвердился: классификация продолжается как
            прежде, её вердикт и её кандидаты — те же, что без этого шага. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-cf-miss", pid, 2, 3, "miss-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-cf-miss", pid, 2, 3, "miss-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 1; base_blocked_answer = 1;
-            d2k_sched_tcp_seeded_hook = stub_tcp_seeded;
+            d2s_sched_tcp_seeded_hook = stub_tcp_seeded;
             seeded_calls = 0; seeded_pass = seeded_fail = -2;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42111;
-            d2k_ev h = ev_hello(6, 42111, "miss-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42111); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42111, "miss-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42111); d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 200);
-                d2k_ev ap = ev_applied(6, 42111); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42111); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(base_calls == 1 && tcp_calls == 1,
@@ -14239,14 +14239,14 @@ own_first_test:
             const char *verdict_at = strstr(saidbuf, "вердикт: помогает разрез");
             CHECK(own_at && verdict_at && own_at < verdict_at,
                   "own-first: вердикт донора не тот или пришёл раньше своих планов");
-            const d2k_cat_binding *bd = binding_of(&c, "miss-second.own", 6);
-            CHECK(bd != NULL && bd->input != D2K_INPUT_TRANSFER,
+            const d2s_cat_binding *bd = binding_of(&c, "miss-second.own", 6);
+            CHECK(bd != NULL && bd->input != D2S_INPUT_TRANSFER,
                   "own-first: после полного замера подтверждение записано как перенос");
             CHECK(seeded_calls == 1 && seeded_pass == 0 && seeded_fail == 3,
                   "own-first: полный замер не получил ответ базового вопроса (I2)");
-            d2k_sched_tcp_seeded_hook = NULL;
+            d2s_sched_tcp_seeded_hook = NULL;
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_app_after_tcp_search = 0;
         }
 
@@ -14262,26 +14262,26 @@ own_first_test:
            ПАДАЕТ БЕЗ ПРАВКИ: обычный seeded-крючок приманку не нёс, и на
            seeded-пути seeded_white_calls оставался 0. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-cf-seed", pid, 2, 3, "ech-seed-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-cf-seed", pid, 2, 3, "ech-seed-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 1; base_blocked_answer = 1;
             /* Только seeded+white крючок: если приманка не дойдёт до seeded-пути,
                вызов уйдёт в обычный путь и seeded_white_calls останется 0. */
-            d2k_sched_tcp_seeded_white_hook = stub_tcp_seeded_white;
+            d2s_sched_tcp_seeded_white_hook = stub_tcp_seeded_white;
             seeded_white_calls = 0; seeded_white_len = -1; seeded_calls = 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42121;
-            d2k_ev h = ev_hello(6, 42121, "ech-seed-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42121); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42121, "ech-seed-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42121); d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 200);
-                d2k_ev ap = ev_applied(6, 42121); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42121); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(base_calls == 1 && tcp_calls == 1,
@@ -14290,9 +14290,9 @@ own_first_test:
                   "ECH seed: seeded-замер не получил ECH-приманку");
             CHECK(seeded_calls == 0,
                   "ECH seed: вызван обычный seeded-крючок вместо seeded+white");
-            d2k_sched_tcp_seeded_white_hook = NULL;
+            d2s_sched_tcp_seeded_white_hook = NULL;
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_app_after_tcp_search = 0;
         }
 
@@ -14307,24 +14307,24 @@ own_first_test:
            обход 16-КБ заморозки Cloudflare, подтверждённый на десятках
            имён, — до очереди не дошёл; картинки Discord встали. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char p1[40], p5[40], p3[40], p4a[40], p4b[40];
-            own_box(&c, "box-s1", p1, 11, 1, "s1.limit.own", 6, D2K_SHAPE_MODERN, 4, 1790000300, 0);
-            own_box(&c, "box-s5", p5, 15, 5, "s5.limit.own", 6, D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            own_box(&c, "box-s3", p3, 13, 3, "s3.limit.own", 6, D2K_SHAPE_MODERN, 4, 1790000400, 0);
-            own_box(&c, "box-s4a", p4a, 14, 4, "s4a.limit.own", 6, D2K_SHAPE_MODERN, 4, 1790000100, 0);
-            own_box(&c, "box-s4b", p4b, 16, 4, "s4b.limit.own", 6, D2K_SHAPE_MODERN, 4, 1790000200, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+            own_box(&c, "box-s1", p1, 11, 1, "s1.limit.own", 6, D2S_SHAPE_MODERN, 4, 1790000300, 0);
+            own_box(&c, "box-s5", p5, 15, 5, "s5.limit.own", 6, D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            own_box(&c, "box-s3", p3, 13, 3, "s3.limit.own", 6, D2S_SHAPE_MODERN, 4, 1790000400, 0);
+            own_box(&c, "box-s4a", p4a, 14, 4, "s4a.limit.own", 6, D2S_SHAPE_MODERN, 4, 1790000100, 0);
+            own_box(&c, "box-s4b", p4b, 16, 4, "s4b.limit.own", 6, D2S_SHAPE_MODERN, 4, 1790000200, 0);
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5);
             forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42121;
-            d2k_ev h = ev_hello(6, 42121, "new.limit-target.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42121); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42121, "new.limit-target.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42121); d2s_sched_event(s, &su);
             for (int i = 0; i < 30 && tcp_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
             settle(s);
             CHECK(said("пробую свои подтверждённые планы до полного замера: 5"),
@@ -14339,7 +14339,7 @@ own_first_test:
             CHECK(!binding_of(&c, "new.limit-target.own", 6),
                   "own-first: неподтверждённый план привязан");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (c2) Нужный — четвёртый по свежести (прежний потолок «три» его не
@@ -14348,20 +14348,20 @@ own_first_test:
            по свежести, нужный девятый тоже подтверждается без классификатора. */
         for (int variant = 0; variant < 2; variant++) {
             int n_own = variant == 0 ? 4 : 10;
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char ids[10][40];
             for (int k = 0; k < n_own; k++) {
                 char box[32], tgt[48];
                 snprintf(box, sizeof box, "box-many-%d", k);
                 snprintf(tgt, sizeof tgt, "m%d.many.own", k);
-                own_box(&c, box, ids[k], (unsigned)(30 + k), 1, tgt, 6, D2K_SHAPE_MODERN, 4,
+                own_box(&c, box, ids[k], (unsigned)(30 + k), 1, tgt, 6, D2S_SHAPE_MODERN, 4,
                         1790001000 - k * 10, 0); /* k = место по свежести */
             }
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             ver_fail_first = n_own - 1; ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5);
             forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
@@ -14369,24 +14369,24 @@ own_first_test:
             ver_answer_port = port;
             char tgt[48];
             snprintf(tgt, sizeof tgt, "many%d.target.own", variant);
-            d2k_ev h = ev_hello(6, port, tgt); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, tgt); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО") && tcp_calls == 0; i++) {
                 skip_ahead(s, 6000); spin(s, 40);
-                d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             settle(s);
-            const d2k_cat_binding *bd = binding_of(&c, tgt, 6);
+            const d2s_cat_binding *bd = binding_of(&c, tgt, 6);
             CHECK(tcp_calls == 0, "own-first: классификатор пошёл, хотя подходящий свой план был");
             CHECK(bd != NULL && !strcmp(bd->plan_id, ids[n_own - 1]),
                   "own-first: подтверждён не тот свой план (не последний по свежести)");
-            CHECK(bd && bd->shape == D2K_SHAPE_MODERN && bd->family == 4 &&
+            CHECK(bd && bd->shape == D2S_SHAPE_MODERN && bd->family == 4 &&
                   (bd->transport ? bd->transport : 6) == 6,
                   "own-first: привязка не той формы/семейства/транспорта");
             CHECK(ver_calls == n_own, "own-first: свои планы испытаны не ровно по разу до подтверждения");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_fail_first = 0;
         }
 
@@ -14395,21 +14395,21 @@ own_first_test:
            от начала поиска 12 мин, больше SCHED_TASK_LIFE_MS. Замер обязан
            дойти до вердикта, а не быть брошенным «не уложился». */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pa[40], pb[40];
-            own_box(&c, "box-life-a", pa, 41, 1, "a.life.own", 6, D2K_SHAPE_MODERN, 4, 1790000100, 0);
-            own_box(&c, "box-life-b", pb, 42, 1, "b.life.own", 6, D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+            own_box(&c, "box-life-a", pa, 41, 1, "a.life.own", 6, D2S_SHAPE_MODERN, 4, 1790000100, 0);
+            own_box(&c, "box-life-b", pb, 42, 1, "b.life.own", 6, D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
             tcp_wait_until_stop = 1; tcp_release_waiters = 0; tcp_saw_stop = 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42151;
-            d2k_ev h = ev_hello(6, 42151, "life.target.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42151); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42151, "life.target.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42151); d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !said("пробую свои подтверждённые планы"); i++) spin(s, 20);
             char since0[64] = "", since1[64] = "";
             {
@@ -14437,7 +14437,7 @@ own_first_test:
                   "own-first life: полный замер не дошёл до итога");
             tcp_wait_until_stop = 0; tcp_release_waiters = 0;
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (c5) Повторное ревью, Minor 1: своих планов больше бюджета
@@ -14445,27 +14445,27 @@ own_first_test:
            испытанных; «не подтвердились» про неиспытанные не говорится; дальше
            полный замер. Порции после бюджета не прокручиваются. */
         {
-            int budget = (int)(D2K_PROPS_QUESTIONS + 8 + D2K_RX_VOLUME_PLAN_VARIANTS +
-                               d2k_fallback_arms());
+            int budget = (int)(D2S_PROPS_QUESTIONS + 8 + D2S_RX_VOLUME_PLAN_VARIANTS +
+                               d2s_fallback_arms());
             int n_own = budget + 3;
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             for (int k = 0; k < n_own; k++) {
                 char box[32], tgt[48], id[40];
                 snprintf(box, sizeof box, "box-budget-%d", k);
                 snprintf(tgt, sizeof tgt, "b%d.budget.own", k);
-                own_box(&c, box, id, (unsigned)(100 + k), 1, tgt, 6, D2K_SHAPE_MODERN, 4,
+                own_box(&c, box, id, (unsigned)(100 + k), 1, tgt, 6, D2S_SHAPE_MODERN, 4,
                         1790002000 - k, 0);
             }
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42161;
-            d2k_ev h = ev_hello(6, 42161, "budget.target.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42161); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42161, "budget.target.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42161); d2s_sched_event(s, &su);
             for (int i = 0; i < 4000 && tcp_calls == 0; i++) { skip_ahead(s, 1000); spin(s, 3); }
             settle(s);
             CHECK(tcp_calls == 1, "own-first budget: полный замер не пошёл после бюджета своих планов");
@@ -14473,31 +14473,31 @@ own_first_test:
             CHECK(!said("свои подтверждённые планы не подтвердились"),
                   "own-first budget: неиспытанные планы названы неподтвердившимися");
             CHECK(ver_calls < n_own, "own-first budget: испытано больше, чем позволяет бюджет");
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (d) Формы, транспорты и семейства не смешиваются; помеченная к
            перепроверке и выключенная привязка — не подтверждённое знание. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pl[40], pq[40], pr[40], p6[40], pd[40];
-            own_box(&c, "box-legacy", pl, 21, 9, "legacy.mix.own", 6, D2K_SHAPE_LEGACY, 4, 1790000000, 0);
-            own_box(&c, "box-quic", pq, 22, 9, "quic.mix.own", 17, D2K_LINK_SHAPE_QUIC, 4, 1790000000, 0);
-            own_box(&c, "box-recheck", pr, 23, 9, "recheck.mix.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-legacy", pl, 21, 9, "legacy.mix.own", 6, D2S_SHAPE_LEGACY, 4, 1790000000, 0);
+            own_box(&c, "box-quic", pq, 22, 9, "quic.mix.own", 17, D2S_LINK_SHAPE_QUIC, 4, 1790000000, 0);
+            own_box(&c, "box-recheck", pr, 23, 9, "recheck.mix.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 1790000500);
-            own_box(&c, "box-v6", p6, 24, 9, "v6.mix.own", 6, D2K_SHAPE_MODERN, 6, 1790000000, 0);
-            own_box(&c, "box-disabled", pd, 25, 9, "disabled.mix.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-v6", p6, 24, 9, "v6.mix.own", 6, D2S_SHAPE_MODERN, 6, 1790000000, 0);
+            own_box(&c, "box-disabled", pd, 25, 9, "disabled.mix.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
             c.boxes[c.n_boxes - 1].binds[0].enabled = 0;
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0;
             drain(); forget_sent();
-            d2k_ev h = ev_hello(6, 42131, "modern.mix-target.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42131); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42131, "modern.mix-target.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42131); d2s_sched_event(s, &su);
             settle(s);
             /* План формы 1.2 — гипотеза для клиента 1.3 (поле 04.10, решение
                координатора): предлагается, но один — QUIC, другое семейство,
@@ -14514,33 +14514,33 @@ own_first_test:
             forget_sent();
             base_calls = tcp_calls = ver_calls = 0;
             ver_answer_port = 42132;
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, "legacy.mix-target.own", D2K_SHAPE_LEGACY) == 0,
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, "legacy.mix-target.own", D2S_SHAPE_LEGACY) == 0,
                   "own-first: снимок TLS 1.2 не собран");
-            d2k_sched_event(s, &sh);
-            d2k_ev h2 = ev_hello(6, 42132, "legacy.mix-target.own"); d2k_sched_event(s, &h2);
-            d2k_ev su2 = ev_suspect(6, 42132); d2k_sched_event(s, &su2);
+            d2s_sched_event(s, &sh);
+            d2s_ev h2 = ev_hello(6, 42132, "legacy.mix-target.own"); d2s_sched_event(s, &h2);
+            d2s_ev su2 = ev_suspect(6, 42132); d2s_sched_event(s, &su2);
             for (int i = 0; i < 30 && tcp_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
             CHECK(base_calls == 1 && said("пробую свои подтверждённые планы до полного замера: 1"),
                   "own-first: TLS 1.2-клиенту не предложен свой план формы 1.2");
             CHECK(sent_first_split_index(21) == 0 && said_count("поставил план") == 1,
                   "own-first: TLS 1.2-клиенту испытан план другой формы");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             /* QUIC: этот шаг только для TCP (QUIC — своим путём оригинала). */
-            d2k_catalog cq = {0};
-            own_box(&cq, "box-quic-only", pq, 26, 9, "quic.only.own", 17, D2K_LINK_SHAPE_QUIC, 4,
+            d2s_catalog cq = {0};
+            own_box(&cq, "box-quic-only", pq, 26, 9, "quic.only.own", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1790000000, 0);
-            s = d2k_sched_new(&cq, sv[0], 0x2d);
+            s = d2s_sched_new(&cq, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = 0;
-            d2k_ev hq = ev_hello(17, 42133, "quic.target.own"); d2k_sched_event(s, &hq);
-            d2k_ev sq = ev_suspect(17, 42133); d2k_sched_event(s, &sq);
+            d2s_ev hq = ev_hello(17, 42133, "quic.target.own"); d2s_sched_event(s, &hq);
+            d2s_ev sq = ev_suspect(17, 42133); d2s_sched_event(s, &sq);
             settle(s);
             CHECK(base_calls == 0 && !said("пробую свои подтверждённые"),
                   "own-first: без QUIC-крючка базы QUIC-цели задан TCP-базовый вопрос");
-            d2k_sched_free(s); d2k_catalog_free(&cq);
+            d2s_sched_free(s); d2s_catalog_free(&cq);
         }
 
         /* (f) ПОЛЕ 04.10.2026, updates.discord.com: приложение Discord ходит
@@ -14554,79 +14554,79 @@ own_first_test:
         {
             /* (f1) Своих планов формы 1.2 нет — план формы 1.3 клиенту 1.2 не
                переносится; замер идёт приветствием старой формы. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pm[40];
-            own_box(&c, "box-modern-only", pm, 41, 3, "modern.app.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-modern-only", pm, 41, 3, "modern.app.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0;
             memset(tcp_last_trig, 0, sizeof tcp_last_trig); tcp_last_wire = 0;
             ver_answer_port = 42171;
-            d2k_ev h = ev_hello(6, 42171, "updates.app.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42171); su.client_shape = D2K_SHAPE_LEGACY;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42171, "updates.app.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42171); su.client_shape = D2S_SHAPE_LEGACY;
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42171); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42171); d2s_sched_event(s, &ap);
             spin(s, 40);
             /* С 04.10 (решение координатора) план формы 1.3 предлагается
                клиенту 1.2 гипотезой — но испытывается зондом TLS 1.2 и
                привязывается формой 1.2 (см. g1). */
-            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2K_SHAPE_LEGACY,
+            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2S_SHAPE_LEGACY,
                   "shape f1: клиенту TLS 1.2 план испытан зондом другой формы");
-            CHECK(binding_shape(&c, "updates.app.own", 6, D2K_SHAPE_MODERN) == NULL,
+            CHECK(binding_shape(&c, "updates.app.own", 6, D2S_SHAPE_MODERN) == NULL,
                   "shape f1: клиенту TLS 1.2 записана привязка формы TLS 1.3");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
         {
             /* (f2) Свой план формы 1.2 есть: он и переносится, зонд TLS 1.2,
                привязка формы 1.2. Снимок клиента (та же форма) приходит
                ПОСЛЕ ответа базы — посреди испытания своих планов. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pm[40], pl[40];
-            own_box(&c, "box-modern-app", pm, 42, 5, "modern.app2.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-modern-app", pm, 42, 5, "modern.app2.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            own_box(&c, "box-legacy-app", pl, 43, 3, "legacy.app2.own", 6, D2K_SHAPE_LEGACY, 4,
+            own_box(&c, "box-legacy-app", pl, 43, 3, "legacy.app2.own", 6, D2S_SHAPE_LEGACY, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0; ver_last_shape = 0;
             drain(); forget_sent();
             ver_answer_port = 42172;
-            d2k_ev h = ev_hello(6, 42172, "updates.app2.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42172); su.client_shape = D2K_SHAPE_LEGACY;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42172, "updates.app2.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42172); su.client_shape = D2S_SHAPE_LEGACY;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 400 && !said("пробую свои подтверждённые"); i++) tick_once(s);
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, "updates.app2.own", D2K_SHAPE_LEGACY) == 0,
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, "updates.app2.own", D2S_SHAPE_LEGACY) == 0,
                   "shape f2: снимок TLS 1.2 не собран");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42172); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42172); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(base_calls == 1 && said("пробую свои подтверждённые планы до полного замера: 2") &&
                   sent_first_split_index(43) == 0,
                   "shape f2: клиенту TLS 1.2 свой план формы TLS 1.2 предложен не первым");
-            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2K_SHAPE_LEGACY,
+            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2S_SHAPE_LEGACY,
                   "shape f2: свой план испытан не зондом TLS 1.2");
-            const d2k_cat_binding *lg = binding_shape(&c, "updates.app2.own", 6, D2K_SHAPE_LEGACY);
+            const d2s_cat_binding *lg = binding_shape(&c, "updates.app2.own", 6, D2S_SHAPE_LEGACY);
             CHECK(lg != NULL && !strcmp(lg->plan_id, pl) && lg->level >= 3,
                   "shape f2: привязка клиента TLS 1.2 легла не формой TLS 1.2");
-            CHECK(binding_shape(&c, "updates.app2.own", 6, D2K_SHAPE_MODERN) == NULL,
+            CHECK(binding_shape(&c, "updates.app2.own", 6, D2S_SHAPE_MODERN) == NULL,
                   "shape f2: клиенту TLS 1.2 записана привязка формы TLS 1.3");
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            CHECK(sent_set_name_shape("updates.app2.own", D2K_SHAPE_LEGACY) == 1 &&
-                  sent_set_name_shape("updates.app2.own", D2K_SHAPE_MODERN) == 0,
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            CHECK(sent_set_name_shape("updates.app2.own", D2S_SHAPE_LEGACY) == 1 &&
+                  sent_set_name_shape("updates.app2.own", D2S_SHAPE_MODERN) == 0,
                   "shape f2: датапату не ушла постоянная привязка формы TLS 1.2");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
         {
             /* (f3) Обратное направление и две формы на одном имени: у имени
@@ -14634,46 +14634,46 @@ own_first_test:
                приветствие 1.2 этого имени, а подозрение пришло от браузера
                формы 1.3. Мерить и подтверждать надо формой 1.3, не байтами
                чужого клиента; привязка 1.2 остаётся. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pm[40], pl[40];
-            own_box(&c, "box-modern-br", pm, 44, 3, "modern.app3.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-modern-br", pm, 44, 3, "modern.app3.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            own_box(&c, "box-legacy-br", pl, 45, 3, "updates.app3.own", 6, D2K_SHAPE_LEGACY, 4,
+            own_box(&c, "box-legacy-br", pl, 45, 3, "updates.app3.own", 6, D2S_SHAPE_LEGACY, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched_rx_ver_hook = stub_rx_counting;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_rx_ver_hook = stub_rx_counting;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0; ver_last_shape = 0;
             ver_answer_port = 42173;
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, "updates.app3.own", D2K_SHAPE_LEGACY) == 0,
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, "updates.app3.own", D2S_SHAPE_LEGACY) == 0,
                   "shape f3: снимок TLS 1.2 не собран");
             sh.low_ip[0] = 127; sh.low_ip[3] = 1; sh.low_port = g_server_port;
             sh.high_ip[0] = 192; sh.high_ip[1] = 168; sh.high_ip[2] = 1; sh.high_ip[3] = 67;
             sh.high_port = 42170; /* другой поток: приложение, не браузер */
-            d2k_sched_event(s, &sh);
-            d2k_ev h = ev_hello(6, 42173, "updates.app3.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42173); su.client_shape = D2K_SHAPE_MODERN;
-            d2k_sched_event(s, &su);
+            d2s_sched_event(s, &sh);
+            d2s_ev h = ev_hello(6, 42173, "updates.app3.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42173); su.client_shape = D2S_SHAPE_MODERN;
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42173); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42173); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(!said("повторяю поиск его байтами"),
                   "shape f3: поиск браузера перезапущен байтами другого клиента");
-            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2K_SHAPE_MODERN,
+            CHECK(ver_calls >= 1 && ver_last_shape == (uint8_t)D2S_SHAPE_MODERN,
                   "shape f3: клиенту TLS 1.3 план испытан зондом другой формы");
-            const d2k_cat_binding *md = binding_shape(&c, "updates.app3.own", 6, D2K_SHAPE_MODERN);
+            const d2s_cat_binding *md = binding_shape(&c, "updates.app3.own", 6, D2S_SHAPE_MODERN);
             CHECK(md != NULL && !strcmp(md->plan_id, pm) && md->level >= 3,
                   "shape f3: клиенту TLS 1.3 привязка не легла формой TLS 1.3");
-            const d2k_cat_binding *lg = binding_shape(&c, "updates.app3.own", 6, D2K_SHAPE_LEGACY);
+            const d2s_cat_binding *lg = binding_shape(&c, "updates.app3.own", 6, D2S_SHAPE_LEGACY);
             CHECK(lg != NULL && !strcmp(lg->plan_id, pl) && lg->enabled && lg->level >= 3,
                   "shape f3: привязка формы TLS 1.2 того же имени задета");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_rx_ver_hook = saved_rx;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_rx_ver_hook = saved_rx;
         }
         /* (g) ПОЛЕ 04.10.2026, 11:39: апдейтер Discord уже мерится своей
            формой TLS 1.2, но фейк-первый plan-680fbe00, рабочий на этой
@@ -14686,74 +14686,74 @@ own_first_test:
         {
             /* (g1) На коробке только план формы 1.3 — клиенту 1.2 он
                испытывается зондом TLS 1.2 и привязывается формой 1.2. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pm[40], pq[40];
-            own_box(&c, "box-cross-modern", pm, 51, 3, "rutracker.cross.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-cross-modern", pm, 51, 3, "rutracker.cross.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            own_box(&c, "box-cross-quic", pq, 52, 9, "quic.cross.own", 17, D2K_LINK_SHAPE_QUIC, 4,
+            own_box(&c, "box-cross-quic", pq, 52, 9, "quic.cross.own", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0; ver_last_shape = 0;
             drain(); forget_sent();
             ver_answer_port = 42181;
-            d2k_ev h = ev_hello(6, 42181, "updates.cross.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42181); su.client_shape = D2K_SHAPE_LEGACY;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42181, "updates.cross.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42181); su.client_shape = D2S_SHAPE_LEGACY;
+            d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42181); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42181); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(base_calls == 1 && said("пробую свои подтверждённые планы до полного замера: 1"),
                   "shape g1: план формы 1.3 не предложен клиенту 1.2 гипотезой");
-            CHECK(tcp_calls == 0 && ver_calls >= 1 && ver_last_shape == (uint8_t)D2K_SHAPE_LEGACY,
+            CHECK(tcp_calls == 0 && ver_calls >= 1 && ver_last_shape == (uint8_t)D2S_SHAPE_LEGACY,
                   "shape g1: гипотеза другой формы испытана не зондом TLS 1.2");
-            const d2k_cat_binding *lg = binding_shape(&c, "updates.cross.own", 6, D2K_SHAPE_LEGACY);
+            const d2s_cat_binding *lg = binding_shape(&c, "updates.cross.own", 6, D2S_SHAPE_LEGACY);
             CHECK(lg != NULL && !strcmp(lg->plan_id, pm) && lg->level >= 3,
                   "shape g1: подтверждённая гипотеза привязана не формой клиента 1.2");
-            CHECK(binding_shape(&c, "updates.cross.own", 6, D2K_SHAPE_MODERN) == NULL,
+            CHECK(binding_shape(&c, "updates.cross.own", 6, D2S_SHAPE_MODERN) == NULL,
                   "shape g1: клиенту 1.2 записана привязка формы 1.3");
             CHECK(said_count("поставил план") == 1,
                   "shape g1: TCP-клиенту предложен план QUIC");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
         {
             /* (g2) Планы своей формы — первыми, даже при большем числе
                успехов у плана другой формы; гипотеза другой формы — после. */
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pm[40], pl[40];
-            own_box(&c, "box-order-modern", pm, 53, 9, "modern.order.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-order-modern", pm, 53, 9, "modern.order.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000900, 0);
-            own_box(&c, "box-order-legacy", pl, 54, 1, "legacy.order.own", 6, D2K_SHAPE_LEGACY, 4,
+            own_box(&c, "box-order-legacy", pl, 54, 1, "legacy.order.own", 6, D2S_SHAPE_LEGACY, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0; ver_last_shape = 0;
             drain(); forget_sent();
             ver_answer_port = 42182;
-            d2k_ev h = ev_hello(6, 42182, "updates.order.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42182); su.client_shape = D2K_SHAPE_LEGACY;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42182, "updates.order.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42182); su.client_shape = D2S_SHAPE_LEGACY;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 200);
-                d2k_ev ap = ev_applied(6, 42182); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42182); d2s_sched_event(s, &ap);
             }
             spin(s, 40);
             CHECK(said("пробую свои подтверждённые планы до полного замера: 2"),
                   "shape g2: в своих планах нет обеих форм");
             CHECK(sent_first_split_index(54) == 0 && sent_first_split_index(53) == 1,
                   "shape g2: гипотеза другой формы испытана раньше плана своей формы");
-            const d2k_cat_binding *lg = binding_shape(&c, "updates.order.own", 6, D2K_SHAPE_LEGACY);
-            CHECK(lg != NULL && !strcmp(lg->plan_id, pm) && ver_last_shape == (uint8_t)D2K_SHAPE_LEGACY,
+            const d2s_cat_binding *lg = binding_shape(&c, "updates.order.own", 6, D2S_SHAPE_LEGACY);
+            CHECK(lg != NULL && !strcmp(lg->plan_id, pm) && ver_last_shape == (uint8_t)D2S_SHAPE_LEGACY,
                   "shape g2: гипотеза другой формы не подтверждена формой клиента");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_fail_first = 0;
         }
 
@@ -14761,18 +14761,18 @@ own_first_test:
            не пробуем, идёт полный замер как прежде (рабочий трафик не
            подбирается, подозрение не равно блокировке). */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-clear", pid, 31, 3, "clear-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-clear", pid, 31, 3, "clear-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_CLEAR; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_CLEAR; ver_answer = D2S_VER_APPLICATION;
             base_blocked_answer = 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0;
-            d2k_ev h = ev_hello(6, 42141, "clear-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42141); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42141, "clear-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42141); d2s_sched_event(s, &su);
             settle(s);
             CHECK(base_calls == 1 && tcp_calls == 1 && ver_calls == 0 &&
                   !said("пробую свои подтверждённые"),
@@ -14780,7 +14780,7 @@ own_first_test:
             CHECK(said("напрямую проходит"), "own-first: вердикт CLEAR полного замера потерян");
             CHECK(!binding_of(&c, "clear-second.own", 6), "own-first: рабочей цели привязан план");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             base_blocked_answer = 1;
         }
 
@@ -14788,30 +14788,30 @@ own_first_test:
            обрывается при полном gzip: план не подтверждается, полный замер
            продолжается (многоэтапный RX-путь испытания). */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-rx", pid, 41, 3, "rx-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-rx", pid, 41, 3, "rx-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             base_blocked_answer = 1; layered_bad_control = 0;
-            d2k_sched_rx_ver_hook = stub_layered_identity;
-            d2k_sched_rx_gzip_ver_hook = stub_layered_gzip;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_rx_ver_hook = stub_layered_identity;
+            d2s_sched_rx_gzip_ver_hook = stub_layered_gzip;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0;
             layered_identity_calls = layered_gzip_calls = 0;
             ver_answer_port = 42151;
-            d2k_ev h = ev_hello(6, 42151, "rx-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42151); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42151, "rx-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42151); d2s_sched_event(s, &su);
             forget_sent();
             int installed = 0;
             for (int i = 0; i < 4000 && tcp_calls == 0; i++) {
                 tick_once(s);
-                int n = (int)sent_command_count(D2K_CMD_SET_NAME_PROBE, NULL, 0);
+                int n = (int)sent_command_count(D2S_CMD_SET_NAME_PROBE, NULL, 0);
                 if (n > installed) {
                     installed = n;
-                    d2k_ev ap = ev_applied(6, 42151); d2k_sched_event(s, &ap);
+                    d2s_ev ap = ev_applied(6, 42151); d2s_sched_event(s, &ap);
                 }
             }
             settle(s);
@@ -14820,35 +14820,35 @@ own_first_test:
             CHECK(tcp_calls == 1 && !binding_of(&c, "rx-second.own", 6),
                   "own-first: план с обрывом тела подтверждён или полный замер не пошёл");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_rx_ver_hook = saved_rx;
-            d2k_sched_rx_gzip_ver_hook = saved_gzip;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_rx_ver_hook = saved_rx;
+            d2s_sched_rx_gzip_ver_hook = saved_gzip;
         }
 
         /* (g) Снимок клиента приходит, пока задан базовый вопрос заготовкой
            (задача 31): вопрос бросается и задаётся заново байтами клиента,
            без вердикта и без покоя; затем — свои планы. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-snap", pid, 51, 3, "snap-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-snap", pid, 51, 3, "snap-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
             base_blocked_answer = 1; base_wait_until_stop = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = 0;
             ver_answer_port = 42161;
-            d2k_ev h = ev_hello(6, 42161, "snap-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42161); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42161, "snap-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42161); d2s_sched_event(s, &su);
             for (int i = 0; i < 400 && base_calls == 0; i++) tick_once(s);
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, "snap-second.own", D2K_SHAPE_MODERN) == 0,
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, "snap-second.own", D2S_SHAPE_MODERN) == 0,
                   "own-first: снимок не собран");
-            d2k_sched_event(s, &sh);
+            d2s_sched_event(s, &sh);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42161); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42161); d2s_sched_event(s, &ap);
             spin(s, 40);
             CHECK(base_calls == 2 && tcp_last_wire == sh.shape_len,
                   "own-first: брошенный ради снимка базовый вопрос не задан заново его байтами");
@@ -14856,68 +14856,68 @@ own_first_test:
                   "own-first: брошенный базовый вопрос разобран как вердикт");
             CHECK(tcp_calls == 0 && said("пробую свои подтверждённые планы до полного замера: 1"),
                   "own-first: после снимка свои планы не испытаны до полного замера");
-            const d2k_cat_binding *bd = binding_of(&c, "snap-second.own", 6);
-            CHECK(bd && !strcmp(bd->plan_id, pid) && bd->input == D2K_INPUT_TRANSFER,
+            const d2s_cat_binding *bd = binding_of(&c, "snap-second.own", 6);
+            CHECK(bd && !strcmp(bd->plan_id, pid) && bd->input == D2S_INPUT_TRANSFER,
                   "own-first: после снимка свой план не подтвердился переносом");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             base_wait_until_stop = 0;
         }
 
         /* (h) I1: свой план из коробки без отпечатка — перенос не дарит ей
            отпечаток неизмеренной цели. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-без-приметы", pid, 61, 3, "nofp-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-без-приметы", pid, 61, 3, "nofp-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
             memset(&c.boxes[0].fp, 0, sizeof c.boxes[0].fp);
-            tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION; base_blocked_answer = 1;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = 0;
             ver_answer_port = 42171;
-            d2k_ev h = ev_hello(6, 42171, "nofp-second.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42171); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42171, "nofp-second.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42171); d2s_sched_event(s, &su);
             settle(s);
-            d2k_ev ap = ev_applied(6, 42171); d2k_sched_event(s, &ap);
+            d2s_ev ap = ev_applied(6, 42171); d2s_sched_event(s, &ap);
             spin(s, 40);
-            const d2k_cat_binding *bd = binding_of(&c, "nofp-second.own", 6);
-            CHECK(bd && bd->input == D2K_INPUT_TRANSFER, "own-first/I1: перенос не подтвердился");
+            const d2s_cat_binding *bd = binding_of(&c, "nofp-second.own", 6);
+            CHECK(bd && bd->input == D2S_INPUT_TRANSFER, "own-first/I1: перенос не подтвердился");
             CHECK(c.n_boxes == 1 && c.boxes[0].fp.n_sig == 0,
                   "own-first/I1: перенос записал коробке без приметы чужой отпечаток");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (i) M1: отвергнутый исполнителем свой план опыта не имел — полный
            замер вправе предложить его снова (узнанная коробка); испытанный
            на проводе — нет. */
         for (int nak = 1; nak >= 0; nak--) {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
             own_box(&c, "box-m1", pid, 71, 3, nak ? "m1a-first.own" : "m1b-first.own", 6,
-                    D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            d2k_cat_fp *fp = &c.boxes[0].fp;
+                    D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            d2s_cat_fp *fp = &c.boxes[0].fp;
             fp->sig[0].ttl = 127; fp->sig[0].tos = 0x88; fp->sig[0].ipid = 54321;
-            tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_HANDSHAKE; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_HANDSHAKE; base_blocked_answer = 1;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = 0;
             const char *name = nak ? "m1a-second.own" : "m1b-second.own";
             uint16_t port = (uint16_t)(nak ? 42181 : 42182);
             ver_answer_port = port;
             forget_sent();
-            d2k_ev h = ev_hello(6, port, name); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, name); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             if (nak) {
                 for (int i = 0; i < 400 && !said("поставил план 1 из 1"); i++) tick_frozen(s);
-                uint8_t id[D2K_TRIAL_ID_LEN];
+                uint8_t id[D2S_TRIAL_ID_LEN];
                 CHECK(name_probe_trial(name, id), "own-first/M1: пробный план не найден");
-                d2k_ev a = name_probe_ack(id, 0, D2K_ACK_BAD_PLAN);
-                d2k_sched_event(s, &a);
+                d2s_ev a = name_probe_ack(id, 0, D2S_ACK_BAD_PLAN);
+                d2s_sched_event(s, &a);
                 for (int i = 0; i < 20; i++) tick_frozen(s);
             }
             for (int i = 0; i < 30 && tcp_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
@@ -14929,39 +14929,39 @@ own_first_test:
                   nak ? "own-first/M1: отвергнутый исполнителем план помечен испытанным"
                       : "own-first/M1: испытанный на проводе план предложен второй раз");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (j) QUIC: базовый вопрос QUIC подтвердил блокировку — свой QUIC-план
            той же формы подтверждается зондом H3 до полного поиска; (k) не
            подтвердился — полный поиск получает ответ базы. */
         for (int miss = 0; miss < 2; miss++) {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40], ptcp[40];
-            own_box(&c, "box-quic-own", pid, 81, 3, "q-first.own", 17, D2K_LINK_SHAPE_QUIC, 4,
+            own_box(&c, "box-quic-own", pid, 81, 3, "q-first.own", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1790000000, 0);
-            own_box(&c, "box-tcp-near", ptcp, 82, 9, "t-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-tcp-near", ptcp, 82, 9, "t-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            d2k_sched_quic_base_hook = stub_quic_base;
-            d2k_sched_quic_seeded_hook = stub_quic_seeded;
-            quic_answer = D2K_V_INCONCLUSIVE; base_blocked_answer = 1;
-            ver_answer = miss ? D2K_VER_HANDSHAKE : D2K_VER_APPLICATION;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_quic_base_hook = stub_quic_base;
+            d2s_sched_quic_seeded_hook = stub_quic_seeded;
+            quic_answer = D2S_V_INCONCLUSIVE; base_blocked_answer = 1;
+            ver_answer = miss ? D2S_VER_HANDSHAKE : D2S_VER_APPLICATION;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             quic_base_calls = quic_seeded_calls = quic_calls = base_calls = ver_calls = 0;
             quic_seeded_ctl = -2;
             const char *name = miss ? "q-miss.own" : "q-second.own";
             uint16_t port = (uint16_t)(42191 + miss);
             ver_answer_port = port;
             forget_sent();
-            d2k_ev h = ev_hello(17, port, name); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, port); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, port, name); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, port); d2s_sched_event(s, &su);
             if (miss) {
                 for (int i = 0; i < 30 && quic_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
             } else {
                 settle(s);
-                d2k_ev ap = ev_applied(17, port); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(17, port); d2s_sched_event(s, &ap);
                 spin(s, 40);
             }
             CHECK(quic_base_calls == 1 && base_calls == 0 &&
@@ -14970,9 +14970,9 @@ own_first_test:
             CHECK(ver_calls >= 1 && ver_last_transport == 17,
                   "own-first/QUIC: свой план испытан не QUIC-зондом");
             if (!miss) {
-                const d2k_cat_binding *bd = binding_of(&c, name, 17);
+                const d2s_cat_binding *bd = binding_of(&c, name, 17);
                 CHECK(quic_calls == 0 && bd && !strcmp(bd->plan_id, pid) &&
-                      bd->input == D2K_INPUT_TRANSFER && bd->shape == D2K_LINK_SHAPE_QUIC,
+                      bd->input == D2S_INPUT_TRANSFER && bd->shape == D2S_LINK_SHAPE_QUIC,
                       "own-first/QUIC: свой QUIC-план не подтверждён переносом до полного поиска");
                 const char *owner = NULL;
                 for (size_t i = 0; i < c.n_boxes; i++)
@@ -14987,11 +14987,11 @@ own_first_test:
                       "own-first/QUIC: неподтверждённый план привязан");
             }
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_quic_base_hook = NULL;
-            d2k_sched_quic_seeded_hook = NULL;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_quic_base_hook = NULL;
+            d2s_sched_quic_seeded_hook = NULL;
         }
-        quic_answer = D2K_V_OPAQUE;
+        quic_answer = D2S_V_OPAQUE;
 
         /* (l) Финальное ревью core, M1 + M3. Поиск со своими планами (свой
            не помог → полный замер подтвердил заготовкой), затем снимок
@@ -14999,36 +14999,36 @@ own_first_test:
            начала (began_carry не переживает свой запуск), и фаза своих
            планов предлагает их заново (own_seen сброшен). */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-remeasure", pid, 2, 3, "remeasure-first.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-remeasure", pid, 2, 3, "remeasure-first.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_PREFIX; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_PREFIX; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 1; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42201;
             const char *nm = "remeasure-second.own";
-            d2k_ev h = ev_hello(6, 42201, nm); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42201); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42201, nm); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42201); d2s_sched_event(s, &su);
             char since0[64] = "", since1[64] = "";
             for (int i = 0; i < 400 && !said("пробую свои подтверждённые планы"); i++) tick_once(s);
             search_since(s, nm, since0, sizeof since0);
             for (int i = 0; i < 40 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 200);
-                d2k_ev ap = ev_applied(6, 42201); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42201); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
-            const d2k_cat_binding *bd = binding_of(&c, nm, 6);
-            CHECK(tcp_calls == 1 && bd && bd->input == D2K_INPUT_PROFILE,
+            const d2s_cat_binding *bd = binding_of(&c, nm, 6);
+            CHECK(tcp_calls == 1 && bd && bd->input == D2S_INPUT_PROFILE,
                   "remeasure: стенд — полный замер не подтвердил заготовкой после своих планов");
             skip_ahead(s, 5 * 60 * 1000);
             spin(s, 5);
-            d2k_ev sh;
-            CHECK(tls_shape_event(&sh, nm, D2K_SHAPE_MODERN) == 0, "remeasure: снимок не собран");
-            d2k_sched_event(s, &sh);
+            d2s_ev sh;
+            CHECK(tls_shape_event(&sh, nm, D2S_SHAPE_MODERN) == 0, "remeasure: снимок не собран");
+            d2s_sched_event(s, &sh);
             for (int i = 0; i < 400 && !said("перемеряю снимком"); i++) tick_once(s);
             CHECK(said("перемеряю снимком"), "remeasure: перемер снимком не начался");
             search_since(s, nm, since1, sizeof since1);
@@ -15041,7 +15041,7 @@ own_first_test:
             CHECK(said("пробую свои подтверждённые планы до полного замера: 2"),
                   "remeasure/M3: перемер не предложил свои планы заново (own_seen не сброшен)");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_app_after_tcp_search = 0;
         }
 
@@ -15050,24 +15050,24 @@ own_first_test:
            а не отдых и повтор тех же своих планов следующей задачей. */
         {
             int n_own = 40;
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             for (int k = 0; k < n_own; k++) {
                 char box[32], tgt[48], id[40];
                 snprintf(box, sizeof box, "box-lifecap-%d", k);
                 snprintf(tgt, sizeof tgt, "l%d.lifecap.own", k);
-                own_box(&c, box, id, (unsigned)(200 + k), 1, tgt, 6, D2K_SHAPE_MODERN, 4,
+                own_box(&c, box, id, (unsigned)(200 + k), 1, tgt, 6, D2S_SHAPE_MODERN, 4,
                         1790003000 - k, 0);
             }
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_HANDSHAKE;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_HANDSHAKE;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5);
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42211;
-            d2k_ev h = ev_hello(6, 42211, "lifecap.target.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42211); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42211, "lifecap.target.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42211); d2s_sched_event(s, &su);
             for (int i = 0; i < 400 && tcp_calls == 0; i++) { skip_ahead(s, 30000); spin(s, 3); }
             settle(s);
             CHECK(ver_calls < n_own, "own-first life cap: стенд — свои планы уложились в срок");
@@ -15078,7 +15078,7 @@ own_first_test:
                   "own-first life cap: срок фазы своих планов провалил задачу в отдых");
             CHECK(said("срок фазы своих планов"), "own-first life cap: конец фазы по сроку не сказан");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* ---- ЗАДАЧА 55: проверка бюджета потока (поле 04.10, Cloudflare) ----
@@ -15087,75 +15087,75 @@ own_first_test:
            подтверждён; план с приманкой первым держит поток — подтверждён,
            привязка помечена «бюджет пройден». Бюджет без замера коробки — 25. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char p_split[40], p_fake[40];
-            own_box(&c, "box-428176d8", p_split, 61, 9, "media.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-428176d8", p_split, 61, 9, "media.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000500, 0);
-            own_box(&c, "box-e67d8c22", p_fake, 62, 2, "discord.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-e67d8c22", p_fake, 62, 2, "discord.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
-            ver_budget_n = 2; ver_budget_seq[0] = D2K_BUDGET_CUT; ver_budget_seq[1] = D2K_BUDGET_PASSED;
+            ver_budget_n = 2; ver_budget_seq[0] = D2S_BUDGET_CUT; ver_budget_seq[1] = D2S_BUDGET_PASSED;
             ver_budget_status = 403;
             memset(ver_budget_seen, 0, sizeof ver_budget_seen);
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42301;
-            d2k_ev h = ev_hello(6, 42301, "cdn.budget.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42301); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42301, "cdn.budget.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42301); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, 42301); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42301); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(sent_first_split_index(61) == 0 && sent_first_split_index(62) == 1,
                   "budget: стенд — свои планы не в порядке «успехи, затем свежесть»");
             CHECK(said("посреди повторов") && said("не подтверждаю"),
                   "budget: обрыв посреди повторов не назван под кандидатом");
-            const d2k_cat_binding *bd = binding_of(&c, "cdn.budget.own", 6);
-            CHECK(bd && !strcmp(bd->plan_id, p_fake) && bd->budget == D2K_CAT_BUDGET_PASSED,
+            const d2s_cat_binding *bd = binding_of(&c, "cdn.budget.own", 6);
+            CHECK(bd && !strcmp(bd->plan_id, p_fake) && bd->budget == D2S_CAT_BUDGET_PASSED,
                   "budget: подтверждён план, не прошедший бюджет, или отметка не записана");
-            CHECK(ver_budget_seen[0] == D2K_BUDGET_FIELD_PACKETS && ver_budget_seen[1] == D2K_BUDGET_FIELD_PACKETS,
+            CHECK(ver_budget_seen[0] == D2S_BUDGET_FIELD_PACKETS && ver_budget_seen[1] == D2S_BUDGET_FIELD_PACKETS,
                   "budget: без замера коробки бюджет зонда не 25 (поле 04.10)");
             CHECK(said("бюджет потока пройден") && said("50"),
                   "budget: строка подтверждения без числа пакетов и исхода");
             CHECK(tcp_calls == 0, "budget: полный замер пошёл, хотя свой план прошёл бюджет");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0; ver_budget_status = 200;
         }
 
         /* (n2) Keep-alive не дают («не применимо»): подтверждение прежнее,
            привязка помечена «бюджет не проверен». */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-ka", pid, 63, 3, "ka.budget.own", 6, D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            own_box(&c, "box-ka", pid, 63, 3, "ka.budget.own", 6, D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
-            ver_budget_n = 1; ver_budget_seq[0] = D2K_BUDGET_NOT_APPLICABLE;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            ver_budget_n = 1; ver_budget_seq[0] = D2S_BUDGET_NOT_APPLICABLE;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42302;
-            d2k_ev h = ev_hello(6, 42302, "close.budget.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42302); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42302, "close.budget.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42302); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, 42302); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42302); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
-            const d2k_cat_binding *bd = binding_of(&c, "close.budget.own", 6);
-            CHECK(bd && !strcmp(bd->plan_id, pid) && bd->budget == D2K_CAT_BUDGET_UNCHECKED,
+            const d2s_cat_binding *bd = binding_of(&c, "close.budget.own", 6);
+            CHECK(bd && !strcmp(bd->plan_id, pid) && bd->budget == D2S_CAT_BUDGET_UNCHECKED,
                   "budget n/a: подтверждение не прежнее или привязка не помечена «не проверен»");
             CHECK(said("бюджет потока не проверен"), "budget n/a: исход не назван");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0;
         }
 
@@ -15163,22 +15163,22 @@ own_first_test:
            прошедшая бюджет, а не новейшая непроверенная; без отметок —
            новейшая, как прежде. Каталог не правится. */
         for (int marked = 0; marked < 2; marked++) {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char p_old[40], p_new[40];
-            own_box(&c, "box-sel-old", p_old, 71, 5, "sel.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-sel-old", p_old, 71, 5, "sel.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            own_box(&c, "box-sel-new", p_new, 72, 1, "sel.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-sel-new", p_new, 72, 1, "sel.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000900, 0);
-            if (marked) c.boxes[0].binds[0].budget = D2K_CAT_BUDGET_PASSED;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+            if (marked) c.boxes[0].binds[0].budget = D2S_CAT_BUDGET_PASSED;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
             int old_at = sent_first_split_index(71), new_at = sent_first_split_index(72);
             CHECK(marked ? (old_at >= 0 && new_at < 0) : (old_at < 0 && new_at >= 0),
                   marked ? "budget install: поставлена новейшая непроверенная, а не прошедшая бюджет"
                          : "budget install: без отметок поставлена не новейшая");
             CHECK(c.n_boxes == 2 && c.boxes[0].n_binds == 1 && c.boxes[1].n_binds == 1,
                   "budget install: каталог правился выбором установки");
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
         }
 
         /* (n4) Подозрение с потока ПОД планом: привязанный план не исключается
@@ -15191,39 +15191,39 @@ own_first_test:
            I-2): поиск не кончается «ложным подозрением», план не
            переподтверждается, дальше свои планы без него. */
         for (int variant = 0; variant < 3; variant++) {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char p_bound[40], p_other[40];
             const char *name = variant == 1 ? "gw-cut.bound.own" :
                                variant == 2 ? "gw-na.bound.own" : "gw.bound.own";
-            own_box(&c, "box-bound", p_bound, 81, 2, name, 6, D2K_SHAPE_MODERN, 4, 1790000000, 0);
-            own_box(&c, "box-other", p_other, 82, 9, "other.bound.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-bound", p_bound, 81, 2, name, 6, D2S_SHAPE_MODERN, 4, 1790000000, 0);
+            own_box(&c, "box-other", p_other, 82, 9, "other.bound.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000500, 0);
-            c.boxes[0].binds[0].budget = D2K_CAT_BUDGET_PASSED;
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            c.boxes[0].binds[0].budget = D2S_CAT_BUDGET_PASSED;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
             ver_budget_n = 2;
-            ver_budget_seq[0] = variant == 0 ? D2K_BUDGET_PASSED :
-                                variant == 1 ? D2K_BUDGET_CUT : D2K_BUDGET_NOT_APPLICABLE;
-            ver_budget_seq[1] = variant == 1 ? D2K_BUDGET_NOT_APPLICABLE : D2K_BUDGET_PASSED;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            ver_budget_seq[0] = variant == 0 ? D2S_BUDGET_PASSED :
+                                variant == 1 ? D2S_BUDGET_CUT : D2S_BUDGET_NOT_APPLICABLE;
+            ver_budget_seq[1] = variant == 1 ? D2S_BUDGET_NOT_APPLICABLE : D2S_BUDGET_PASSED;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             uint16_t port = (uint16_t)(42310 + variant);
             ver_answer_port = port;
-            d2k_ev h = ev_hello(6, port, name); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); su.planned = D2K_LINK_PLANNED_YES;
-            d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, name); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); su.planned = D2S_LINK_PLANNED_YES;
+            d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(sent_first_split_index(81) == 0,
                   "budget suspicion: план, под которым пришло подозрение, не испытан первым");
-            const d2k_cat_binding *bound_bd = &c.boxes[0].binds[0];
-            const d2k_cat_binding *other_bd = NULL;
+            const d2s_cat_binding *bound_bd = &c.boxes[0].binds[0];
+            const d2s_cat_binding *other_bd = NULL;
             for (size_t i = 0; i < c.n_boxes; i++)
                 for (size_t j = 0; j < c.boxes[i].n_binds; j++)
                     if (!strcmp(c.boxes[i].binds[j].target, name) &&
@@ -15232,30 +15232,30 @@ own_first_test:
                 CHECK(ver_calls == 1 && sent_first_split_index(82) < 0 && tcp_calls == 0,
                       "budget suspicion: после прохода бюджета пробовались другие планы");
                 CHECK(!strcmp(bound_bd->plan_id, p_bound) && bound_bd->successes >= 3 &&
-                      bound_bd->budget == D2K_CAT_BUDGET_PASSED,
+                      bound_bd->budget == D2S_CAT_BUDGET_PASSED,
                       "budget suspicion: привязка не переподтверждена с отметкой бюджета");
                 CHECK(said("подозрение было ложным"), "budget suspicion: ложное подозрение не названо");
             } else {
                 CHECK(sent_first_split_index(82) == 1 && ver_calls == 2,
                       "budget suspicion: после неудачи привязанного плана свои не пошли по порядку");
-                CHECK(other_bd && other_bd->budget == (variant == 1 ? D2K_CAT_BUDGET_UNCHECKED
-                                                                    : D2K_CAT_BUDGET_PASSED),
+                CHECK(other_bd && other_bd->budget == (variant == 1 ? D2S_CAT_BUDGET_UNCHECKED
+                                                                    : D2S_CAT_BUDGET_PASSED),
                       "budget suspicion: замена своим планом не подтверждена");
                 CHECK(!said("подозрение было ложным") && bound_bd->successes == 2,
                       "budget suspicion: без пройденного бюджета привязанный план переподтверждён");
                 if (variant == 1) {
-                    CHECK(bound_bd->budget == D2K_CAT_BUDGET_CUT,
+                    CHECK(bound_bd->budget == D2S_CAT_BUDGET_CUT,
                           "budget suspicion: у оборванного плана осталась отметка «пройден»");
-                    drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
+                    drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
                     CHECK(sent_first_split_index(82) >= 0 && sent_first_split_index(81) < 0,
                           "budget suspicion: на провод снова идёт оборванный план (ревью I-3)");
                 } else {
-                    CHECK(said("бюджет не проверен") && bound_bd->budget == D2K_CAT_BUDGET_PASSED,
+                    CHECK(said("бюджет не проверен") && bound_bd->budget == D2S_CAT_BUDGET_PASSED,
                           "budget suspicion: «не проверено» не названо или отметка тронута без улики");
                 }
             }
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0;
         }
 
@@ -15263,30 +15263,30 @@ own_first_test:
            улика (ревью I-1): кандидат не отвергается как «оборван», отметка
            его привязки не трогается, итог — «не засчитано». */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-unapplied", pid, 65, 3, "unapplied.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-unapplied", pid, 65, 3, "unapplied.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            c.boxes[0].binds[0].budget = D2K_CAT_BUDGET_PASSED;
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            c.boxes[0].binds[0].budget = D2S_CAT_BUDGET_PASSED;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
-            ver_budget_n = 1; ver_budget_seq[0] = D2K_BUDGET_CUT;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            ver_budget_n = 1; ver_budget_seq[0] = D2S_BUDGET_CUT;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42315;
-            d2k_ev h = ev_hello(6, 42315, "noapply.budget.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42315); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42315, "noapply.budget.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42315); d2s_sched_event(s, &su);
             for (int i = 0; i < 30 && tcp_calls == 0; i++) { skip_ahead(s, 6000); spin(s, 40); }
             CHECK(ver_calls >= 1 && !said("поток оборван посреди повторов"),
                   "budget unapplied: обрыв без применения плана засчитан против кандидата");
             CHECK(said("не засчитано"), "budget unapplied: «не измерено» не сказано");
-            CHECK(c.boxes[0].binds[0].budget == D2K_CAT_BUDGET_PASSED,
+            CHECK(c.boxes[0].binds[0].budget == D2S_CAT_BUDGET_PASSED,
                   "budget unapplied: отметка привязки тронута без улики");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0;
         }
 
@@ -15294,77 +15294,77 @@ own_first_test:
            приманка) режется на 25 датаграммах — не подтверждён; 389a3920
            (приманки Initial) проходит — подтверждён с отметкой. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char p_min[40], p_fakes[40];
-            own_box(&c, "box-q-min", p_min, 91, 7, "media.qbudget.own", 17, D2K_LINK_SHAPE_QUIC, 4,
+            own_box(&c, "box-q-min", p_min, 91, 7, "media.qbudget.own", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1790000500, 0);
-            own_box(&c, "box-q-fakes", p_fakes, 92, 3, "rutracker.qbudget.own", 17, D2K_LINK_SHAPE_QUIC, 4,
+            own_box(&c, "box-q-fakes", p_fakes, 92, 3, "rutracker.qbudget.own", 17, D2S_LINK_SHAPE_QUIC, 4,
                     1790000000, 0);
-            d2k_sched_quic_base_hook = stub_quic_base;
-            d2k_sched_quic_seeded_hook = stub_quic_seeded;
-            quic_answer = D2K_V_INCONCLUSIVE; base_blocked_answer = 1;
-            ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
-            ver_budget_n = 2; ver_budget_seq[0] = D2K_BUDGET_CUT; ver_budget_seq[1] = D2K_BUDGET_PASSED;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched_quic_base_hook = stub_quic_base;
+            d2s_sched_quic_seeded_hook = stub_quic_seeded;
+            quic_answer = D2S_V_INCONCLUSIVE; base_blocked_answer = 1;
+            ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
+            ver_budget_n = 2; ver_budget_seq[0] = D2S_BUDGET_CUT; ver_budget_seq[1] = D2S_BUDGET_PASSED;
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             quic_base_calls = quic_seeded_calls = quic_calls = base_calls = ver_calls = 0;
             ver_answer_port = 42320;
             forget_sent();
-            d2k_ev h = ev_hello(17, 42320, "cdn.qbudget.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(17, 42320); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(17, 42320, "cdn.qbudget.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(17, 42320); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(17, 42320); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(17, 42320); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
-            const d2k_cat_binding *bd = binding_of(&c, "cdn.qbudget.own", 17);
+            const d2s_cat_binding *bd = binding_of(&c, "cdn.qbudget.own", 17);
             CHECK(ver_calls == 2 && ver_last_transport == 17 && said("посреди повторов"),
                   "budget QUIC: обрыв посреди потоков HTTP/3 не отверг первый план");
-            CHECK(bd && !strcmp(bd->plan_id, p_fakes) && bd->budget == D2K_CAT_BUDGET_PASSED,
+            CHECK(bd && !strcmp(bd->plan_id, p_fakes) && bd->budget == D2S_CAT_BUDGET_PASSED,
                   "budget QUIC: подтверждён не прошедший бюджет план");
-            CHECK(ver_budget_seen[0] == D2K_BUDGET_FIELD_PACKETS,
+            CHECK(ver_budget_seen[0] == D2S_BUDGET_FIELD_PACKETS,
                   "budget QUIC: зонд QUIC позван без бюджета");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
-            d2k_sched_quic_base_hook = NULL;
-            d2k_sched_quic_seeded_hook = NULL;
-            quic_answer = D2K_V_OPAQUE;
+            d2s_sched_free(s); d2s_catalog_free(&c);
+            d2s_sched_quic_base_hook = NULL;
+            d2s_sched_quic_seeded_hook = NULL;
+            quic_answer = D2S_V_OPAQUE;
             ver_budget_n = 0;
         }
 
         /* (n7) Бюджет — свойство коробки: у коробки плана записан замер
            обрыва identity (26 пакетов) — зонд зовётся с ним, а не с 25. */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             char pid[40];
-            own_box(&c, "box-measured", pid, 64, 3, "measured.budget.own", 6, D2K_SHAPE_MODERN, 4,
+            own_box(&c, "box-measured", pid, 64, 3, "measured.budget.own", 6, D2S_SHAPE_MODERN, 4,
                     1790000000, 0);
-            d2k_cat_signal *rv = &c.boxes[0].fp.sig[c.boxes[0].fp.n_sig++];
+            d2s_cat_signal *rv = &c.boxes[0].fp.sig[c.boxes[0].fp.n_sig++];
             memset(rv, 0, sizeof *rv);
             snprintf(rv->kind, sizeof rv->kind, "rx-volume");
             rv->volume = 20; rv->seen = 1; rv->packets = 26;
-            tcp_answer = D2K_V_INCONCLUSIVE; ver_answer = D2K_VER_APPLICATION;
+            tcp_answer = D2S_V_INCONCLUSIVE; ver_answer = D2S_VER_APPLICATION;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1; ver_fail_first = 0;
-            ver_budget_n = 1; ver_budget_seq[0] = D2K_BUDGET_PASSED;
+            ver_budget_n = 1; ver_budget_seq[0] = D2S_BUDGET_PASSED;
             memset(ver_budget_seen, 0, sizeof ver_budget_seen);
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42330;
-            d2k_ev h = ev_hello(6, 42330, "box.budget.own"); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, 42330); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, 42330, "box.budget.own"); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, 42330); d2s_sched_event(s, &su);
             for (int i = 0; i < 60 && !said("ПОДТВЕРЖДЕНО"); i++) {
                 spin(s, 100);
-                d2k_ev ap = ev_applied(6, 42330); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42330); d2s_sched_event(s, &ap);
                 spin(s, 5);
             }
             CHECK(ver_budget_seen[0] == 26 && said("замер коробки box-measured"),
                   "budget box: бюджет зонда не взят из замера коробки");
             if (fails) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0;
         }
 
@@ -15378,47 +15378,47 @@ own_first_test:
            (p3) Оборванный бюджетом замеренный приём не отправляет цель на
            отдых: дальше идут запасные кандидаты оригинала. */
         for (int variant = 0; variant < 2; variant++) {
-            d2k_catalog c = {0};
-            tcp_owns_search = 1; tcp_found_arm = 0; tcp_answer = D2K_V_PREFIX;
-            ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0;
+            d2s_catalog c = {0};
+            tcp_owns_search = 1; tcp_found_arm = 0; tcp_answer = D2S_V_PREFIX;
+            ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
-            ver_budget_n = 2; ver_budget_seq[0] = D2K_BUDGET_CUT;
-            ver_budget_seq[1] = D2K_BUDGET_PASSED; ver_budget_status = 404;
+            ver_budget_n = 2; ver_budget_seq[0] = D2S_BUDGET_CUT;
+            ver_budget_seq[1] = D2S_BUDGET_PASSED; ver_budget_status = 404;
             ver_fail_after = variant == 0 ? 1 : 0;
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             uint16_t port = (uint16_t)(42340 + variant);
             ver_answer_port = port;
             const char *name = variant ? "updates2.partial.own" : "updates.partial.own";
-            d2k_ev h = ev_hello(6, port, name); d2k_sched_event(s, &h);
-            d2k_ev su = ev_suspect(6, port); d2k_sched_event(s, &su);
+            d2s_ev h = ev_hello(6, port, name); d2s_sched_event(s, &h);
+            d2s_ev su = ev_suspect(6, port); d2s_sched_event(s, &su);
             for (int i = 0; i < 400 && !said("ПОДТВЕРЖДЕНО") && !said("цель отдыхает"); i++) {
                 spin(s, 20);
-                d2k_ev ap = ev_applied(6, port); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, port); d2s_sched_event(s, &ap);
                 spin(s, 2);
             }
             CHECK(ver_calls >= 2 && said("запасного перебора"),
                   "partial: оборванный бюджетом замеренный приём кончил поиск (не пошли запасные)");
-            const d2k_cat_binding *bd = binding_of(&c, name, 6);
+            const d2s_cat_binding *bd = binding_of(&c, name, 6);
             if (variant == 0) {
-                CHECK(bd && bd->budget == D2K_CAT_BUDGET_CUT && said("частичный обход: рукопожатие снято") &&
+                CHECK(bd && bd->budget == D2S_CAT_BUDGET_CUT && said("частичный обход: рукопожатие снято") &&
                       said("ПОДТВЕРЖДЕНО"),
                       "partial: без лучшего частичный обход не подтверждён с отметкой «оборван»");
                 CHECK(!said("цель отдыхает"), "partial: цель ушла в отдых без плана");
-                drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-                CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) >= 1,
+                drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+                CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) >= 1,
                       "partial: частичный обход не поставлен на провод");
             } else {
-                CHECK(bd && bd->budget == D2K_CAT_BUDGET_PASSED && !said("частичный обход: рукопожатие снято"),
+                CHECK(bd && bd->budget == D2S_CAT_BUDGET_PASSED && !said("частичный обход: рукопожатие снято"),
                       "partial: частичный выбран вместо прошедшего бюджет");
             }
             if (fails || getenv("T55_SHOW")) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0; ver_budget_status = 200; ver_fail_after = 0;
-            tcp_owns_search = 0; tcp_answer = D2K_V_OPAQUE;
+            tcp_owns_search = 0; tcp_answer = D2S_V_OPAQUE;
         }
 
         /* ---- ПОЛЕ 12.10.2026, www.userscript.zone: У ЦЕЛИ ДВА БЛОКА ----
@@ -15433,31 +15433,31 @@ own_first_test:
            объёмному блоку: кандидат не выбрасывается, перебор не
            запускается, результат записан частичным с отметкой «оборван». */
         {
-            d2k_catalog c = {0};
+            d2s_catalog c = {0};
             net_name_known(&c, "hcaptcha.com"); /* без подбора белого имени */
-            tcp_owns_search = 0; tcp_found_arm = 0; tcp_answer = D2K_V_CLEAR;
-            vol_answer = D2K_VOL_PASSED; vol_rx_cut = 1; vol_rx_packets = 0;
+            tcp_owns_search = 0; tcp_found_arm = 0; tcp_answer = D2S_V_CLEAR;
+            vol_answer = D2S_VOL_PASSED; vol_rx_cut = 1; vol_rx_packets = 0;
             vol_rx_at_kb = 15;
-            ver_answer = D2K_VER_APPLICATION; ver_fail_first = 0; ver_fail_after = 0;
+            ver_answer = D2S_VER_APPLICATION; ver_fail_first = 0; ver_fail_after = 0;
             ver_app_after_tcp_search = 0; base_blocked_answer = 1;
             ver_budget_status = 200;
             ver_budget_n = 8;
-            for (int k = 0; k < ver_budget_n; k++) { ver_budget_seq[k] = D2K_BUDGET_CUT; }
-            d2k_sched *s = d2k_sched_new(&c, sv[0], 0x2d);
+            for (int k = 0; k < ver_budget_n; k++) { ver_budget_seq[k] = D2S_BUDGET_CUT; }
+            d2s_sched *s = d2s_sched_new(&c, sv[0], 0x2d);
             saidbuf[0] = '\0';
-            d2k_sched_set_say(s, collect_say, NULL);
+            d2s_sched_set_say(s, collect_say, NULL);
             spin(s, 5); drain(); forget_sent();
             base_calls = tcp_calls = ver_calls = vol_calls = 0;
             ver_answer_port = 42350;
-            d2k_ev h = ev_hello(6, 42350, "userscript.volume.cut"), shv;
-            d2k_sched_event(s, &h);
-            CHECK(tls_shape_event(&shv, h.name, D2K_SHAPE_MODERN) == 0,
+            d2s_ev h = ev_hello(6, 42350, "userscript.volume.cut"), shv;
+            d2s_sched_event(s, &h);
+            CHECK(tls_shape_event(&shv, h.name, D2S_SHAPE_MODERN) == 0,
                   "vol-budget: снимок TLS 1.3 не собрался");
-            d2k_sched_event(s, &shv);
-            d2k_ev su = ev_suspect(6, 42350); d2k_sched_event(s, &su);
+            d2s_sched_event(s, &shv);
+            d2s_ev su = ev_suspect(6, 42350); d2s_sched_event(s, &su);
             for (int i = 0; i < 400 && !said("ПОДТВЕРЖДЕНО") && !said("цель отдыхает"); i++) {
                 spin(s, 20);
-                d2k_ev ap = ev_applied(6, 42350); d2k_sched_event(s, &ap);
+                d2s_ev ap = ev_applied(6, 42350); d2s_sched_event(s, &ap);
                 spin(s, 2);
             }
             CHECK(vol_calls >= 1 && ver_calls >= 1,
@@ -15474,32 +15474,32 @@ own_first_test:
                   "vol-budget: частичный результат не записан");
             CHECK(!said("в запасном списке"),
                   "vol-budget: запасной перебор открыт обрывом объёма");
-            const d2k_cat_binding *bd = binding_of(&c, h.name, 6);
-            CHECK(bd && bd->budget == D2K_CAT_BUDGET_CUT,
+            const d2s_cat_binding *bd = binding_of(&c, h.name, 6);
+            CHECK(bd && bd->budget == D2S_CAT_BUDGET_CUT,
                   "vol-budget: привязка частичного обхода без отметки «оборван»");
             CHECK(!said("цель отдыхает"), "vol-budget: цель ушла в отдых без плана");
-            drain(); forget_sent(); d2k_sched_sync(s); sync_out(s);
-            CHECK(sent_command_count(D2K_CMD_SET_NAME, NULL, 0) >= 1,
+            drain(); forget_sent(); d2s_sched_sync(s); sync_out(s);
+            CHECK(sent_command_count(D2S_CMD_SET_NAME, NULL, 0) >= 1,
                   "vol-budget: частичный обход не поставлен на провод");
             if (fails || getenv("T55_SHOW")) fprintf(stderr, "%s\n", saidbuf);
-            d2k_sched_free(s); d2k_catalog_free(&c);
+            d2s_sched_free(s); d2s_catalog_free(&c);
             ver_budget_n = 0; ver_budget_status = 200;
             vol_rx_cut = 0; vol_rx_at_kb = 24; vol_rx_packets = 0;
-            tcp_answer = D2K_V_OPAQUE;
+            tcp_answer = D2S_V_OPAQUE;
         }
 
-        d2k_sched_tcp_base_hook = saved_base;
-        d2k_sched_rx_ver_hook = saved_rx;
-        d2k_sched_rx_gzip_ver_hook = saved_gzip;
-        tcp_answer = D2K_V_OPAQUE; ver_answer = D2K_VER_APPLICATION;
+        d2s_sched_tcp_base_hook = saved_base;
+        d2s_sched_rx_ver_hook = saved_rx;
+        d2s_sched_rx_gzip_ver_hook = saved_gzip;
+        tcp_answer = D2S_V_OPAQUE; ver_answer = D2S_VER_APPLICATION;
         if (own_first_only) { goto voice_only_done; }
     }
 
 voice_only_done:
     close(sv[0]);
     close(sv[1]);
-    d2k_catalog_free(&cat);
-    d2k_sched_mark_hook = saved_mark;
+    d2s_catalog_free(&cat);
+    d2s_sched_mark_hook = saved_mark;
 
     if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }
     printf(voice_only ? "voice scheduler: all checks passed\n" :

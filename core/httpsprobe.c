@@ -1,4 +1,4 @@
-/* httpsprobe.c — есть ли у имени HTTPS (задача 51), см. d2k_httpsprobe.h. */
+/* httpsprobe.c — есть ли у имени HTTPS (задача 51), см. d2s_httpsprobe.h. */
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 #include <errno.h>
@@ -14,10 +14,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_hello.h"
-#include "d2k_httpsprobe.h"
-#include "d2k_tls12.h"
-#include "d2k_tls13.h"
+#include "d2s_hello.h"
+#include "d2s_httpsprobe.h"
+#include "d2s_tls12.h"
+#include "d2s_tls13.h"
 
 /* Отказ 443 приходит за один RTT; потолок ограничивает молчащую линию, а
    кэш избавляет от неё следующие запросы. */
@@ -27,41 +27,41 @@
    один RTT; тишина дольше — так коробка «роняет» поток. */
 #define FIRST_MS   2000
 
-uint16_t d2k_https_probe_port = 443;
+uint16_t d2s_https_probe_port = 443;
 
-d2k_https_state d2k_https_classify(int connect_result, int server_tls, int tls_ok, int peer_name) {
-    if (connect_result == D2K_HTTPS_REFUSED) { return D2K_HTTPS_CLOSED; }
-    if (connect_result != D2K_HTTPS_CONNECTED) { return D2K_HTTPS_UNCONFIRMED; }
-    if (!server_tls) { return D2K_HTTPS_TLS_BLOCKED; }
-    if (!tls_ok) { return D2K_HTTPS_UNCONFIRMED; }
-    if (peer_name == 1) { return D2K_HTTPS_SERVED; }
-    if (peer_name == 0) { return D2K_HTTPS_OTHER_NAME; }
-    return D2K_HTTPS_UNCONFIRMED;
+d2s_https_state d2s_https_classify(int connect_result, int server_tls, int tls_ok, int peer_name) {
+    if (connect_result == D2S_HTTPS_REFUSED) { return D2S_HTTPS_CLOSED; }
+    if (connect_result != D2S_HTTPS_CONNECTED) { return D2S_HTTPS_UNCONFIRMED; }
+    if (!server_tls) { return D2S_HTTPS_TLS_BLOCKED; }
+    if (!tls_ok) { return D2S_HTTPS_UNCONFIRMED; }
+    if (peer_name == 1) { return D2S_HTTPS_SERVED; }
+    if (peer_name == 0) { return D2S_HTTPS_OTHER_NAME; }
+    return D2S_HTTPS_UNCONFIRMED;
 }
 
-int d2k_https_upgrade(d2k_https_state s) {
-    return s == D2K_HTTPS_SERVED || s == D2K_HTTPS_TLS_BLOCKED;
+int d2s_https_upgrade(d2s_https_state s) {
+    return s == D2S_HTTPS_SERVED || s == D2S_HTTPS_TLS_BLOCKED;
 }
 
-uint32_t d2k_https_ttl(d2k_https_state s) {
+uint32_t d2s_https_ttl(d2s_https_state s) {
     switch (s) {
-    case D2K_HTTPS_SERVED:      return 6u * 3600u;
-    case D2K_HTTPS_TLS_BLOCKED: return 3600u;
-    case D2K_HTTPS_CLOSED:      return 30u * 60u;
-    case D2K_HTTPS_OTHER_NAME:  return 30u * 60u;
-    case D2K_HTTPS_UNCONFIRMED: return 2u * 60u;
+    case D2S_HTTPS_SERVED:      return 6u * 3600u;
+    case D2S_HTTPS_TLS_BLOCKED: return 3600u;
+    case D2S_HTTPS_CLOSED:      return 30u * 60u;
+    case D2S_HTTPS_OTHER_NAME:  return 30u * 60u;
+    case D2S_HTTPS_UNCONFIRMED: return 2u * 60u;
     default:                    return 0;
     }
 }
 
-const char *d2k_https_state_name(d2k_https_state s) {
+const char *d2s_https_state_name(d2s_https_state s) {
     switch (s) {
-    case D2K_HTTPS_SERVED:      return "served";
-    case D2K_HTTPS_CLOSED:      return "closed";
-    case D2K_HTTPS_OTHER_NAME:  return "other-name";
-    case D2K_HTTPS_UNCONFIRMED: return "unconfirmed";
-    case D2K_HTTPS_PROBING:     return "probing";
-    case D2K_HTTPS_TLS_BLOCKED: return "tls-blocked";
+    case D2S_HTTPS_SERVED:      return "served";
+    case D2S_HTTPS_CLOSED:      return "closed";
+    case D2S_HTTPS_OTHER_NAME:  return "other-name";
+    case D2S_HTTPS_UNCONFIRMED: return "unconfirmed";
+    case D2S_HTTPS_PROBING:     return "probing";
+    case D2S_HTTPS_TLS_BLOCKED: return "tls-blocked";
     default:                    return "unknown";
     }
 }
@@ -82,24 +82,24 @@ static int https_connect(uint8_t family, const uint8_t *addr, uint32_t mark, int
     if (family == 6) {
         struct sockaddr_in6 *a = (struct sockaddr_in6 *)&ss;
         a->sin6_family = AF_INET6;
-        a->sin6_port = htons(d2k_https_probe_port);
+        a->sin6_port = htons(d2s_https_probe_port);
         memcpy(&a->sin6_addr, addr, 16);
         sl = sizeof *a;
     } else {
         struct sockaddr_in *a = (struct sockaddr_in *)&ss;
         a->sin_family = AF_INET;
-        a->sin_port = htons(d2k_https_probe_port);
+        a->sin_port = htons(d2s_https_probe_port);
         memcpy(&a->sin_addr, addr, 4);
         sl = sizeof *a;
     }
     *fd_out = -1;
     int fd = socket(family == 6 ? AF_INET6 : AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) { snprintf(why, cap, "socket: %s", strerror(errno)); return D2K_HTTPS_NO_ANSWER; }
+    if (fd < 0) { snprintf(why, cap, "socket: %s", strerror(errno)); return D2S_HTTPS_NO_ANSWER; }
 #ifdef SO_MARK
     if (mark && setsockopt(fd, SOL_SOCKET, SO_MARK, &mark, sizeof mark) != 0) {
         snprintf(why, cap, "SO_MARK: %s", strerror(errno));
         close(fd);
-        return D2K_HTTPS_NO_ANSWER;
+        return D2S_HTTPS_NO_ANSWER;
     }
 #else
     (void)mark;
@@ -108,7 +108,7 @@ static int https_connect(uint8_t family, const uint8_t *addr, uint32_t mark, int
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
         snprintf(why, cap, "fcntl: %s", strerror(errno));
         close(fd);
-        return D2K_HTTPS_NO_ANSWER;
+        return D2S_HTTPS_NO_ANSWER;
     }
     int error = 0;
     if (connect(fd, (const struct sockaddr *)&ss, sl) != 0) {
@@ -121,7 +121,7 @@ static int https_connect(uint8_t family, const uint8_t *addr, uint32_t mark, int
             if (rc == 0) {
                 snprintf(why, cap, "443 молчит %d мс", ms);
                 close(fd);
-                return D2K_HTTPS_NO_ANSWER;
+                return D2S_HTTPS_NO_ANSWER;
             }
             socklen_t el = sizeof error;
             if (rc < 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &el) != 0) {
@@ -133,31 +133,31 @@ static int https_connect(uint8_t family, const uint8_t *addr, uint32_t mark, int
         snprintf(why, cap, "443: %s", strerror(error));
         close(fd);
         return error == ECONNREFUSED || error == EHOSTUNREACH || error == ENETUNREACH
-            ? D2K_HTTPS_REFUSED : D2K_HTTPS_NO_ANSWER;
+            ? D2S_HTTPS_REFUSED : D2S_HTTPS_NO_ANSWER;
     }
     if (fcntl(fd, F_SETFL, flags) < 0) {
         snprintf(why, cap, "fcntl: %s", strerror(errno));
         close(fd);
-        return D2K_HTTPS_NO_ANSWER;
+        return D2S_HTTPS_NO_ANSWER;
     }
     *fd_out = fd;
-    return D2K_HTTPS_CONNECTED;
+    return D2S_HTTPS_CONNECTED;
 }
 
-/* 1 — рукопожатие завершилось; *peer_name — как d2k_tls_peer_name. */
+/* 1 — рукопожатие завершилось; *peer_name — как d2s_tls_peer_name. */
 static int https_tls(int fd, const char *host, int ms, int v13, int *peer_name,
                      char *why, size_t cap) {
     *peer_name = -1;
     if (v13) {
-        d2k_tls *t = NULL;
-        if (d2k_tls_connect(fd, host, ms, 0, &t, why, cap) != 0) { return 0; }
-        *peer_name = d2k_tls_peer_name(t);
-        d2k_tls_free(t);
+        d2s_tls *t = NULL;
+        if (d2s_tls_connect(fd, host, ms, 0, &t, why, cap) != 0) { return 0; }
+        *peer_name = d2s_tls_peer_name(t);
+        d2s_tls_free(t);
     } else {
-        d2k_tls12 *t = NULL;
-        if (d2k_tls12_connect(fd, host, ms, 0, &t, why, cap) != 0) { return 0; }
-        *peer_name = d2k_tls12_peer_name(t);
-        d2k_tls12_free(t);
+        d2s_tls12 *t = NULL;
+        if (d2s_tls12_connect(fd, host, ms, 0, &t, why, cap) != 0) { return 0; }
+        *peer_name = d2s_tls12_peer_name(t);
+        d2s_tls12_free(t);
     }
     snprintf(why, cap, "TLS 1.%d, имя в листе сертификата (цепочка не проверяется) %s", v13 ? 3 : 2,
              *peer_name == 1 ? "совпало" : *peer_name == 0 ? "чужое" : "не прочитано");
@@ -167,11 +167,11 @@ static int https_tls(int fd, const char *host, int ms, int v13, int *peer_name,
 /* Первый полёт: наш ClientHello (профиль браузера, SNI = имя) и первый байт
    ответа. 1 — пришла запись TLS (рукопожатие или тревога) от сервера; 0 —
    сброс, закрытие, тишина FIRST_MS или не-TLS байты. Отдельным соединением:
-   клиентам TLS d2k нечем сказать, пришло ли от сервера хоть что-то. */
+   клиентам TLS d2s нечем сказать, пришло ли от сервера хоть что-то. */
 static int first_flight(int fd, const char *host, char *why, size_t cap) {
     uint8_t hello[2048];
     size_t hl = 0;
-    if (d2k_hello_from_profile(D2K_SHAPE_MODERN, host, hello, sizeof hello, &hl) != 0) {
+    if (d2s_hello_from_profile(D2S_SHAPE_MODERN, host, hello, sizeof hello, &hl) != 0) {
         snprintf(why, cap, "ClientHello не собрался");
         return -1;
     }
@@ -200,20 +200,20 @@ static int first_flight(int fd, const char *host, char *why, size_t cap) {
     return 0;
 }
 
-d2k_https_state d2k_https_probe_real(uint8_t family, const uint8_t *addr, const char *host,
+d2s_https_state d2s_https_probe_real(uint8_t family, const uint8_t *addr, const char *host,
                                      uint32_t mark, char *why, size_t cap) {
     why[0] = '\0';
     int fd;
     int cr0 = https_connect(family, addr, mark, CONNECT_MS, &fd, why, cap);
-    if (cr0 != D2K_HTTPS_CONNECTED) { return d2k_https_classify(cr0, 0, 0, -1); }
+    if (cr0 != D2S_HTTPS_CONNECTED) { return d2s_https_classify(cr0, 0, 0, -1); }
     int ff = first_flight(fd, host, why, cap);
     close(fd);
-    if (ff < 0) { return D2K_HTTPS_UNCONFIRMED; }
-    if (ff == 0) { return d2k_https_classify(D2K_HTTPS_CONNECTED, 0, 0, -1); }
+    if (ff < 0) { return D2S_HTTPS_UNCONFIRMED; }
+    if (ff == 0) { return d2s_https_classify(D2S_HTTPS_CONNECTED, 0, 0, -1); }
 
     /* Сервер говорит TLS: теперь полное рукопожатие — чьё имя в листе. */
     int64_t deadline = mono_ms() + PROBE_MS;
-    int peer_name = -1, tls_ok = 0, cr = D2K_HTTPS_NO_ANSWER, tries = 0;
+    int peer_name = -1, tls_ok = 0, cr = D2S_HTTPS_NO_ANSWER, tries = 0;
     char first[160] = "";
     why[0] = '\0';
     /* TLS 1.3 сначала; сервер, с которым наш единственный набор 1.3 не
@@ -224,7 +224,7 @@ d2k_https_state d2k_https_probe_real(uint8_t family, const uint8_t *addr, const 
         int fd;
         cr = https_connect(family, addr, mark, (int)(left < CONNECT_MS ? left : CONNECT_MS),
                            &fd, why, cap);
-        if (cr != D2K_HTTPS_CONNECTED) { break; }
+        if (cr != D2S_HTTPS_CONNECTED) { break; }
         left = deadline - mono_ms();
         tries++;
         tls_ok = left > 0 && https_tls(fd, host, (int)left, v13, &peer_name, why, cap);
@@ -238,15 +238,15 @@ d2k_https_state d2k_https_probe_real(uint8_t family, const uint8_t *addr, const 
     }
     /* Сервер уже ответил TLS первым полётом: повторный отказ соединения —
        не «HTTPS нет», а случай на линии. */
-    if (cr != D2K_HTTPS_CONNECTED) { cr = D2K_HTTPS_NO_ANSWER; }
-    return d2k_https_classify(cr, 1, tls_ok, peer_name);
+    if (cr != D2S_HTTPS_CONNECTED) { cr = D2S_HTTPS_NO_ANSWER; }
+    return d2s_https_classify(cr, 1, tls_ok, peer_name);
 }
 
 /* --- кэш, очередь и поток ------------------------------------------------- */
 
 typedef struct {
     char host[256];
-    d2k_https_state state;
+    d2s_https_state state;
     int64_t expires_ms, stamp_ms;
 } entry;
 
@@ -255,17 +255,17 @@ typedef struct {
     uint8_t family, addr[16];
 } job;
 
-struct d2k_httpsprobe {
+struct d2s_httpsprobe {
     uint32_t mark;
-    d2k_https_probe_fn probe;
-    entry cache[D2K_HTTPSPROBE_NAMES];
+    d2s_https_probe_fn probe;
+    entry cache[D2S_HTTPSPROBE_NAMES];
     pthread_mutex_t mu;
     pthread_cond_t cv;
     pthread_t th;
     int th_live, stop;
-    job jobs[D2K_HTTPSPROBE_JOBS];
+    job jobs[D2S_HTTPSPROBE_JOBS];
     size_t j_head, j_count;
-    d2k_httpsprobe_result done[D2K_HTTPSPROBE_JOBS + 1];
+    d2s_httpsprobe_result done[D2S_HTTPSPROBE_JOBS + 1];
     size_t d_count;
     uint64_t lost;
     int wake[2];
@@ -282,24 +282,24 @@ static int host_ok(const char *h) {
     return 1;
 }
 
-static entry *cache_find(d2k_httpsprobe *p, const char *host) {
-    for (size_t i = 0; i < D2K_HTTPSPROBE_NAMES; i++) {
+static entry *cache_find(d2s_httpsprobe *p, const char *host) {
+    for (size_t i = 0; i < D2S_HTTPSPROBE_NAMES; i++) {
         if (p->cache[i].host[0] && strcasecmp(p->cache[i].host, host) == 0) { return &p->cache[i]; }
     }
     return NULL;
 }
 
-static entry *cache_put(d2k_httpsprobe *p, const char *host, d2k_https_state s,
+static entry *cache_put(d2s_httpsprobe *p, const char *host, d2s_https_state s,
                         int64_t expires, int64_t now) {
     entry *e = cache_find(p, host);
     if (!e) {
         /* Вытесняется самая давняя запись, но не та, по которой идёт зонд:
            иначе по имени ушёл бы второй (ревью M5). */
         e = NULL;
-        for (size_t i = 0; i < D2K_HTTPSPROBE_NAMES; i++) {
+        for (size_t i = 0; i < D2S_HTTPSPROBE_NAMES; i++) {
             entry *c = &p->cache[i];
             if (!c->host[0]) { e = c; break; }
-            if (c->state == D2K_HTTPS_PROBING && now < c->expires_ms) { continue; }
+            if (c->state == D2S_HTTPS_PROBING && now < c->expires_ms) { continue; }
             if (!e || c->stamp_ms < e->stamp_ms) { e = c; }
         }
         if (!e) { e = &p->cache[0]; }
@@ -312,26 +312,26 @@ static entry *cache_put(d2k_httpsprobe *p, const char *host, d2k_https_state s,
 }
 
 static void *worker(void *arg) {
-    d2k_httpsprobe *p = arg;
+    d2s_httpsprobe *p = arg;
     pthread_mutex_lock(&p->mu);
     for (;;) {
         while (!p->stop && p->j_count == 0) { pthread_cond_wait(&p->cv, &p->mu); }
         if (p->stop) { break; }
         job j = p->jobs[p->j_head];
-        p->j_head = (p->j_head + 1) % D2K_HTTPSPROBE_JOBS;
+        p->j_head = (p->j_head + 1) % D2S_HTTPSPROBE_JOBS;
         p->j_count--;
         pthread_mutex_unlock(&p->mu);
 
-        d2k_httpsprobe_result r;
+        d2s_httpsprobe_result r;
         memset(&r, 0, sizeof r);
         snprintf(r.host, sizeof r.host, "%s", j.host);
         r.family = j.family;
         memcpy(r.addr, j.addr, sizeof r.addr);
         r.state = p->probe(j.family, j.addr, j.host, p->mark, r.why, sizeof r.why);
-        if (r.state == D2K_HTTPS_UNKNOWN || r.state == D2K_HTTPS_PROBING) {
-            r.state = D2K_HTTPS_UNCONFIRMED;
+        if (r.state == D2S_HTTPS_UNKNOWN || r.state == D2S_HTTPS_PROBING) {
+            r.state = D2S_HTTPS_UNCONFIRMED;
         }
-        r.ttl_s = d2k_https_ttl(r.state);
+        r.ttl_s = d2s_https_ttl(r.state);
 
         pthread_mutex_lock(&p->mu);
         if (p->d_count < sizeof p->done / sizeof p->done[0]) {
@@ -348,16 +348,16 @@ static void *worker(void *arg) {
     return NULL;
 }
 
-d2k_httpsprobe *d2k_httpsprobe_new(uint32_t mark, d2k_https_probe_fn probe) {
-    d2k_httpsprobe *p = calloc(1, sizeof *p);
+d2s_httpsprobe *d2s_httpsprobe_new(uint32_t mark, d2s_https_probe_fn probe) {
+    d2s_httpsprobe *p = calloc(1, sizeof *p);
     if (!p) { return NULL; }
     p->mark = mark;
-    p->probe = probe ? probe : d2k_https_probe_real;
+    p->probe = probe ? probe : d2s_https_probe_real;
     p->wake[0] = p->wake[1] = -1;
     pthread_mutex_init(&p->mu, NULL);
     pthread_cond_init(&p->cv, NULL);
     /* `< 0`, а не `!= 0`: на MIPS pipe() возвращает первый дескриптор, а не
-       нуль (см. d2k_sched_new в sched.c и test_mips_pipe). */
+       нуль (см. d2s_sched_new в sched.c и test_mips_pipe). */
     if (pipe(p->wake) < 0) {
         p->wake[0] = p->wake[1] = -1;
     } else {
@@ -368,13 +368,13 @@ d2k_httpsprobe *d2k_httpsprobe_new(uint32_t mark, d2k_https_probe_fn probe) {
     }
     if (pthread_create(&p->th, NULL, worker, p) == 0) { p->th_live = 1; }
     if (!p->th_live || p->wake[0] < 0) {
-        d2k_httpsprobe_free(p);
+        d2s_httpsprobe_free(p);
         return NULL;
     }
     return p;
 }
 
-void d2k_httpsprobe_free(d2k_httpsprobe *p) {
+void d2s_httpsprobe_free(d2s_httpsprobe *p) {
     if (!p) { return; }
     if (p->th_live) {
         pthread_mutex_lock(&p->mu);
@@ -390,11 +390,11 @@ void d2k_httpsprobe_free(d2k_httpsprobe *p) {
     free(p);
 }
 
-int d2k_httpsprobe_wake_fd(const d2k_httpsprobe *p) {
+int d2s_httpsprobe_wake_fd(const d2s_httpsprobe *p) {
     return p ? p->wake[0] : -1;
 }
 
-int d2k_httpsprobe_portal(d2k_httpsprobe *p, const char *host, uint8_t family,
+int d2s_httpsprobe_portal(d2s_httpsprobe *p, const char *host, uint8_t family,
                           const uint8_t *addr, int answered, int64_t now,
                           uint32_t *resend_ttl) {
     if (resend_ttl) { *resend_ttl = 0; }
@@ -403,7 +403,7 @@ int d2k_httpsprobe_portal(d2k_httpsprobe *p, const char *host, uint8_t family,
     entry *e = cache_find(p, host);
     int rc = 0;
     if (e && now < e->expires_ms) {
-        if (d2k_https_upgrade(e->state) && !answered && resend_ttl) {
+        if (d2s_https_upgrade(e->state) && !answered && resend_ttl) {
             /* Датапат о подтверждённом имени не знает: перезапуск или вытеснение. */
             int64_t left = (e->expires_ms - now) / 1000;
             if (left > 0) {
@@ -411,15 +411,15 @@ int d2k_httpsprobe_portal(d2k_httpsprobe *p, const char *host, uint8_t family,
                 rc = 2;
             }
         }
-    } else if (p->j_count < D2K_HTTPSPROBE_JOBS) {
-        job *j = &p->jobs[(p->j_head + p->j_count) % D2K_HTTPSPROBE_JOBS];
+    } else if (p->j_count < D2S_HTTPSPROBE_JOBS) {
+        job *j = &p->jobs[(p->j_head + p->j_count) % D2S_HTTPSPROBE_JOBS];
         memset(j, 0, sizeof *j);
         snprintf(j->host, sizeof j->host, "%s", host);
         j->family = family;
         memcpy(j->addr, addr, family == 6 ? 16 : 4);
         p->j_count++;
         /* Пока зонд идёт, по имени новых не ставим; срок с запасом на зонд. */
-        cache_put(p, host, D2K_HTTPS_PROBING, now + PROBE_MS * 4, now);
+        cache_put(p, host, D2S_HTTPS_PROBING, now + PROBE_MS * 4, now);
         pthread_cond_signal(&p->cv);
         rc = 1;
     }
@@ -427,7 +427,7 @@ int d2k_httpsprobe_portal(d2k_httpsprobe *p, const char *host, uint8_t family,
     return rc;
 }
 
-size_t d2k_httpsprobe_done(d2k_httpsprobe *p, int64_t now, d2k_httpsprobe_result *out,
+size_t d2s_httpsprobe_done(d2s_httpsprobe *p, int64_t now, d2s_httpsprobe_result *out,
                            size_t cap) {
     if (!p || !out) { return 0; }
     char drain[64];
@@ -448,16 +448,16 @@ size_t d2k_httpsprobe_done(d2k_httpsprobe *p, int64_t now, d2k_httpsprobe_result
     return n;
 }
 
-d2k_https_state d2k_httpsprobe_state(d2k_httpsprobe *p, const char *host, int64_t now) {
-    if (!p || !host) { return D2K_HTTPS_UNKNOWN; }
+d2s_https_state d2s_httpsprobe_state(d2s_httpsprobe *p, const char *host, int64_t now) {
+    if (!p || !host) { return D2S_HTTPS_UNKNOWN; }
     pthread_mutex_lock(&p->mu);
     entry *e = cache_find(p, host);
-    d2k_https_state s = e && now < e->expires_ms ? e->state : D2K_HTTPS_UNKNOWN;
+    d2s_https_state s = e && now < e->expires_ms ? e->state : D2S_HTTPS_UNKNOWN;
     pthread_mutex_unlock(&p->mu);
     return s;
 }
 
-uint64_t d2k_httpsprobe_lost(d2k_httpsprobe *p) {
+uint64_t d2s_httpsprobe_lost(d2s_httpsprobe *p) {
     if (!p) { return 0; }
     pthread_mutex_lock(&p->mu);
     uint64_t n = p->lost;
@@ -467,13 +467,13 @@ uint64_t d2k_httpsprobe_lost(d2k_httpsprobe *p) {
 
 /* --- кэш на диске (ревью I2) ------------------------------------------------ */
 
-static const struct { d2k_https_state s; const char *name; } stored[] = {
-    {D2K_HTTPS_SERVED, "served"}, {D2K_HTTPS_TLS_BLOCKED, "tls-blocked"},
-    {D2K_HTTPS_CLOSED, "closed"}, {D2K_HTTPS_OTHER_NAME, "other-name"},
-    {D2K_HTTPS_UNCONFIRMED, "unconfirmed"},
+static const struct { d2s_https_state s; const char *name; } stored[] = {
+    {D2S_HTTPS_SERVED, "served"}, {D2S_HTTPS_TLS_BLOCKED, "tls-blocked"},
+    {D2S_HTTPS_CLOSED, "closed"}, {D2S_HTTPS_OTHER_NAME, "other-name"},
+    {D2S_HTTPS_UNCONFIRMED, "unconfirmed"},
 };
 
-int d2k_httpsprobe_save(d2k_httpsprobe *p, const char *path, int64_t now_ms, int64_t wall_s,
+int d2s_httpsprobe_save(d2s_httpsprobe *p, const char *path, int64_t now_ms, int64_t wall_s,
                         char *err, size_t cap) {
     if (!p || !path) { return -1; }
     char tmp[1024];
@@ -484,12 +484,12 @@ int d2k_httpsprobe_save(d2k_httpsprobe *p, const char *path, int64_t now_ms, int
     FILE *f = fopen(tmp, "w");
     if (!f) { snprintf(err, cap, "%s: %s", tmp, strerror(errno)); return -1; }
     /* v2: отметка записи по стенным часам (ревью N2). */
-    fprintf(f, "d2k-https 2 %lld\n", (long long)wall_s);
+    fprintf(f, "d2s-https 2 %lld\n", (long long)wall_s);
     pthread_mutex_lock(&p->mu);
-    for (size_t i = 0; i < D2K_HTTPSPROBE_NAMES; i++) {
+    for (size_t i = 0; i < D2S_HTTPSPROBE_NAMES; i++) {
         const entry *e = &p->cache[i];
-        if (!e->host[0] || e->state == D2K_HTTPS_PROBING || e->expires_ms <= now_ms) { continue; }
-        const char *name = d2k_https_state_name(e->state);
+        if (!e->host[0] || e->state == D2S_HTTPS_PROBING || e->expires_ms <= now_ms) { continue; }
+        const char *name = d2s_https_state_name(e->state);
         fprintf(f, "%s %lld %s\n", name,
                 (long long)(wall_s + (e->expires_ms - now_ms) / 1000), e->host);
     }
@@ -504,8 +504,8 @@ int d2k_httpsprobe_save(d2k_httpsprobe *p, const char *path, int64_t now_ms, int
     return 0;
 }
 
-int d2k_httpsprobe_load(d2k_httpsprobe *p, const char *path, int64_t now_ms, int64_t wall_s,
-                        d2k_httpsprobe_result *push, size_t push_cap, size_t *n_push,
+int d2s_httpsprobe_load(d2s_httpsprobe *p, const char *path, int64_t now_ms, int64_t wall_s,
+                        d2s_httpsprobe_result *push, size_t push_cap, size_t *n_push,
                         size_t *n_loaded, char *err, size_t cap) {
     if (n_push) { *n_push = 0; }
     if (n_loaded) { *n_loaded = 0; }
@@ -520,11 +520,11 @@ int d2k_httpsprobe_load(d2k_httpsprobe *p, const char *path, int64_t now_ms, int
     long long written = -1;
     int used = 0;
     if (!fgets(line, sizeof line, f) ||
-        (strcmp(line, "d2k-https 1\n") != 0 &&
-         (sscanf(line, "d2k-https 2 %lld\n%n", &written, &used) != 1 || line[used] != '\0' ||
+        (strcmp(line, "d2s-https 1\n") != 0 &&
+         (sscanf(line, "d2s-https 2 %lld\n%n", &written, &used) != 1 || line[used] != '\0' ||
           written < 0))) {
         fclose(f);
-        snprintf(err, cap, "%s: не кэш HTTPS d2k (нет заголовка «d2k-https 1|2»)", path);
+        snprintf(err, cap, "%s: не кэш HTTPS d2s (нет заголовка «d2s-https 1|2»)", path);
         return -1;
     }
     if (written > wall_s) {
@@ -539,19 +539,19 @@ int d2k_httpsprobe_load(d2k_httpsprobe *p, const char *path, int64_t now_ms, int
         used = 0;
         if (sscanf(line, "%31s %lld %299s %n", st, &exp, host, &used) != 3 ||
             line[used] != '\0' || !host_ok(host)) { continue; }
-        d2k_https_state s = D2K_HTTPS_UNKNOWN;
+        d2s_https_state s = D2S_HTTPS_UNKNOWN;
         for (size_t i = 0; i < sizeof stored / sizeof stored[0]; i++) {
             if (strcmp(st, stored[i].name) == 0) { s = stored[i].s; }
         }
-        if (s == D2K_HTTPS_UNKNOWN || exp <= wall_s) { continue; }
+        if (s == D2S_HTTPS_UNKNOWN || exp <= wall_s) { continue; }
         int64_t left = exp - wall_s;
-        if (left > (int64_t)d2k_https_ttl(s)) { left = d2k_https_ttl(s); }
+        if (left > (int64_t)d2s_https_ttl(s)) { left = d2s_https_ttl(s); }
         pthread_mutex_lock(&p->mu);
         cache_put(p, host, s, now_ms + left * 1000, now_ms);
         pthread_mutex_unlock(&p->mu);
         if (n_loaded) { (*n_loaded)++; }
-        if (d2k_https_upgrade(s) && push && n_push && *n_push < push_cap) {
-            d2k_httpsprobe_result *r = &push[(*n_push)++];
+        if (d2s_https_upgrade(s) && push && n_push && *n_push < push_cap) {
+            d2s_httpsprobe_result *r = &push[(*n_push)++];
             memset(r, 0, sizeof *r);
             snprintf(r->host, sizeof r->host, "%.253s", host);
             r->state = s;

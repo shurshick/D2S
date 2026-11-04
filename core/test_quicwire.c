@@ -8,13 +8,13 @@
  * A RFC 9001 и §16/A.2-A.3 RFC 9000.
  *
  * Что здесь НЕ проверяется: сеть, состояние соединения, кадры. Их здесь нет
- * (см. шапку d2k_quicwire.h), и притворяться, что тест их покрывает, нельзя.
+ * (см. шапку d2s_quicwire.h), и притворяться, что тест их покрывает, нельзя.
  */
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_crypto.h"
-#include "d2k_quicwire.h"
+#include "d2s_crypto.h"
+#include "d2s_quicwire.h"
 
 static int fails;
 
@@ -65,19 +65,19 @@ static void test_varint(void) {
         uint8_t b[8];
         size_t n = unhex(v[i].hex, b, sizeof b);
         uint64_t got = 0; size_t w = 0;
-        CHECK(d2k_qw_varint_read(b, n, &got, &w) == 0, "переменная длина не прочиталась");
+        CHECK(d2s_qw_varint_read(b, n, &got, &w) == 0, "переменная длина не прочиталась");
         CHECK(got == v[i].val, "переменная длина прочиталась не тем числом");
         CHECK(w == v[i].width, "ширина переменной длины не та");
     }
     /* Запись берёт МИНИМАЛЬНУЮ ширину — иначе одно и то же число уезжало бы
        на провод по-разному от вызова к вызову. */
     uint8_t out[8];
-    CHECK(d2k_qw_varint_write(out, sizeof out, 37) == 1 && out[0] == 0x25,
+    CHECK(d2s_qw_varint_write(out, sizeof out, 37) == 1 && out[0] == 0x25,
           "малое число записано не одним байтом");
-    CHECK(d2k_qw_varint_write(out, sizeof out, 15293) == 2 && out[0] == 0x7b && out[1] == 0xbd,
+    CHECK(d2s_qw_varint_write(out, sizeof out, 15293) == 2 && out[0] == 0x7b && out[1] == 0xbd,
           "число в два байта записано неверно");
-    CHECK(d2k_qw_varint_write(out, 1, 15293) == 0, "запись не заметила нехватки места");
-    CHECK(d2k_qw_varint_len(4611686018427387904ull) == 0,
+    CHECK(d2s_qw_varint_write(out, 1, 15293) == 0, "запись не заметила нехватки места");
+    CHECK(d2s_qw_varint_len(4611686018427387904ull) == 0,
           "непредставимое число объявлено представимым");
 }
 
@@ -86,14 +86,14 @@ static void test_varint(void) {
 static void test_pn(void) {
     /* Пример из приложения: принято до 0xa82f30ea, пришло 0x9b32 двумя
        байтами — полный номер 0xa82f9b32. */
-    CHECK(d2k_qw_pn_decode(0xa82f30eaull, 0x9b32ull, 2) == 0xa82f9b32ull,
+    CHECK(d2s_qw_pn_decode(0xa82f30eaull, 0x9b32ull, 2) == 0xa82f9b32ull,
           "номер пакета восстановлен не по алгоритму A.3");
     /* Начало соединения: дополнение нулями и алгоритм совпадают. */
-    CHECK(d2k_qw_pn_decode(0, 1, 1) == 1, "номер в начале соединения восстановлен неверно");
+    CHECK(d2s_qw_pn_decode(0, 1, 1) == 1, "номер в начале соединения восстановлен неверно");
     /* Ширина кодирования: A.2. */
-    CHECK(d2k_qw_pn_len(0xac5c02, 0xabe8b3) == 2, "ширина номера пакета не та");
-    CHECK(d2k_qw_pn_len(0xace8fe, 0xabe8b3) == 3, "ширина номера пакета не та (три байта)");
-    CHECK(d2k_qw_pn_len(0, -1) == 1, "первый номер закодирован шире одного байта");
+    CHECK(d2s_qw_pn_len(0xac5c02, 0xabe8b3) == 2, "ширина номера пакета не та");
+    CHECK(d2s_qw_pn_len(0xace8fe, 0xabe8b3) == 3, "ширина номера пакета не та (три байта)");
+    CHECK(d2s_qw_pn_len(0, -1) == 1, "первый номер закодирован шире одного байта");
 }
 
 /* --- RFC 9001 A.1: начальные секреты и ключи ------------------------------ */
@@ -102,13 +102,13 @@ static void test_initial_keys(void) {
     uint8_t dcid[8];
     CHECK(unhex("8394c8f03e515708", dcid, sizeof dcid) == 8, "DCID вектора не разобрался");
 
-    struct { d2k_qw_side side; const char *secret, *key, *iv, *hp; } c[] = {
-        { D2K_QW_CLIENT,
+    struct { d2s_qw_side side; const char *secret, *key, *iv, *hp; } c[] = {
+        { D2S_QW_CLIENT,
           "c00cf151ca5be075ed0ebfb5c80323c42d6b7db67881289af4008f1f6c357aea",
           "1f369613dd76d5467730efcbe3b1a22d",
           "fa044b2f42a3fd3b46fb255c",
           "9f50449e04a0e810283a1e9933adedd2" },
-        { D2K_QW_SERVER,
+        { D2S_QW_SERVER,
           "3c199828fd139efd216c155ad844cc81fb82fa8d7446fa7d78be803acdda951b",
           "cf3a5331653c364c88f0f379b6067e37",
           "0ac1493ca1905853b0bba03e",
@@ -116,13 +116,13 @@ static void test_initial_keys(void) {
     };
     for (size_t i = 0; i < 2; i++) {
         uint8_t want[32], got[32];
-        CHECK(d2k_qw_initial_secret(D2K_QW_V1, dcid, sizeof dcid, c[i].side, got) == 0,
+        CHECK(d2s_qw_initial_secret(D2S_QW_V1, dcid, sizeof dcid, c[i].side, got) == 0,
               "начальный секрет не вывелся");
         CHECK(unhex(c[i].secret, want, sizeof want) == 32, "вектор секрета не разобрался");
         CHECK(same(got, want, 32), "начальный секрет уровня разошёлся с вектором RFC 9001 A.1");
 
-        d2k_qw_keys k;
-        CHECK(d2k_qw_keys_from_secret(D2K_QW_V1, got, &k) == 0, "ключи уровня не вывелись");
+        d2s_qw_keys k;
+        CHECK(d2s_qw_keys_from_secret(D2S_QW_V1, got, &k) == 0, "ключи уровня не вывелись");
         uint8_t w[16];
         CHECK(unhex(c[i].key, w, sizeof w) == 16 && same(k.key, w, 16),
               "ключ пакетной защиты разошёлся с вектором");
@@ -156,20 +156,20 @@ static void test_server_initial(void) {
     CHECK(unhex("8394c8f03e515708", dcid, sizeof dcid) == 8, "DCID вектора не разобрался");
 
     uint8_t secret[32];
-    d2k_qw_keys k;
-    CHECK(d2k_qw_initial_secret(D2K_QW_V1, dcid, sizeof dcid, D2K_QW_SERVER, secret) == 0,
+    d2s_qw_keys k;
+    CHECK(d2s_qw_initial_secret(D2S_QW_V1, dcid, sizeof dcid, D2S_QW_SERVER, secret) == 0,
           "серверный секрет не вывелся");
-    CHECK(d2k_qw_keys_from_secret(D2K_QW_V1, secret, &k) == 0, "серверные ключи не вывелись");
+    CHECK(d2s_qw_keys_from_secret(D2S_QW_V1, secret, &k) == 0, "серверные ключи не вывелись");
 
-    d2k_qw_hdr h;
-    CHECK(d2k_qw_hdr_parse(pkt, pkt_len, 0, &h) == 0, "заголовок серверного Initial не разобрался");
-    CHECK(h.long_hdr == 1 && h.type == D2K_QW_LT_INITIAL, "тип пакета определён неверно");
+    d2s_qw_hdr h;
+    CHECK(d2s_qw_hdr_parse(pkt, pkt_len, 0, &h) == 0, "заголовок серверного Initial не разобрался");
+    CHECK(h.long_hdr == 1 && h.type == D2S_QW_LT_INITIAL, "тип пакета определён неверно");
     CHECK(h.packet_len == pkt_len, "длина пакета посчитана не по полю Length");
 
     uint8_t plain[256];
     size_t plain_len = 0;
     uint64_t pn = 0;
-    CHECK(d2k_qw_open(&k, &h, pkt, 0, plain, &plain_len, &pn) == 0,
+    CHECK(d2s_qw_open(&k, &h, pkt, 0, plain, &plain_len, &pn) == 0,
           "серверный Initial не открылся ключами из вектора");
     CHECK(plain_len == want_len && same(plain, want_plain, want_len),
           "расшифрованное содержимое разошлось с вектором A.3");
@@ -186,7 +186,7 @@ static void test_server_initial(void) {
        (RFC 9001 A.3): длинный заголовок, фиксированный бит, тип 0, длина
        номера минус один. */
     hdr_plain[0] = 0xc1;
-    size_t got = d2k_qw_seal(&k, 1, hdr_plain, hdr_len, 1, 2, want_plain, want_len,
+    size_t got = d2s_qw_seal(&k, 1, hdr_plain, hdr_len, 1, 2, want_plain, want_len,
                              built, sizeof built);
     CHECK(got == pkt_len, "собранный пакет другой длины");
     CHECK(got == pkt_len && same(built, pkt, pkt_len),
@@ -201,44 +201,44 @@ static void test_retry(void) {
                      "9058fb3f0f2496ba", retry, sizeof retry);
     CHECK(n == 36, "вектор Retry не разобрался");
     CHECK(unhex("8394c8f03e515708", odcid, sizeof odcid) == 8, "DCID вектора не разобрался");
-    CHECK(d2k_qw_retry_verify(D2K_QW_V1, odcid, 8, retry, n) == 0,
+    CHECK(d2s_qw_retry_verify(D2S_QW_V1, odcid, 8, retry, n) == 0,
           "метка целостности Retry не сошлась с вектором A.4");
 
-    d2k_qw_hdr rh;
-    CHECK(d2k_qw_hdr_parse(retry, n, 0, &rh) == 0,
+    d2s_qw_hdr rh;
+    CHECK(d2s_qw_hdr_parse(retry, n, 0, &rh) == 0,
           "заголовок Retry не разобрался");
-    CHECK(rh.type == D2K_QW_LT_RETRY && rh.token_len == 5 &&
+    CHECK(rh.type == D2S_QW_LT_RETRY && rh.token_len == 5 &&
           rh.token_off + rh.token_len <= n &&
           memcmp(retry + rh.token_off, "token", rh.token_len) == 0,
           "парсер Retry не выделил token между SCID и integrity tag");
 
     /* Испорченная метка обязана отвергаться: иначе проверка бесполезна. */
     retry[n - 1] ^= 0x01;
-    CHECK(d2k_qw_retry_verify(D2K_QW_V1, odcid, 8, retry, n) != 0,
+    CHECK(d2s_qw_retry_verify(D2S_QW_V1, odcid, 8, retry, n) != 0,
           "испорченная метка Retry принята");
 
     uint8_t built[128];
     const uint8_t dcid[] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07};
     const uint8_t scid[] = {0x08,0x09,0x0a,0x0b};
     const uint8_t tok[] = {0xaa,0xbb,0xcc};
-    size_t bn = d2k_qw_retry_build(built, sizeof built, D2K_QW_V1,
+    size_t bn = d2s_qw_retry_build(built, sizeof built, D2S_QW_V1,
                                    odcid, sizeof odcid,
                                    dcid, sizeof dcid, scid, sizeof scid,
                                    tok, sizeof tok);
     CHECK(bn > 0, "Retry-конструктор отказал на валидном вводе");
-    d2k_qw_hdr bh;
-    CHECK(bn > 0 && d2k_qw_hdr_parse(built, bn, 0, &bh) == 0,
+    d2s_qw_hdr bh;
+    CHECK(bn > 0 && d2s_qw_hdr_parse(built, bn, 0, &bh) == 0,
           "собранный Retry не разобрался");
-    CHECK(bn > 0 && bh.type == D2K_QW_LT_RETRY && bh.dcid_len == sizeof dcid &&
+    CHECK(bn > 0 && bh.type == D2S_QW_LT_RETRY && bh.dcid_len == sizeof dcid &&
           bh.scid_len == sizeof scid && bh.token_len == sizeof tok &&
           memcmp(built + bh.token_off, tok, sizeof tok) == 0 &&
-          d2k_qw_retry_verify(D2K_QW_V1, odcid, sizeof odcid, built, bn) == 0,
+          d2s_qw_retry_verify(D2S_QW_V1, odcid, sizeof odcid, built, bn) == 0,
           "собранный Retry не прошёл разбор и integrity");
-    CHECK(d2k_qw_retry_build(built, bn - 1, D2K_QW_V1, odcid, sizeof odcid,
+    CHECK(d2s_qw_retry_build(built, bn - 1, D2S_QW_V1, odcid, sizeof odcid,
                              dcid, sizeof dcid, scid, sizeof scid,
                              tok, sizeof tok) == 0,
           "Retry-конструктор проигнорировал малый буфер");
-    CHECK(d2k_qw_retry_build(built, sizeof built, D2K_QW_V1, NULL, sizeof odcid,
+    CHECK(d2s_qw_retry_build(built, sizeof built, D2S_QW_V1, NULL, sizeof odcid,
                              dcid, sizeof dcid, scid, sizeof scid,
                              tok, sizeof tok) == 0,
           "Retry-конструктор принял NULL ODCID");
@@ -248,14 +248,14 @@ static void test_initial_token_header(void) {
     uint8_t hdr[128], dcid[8] = {1,2,3,4,5,6,7,8};
     uint8_t scid[8] = {8,7,6,5,4,3,2,1};
     const uint8_t token[] = {0xde, 0xad, 0xbe, 0xef};
-    size_t n = d2k_qw_long_hdr_token(hdr, sizeof hdr, D2K_QW_V1,
-                                     D2K_QW_LT_INITIAL, dcid, sizeof dcid,
+    size_t n = d2s_qw_long_hdr_token(hdr, sizeof hdr, D2S_QW_V1,
+                                     D2S_QW_LT_INITIAL, dcid, sizeof dcid,
                                      scid, sizeof scid, token, sizeof token,
                                      2, 32);
     CHECK(n > 0, "Initial с Retry-token не собрался");
     if (n > 0) { memset(hdr + n, 0, 50); n += 50; }
-    d2k_qw_hdr h;
-    CHECK(n > 0 && d2k_qw_hdr_parse(hdr, n, 0, &h) == 0,
+    d2s_qw_hdr h;
+    CHECK(n > 0 && d2s_qw_hdr_parse(hdr, n, 0, &h) == 0,
           "заголовок Initial с token не разобрался");
     CHECK(h.token_len == sizeof token && h.token_off + h.token_len <= n &&
           memcmp(hdr + h.token_off, token, sizeof token) == 0,
@@ -270,8 +270,8 @@ static void test_roundtrip_levels(void) {
        не значение, а согласованность сборки и разбора. */
     uint8_t secret[32];
     for (size_t i = 0; i < sizeof secret; i++) { secret[i] = (uint8_t)(i * 7 + 1); }
-    d2k_qw_keys k;
-    CHECK(d2k_qw_keys_from_secret(D2K_QW_V1, secret, &k) == 0, "ключи не вывелись");
+    d2s_qw_keys k;
+    CHECK(d2s_qw_keys_from_secret(D2S_QW_V1, secret, &k) == 0, "ключи не вывелись");
 
     uint8_t payload[64];
     for (size_t i = 0; i < sizeof payload; i++) { payload[i] = (uint8_t)(i ^ 0x5a); }
@@ -281,15 +281,15 @@ static void test_roundtrip_levels(void) {
     uint8_t pkt[256], plain[256];
     uint64_t pns[] = { 0, 1, 255, 256, 0xa82f9b32ull };
     for (size_t i = 0; i < sizeof pns / sizeof pns[0]; i++) {
-        size_t pn_len = d2k_qw_pn_len(pns[i], -1);
-        size_t n = d2k_qw_seal(&k, 0, hdr, sizeof hdr, pns[i], pn_len,
+        size_t pn_len = d2s_qw_pn_len(pns[i], -1);
+        size_t n = d2s_qw_seal(&k, 0, hdr, sizeof hdr, pns[i], pn_len,
                                payload, sizeof payload, pkt, sizeof pkt);
         CHECK(n > 0, "короткий пакет не собрался");
-        d2k_qw_hdr h;
-        CHECK(d2k_qw_hdr_parse(pkt, n, 4, &h) == 0, "короткий заголовок не разобрался");
+        d2s_qw_hdr h;
+        CHECK(d2s_qw_hdr_parse(pkt, n, 4, &h) == 0, "короткий заголовок не разобрался");
         size_t plen = 0;
         uint64_t got_pn = 0;
-        CHECK(d2k_qw_open(&k, &h, pkt, pns[i] ? pns[i] - 1 : 0, plain, &plen, &got_pn) == 0,
+        CHECK(d2s_qw_open(&k, &h, pkt, pns[i] ? pns[i] - 1 : 0, plain, &plen, &got_pn) == 0,
               "короткий пакет не открылся");
         CHECK(plen == sizeof payload && same(plain, payload, plen),
               "содержимое короткого пакета не сошлось");
@@ -297,34 +297,34 @@ static void test_roundtrip_levels(void) {
     }
 
     /* Испорченный байт обязан ломать тег, а не проходить молча. */
-    size_t n = d2k_qw_seal(&k, 0, hdr, sizeof hdr, 7, 1, payload, sizeof payload,
+    size_t n = d2s_qw_seal(&k, 0, hdr, sizeof hdr, 7, 1, payload, sizeof payload,
                            pkt, sizeof pkt);
     CHECK(n > 0, "пакет для порчи не собрался");
     pkt[n - 1] ^= 0x80;
-    d2k_qw_hdr h;
+    d2s_qw_hdr h;
     size_t plen = 0;
-    CHECK(d2k_qw_hdr_parse(pkt, n, 4, &h) == 0, "заголовок испорченного пакета не разобрался");
-    CHECK(d2k_qw_open(&k, &h, pkt, 6, plain, &plen, NULL) != 0,
+    CHECK(d2s_qw_hdr_parse(pkt, n, 4, &h) == 0, "заголовок испорченного пакета не разобрался");
+    CHECK(d2s_qw_open(&k, &h, pkt, 6, plain, &plen, NULL) != 0,
           "испорченный пакет открылся — тег не проверяется");
 }
 
 static void test_hdr_guards(void) {
     uint8_t buf[64];
-    d2k_qw_hdr h;
+    d2s_qw_hdr h;
     memset(buf, 0, sizeof buf);
     /* Короткий заголовок без объявленной длины DCID разбирать нечем. */
     buf[0] = 0x40;
-    CHECK(d2k_qw_hdr_parse(buf, sizeof buf, 0, &h) != 0,
+    CHECK(d2s_qw_hdr_parse(buf, sizeof buf, 0, &h) != 0,
           "короткий заголовок разобран без длины DCID — длина угадана");
     /* Согласование версии (version == 0) — не пакет. */
     buf[0] = 0xc0;
-    CHECK(d2k_qw_hdr_parse(buf, sizeof buf, 0, &h) != 0,
+    CHECK(d2s_qw_hdr_parse(buf, sizeof buf, 0, &h) != 0,
           "пакет согласования версии разобран как обычный");
     /* Слишком длинный CID обязан отвергаться требованием стандарта. */
     uint8_t big[64];
     memset(big, 0, sizeof big);
     big[0] = 0xc0; big[4] = 0x01; big[5] = 21;
-    CHECK(d2k_qw_hdr_parse(big, sizeof big, 0, &h) != 0,
+    CHECK(d2s_qw_hdr_parse(big, sizeof big, 0, &h) != 0,
           "идентификатор длиннее двадцати байт принят");
 }
 

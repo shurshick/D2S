@@ -29,7 +29,7 @@ Checkpoint включает весь накопленный diff коллеги 
 ## Старый каталог
 
 UDP-привязки (`transport=17`) с источником `verified_by=CLIENT` прежний код
-создавал по недостаточному событию. `d2k_sched_sync_step` теперь пропускает
+создавал по недостаточному событию. `d2s_sched_sync_step` теперь пропускает
 их независимо от записанного level и объясняет причину для цели. Записи,
 времена и successes не переписываются/не удаляются. PROBE-привязки проходят
 прежнюю проверку уровня и устанавливаются как раньше.
@@ -46,7 +46,7 @@ UI/файл сохраняют исторические значения; уже
 
 Донор: `../z2k/z2k-detect/internal/voiceprobe/stun.go`,
 `ParseBindingResponse → parseXorMapped`. При присутствующем, но повреждённом
-XOR-MAPPED-ADDRESS возвращает ошибку. C-порт `d2k_stun_parse_response`
+XOR-MAPPED-ADDRESS возвращает ошибку. C-порт `d2s_stun_parse_response`
 вызывал `parse_xor_mapped`, отбрасывал результат и возвращал успех.
 
 Исправлено распространение ошибки. Регрессии: короткий IPv4-атрибут,
@@ -55,7 +55,7 @@ XOR-MAPPED-ADDRESS возвращает ошибку. C-порт `d2k_stun_parse
 адрес» или универсального прикладного зонда не добавлено.
 
 Для продолжения использовать существующие C-проверки, не писать третий
-парсер: STUN `d2k_stun_parse_response`, QUIC `d2k_quic_verify_response` и
+парсер: STUN `d2s_stun_parse_response`, QUIC `d2s_quic_verify_response` и
 его внутренний `qp_verify_server_response`. Семантику Initial/Retry/VN
 сверять с донорским `internal/quicprobe/parse.go:Parse/Response.Answered`:
 различия между вопросами уже существуют, их нельзя скрыть общим bool.
@@ -82,18 +82,18 @@ XOR-MAPPED-ADDRESS возвращает ошибку. C-порт `d2k_stun_parse
 cd core
 make -f Makefile -f - san-udp-evidence <<'MAKE'
 san-udp-evidence: hello_profiles.inc
-	$(CC) $(SANFLAGS) -o /tmp/d2k-udp-san-stun-final test_stun.c stun.c tls13core.c crypto.c x25519.c -lpthread
-	/tmp/d2k-udp-san-stun-final
-	$(CC) $(SANFLAGS) -o /tmp/d2k-udp-san-sched-final test_sched.c $(SRC) -lpthread
-	/tmp/d2k-udp-san-sched-final
+	$(CC) $(SANFLAGS) -o /tmp/d2s-udp-san-stun-final test_stun.c stun.c tls13core.c crypto.c x25519.c -lpthread
+	/tmp/d2s-udp-san-stun-final
+	$(CC) $(SANFLAGS) -o /tmp/d2s-udp-san-sched-final test_sched.c $(SRC) -lpthread
+	/tmp/d2s-udp-san-sched-final
 MAKE
 ```
 
-Локальные журналы: `/tmp/d2k-udp-observation-red-20260919.log`,
-`/tmp/d2k-udp-restore-red-final-20260919.log`,
-`/tmp/d2k-udp-{core,datapath,detect}-check-20260919.log`,
-`/tmp/d2k-udp-core-cross-20260919.log`,
-`/tmp/d2k-udp-sched-final-20260919.log`, `/tmp/d2k-udp-san-final-20260919.log`.
+Локальные журналы: `/tmp/d2s-udp-observation-red-20260919.log`,
+`/tmp/d2s-udp-restore-red-final-20260919.log`,
+`/tmp/d2s-udp-{core,datapath,detect}-check-20260919.log`,
+`/tmp/d2s-udp-core-cross-20260919.log`,
+`/tmp/d2s-udp-sched-final-20260919.log`, `/tmp/d2s-udp-san-final-20260919.log`.
 Свежий сквозной Go↔C прогон и поле не выполнялись. STUN-расхождение проверено
 по донорскому коду и C-регрессиям, не объявлять это полной приёмкой voiceprobe.
 

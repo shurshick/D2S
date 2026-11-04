@@ -13,49 +13,49 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_plans.h"
-#include "d2k_packet.h"
-#include "d2k_quic.h"
-#include "d2k_quicsnap.h" /* core/ — разбор QUIC линкуется исходниками, см. Makefile */
-#include "d2k_nat.h"
-#include "d2k_session.h"
-#include "d2k_http80.h"
-#include "d2k_time.h"
-#include "d2k_tls.h"
-#include "d2k_capture.h"
-#include "d2k_hold.h"
-#include "d2k_ipfrag.h"
+#include "d2s_plans.h"
+#include "d2s_packet.h"
+#include "d2s_quic.h"
+#include "d2s_quicsnap.h" /* core/ — разбор QUIC линкуется исходниками, см. Makefile */
+#include "d2s_nat.h"
+#include "d2s_session.h"
+#include "d2s_http80.h"
+#include "d2s_time.h"
+#include "d2s_tls.h"
+#include "d2s_capture.h"
+#include "d2s_hold.h"
+#include "d2s_ipfrag.h"
 
 /* Сколько первых пакетов потока имеет смысл разбирать в поисках приветствия.
  * ClientHello приходит первым или почти первым; после этого разбор — чистая
  * трата на каждом пакете загрузки. */
-#define D2K_HELLO_WINDOW 8
+#define D2S_HELLO_WINDOW 8
 
 /* Сколько последних клиентских Initial держит сессия. Полёт — не больше
    четырёх датаграмм, и тридцати двух записей хватает на полтора десятка
    одновременных целей: Chrome открывает вкладки пачкой, и полёт одной цели
    не должен вытеснять полёт другой раньше, чем соберётся имя. Около 48 КБ на
    сессию, один раз. */
-#define D2K_SESSION_INIT_RING 32
+#define D2S_SESSION_INIT_RING 32
 
-struct d2k_session {
+struct d2s_session {
     /* Event-loop owned; random initial value, nonzero counter per datagram.
        Never derive this from the client's frequently-zero DF packet ID. */
     uint32_t fragment_id;
     int fragment_seeded;
-    /* Крючок netfilter для ТЕКУЩЕГО пакета — см. d2k_session_set_hook.
-       D2K_HOOK_UNKNOWN значит «не сказали», и тогда направление выводится
+    /* Крючок netfilter для ТЕКУЩЕГО пакета — см. d2s_session_set_hook.
+       D2S_HOOK_UNKNOWN значит «не сказали», и тогда направление выводится
        по порту, как и раньше. */
     uint8_t hook;
     /* Метка маршрутизации клиента у ТЕКУЩЕГО пакета (0 — нет), задача 47. */
     uint32_t route_mark;
     uint64_t routed_flows;
-    d2k_capture capture;
-    d2k_table   *flows;
+    d2s_capture capture;
+    d2s_table   *flows;
     /* Учёт QUIC/UDP-потоков (задача 4 QUIC-вертикали) — ВТОРАЯ, независимая
-     * таблица того же типа d2k_table/d2k_flow, не общая с flows.
+     * таблица того же типа d2s_table/d2s_flow, не общая с flows.
      *
-     * У ключа потока (d2k_key, d2k_track.h) теперь есть поле proto — по
+     * У ключа потока (d2s_key, d2s_track.h) теперь есть поле proto — по
      * ревью задачи 4: TCP-поток и UDP-поток с одинаковой парой адрес+порт
      * получают РАЗНЫЕ ключи и потому не схлопнулись бы в одну ячейку даже в
      * общей таблице (порты TCP и UDP — независимые пространства нумерации,
@@ -66,25 +66,25 @@ struct d2k_session {
      * вытеснять из таблицы TCP-потоки, отняв у них ёмкость, которую
      * оператор выделил под TCP (--flows), и наоборот.
      *
-     * Почему тот же d2k_flow, а не свой маленький тип: d2k_plan_apply()
-     * принимает `const d2k_flow *` (d2k_plan.h) — эта сигнатура не в
+     * Почему тот же d2s_flow, а не свой маленький тип: d2s_plan_apply()
+     * принимает `const d2s_flow *` (d2s_plan.h) — эта сигнатура не в
      * периметре задачи 4, и подменить её другим типом означало бы менять
-     * plan_apply.c. Поля d2k_flow, нужные UDP (key, first_ns/last_ns,
+     * plan_apply.c. Поля d2s_flow, нужные UDP (key, first_ns/last_ns,
      * dir_known/init_low, fwd_pkts, saw_hello, plan_done, damaged), уже
      * названы и уже значат ровно то, что нужно; TCP-специфичные поля
      * (saw_syn, rst_dropped, типы TLS-записей) для UDP-записей просто
      * никогда не трогаются и остаются нулём — это честно: у ЭТОГО потока
      * действительно не было ни SYN, ни TCP-сброса. */
-    d2k_table   *uflows;
-    d2k_plantab *plans;
+    d2s_table   *uflows;
+    d2s_plantab *plans;
     /* Запасной план — на все цели сразу. В продукте его быть не должно: §2.6
      * закрепляет план за контекстом, на котором он подтверждён, а один план
      * на весь трафик означает, что ошибка на одной цели переключит все
      * остальные без проверки. Он существует для опытов, где сужение задано
      * снаружи правилом firewall на одну пару адресов. */
-    d2k_plan    *plan;
+    d2s_plan    *plan;
     uint64_t plan_revision;
-    d2k_journal *jrn;
+    d2s_journal *jrn;
     uint64_t     applied;
     /* Планы, ДОИСПОЛНЕННЫЕ целиком: все посылки ушли и вердикт оригинала
        принят ядром. Отдельно от applied, потому что это разные факты, и
@@ -105,7 +105,7 @@ struct d2k_session {
     uint64_t     rst_dropped;
     uint64_t     exchanges;
     /* Потоки TCP с приветствием и те из них, чей ответ очередь не видела
-       (d2k_session_reply_hidden). */
+       (d2s_session_reply_hidden). */
     uint64_t     tcp_hello_flows;
     uint64_t     reply_hidden;
 
@@ -115,7 +115,7 @@ struct d2k_session {
     uint64_t     pay_late;         /* прямая, но за окном поиска */
     uint64_t     pay_not_hello;    /* разобрали и это не приветствие */
     uint8_t      last_nonhello_first;
-    /* Открытый HTTP, keep-alive: см. d2k_payload_stats. */
+    /* Открытый HTTP, keep-alive: см. d2s_payload_stats. */
     uint64_t     http_later, http_unaligned, http_open_end;
     uint64_t     sni_in_next_seg;
     uint64_t     captured_hellos;
@@ -132,7 +132,7 @@ struct d2k_session {
        QUIC шла мерить, держа в руках TLS-приветствие, и первый же разбор его
        отвергал. Индексы 0/1 — IPv4 TCP/UDP; 2/3 — IPv6 TCP/UDP.
        Семейства не делят снимок: опыт сохраняет контекст исходного потока. */
-    uint8_t  last_hello[4][D2K_SHAPE_MAX];
+    uint8_t  last_hello[4][D2S_SHAPE_MAX];
     size_t   last_hello_len[4];
     /* Опции TCP пакета, с которого снят last_hello / shape (слоты TCP; у
        QUIC нули): набор клиента едет контроллеру рядом со снимком, чтобы
@@ -165,18 +165,18 @@ struct d2k_session {
      * разные строки, и наличие одной ничего не говорит о другой. */
     int      rev_seen[4];
     int      udp_reverse_hook;
-    /* Счётчики потока у ядра по кортежу (d2k_ctq.h); NULL — не спрашивать. */
-    d2k_ct_query_fn ct_query;
+    /* Счётчики потока у ядра по кортежу (d2s_ctq.h); NULL — не спрашивать. */
+    d2s_ct_query_fn ct_query;
     void *ct_query_ctx;
-    /* Бюджеты потока коробок (задача 56, D2K_CMD_SET_STALL_BUDGETS); по
-       умолчанию — один полевой D2K_TCP_STALL_FIELD_BUDGET. */
-    uint16_t stall_budget[D2K_STALL_BUDGETS_MAX];
+    /* Бюджеты потока коробок (задача 56, D2S_CMD_SET_STALL_BUDGETS); по
+       умолчанию — один полевой D2S_TCP_STALL_FIELD_BUDGET. */
+    uint16_t stall_budget[D2S_STALL_BUDGETS_MAX];
     size_t   n_stall_budget;
 
     int      shape_armed[4];
     uint8_t  shape_name[4][256];
     size_t   shape_name_len[4];
-    uint8_t  shape[4][D2K_SHAPE_MAX];
+    uint8_t  shape[4][D2S_SHAPE_MAX];
     size_t   shape_len[4];
 
     /* КОЛЬЦО ПОСЛЕДНИХ INITIAL КЛИЕНТА (задача 66).
@@ -187,12 +187,12 @@ struct d2k_session {
        мегабайты. Пишется, только пока ловушка снимка взведена, и живёт до
        сборки имени — то есть доли секунды. */
     struct {
-        d2k_key  key;
-        uint8_t  dcid[D2K_QW_CID_MAX];
+        d2s_key  key;
+        uint8_t  dcid[D2S_QW_CID_MAX];
         uint8_t  dcid_len;
         uint16_t len;
-        uint8_t  dg[D2K_QW_MAX_DGRAM];
-    } init_ring[D2K_SESSION_INIT_RING];
+        uint8_t  dg[D2S_QW_MAX_DGRAM];
+    } init_ring[D2S_SESSION_INIT_RING];
     size_t init_ring_n;      /* сколько записей заполнено (растёт до предела) */
     size_t init_ring_next;   /* куда писать следующую */
 };
@@ -200,9 +200,9 @@ struct d2k_session {
 /* DCID датаграммы Initial: он лежит в открытом виде (RFC 9001 §5.2), и по
    нему датаграммы одного полёта отличаются от чужого соединения. 0 — успех. */
 static int initial_dcid(const uint8_t *p, size_t n, uint8_t *out, uint8_t *out_len) {
-    d2k_qw_hdr h;
-    if (d2k_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr ||
-        h.type != D2K_QW_LT_INITIAL || h.dcid_len > D2K_QW_CID_MAX) {
+    d2s_qw_hdr h;
+    if (d2s_qw_hdr_parse(p, n, 0, &h) != 0 || !h.long_hdr ||
+        h.type != D2S_QW_LT_INITIAL || h.dcid_len > D2S_QW_CID_MAX) {
         return -1;
     }
     memcpy(out, p + h.dcid_off, h.dcid_len);
@@ -212,15 +212,15 @@ static int initial_dcid(const uint8_t *p, size_t n, uint8_t *out, uint8_t *out_l
 
 /* Запоминает датаграмму полёта. Повтор по таймеру PTO (те же байты того же
    потока) не удваивает запись: полёт от повторов не удлиняется. */
-static void init_ring_add(d2k_session *s, const d2k_key *key,
+static void init_ring_add(d2s_session *s, const d2s_key *key,
                           const uint8_t *dg, size_t len) {
-    uint8_t dcid[D2K_QW_CID_MAX];
+    uint8_t dcid[D2S_QW_CID_MAX];
     uint8_t dcid_len = 0;
-    if (len == 0 || len > D2K_QW_MAX_DGRAM || initial_dcid(dg, len, dcid, &dcid_len) != 0) {
+    if (len == 0 || len > D2S_QW_MAX_DGRAM || initial_dcid(dg, len, dcid, &dcid_len) != 0) {
         return;
     }
     for (size_t i = 0; i < s->init_ring_n; i++) {
-        if (s->init_ring[i].len == len && d2k_key_equal(&s->init_ring[i].key, key) &&
+        if (s->init_ring[i].len == len && d2s_key_equal(&s->init_ring[i].key, key) &&
             memcmp(s->init_ring[i].dg, dg, len) == 0) {
             return;
         }
@@ -231,14 +231,14 @@ static void init_ring_add(d2k_session *s, const d2k_key *key,
     s->init_ring[at].dcid_len = dcid_len;
     s->init_ring[at].len = (uint16_t)len;
     memcpy(s->init_ring[at].dg, dg, len);
-    s->init_ring_next = (at + 1) % D2K_SESSION_INIT_RING;
-    if (s->init_ring_n < D2K_SESSION_INIT_RING) { s->init_ring_n++; }
+    s->init_ring_next = (at + 1) % D2S_SESSION_INIT_RING;
+    if (s->init_ring_n < D2S_SESSION_INIT_RING) { s->init_ring_n++; }
 }
 
 /* Забывает датаграммы потока: его полёт уже собран и снят. */
-static void init_ring_drop(d2k_session *s, const d2k_key *key) {
+static void init_ring_drop(d2s_session *s, const d2s_key *key) {
     for (size_t i = 0; i < s->init_ring_n; i++) {
-        if (d2k_key_equal(&s->init_ring[i].key, key)) {
+        if (d2s_key_equal(&s->init_ring[i].key, key)) {
             s->init_ring[i].len = 0;
             s->init_ring[i].dcid_len = 0;
             memset(&s->init_ring[i].key, 0, sizeof s->init_ring[i].key);
@@ -250,24 +250,24 @@ static void init_ring_drop(d2k_session *s, const d2k_key *key) {
    прихода. 0 — пачка не собралась (вытеснена, не поместилась) и вызывающий
    кладёт одну датаграмму, как раньше: контроллер отвергнет её как обрывок, и
    это честнее выдуманной склейки. */
-static size_t init_ring_pack(const d2k_session *s, const d2k_key *key,
+static size_t init_ring_pack(const d2s_session *s, const d2s_key *key,
                              const uint8_t *last, size_t last_len,
                              uint8_t *out, size_t cap) {
-    uint8_t dcid[D2K_QW_CID_MAX];
+    uint8_t dcid[D2S_QW_CID_MAX];
     uint8_t dcid_len = 0;
     if (initial_dcid(last, last_len, dcid, &dcid_len) != 0) {
         return 0;
     }
-    const uint8_t *dg[D2K_QSNAP_MAX_DGRAMS];
-    size_t len[D2K_QSNAP_MAX_DGRAMS];
+    const uint8_t *dg[D2S_QSNAP_MAX_DGRAMS];
+    size_t len[D2S_QSNAP_MAX_DGRAMS];
     size_t n = 0;
     /* Кольцевой обход от самой старой записи: порядок в пачке — порядок на
        проводе, иначе номера пакетов пойдут вспять. */
-    for (size_t k = 0; k < s->init_ring_n && n < D2K_QSNAP_MAX_DGRAMS; k++) {
-        size_t i = (s->init_ring_next + D2K_SESSION_INIT_RING - s->init_ring_n + k)
-                   % D2K_SESSION_INIT_RING;
+    for (size_t k = 0; k < s->init_ring_n && n < D2S_QSNAP_MAX_DGRAMS; k++) {
+        size_t i = (s->init_ring_next + D2S_SESSION_INIT_RING - s->init_ring_n + k)
+                   % D2S_SESSION_INIT_RING;
         if (s->init_ring[i].len == 0 ||
-            !d2k_key_equal(&s->init_ring[i].key, key) ||
+            !d2s_key_equal(&s->init_ring[i].key, key) ||
             s->init_ring[i].dcid_len != dcid_len ||
             memcmp(s->init_ring[i].dcid, dcid, dcid_len) != 0) {
             continue;
@@ -279,7 +279,7 @@ static size_t init_ring_pack(const d2k_session *s, const d2k_key *key,
     if (n == 0) {
         return 0;
     }
-    return d2k_qsnap_pack(dg, len, n, out, cap);
+    return d2s_qsnap_pack(dg, len, n, out, cap);
 }
 
 /* Номер слота снимка по транспорту. Всё, кроме UDP, живёт в слоте TCP: других
@@ -290,7 +290,7 @@ static size_t shape_slot(uint8_t transport, uint8_t family) {
     return slot_of(transport) + (family == 6 ? 2u : 0u);
 }
 
-static uint32_t next_fragment_id(d2k_session *s) {
+static uint32_t next_fragment_id(d2s_session *s) {
     if (!s->fragment_seeded) {
         FILE *f=fopen("/dev/urandom","rb");
         if (!f) return 0;
@@ -303,63 +303,63 @@ static uint32_t next_fragment_id(d2k_session *s) {
     return s->fragment_id;
 }
 
-d2k_session *d2k_session_new(size_t capacity, size_t journal) {
-    d2k_session *s = calloc(1, sizeof *s);
+d2s_session *d2s_session_new(size_t capacity, size_t journal) {
+    d2s_session *s = calloc(1, sizeof *s);
     if (!s) {
         return NULL;
     }
     /* НЕ НОЛЬ. calloc обнулил бы поле, а ноль — это PREROUTING, то есть
        «серверная сторона»: молча и для ВСЕХ прежних вызывающих, которые про
        крючок ничего не знают. Умолчание обязано значить «не сказали». */
-    s->hook = D2K_HOOK_UNKNOWN;
-    s->stall_budget[0] = D2K_TCP_STALL_FIELD_BUDGET;
+    s->hook = D2S_HOOK_UNKNOWN;
+    s->stall_budget[0] = D2S_TCP_STALL_FIELD_BUDGET;
     s->n_stall_budget = 1;
-    s->flows = d2k_track_new(capacity);
+    s->flows = d2s_track_new(capacity);
     /* Тот же capacity, что у TCP-таблицы: это не новое число, а
        унаследованное — оператор уже выбрал бюджет числа потоков одним
        параметром (--flows), заводить второй знак специально под UDP было бы
        придуманной величиной без замера. */
-    s->uflows = d2k_track_new(capacity);
-    s->jrn = d2k_journal_new(journal);
+    s->uflows = d2s_track_new(capacity);
+    s->jrn = d2s_journal_new(journal);
     /* Вместимость таблицы планов выводится из вместимости таблицы TCP-потоков
        (--flows), а не подбирается литералом: цели не может понадобиться план,
        если у неё нет потока, значит верхняя граница числа целей — число
-       отслеживаемых потоков. d2k_track_capacity(s->flows), а не сырой
-       capacity — округление до степени двойки внутри d2k_track_new делает
+       отслеживаемых потоков. d2s_track_capacity(s->flows), а не сырой
+       capacity — округление до степени двойки внутри d2s_track_new делает
        фактическую вместимость таблицы потоков и таблицы планов равными на
        ту же величину, а не рассинхронизированными на округление. Если
-       s->flows не создался (OOM), d2k_track_capacity(NULL) == 0, и
-       d2k_plantab_new(0) вернёт NULL — это уже разбирает проверка ниже, как
+       s->flows не создался (OOM), d2s_track_capacity(NULL) == 0, и
+       d2s_plantab_new(0) вернёт NULL — это уже разбирает проверка ниже, как
        и отказ любой другой из таблиц. */
-    s->plans = d2k_plantab_new(d2k_track_capacity(s->flows));
+    s->plans = d2s_plantab_new(d2s_track_capacity(s->flows));
     if (!s->flows || !s->uflows || !s->plans || (journal > 0 && !s->jrn)) {
-        d2k_plantab_free(s->plans);
-        d2k_journal_free(s->jrn);
-        d2k_track_free(s->uflows);
-        d2k_track_free(s->flows);
+        d2s_plantab_free(s->plans);
+        d2s_journal_free(s->jrn);
+        d2s_track_free(s->uflows);
+        d2s_track_free(s->flows);
         free(s);
         return NULL;
     }
     return s;
 }
 
-void d2k_session_free(d2k_session *s) {
+void d2s_session_free(d2s_session *s) {
     if (!s) {
         return;
     }
-    d2k_plantab_free(s->plans);
-    d2k_journal_free(s->jrn);
-    d2k_track_free(s->uflows);
-    d2k_track_free(s->flows);
-    d2k_plan_free(s->plan);
+    d2s_plantab_free(s->plans);
+    d2s_journal_free(s->jrn);
+    d2s_track_free(s->uflows);
+    d2s_track_free(s->flows);
+    d2s_plan_free(s->plan);
     free(s);
 }
 
-void d2k_session_set_plan(d2k_session *s, d2k_plan *p) {
+void d2s_session_set_plan(d2s_session *s, d2s_plan *p) {
     if (!s) {
         return;
     }
-    d2k_plan_free(s->plan);
+    d2s_plan_free(s->plan);
     s->plan = p;
     s->plan_revision++;
 }
@@ -388,33 +388,33 @@ static uint16_t rd16(const uint8_t *p) {
 /* Отказ по плану в журнал. Отдельной функцией, чтобы каждая точка отказа
    писала одинаково: журнал, в котором половина отказов не отмечена, хуже
    отсутствующего — он выглядит полным. */
-/* ОТКАЗ ПРИМЕНИТЬ ПЛАН. code — D2K_REFUSE_*: ноль значит «плана для цели
-   нет» (обычное состояние транзитного потока), D2K_REFUSE_NOT_APPLIED —
+/* ОТКАЗ ПРИМЕНИТЬ ПЛАН. code — D2S_REFUSE_*: ноль значит «плана для цели
+   нет» (обычное состояние транзитного потока), D2S_REFUSE_NOT_APPLIED —
    найденный план отвергнут исполнителем.
  *
  * О ЗОНДОВОМ ПОТОКЕ МОЛЧИМ ТОЛЬКО ПРИ НУЛЕ. Прежде молчали всегда, и
  * контроллер не мог узнать, что его зонд ушёл голым: он видел лишь
  * отсутствие применения и после одного повтора судил кандидата (поле
- * 13.10.2026, forum.ru-board.com — см. D2K_REFUSE_NOT_APPLIED). Для своего
+ * 13.10.2026, forum.ru-board.com — см. D2S_REFUSE_NOT_APPLIED). Для своего
  * зонда отказ исполнителя и есть результат опыта, а молчать о нулевом
  * по-прежнему нужно: план просто не успел доехать, и это ждёт сам
  * контроллер. */
-static void refuse_coded(d2k_session *s, uint64_t at_ns, const d2k_key *k,
-                         const char *why, uint8_t code, const d2k_plan *use) {
-    d2k_flow *fl = k ? d2k_track_find(k->proto == 17 ? s->uflows : s->flows, k)
+static void refuse_coded(d2s_session *s, uint64_t at_ns, const d2s_key *k,
+                         const char *why, uint8_t code, const d2s_plan *use) {
+    d2s_flow *fl = k ? d2s_track_find(k->proto == 17 ? s->uflows : s->flows, k)
                      : NULL;
-    if (fl && fl->controller_probe && code == D2K_REFUSE_NONE) { return; }
-    uint8_t trial[D2K_TRIAL_ID_LEN];
+    if (fl && fl->controller_probe && code == D2S_REFUSE_NONE) { return; }
+    uint8_t trial[D2S_TRIAL_ID_LEN];
     memset(trial, 0, sizeof trial);
-    if (use) { d2k_plantab_trial(s->plans, use, trial); }
-    d2k_journal_add_refused(s->jrn, at_ns, k, code,
-                            use ? d2k_plan_id(use) : NULL,
+    if (use) { d2s_plantab_trial(s->plans, use, trial); }
+    d2s_journal_add_refused(s->jrn, at_ns, k, code,
+                            use ? d2s_plan_id(use) : NULL,
                             use ? trial : NULL, why);
 }
 
-static void refuse(d2k_session *s, uint64_t at_ns, const d2k_key *k,
+static void refuse(d2s_session *s, uint64_t at_ns, const d2s_key *k,
                    const char *why) {
-    refuse_coded(s, at_ns, k, why, D2K_REFUSE_NONE, NULL);
+    refuse_coded(s, at_ns, k, why, D2S_REFUSE_NONE, NULL);
 }
 
 /* Есть ли в опциях TCP пакета метка времени (вид 8, длина 10). Разбор тот же,
@@ -438,38 +438,38 @@ static int tcp_options_have_timestamp(const uint8_t *o, size_t n) {
    Одна функция на обе ветки (TCP и UDP/QUIC) нарочно: разойдись они, одна из
    двух однажды забыла бы взвести счёт, и «план доисполнен» по этому
    транспорту перестало бы появляться молча. */
-static void plan_handed_off(d2k_session *s, d2k_result *out, d2k_flow *fl, const d2k_key *k,
-                            const d2k_plan *use, const uint8_t *trial_id) {
+static void plan_handed_off(d2s_session *s, d2s_result *out, d2s_flow *fl, const d2s_key *k,
+                            const d2s_plan *use, const uint8_t *trial_id) {
     out->applied = 1;
     out->key = *k;
-    const uint8_t *id = d2k_plan_id(use);
+    const uint8_t *id = d2s_plan_id(use);
     if (id) {
-        memcpy(out->plan_id, id, D2K_PLAN_ID_LEN);
+        memcpy(out->plan_id, id, D2S_PLAN_ID_LEN);
     }
-    if (trial_id) { memcpy(out->trial_id, trial_id, D2K_TRIAL_ID_LEN); }
-    else { d2k_plantab_trial(s->plans,use,out->trial_id); }
+    if (trial_id) { memcpy(out->trial_id, trial_id, D2S_TRIAL_ID_LEN); }
+    else { d2s_plantab_trial(s->plans,use,out->trial_id); }
     /* n_out не может превысить вместимость out[] (16): выше стоит явная
        проверка, отвергающая план целиком. */
     /* One completion for each raw send AND one for the original's NF verdict. */
     /* Кто владеет оригиналом этой попытки. Вердикт уже посчитан обеими
        ветками выше; сохраняем его на потоке, потому что веткам отказа, где
-       d2k_result недоступен, решать больше нечем. */
-    fl->orig_taken = (out->verdict == D2K_VERDICT_DROP);
+       d2s_result недоступен, решать больше нечем. */
+    fl->orig_taken = (out->verdict == D2S_VERDICT_DROP);
     fl->sends_left = (uint8_t)(out->n_out + 1);
     fl->sends_failed = 0;
     fl->sends_done = 0;
     fl->udp_replan = 0;
     if (++s->next_execution == 0) { ++s->next_execution; }
     out->execution_id = fl->execution_id = s->next_execution;
-    (void)d2k_plantab_binding(s->plans, use, &out->binding);
+    (void)d2s_plantab_binding(s->plans, use, &out->binding);
     fl->execution_binding = out->binding;
-    memcpy(fl->execution_plan_id, out->plan_id, D2K_PLAN_ID_LEN);
-    memcpy(fl->execution_trial_id, out->trial_id, D2K_TRIAL_ID_LEN);
+    memcpy(fl->execution_plan_id, out->plan_id, D2S_PLAN_ID_LEN);
+    memcpy(fl->execution_trial_id, out->trial_id, D2S_TRIAL_ID_LEN);
 }
 
 /* Таблица, в которой живёт поток этого ключа. Транспорт лежит в самом ключе,
    и выбирать таблицу по чему-то ещё было бы вторым источником истины. */
-static d2k_table *table_of(d2k_session *s, const d2k_key *k) {
+static d2s_table *table_of(d2s_session *s, const d2s_key *k) {
     return (k->proto == 17) ? s->uflows : s->flows;
 }
 
@@ -478,8 +478,8 @@ static d2k_table *table_of(d2k_session *s, const d2k_key *k) {
    Слово «подозрение» выбрано вместо «блокировки» намеренно: §2.4 запрещает
    превращать наблюдение в диагноз, а §2.3 — сохранять отрицательный результат
    вообще. Отсюда ничего не пишется на диск. */
-static void suspect_num(d2k_session *s, uint64_t at_ns, const d2k_key *k,
-                        d2k_flow *fl, uint8_t code, const d2k_jrn_detail *det,
+static void suspect_num(d2s_session *s, uint64_t at_ns, const d2s_key *k,
+                        d2s_flow *fl, uint8_t code, const d2s_jrn_detail *det,
                         uint32_t num) {
     if (fl->controller_probe || fl->suspected) {
         return;
@@ -487,18 +487,18 @@ static void suspect_num(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     fl->suspected = 1;
     s->suspects++;
     /* ПРИМЕНЯЛСЯ ЛИ ПЛАН К ЭТОМУ ПОТОКУ — говорим всегда (см. d_planned в
-       d2k_journal.h). Знает это только датапат, и без его слова контроллер
+       d2s_journal.h). Знает это только датапат, и без его слова контроллер
        считает деградацией подтверждённой цели любое подозрение, в том числе
        о потоке, начатом до установки плана. */
-    d2k_jrn_detail d;
+    d2s_jrn_detail d;
     if (det) { d = *det; } else { memset(&d, 0, sizeof d); }
-    d.planned = fl->plan_done ? D2K_PLANNED_YES : D2K_PLANNED_NO;
+    d.planned = fl->plan_done ? D2S_PLANNED_YES : D2S_PLANNED_NO;
     d.client_shape = fl->client_shape;
-    d2k_journal_add(s->jrn, at_ns, k, D2K_JRN_SUSPECT, code, num, &d, NULL, 0, NULL);
+    d2s_journal_add(s->jrn, at_ns, k, D2S_JRN_SUSPECT, code, num, &d, NULL, 0, NULL);
 }
 
-static void suspect(d2k_session *s, uint64_t at_ns, const d2k_key *k,
-                    d2k_flow *fl, uint8_t code, const d2k_jrn_detail *det) {
+static void suspect(d2s_session *s, uint64_t at_ns, const d2s_key *k,
+                    d2s_flow *fl, uint8_t code, const d2s_jrn_detail *det) {
     suspect_num(s, at_ns, k, fl, code, det, 0);
 }
 
@@ -506,19 +506,19 @@ static void suspect(d2k_session *s, uint64_t at_ns, const d2k_key *k,
    docs/field/2026-10-12g) showed no reliable distinction between a blocked
    QUIC flow and a healthy idle one: 5.3% of healthy sessions place a short
    1-RTT header beyond the queue window, and client packet counts overlap. */
-static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns);
+static int tcp_silence_observe(d2s_session *s, d2s_flow *f, uint64_t now_ns);
 
 struct flow_expire_ctx {
-    d2k_session *s;
+    d2s_session *s;
     uint64_t now_ns;
 };
 
-static void on_flow_expire(void *ctx, const d2k_flow *f) {
+static void on_flow_expire(void *ctx, const d2s_flow *f) {
     struct flow_expire_ctx *c = ctx;
-    d2k_capture_forget(&c->s->capture, &f->key);
+    d2s_capture_forget(&c->s->capture, &f->key);
     /* The track callback is const; re-find the live entry so the shared
-       checker can set its duplicate guard before d2k_track_expire removes it. */
-    d2k_flow *live = d2k_track_find(c->s->flows, &f->key);
+       checker can set its duplicate guard before d2s_track_expire removes it. */
+    d2s_flow *live = d2s_track_find(c->s->flows, &f->key);
     if (live) {
         (void)tcp_silence_observe(c->s, live, c->now_ns);
     }
@@ -586,7 +586,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
  *
  * У UDP нет соединения — «поток» здесь пятёрка адрес+порт с истечением по
  * времени (s->uflows, вторая независимая таблица, см. её объявление в
- * struct d2k_session). Разбор QUIC (core/quic.c, задача 2 этой же
+ * struct d2s_session). Разбор QUIC (core/quic.c, задача 2 этой же
  * вертикали) не хранит НИЧЕГО между вызовами и не выделяет память: ключи на
  * каждый вызов выводятся заново из DCID именно ЭТОЙ датаграммы. Отсюда
  * прямое следствие для окна поиска: клиент повторяет Initial, а после Retry
@@ -594,7 +594,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
  * другими ключами, и попытка обязана повториться на ней, а не остановиться
  * после первой неудачи. Поэтому здесь, в отличие от TCP-ветки, «похоже на
  * Initial, но не расшифровалось» НЕ взводит saw_hello — взводит только
- * УСПЕШНОЕ d2k_quic_sni (см. по тексту ниже).
+ * УСПЕШНОЕ d2s_quic_sni (см. по тексту ниже).
  *
  * Разрезы/перекрытие плана здесь неприменимы иначе, чем для TCP: датаграмма
  * атомарна, пересборки потока у UDP нет, и попытка плана нарезать payload на
@@ -602,7 +602,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
  * одного QUIC-пакета, которые ничей сборщик не соединит. Это ловится
  * отдельно, ниже, до обращения к сборщику на провод. */
 
-/* ПОДСТАНОВКА ВНЕШНЕГО АДРЕСА. Всё обоснование — в d2k_nat.h; здесь только
+/* ПОДСТАНОВКА ВНЕШНЕГО АДРЕСА. Всё обоснование — в d2s_nat.h; здесь только
    место, где оно применяется.
 
    Спрашиваем ОДИН раз на поток и запоминаем: таблица соединений читается
@@ -613,7 +613,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
    уйдёт в никуда, а план будет объявлен применённым. Возвращаем отказ, и
    вызывающий честно откажется целиком (§2.5: не подменять запрошенное
    похожим). Так бывает при включённом nf_conntrack_fastnat: ускоритель
-   ведёт поток мимо conntrack, записи нет вовсе — поэтому files/S99d2k
+   ведёт поток мимо conntrack, записи нет вовсе — поэтому files/S99d2s
    выключает его на время своей работы. */
 /* ПОТОК ОБЯЗАН ВЕСТИСЬ CONNTRACK, иначе посылки уйдут мимо NAT.
  *
@@ -626,7 +626,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
  *
  * Если записи нет, NAT считать нечего: пакет уходит с локальным адресом и
  * умирает у провайдера. Так бывает при включённом nf_conntrack_fastnat —
- * ускоритель ведёт поток мимо conntrack (поэтому files/S99d2k выключает его
+ * ускоритель ведёт поток мимо conntrack (поэтому files/S99d2s выключает его
  * на время работы). Замерено на роутере Марка 13.09.2026: обход работал
  * только для трафика самого роутера, а любое устройство за ним получало
  * ноль — при том, что собственный зонд на той же цели отвечал 200.
@@ -642,7 +642,7 @@ static int is_stun_response_for(const uint8_t *d, size_t n,
  * жизни потока не меняется. */
 static uint64_t g_nat_ok, g_nat_miss, g_nat_none, g_nat_retried;
 
-void d2k_session_nat_stats(uint64_t *ok, uint64_t *miss, uint64_t *none,
+void d2s_session_nat_stats(uint64_t *ok, uint64_t *miss, uint64_t *none,
                            uint64_t *retried) {
     if (ok) { *ok = g_nat_ok; }
     if (miss) { *miss = g_nat_miss; }
@@ -664,13 +664,13 @@ void d2k_session_nat_stats(uint64_t *ok, uint64_t *miss, uint64_t *none,
  * plan_parse.c), спрашивать о нём никого не надо. Ноль — «не объявлен», такой
  * план бывает у старого файла, и его пропускаем как раньше: §2.4, «не
  * измерено» ≠ «не тот». */
-static int plan_fits_transport(const d2k_plan *p, uint8_t proto) {
+static int plan_fits_transport(const d2s_plan *p, uint8_t proto) {
     if (!p) { return 1; }
-    uint8_t tr = d2k_plan_transport(p);
+    uint8_t tr = d2s_plan_transport(p);
     return (tr == 0 || tr == proto) ? 1 : 0;
 }
 
-static int flow_tracked(d2k_flow *fl, const d2k_conn *c, uint8_t proto,
+static int flow_tracked(d2s_flow *fl, const d2s_conn *c, uint8_t proto,
                         int first_packet) {
     /* ПЕРВОМУ ПАКЕТУ ТАБЛИЦУ НЕ ЧИТАЕМ (задача 46). Ответ для него известен
        заранее — «можно» (см. исключение ниже), а его собственная запись не
@@ -726,10 +726,10 @@ static int flow_tracked(d2k_flow *fl, const d2k_conn *c, uint8_t proto,
         for (int attempt = 0; attempt < 3; attempt++) {
             if (c->family == 6) {
                 uint8_t ext6[16];
-                rc = d2k_nat_family_hook(D2K_NAT_PROC, proto, c->src_ip6, c->src_port,
+                rc = d2s_nat_family_hook(D2S_NAT_PROC, proto, c->src_ip6, c->src_port,
                     c->dst_ip6, c->dst_port, 6, ext6, &eport);
             } else {
-                rc = d2k_nat_hook(D2K_NAT_PROC, proto, c->src_ip, c->src_port,
+                rc = d2s_nat_hook(D2S_NAT_PROC, proto, c->src_ip, c->src_port,
                               c->dst_ip, c->dst_port, &ext, &eport);
             }
             if (rc >= 0) {
@@ -771,9 +771,9 @@ static int flow_tracked(d2k_flow *fl, const d2k_conn *c, uint8_t proto,
     return 0;
 }
 
-static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
-                       const d2k_packet_view *ip, uint64_t now_ns,
-                       uint8_t *buf, size_t bufcap, d2k_result *out,
+static void handle_udp(d2s_session *s, const uint8_t *pkt, size_t len,
+                       const d2s_packet_view *ip, uint64_t now_ns,
+                       uint8_t *buf, size_t bufcap, d2s_result *out,
                        int controller_probe) {
     size_t ihl = ip->l4;
     /* Минимум для UDP — 8 байт заголовка, а не унаследованные от TCP 20: у
@@ -803,10 +803,10 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     size_t payload_off = ihl + 8;
     size_t payload_len = total - payload_off;
 
-    d2k_key key;
-    int src_is_low = d2k_key_make_addr(&key, 17, &ip->src, &ip->dst, u, u + 2);
+    d2s_key key;
+    int src_is_low = d2s_key_make_addr(&key, 17, &ip->src, &ip->dst, u, u + 2);
 
-    d2k_flow *fl = d2k_track_get(s->uflows, &key, now_ns);
+    d2s_flow *fl = d2s_track_get(s->uflows, &key, now_ns);
     if (!fl) {
         /* Таблица полна — тот же честный исход, что и у TCP: обработать
            пакет без учёта потока значит применить план второй раз к тому же
@@ -818,10 +818,10 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
 
     /* Направление — из ПОРТА, а не из содержимого (ревью задачи 4, круг 3).
      *
-     * Было (круг 2): направление ставилось по успеху d2k_quic_sni —
+     * Было (круг 2): направление ставилось по успеху d2s_quic_sni —
      * «раскрылось ключами client in, значит датаграмма от клиента». Это
      * неверно. Ключи QUIC Initial выводятся из ПУБЛИЧНОГО DCID (RFC 9001
-     * §5.4.1/5.4.2, см. d2k_crypto.h), поэтому раскрытие доказывает только,
+     * §5.4.1/5.4.2, см. d2s_crypto.h), поэтому раскрытие доказывает только,
      * что БАЙТЫ ПОЛЕЗНОЙ НАГРУЗКИ — это содержимое клиентского Initial, и
      * ничего не говорит о том, куда едет ЭТА КОНКРЕТНАЯ датаграмма:
      * побайтовая копия тех же самых байт, пущенная в обратную сторону,
@@ -850,16 +850,16 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     int dst_is_443 = (rd16(u + 2) == 443);
     int src_is_443 = (rd16(u + 0) == 443);
     int from_client = -1;   /* -1 — не установлено */
-    if (s->hook == D2K_HOOK_OUTPUT || s->hook == D2K_HOOK_POSTROUTING) {
+    if (s->hook == D2S_HOOK_OUTPUT || s->hook == D2S_HOOK_POSTROUTING) {
         from_client = 1;
-    } else if (s->hook == D2K_HOOK_INPUT || s->hook == D2K_HOOK_PREROUTING ||
-               s->hook == D2K_HOOK_FORWARD) {
+    } else if (s->hook == D2S_HOOK_INPUT || s->hook == D2S_HOOK_PREROUTING ||
+               s->hook == D2S_HOOK_FORWARD) {
         /* FORWARD несёт транзит в ОБЕ стороны, и одной стороной его назвать
            нельзя. Пока сюда попадает только входящее (правило INPUT ставится
            на обратное направление), но выдавать транзит за серверную сторону
            нельзя — для него крючок уликой не является, и мы честно падаем
            обратно на порт. */
-        from_client = (s->hook == D2K_HOOK_FORWARD) ? -1 : 0;
+        from_client = (s->hook == D2S_HOOK_FORWARD) ? -1 : 0;
     }
     /* FORWARD НА ЛЮБОМ ПОРТУ: ПОТОК УЖЕ ЗНАЕТ, КТО ЕГО НАЧАЛ.
        Порт уликой работает только на 443; у голоса Дискорда его нет вовсе
@@ -886,7 +886,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
            приветствий 4, подозрений 0). */
         fl->rev_pkts++;
         s->rev_seen[shape_slot(17, fl->key.family)] = 1;
-        /* saw_initial — тот же поток, только имя не прочиталось (d2k_track.h).
+        /* saw_initial — тот же поток, только имя не прочиталось (d2s_track.h).
            Ответ по нему тоже наблюдаем: иначе обратный трафик выглядел бы
            полным молчанием. Это не проверка протокола или успеха обхода. */
         if (fl->saw_hello || fl->saw_initial) {
@@ -904,8 +904,8 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
                 fl->voice_proof_told = 1;
                 fl->exchange_told = 1;
                 s->exchanges++;
-                d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_EXCHANGE,
-                                D2K_UDP_PROOF_VOICE_DISCOVERY,
+                d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_EXCHANGE,
+                                D2S_UDP_PROOF_VOICE_DISCOVERY,
                                 (uint32_t)payload_len, NULL, NULL, 0, NULL);
             }
             if (!fl->controller_probe && fl->stun_txid_valid &&
@@ -914,8 +914,8 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
                 fl->stun_proof_told = 1;
                 fl->exchange_told = 1;
                 s->exchanges++;
-                d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_EXCHANGE,
-                                D2K_UDP_PROOF_STUN,
+                d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_EXCHANGE,
+                                D2S_UDP_PROOF_STUN,
                                 (uint32_t)payload_len, NULL, NULL, 0, NULL);
             }
             /* UDP EXCHANGE — только первая обратная датаграмма, один раз на
@@ -925,8 +925,8 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
             if (!fl->controller_probe && !fl->exchange_told) {
                 fl->exchange_told = 1;
                 s->exchanges++;
-                d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_EXCHANGE,
-                                D2K_UDP_PROOF_NONE,
+                d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_EXCHANGE,
+                                D2S_UDP_PROOF_NONE,
                                 (uint32_t)payload_len, NULL, NULL, 0, NULL);
             }
         }
@@ -951,7 +951,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     fl->fwd_pkts++; /* счётчик попыток разбора клиентской стороны потока */
     if (fl->saw_hello || fl->saw_initial) {
         /* Клиент шлёт ЕЩЁ, уже показав приветствие, — повтор Initial по
-           таймеру PTO. Половина критерия «шлём, а молчат» (см. d2k_track.h).
+           таймеру PTO. Половина критерия «шлём, а молчат» (см. d2s_track.h).
            Считается ДО раннего выхода ниже: там поток с разобранным
            приветствием уходит первой же строкой, и счёт, поставленный после,
            не двинулся бы никогда. */
@@ -968,7 +968,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         return;
     }
     if (fl->quic_deny) {
-        out->verdict = D2K_VERDICT_DROP;
+        out->verdict = D2S_VERDICT_DROP;
         out->quic_deny = 1;
         out->skipped = "QUIC для имени не пропускается: обхода по QUIC нет, клиент уйдёт на TCP";
         return;
@@ -984,9 +984,9 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        проходил именно так.
 
        Окно поиска по-прежнему держит цену: попыток не больше
-       D2K_HELLO_WINDOW на поток. */
+       D2S_HELLO_WINDOW на поток. */
     if ((fl->saw_hello && fl->plan_done && !fl->udp_replan) ||
-        fl->fwd_pkts > D2K_HELLO_WINDOW) {
+        fl->fwd_pkts > D2S_HELLO_WINDOW) {
         out->skipped = fl->saw_hello ? "поток уже показывал приветствие"
                                       : "за окном поиска";
         return;
@@ -999,7 +999,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
 
     /* ГОЛОС ИЛИ QUIC. Дальше путь общий — имя, журнал, план, исполнение, — и
        различаются только имя и форма: у QUIC имя из Initial, у голоса —
-       ярлык класса (D2K_VOICE_CLASS в d2k_plans.h про то, почему не домен и
+       ярлык класса (D2S_VOICE_CLASS в d2s_plans.h про то, почему не домен и
        не адрес). */
     int discord_voice = is_discord_ip_discovery(pkt + payload_off, payload_len);
     int stun_voice = is_stun_request(pkt + payload_off, payload_len);
@@ -1012,8 +1012,8 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        голоса/STUN (задача 16), без выдуманного имени (§4, §5). */
     uint16_t server_port = (uint16_t)((uint16_t)u[2] << 8 | u[3]);
     int discord_class = discord_voice ||
-        (stun_voice && server_port >= D2K_DISCORD_MEDIA_PORT_LO &&
-         server_port <= D2K_DISCORD_MEDIA_PORT_HI);
+        (stun_voice && server_port >= D2S_DISCORD_MEDIA_PORT_LO &&
+         server_port <= D2S_DISCORD_MEDIA_PORT_HI);
     if (discord_voice && !fl->voice_ssrc_valid) {
         memcpy(fl->voice_ssrc, pkt + payload_off + 4, sizeof fl->voice_ssrc);
         fl->voice_ssrc_valid = 1;
@@ -1022,7 +1022,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         memcpy(fl->stun_txid, pkt + payload_off + 8, sizeof fl->stun_txid);
         fl->stun_txid_valid = 1;
     }
-    if (!voice && !d2k_quic_is_initial(pkt + payload_off, payload_len)) {
+    if (!voice && !d2s_quic_is_initial(pkt + payload_off, payload_len)) {
         out->skipped = "не QUIC Initial и не голос Дискорда";
         return;
     }
@@ -1059,7 +1059,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
      *
      * Поле 19.09.2026: настоящий клиент (curl/ngtcp2) разбрасывает ClientHello
      * по множеству мелких кадров CRYPTO в разнобой, поперёк ДВУХ
-     * Initial-датаграмм; d2k_quic_assembly теперь собирает их по DCID и
+     * Initial-датаграмм; d2s_quic_assembly теперь собирает их по DCID и
      * смещениям CRYPTO. Пока непрерывный ClientHello не готов, здесь всё ещё
      * должен быть честный выход — имя и план нельзя вывести из половины.
      *
@@ -1072,12 +1072,12 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     char name[256];
     int named = 1;
     if (discord_class) {
-        snprintf(name, sizeof name, "%s", D2K_VOICE_CLASS);
+        snprintf(name, sizeof name, "%s", D2S_VOICE_CLASS);
     } else if (voice) {
         named = 0;          /* STUN без класса: только адресный путь */
         name[0] = '\0';
     } else {
-        int assembled = d2k_quic_assembly_feed(&fl->quic_assembly,
+        int assembled = d2s_quic_assembly_feed(&fl->quic_assembly,
                                                 pkt + payload_off,
                                                 payload_len, name, sizeof name);
         if (assembled != 1) {
@@ -1086,7 +1086,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         }
     }
     size_t name_len = strlen(name);
-    uint8_t seen_shape = voice ? D2K_PLAN_SHAPE_VOICE : D2K_PLAN_SHAPE_QUIC;
+    uint8_t seen_shape = voice ? D2S_PLAN_SHAPE_VOICE : D2S_PLAN_SHAPE_QUIC;
     fl->client_shape = seen_shape;
 
     /* Внешний UDP hold уже сохранил эту датаграмму.  Пока ClientHello не
@@ -1126,7 +1126,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     } else if (!fl->saw_initial) {
         /* Имени нет — приветствием не объявляем (счётчики, журнал и снимок не
            трогаем), но молчание по этому потоку замечать обязаны: см.
-           saw_initial в d2k_track.h. Срок молчания считается от ПЕРВОГО такого
+           saw_initial в d2s_track.h. Срок молчания считается от ПЕРВОГО такого
            Initial, как и у приветствия с именем. */
         fl->saw_initial = 1;
         fl->hello_ns = now_ns;
@@ -1134,12 +1134,12 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     if (first_hello) {
         fl->hello_ns = now_ns;
         /* Те же счётчики и то же событие журнала, что и для TLS
-           (D2K_JRN_HELLO_SNI, s->hellos, s->with_sni) — по требованию задачи
+           (D2S_JRN_HELLO_SNI, s->hellos, s->with_sni) — по требованию задачи
            4: имя есть имя для контроллера независимо от транспорта. */
         s->hellos++;
         s->with_sni++;
         if (!fl->controller_probe) {
-            d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_HELLO_SNI, 0, 0, NULL,
+            d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_HELLO_SNI, 0, 0, NULL,
                             (const uint8_t *)name, name_len, NULL);
         }
     }
@@ -1160,14 +1160,14 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        пришедший после снимка, снова снимком не становится — кольцо уже
        очищено, и уходила бы одиночная датаграмма-обрывок. */
     if (named && !voice && !fl->controller_probe && !fl->qsnap_done &&
-        d2k_quic_assembly_complete(&fl->quic_assembly)) {
+        d2s_quic_assembly_complete(&fl->quic_assembly)) {
         fl->qsnap_done = 1;
         size_t k = shape_slot(17, key.family);
         /* ВЕСЬ ПОЛЁТ, А НЕ ПОСЛЕДНЯЯ ДАТАГРАММА (задача 66): приветствие с
            постквантовым key_share едет двумя Initial. Пачка не собралась —
            кладём одну датаграмму, как прежде: контроллер отвергнет её как
            обрывок, и это честнее склейки наугад. */
-        uint8_t pack[D2K_SHAPE_MAX];
+        uint8_t pack[D2S_SHAPE_MAX];
         size_t pack_len = init_ring_pack(s, &key, pkt + payload_off, payload_len,
                                          pack, sizeof pack);
         /* Полёт собран — записи этого потока кольцу больше не нужны. Без
@@ -1194,17 +1194,17 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
            дожидаясь заказа, пока следующее соединение её не перекрыло. */
         int ech = 0;
         if (pack_len) {
-            d2k_qsnap pk;
-            static uint8_t rec[5 + D2K_SHAPE_MAX];
+            d2s_qsnap pk;
+            static uint8_t rec[5 + D2S_SHAPE_MAX];
             size_t chl = 0;
-            if (d2k_qsnap_parse(pack, pack_len, &pk) == 0 &&
-                d2k_qsnap_client_hello(&pk, rec + 5, sizeof rec - 5, &chl) == 0 &&
+            if (d2s_qsnap_parse(pack, pack_len, &pk) == 0 &&
+                d2s_qsnap_client_hello(&pk, rec + 5, sizeof rec - 5, &chl) == 0 &&
                 chl > 0 && chl <= 0xffff) {
                 rec[0] = 0x16; rec[1] = 0x03; rec[2] = 0x01;
                 rec[3] = (uint8_t)(chl >> 8); rec[4] = (uint8_t)chl;
-                d2k_tls_info ti;
+                d2s_tls_info ti;
                 memset(&ti, 0, sizeof ti);
-                (void)d2k_tls_parse(rec, chl + 5, &ti);
+                (void)d2s_tls_parse(rec, chl + 5, &ti);
                 ech = ti.is_client_hello && ti.ech_offer;
             }
         }
@@ -1216,7 +1216,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
             memcpy(s->shape[k], snap, snap_len);
             s->shape_len[k] = snap_len;
             if (requested) s->shape_armed[k] = 0;
-            d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_SHAPE, 0,
+            d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_SHAPE, 0,
                             (uint32_t)snap_len, NULL, NULL, 0, NULL);
         }
     }
@@ -1232,12 +1232,12 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        они по ФОРМЕ; транспорт проверяется отдельно и ниже — он объявлен в
        самом плане, и догадываться о нём не нужно (plan_fits_transport). */
     /* МЕСТНЫЙ ПОРТ — чтобы пробная запись досталась только потоку зонда и
-       никому больше (d2k_plans.h про d2k_plantab_set_name_probe). Берётся из
+       никому больше (d2s_plans.h про d2s_plantab_set_name_probe). Берётся из
        заголовка как есть, в сетевом порядке: таблица сравнивает его с тем,
        что назвал контроллер, и переворачивать по дороге нечего. */
     uint16_t sport_be;
     memcpy(&sport_be, u + 0, 2);
-    d2k_addr_probe_flow probe_flow;
+    d2s_addr_probe_flow probe_flow;
     memset(&probe_flow, 0, sizeof probe_flow);
     probe_flow.family = ip->family;
     memcpy(ip->family == 6 ? probe_flow.src_ip6 : probe_flow.src_ip4,
@@ -1247,29 +1247,29 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
            ip->dst.bytes, ip->family == 6 ? 16 : 4);
     memcpy(&probe_flow.dst_port_be, u + 2, 2);
     probe_flow.transport = 17;
-    uint8_t trial_id[D2K_TRIAL_ID_LEN] = {0};
+    uint8_t trial_id[D2S_TRIAL_ID_LEN] = {0};
     /* ГОЛОСОВОЙ ОПЫТ (задача 15) — только запросу голоса пользовательского
        потока. Межсетевой экран отдаёт в очередь лишь первые пакеты потока
-       (S99d2k, connbytes 0:8), поэтому опыт ждёт СЛЕДУЮЩИЙ разговор того же
+       (S99d2s, connbytes 0:8), поэтому опыт ждёт СЛЕДУЮЩИЙ разговор того же
        клиента LAN с той же точкой сервера (адрес и порт), с любым клиентским
        портом; его первый IP Discovery / STUN-запрос и получает план, APPLIED
        несёт trial ID. Голосовые пакеты контроллера адресных опытов не берут;
        не-голос подстановочных записей не видит (find_addr_probe). */
-    const d2k_plan *use = NULL;
+    const d2s_plan *use = NULL;
     if (!voice) {
-        use = d2k_plantab_find_addr_probe(s->plans, &probe_flow, now_ns, trial_id);
+        use = d2s_plantab_find_addr_probe(s->plans, &probe_flow, now_ns, trial_id);
     } else if (!fl->controller_probe) {
-        use = d2k_plantab_find_voice_probe(s->plans, &probe_flow, now_ns, trial_id);
+        use = d2s_plantab_find_voice_probe(s->plans, &probe_flow, now_ns, trial_id);
     }
     if (!use) { memset(trial_id, 0, sizeof trial_id); }
-    size_t misses_before = d2k_plantab_shape_misses(s->plans);
-    if (!use) { use = d2k_plantab_find_target(s->plans,
+    size_t misses_before = d2s_plantab_shape_misses(s->plans);
+    if (!use) { use = d2s_plantab_find_target(s->plans,
                                                  named ? (const uint8_t *)name : NULL,
                                                  name_len, ip->dst.bytes, ip->family, now_ns,
                                                  seen_shape, controller_probe ? sport_be : 0); }
     if (named && !voice) {
         snprintf(out->quic_name, sizeof out->quic_name, "%.*s", (int)name_len, name);
-        out->quic_shape_miss = d2k_plantab_shape_misses(s->plans) != misses_before;
+        out->quic_shape_miss = d2s_plantab_shape_misses(s->plans) != misses_before;
     }
     if (!use) {
         use = s->plan;
@@ -1285,8 +1285,8 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         out->skipped = "плана для этой цели нет";
         /* Событие обязано выйти на провод (ревью, пункт 3): раньше эта
            ветка не звала refuse() вовсе, и однажды вытесненная из таблицы
-           (см. d2k_plans.h про LRU) подтверждённая цель терялась НАВСЕГДА
-           без единого следа для контроллера, кроме счётчика в сводке d2kd.
+           (см. d2s_plans.h про LRU) подтверждённая цель терялась НАВСЕГДА
+           без единого следа для контроллера, кроме счётчика в сводке d2sd.
 
            НЕ ЧАЩЕ ОДНОГО РАЗА НА ПОТОК — теперь это условие, а не следствие.
            Пока повтор Initial отсеивался раньше, сюда нельзя было попасть
@@ -1306,7 +1306,7 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         out->skipped = "план уже применён к этому потоку";
         return;
     }
-    if (d2k_plan_quic_deny(use)) {
+    if (d2s_plan_quic_deny(use)) {
         /* Задача 50, раунд 2: обхода по QUIC нет — поток не складывается,
            клиент уходит на TCP. Зонд контроллера не трогаем: им имя и
            перепроверяется. APPLIED нет — это не исполнение обхода. */
@@ -1315,35 +1315,35 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
             return;
         }
         fl->quic_deny = 1;
-        out->verdict = D2K_VERDICT_DROP;
+        out->verdict = D2S_VERDICT_DROP;
         out->quic_deny = 1;
         out->skipped = "QUIC для имени не пропускается: обхода по QUIC нет, клиент уйдёт на TCP";
         return;
     }
 
-    d2k_pkt in;
+    d2s_pkt in;
     memset(&in, 0, sizeof in);
     in.payload = pkt + payload_off;
     in.payload_len = payload_len;
     in.seq = 0;      /* у UDP нет номера последовательности */
-    /* have_sni = 0 НАМЕРЕННО, хотя имя выше уже найдено. Имя d2k_quic_sni
+    /* have_sni = 0 НАМЕРЕННО, хотя имя выше уже найдено. Имя d2s_quic_sni
        достаёт из ClientHello, пересобранного ВНУТРИ core/quic.c по смещениям
        CRYPTO-кадров расшифрованного потока — оно не лежит смещением в этом
        payload (тот всё ещё шифротекст). Якоря ANCHOR_SNI_START/END
        исполнителя (plan_apply.c) вычисляют смещение именно В payload; для
        QUIC такого смещения не существует ни при каком значении. Подставить
        сюда 0 «на всякий случай» значило бы дать исполнителю МОЛЧА вычислить
-       заведомо неверный якорь вместо честного отказа — d2k_wire.h прямо
+       заведомо неверный якорь вместо честного отказа — d2s_wire.h прямо
        запрещает подменять запрошенное на похожее. have_sni=0 — единственно
        честное значение: план, которому нужен якорь по SNI, получит отказ
-       ниже (d2k_plan_apply вернёт -1 и пакет пройдёт как есть), а не тихую
+       ниже (d2s_plan_apply вернёт -1 и пакет пройдёт как есть), а не тихую
        порчу. */
     in.have_sni = 0;
     in.sni_off = 0;
     in.sni_len = 0;
     /* ОРИГИНАЛ ПОСЛЕ ФАЛЬШИВОК — СВОЕЙ ПОСЫЛКОЙ (задача 42). Наши сырые
        фальшивки несут тот же кортеж, создают и ПОДТВЕРЖДАЮТ запись conntrack
-       первыми (у транзита — с трансляцией по метке, S99d2k), а удержанный в
+       первыми (у транзита — с трансляцией по метке, S99d2s), а удержанный в
        NFQUEUE оригинал несёт свою неподтверждённую запись, и после ACCEPT ядро
        снимает его как дубль: insert_failed/drop росли на роутере ровно на
        число прогонов, настоящий Initial на ppp0 не появлялся, уходил только
@@ -1352,12 +1352,12 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        а копия в очереди снимается. */
     in.own_after_fakes = 1;
 
-    d2k_actions acts;
+    d2s_actions acts;
     memset(&acts, 0, sizeof acts);
-    if (d2k_plan_apply(use, fl, &in, &acts) != 0) {
+    if (d2s_plan_apply(use, fl, &in, &acts) != 0) {
         out->skipped = acts.refuse_why ? acts.refuse_why : "план неприменим к этому пакету";
-        refuse_coded(s, now_ns, &key, out->skipped, D2K_REFUSE_NOT_APPLIED, use);
-        d2k_actions_free(&acts);
+        refuse_coded(s, now_ns, &key, out->skipped, D2S_REFUSE_NOT_APPLIED, use);
+        d2s_actions_free(&acts);
         return;
     }
 
@@ -1373,18 +1373,18 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
        кто знает про транспорт, — то есть здесь, до обращения к сборщику. */
     size_t payload_emits = 0;
     for (size_t i = 0; i < acts.n; i++) {
-        if (acts.v[i].kind == D2K_EMIT_PAYLOAD) {
+        if (acts.v[i].kind == D2S_EMIT_PAYLOAD) {
             payload_emits++;
         }
     }
     if (payload_emits > 1) {
         out->skipped = "план режет датаграмму на части — для UDP это порча, не разрез";
         refuse(s, now_ns, &key, out->skipped);
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return;
     }
 
-    d2k_conn c;
+    d2s_conn c;
     memset(&c, 0, sizeof c);
     c.family = ip->family;
     memcpy(ip->family == 6 ? c.src_ip6 : (uint8_t *)&c.src_ip,
@@ -1399,12 +1399,12 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
     if (flow_tracked(fl, &c, 17, held_first_replay || fl->fwd_pkts <= 1) != 0) {
         out->skipped = "поток не ведётся conntrack — посылки уйдут мимо NAT";
         refuse(s, now_ns, &key, out->skipped);
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return;
     }
     c.ttl = ip->hop_limit;
     c.ip_id = ip->ip_id;
-    d2k_conn fragment_conn=c;
+    d2s_conn fragment_conn=c;
     for (size_t i=0;i<acts.n;i++) if (acts.v[i].ipfrag) {
         /* NODEFRAG sends bypass reassembly/normal UDP conntrack. Translate
            ONLY fragments here, using the existing client's confirmed tuple.
@@ -1413,9 +1413,9 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         uint32_t ext=0;uint16_t port=0;
         uint8_t ext6[16] = {0};
         int found = c.family == 6
-            ? d2k_nat_family_hook(D2K_NAT_PROC,17,c.src_ip6,c.src_port,
+            ? d2s_nat_family_hook(D2S_NAT_PROC,17,c.src_ip6,c.src_port,
                                   c.dst_ip6,c.dst_port,6,ext6,&port)
-            : d2k_nat_hook(D2K_NAT_PROC,17,c.src_ip,c.src_port,
+            : d2s_nat_hook(D2S_NAT_PROC,17,c.src_ip,c.src_port,
                            c.dst_ip,c.dst_port,&ext,&port);
         if(found!=0 || (c.family != 6 && !ext) || !port) {
             /* Первый QUIC Initial ещё не подтверждён conntrack, пока его
@@ -1426,13 +1426,13 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
                пакетах остаётся обычным отказом ниже. */
             if(found==-1 && (held_first_replay || fl->fwd_pkts<=1)) {
                 out->skipped="ожидаю подтверждения conntrack для IP-фрагментов";
-                d2k_actions_free(&acts);
+                d2s_actions_free(&acts);
                 return;
             }
             /* Missing procfs is NOT evidence of no NAT. Ordinary packets
                can leave translation to the kernel; NODEFRAG packets cannot. */
             out->skipped="нет подтверждённого NAT-контекста для IP-фрагментов";
-            refuse(s,now_ns,&key,out->skipped);d2k_actions_free(&acts);return;
+            refuse(s,now_ns,&key,out->skipped);d2s_actions_free(&acts);return;
         }
         if(found==0){
             if(c.family==6)memcpy(fragment_conn.src_ip6,ext6,16);
@@ -1442,14 +1442,14 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         break;
     }
     /* c.ack и c.window остаются нулями: полей TCP у UDP нет, а
-       d2k_wire_build_udp их не читает (см. d2k_wire.h). */
+       d2s_wire_build_udp их не читает (см. d2s_wire.h). */
 
     size_t wire_count=acts.n;
     for (size_t i=0;i<acts.n;i++) {
         if (acts.v[i].ipfrag) wire_count+=acts.v[i].ipfrag<=2?1:2;
     }
     if (wire_count > sizeof out->out / sizeof out->out[0]) {
-        /* План описывает больше посылок, чем вмещает d2k_result.out[]
+        /* План описывает больше посылок, чем вмещает d2s_result.out[]
            (ревью задачи 4, круг 2): repeats фальшивки приходит из TLV одним
            байтом без потолка (до 255), а out[] — фиксированные 16. Раньше n
            тихо обрезался до 16: план "применялся" целиком (plan_done,
@@ -1460,43 +1460,43 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
            целиком, а не обрезанное исполнение, выданное за полное. */
         out->skipped = "план описывает больше посылок, чем вмещает буфер результата";
         refuse(s, now_ns, &key, out->skipped);
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return;
     }
     size_t used = 0;
     size_t n = 0;
     for (size_t i = 0; i < acts.n; i++) {
-        const d2k_emit *e=&acts.v[i];
-        d2k_ipfrag_span spans[3];
+        const d2s_emit *e=&acts.v[i];
+        d2s_ipfrag_span spans[3];
         size_t count=0,made=0;
         if (e->ipfrag) {
-            d2k_ipfrag_plan fp;
+            d2s_ipfrag_plan fp;
             /* Copying/fragmenting IPv4 options needs its own measured path.
                Reject unsupported context instead of silently losing options. */
             if (((c.family==6 && ihl==40) || (c.family!=6 && ihl==20)) &&
-                e->kind==D2K_EMIT_PAYLOAD && !e->pre_len &&
+                e->kind==D2S_EMIT_PAYLOAD && !e->pre_len &&
                 !e->seq_shift && !e->poison && !e->wire_profile &&
-                d2k_ipfrag_shape(e->ipfrag,&fp)==0) {
+                d2s_ipfrag_shape(e->ipfrag,&fp)==0) {
                 uint32_t id=next_fragment_id(s);
                 if (c.family==6) {
-                    count=d2k_udpfrag6_build_ex(fragment_conn.src_ip6,fragment_conn.dst_ip6,
+                    count=d2s_udpfrag6_build_ex(fragment_conn.src_ip6,fragment_conn.dst_ip6,
                         rd16((const uint8_t *)&fragment_conn.src_port),
                         rd16((const uint8_t *)&fragment_conn.dst_port),e->bytes,e->len,&fp,id,
                         c.ttl,c.traffic_class,c.flow_label,buf+used,bufcap-used,spans);
-                } else count=d2k_udpfrag_build_ex((const uint8_t *)&fragment_conn.src_ip,
+                } else count=d2s_udpfrag_build_ex((const uint8_t *)&fragment_conn.src_ip,
                     (const uint8_t *)&fragment_conn.dst_ip,rd16((const uint8_t *)&fragment_conn.src_port),
                     rd16((const uint8_t *)&fragment_conn.dst_port),e->bytes,e->len,&fp,(uint16_t)id,
                     c.ttl,pkt[1],buf+used,bufcap-used,spans);
                 if(count)made=spans[count-1].off+spans[count-1].len;
             }
         } else {
-            made=d2k_wire_build_udp(&c,e,buf+used,bufcap-used);
-            if(made){count=1;spans[0]=(d2k_ipfrag_span){0,made};}
+            made=d2s_wire_build_udp(&c,e,buf+used,bufcap-used);
+            if(made){count=1;spans[0]=(d2s_ipfrag_span){0,made};}
         }
         if (made == 0) {
-            /* d2k_wire_build_udp возвращает 0 в двух случаях: посылка не
+            /* d2s_wire_build_udp возвращает 0 в двух случаях: посылка не
                поместилась в буфер и «эту порчу для UDP честно не исполнить»
-               (pre_len/seq_shift/TCPTS_BACK/BADSUM, см. шапку d2k_wire.h).
+               (pre_len/seq_shift/TCPTS_BACK/BADSUM, см. шапку d2s_wire.h).
                Оба — отказ, и его нельзя проглотить: отправить меньше, чем
                описал план, и промолчать значит приписать результат плану,
                который не исполнялся. Обработка — слово в слово как в
@@ -1509,20 +1509,20 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
                которых на проводе не было. Раз ничего не ушло — отказываемся
                ЦЕЛИКОМ, не меняя воздействия, и отпускаем оригинал нетронутым
                (0009, U3). */
-            d2k_cancel cancel;
-            d2k_actions_cancel(&acts, 0, &cancel);
+            d2s_cancel cancel;
+            d2s_actions_cancel(&acts, 0, &cancel);
             out->n_out = 0;
-            out->verdict = (cancel.fate == D2K_ORIG_DROP) ? D2K_VERDICT_DROP
-                                                          : D2K_VERDICT_ACCEPT;
+            out->verdict = (cancel.fate == D2S_ORIG_DROP) ? D2S_VERDICT_DROP
+                                                          : D2S_VERDICT_ACCEPT;
             if (cancel.stream_damaged) {
                 fl->damaged = 1;
             }
             out->skipped = "посылка невыполнима для UDP";
             refuse(s, now_ns, &key, out->skipped);
-            d2k_actions_free(&acts);
+            d2s_actions_free(&acts);
             return;
         }
-        if (acts.v[i].kind == D2K_EMIT_PAYLOAD && out->first_payload == 0xFF) {
+        if (acts.v[i].kind == D2S_EMIT_PAYLOAD && out->first_payload == 0xFF) {
             out->first_payload = (uint8_t)n;
         }
         for(size_t k=0;k<count;k++,n++) {
@@ -1532,24 +1532,24 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
         }
         used += made;
     }
-    if (acts.fate == D2K_ORIG_HOLD) {
+    if (acts.fate == D2S_ORIG_HOLD) {
         /* Как и в TCP-ветке: удержание оригинала датапат не умеет вовсе. */
         out->n_out = 0;
-        out->verdict = D2K_VERDICT_ACCEPT;
+        out->verdict = D2S_VERDICT_ACCEPT;
         out->skipped = "удержание оригинала не поддержано";
         refuse(s, now_ns, &key, out->skipped);
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return;
     }
     out->n_out = n;
-    out->verdict = (acts.fate == D2K_ORIG_DROP) ? D2K_VERDICT_DROP
-                                                : D2K_VERDICT_ACCEPT;
+    out->verdict = (acts.fate == D2S_ORIG_DROP) ? D2S_VERDICT_DROP
+                                                : D2S_VERDICT_ACCEPT;
     fl->plan_done = 1;
-    fl->guards = d2k_plan_guards(use);
+    fl->guards = d2s_plan_guards(use);
     s->applied++;
     /* Ключ потока и идентификатор плана — ВЫЗЫВАЮЩЕМУ, до отправки. Без них
        отправляющий видит только байты, и отказ sendto оставался голым
-       счётчиком (d2k_session.h, поля applied/key/plan_id). */
+       счётчиком (d2s_session.h, поля applied/key/plan_id). */
     plan_handed_off(s, out, fl, &key, use,
                     trial_id[0] || trial_id[1] || trial_id[2] || trial_id[3] ||
                     trial_id[4] || trial_id[5] || trial_id[6] || trial_id[7] ||
@@ -1558,14 +1558,14 @@ static void handle_udp(d2k_session *s, const uint8_t *pkt, size_t len,
                     ? trial_id : NULL);
     /* Не просто «план применился», а КАКОЙ: без идентификатора контроллер не
        отличит применение своего кандидата от применения предыдущего, чьё
-       событие пришло позже (d2k_ctl.h объявляет APPLIED «ключ + id плана»). */
-    d2k_journal_add_applied(s->jrn, now_ns, &key, d2k_plan_id(use), out->trial_id);
-    d2k_actions_free(&acts);
+       событие пришло позже (d2s_ctl.h объявляет APPLIED «ключ + id плана»). */
+    d2s_journal_add_applied(s->jrn, now_ns, &key, d2s_plan_id(use), out->trial_id);
+    d2s_actions_free(&acts);
 }
 
 /* Приветствие TCP узнано: запомнить подтверждение, с которым оно ушло, и
-   учесть поток в знаменателе d2k_session_reply_hidden. */
-static void note_tcp_hello(d2k_session *s, d2k_flow *fl, int ack,
+   учесть поток в знаменателе d2s_session_reply_hidden. */
+static void note_tcp_hello(d2s_session *s, d2s_flow *fl, int ack,
                            const uint8_t *tcp) {
     /* Зонд контроллера — не пользовательский поток: исключён и здесь, и в
        числителе, иначе доля «невидимых» ответов занижалась бы. */
@@ -1578,27 +1578,27 @@ static void note_tcp_hello(d2k_session *s, d2k_flow *fl, int ack,
  *
  * Keenetic метит пакеты клиента с маршрутом по политике или доменам в mangle
  * PREROUTING (0xffffaaa -> ip rule 100 -> таблица 4096, например VPN) — до
- * нашей очереди в POSTROUTING. Все сырые посылки d2k (фальшивки, куски,
+ * нашей очереди в POSTROUTING. Все сырые посылки d2s (фальшивки, куски,
  * собственный Initial задачи 42) идут с меткой 0x2d по главной таблице, то
  * есть через провайдера мимо VPN: утечка ClientHello/Initial и разорванное
  * соединение. Такой поток не получает ни плана, ни удержания, ни наблюдения:
  * его ответы и молчание — свойство чужого пути, а не коробки провайдера, и
  * уликой для контроллера быть не могут. Помечается поток (обе стороны), а не
  * пакет: ответы сервера приходят без метки клиента. */
-static int routed_flow(d2k_session *s, const uint8_t *pkt, size_t len,
-                       const d2k_packet_view *ip, uint64_t now_ns, uint32_t route_mark,
-                       d2k_result *out) {
+static int routed_flow(d2s_session *s, const uint8_t *pkt, size_t len,
+                       const d2s_packet_view *ip, uint64_t now_ns, uint32_t route_mark,
+                       d2s_result *out) {
     if ((ip->protocol != 6 && ip->protocol != 17) || len < ip->l4 + 4 ||
         (ip->fragment & 0x1fff)) {
         return 0;
     }
     const uint8_t *l4 = pkt + ip->l4;
-    d2k_key key;
-    (void)d2k_key_make_addr(&key, ip->protocol, &ip->src, &ip->dst, l4, l4 + 2);
-    d2k_table *t = ip->protocol == 6 ? s->flows : s->uflows;
-    d2k_flow *fl;
+    d2s_key key;
+    (void)d2s_key_make_addr(&key, ip->protocol, &ip->src, &ip->dst, l4, l4 + 2);
+    d2s_table *t = ip->protocol == 6 ? s->flows : s->uflows;
+    d2s_flow *fl;
     if (route_mark) {
-        fl = d2k_track_get(t, &key, now_ns);
+        fl = d2s_track_get(t, &key, now_ns);
         if (fl && !fl->routed) {
             fl->routed = 1;
             s->routed_flows++;
@@ -1606,7 +1606,7 @@ static int routed_flow(d2k_session *s, const uint8_t *pkt, size_t len,
             out->routed_mark = route_mark;
         }
     } else {
-        fl = d2k_track_find(t, &key);
+        fl = d2s_track_find(t, &key);
         if (!fl || !fl->routed) { return 0; }
         /* Новый SYN без метки на том же кортеже — новое соединение (ревью M1):
            флаг прежнего не переживает его, дальше обычный путь SYN. */
@@ -1620,9 +1620,9 @@ static int routed_flow(d2k_session *s, const uint8_t *pkt, size_t len,
     return 1;
 }
 
-static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
+static int session_packet(d2s_session *s, const uint8_t *pkt, size_t len,
                        uint64_t now_ns, uint8_t *buf, size_t bufcap,
-                       d2k_result *out, int observe_only,
+                       d2s_result *out, int observe_only,
                        int controller_probe, size_t tcp_segment_cap) {
     if (!out) {
         return 0;
@@ -1631,15 +1631,15 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     /* 0xFF — «нагрузки в плане нет». Ноль был бы законным НОМЕРОМ посылки, и
        отличить «первая посылка — нагрузка» от «нагрузки нет» стало бы нечем. */
     out->first_payload = 0xFF;
-    out->verdict = D2K_VERDICT_ACCEPT;
+    out->verdict = D2S_VERDICT_ACCEPT;
     if (!s || !pkt) {
         out->skipped = "нет сессии или пакета";
         return 0;
     }
 
     /* --- заголовки, с явными границами на каждом шаге ------------------- */
-    d2k_packet_view ip;
-    if (!d2k_packet_parse(pkt, len, &ip)) {
+    d2s_packet_view ip;
+    if (!d2s_packet_parse(pkt, len, &ip)) {
         out->skipped = "неподдержанный или неполный IP-пакет";
         return 0;
     }
@@ -1698,8 +1698,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         return 0;
     }
 
-    d2k_key key;
-    int src_is_low = d2k_key_make_addr(&key, 6, &ip.src, &ip.dst, t, t + 2);
+    d2s_key key;
+    int src_is_low = d2s_key_make_addr(&key, 6, &ip.src, &ip.dst, t, t + 2);
 
     uint8_t flags = t[13];
     const int fin = (flags & 0x01) != 0;
@@ -1707,9 +1707,9 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     const int rst = (flags & 0x04) != 0;
     const int ack = (flags & 0x10) != 0;
 
-    if (syn && !ack) { d2k_capture_forget(&s->capture, &key); }
+    if (syn && !ack) { d2s_capture_forget(&s->capture, &key); }
 
-    d2k_flow *fl = d2k_track_get(s->flows, &key, now_ns);
+    d2s_flow *fl = d2s_track_get(s->flows, &key, now_ns);
     if (!fl) {
         /* Таблица полна. Пропускаем — и это правильный исход: обработать
            пакет без учёта потока значит применить план второй раз к тому же
@@ -1781,8 +1781,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                    дешёвый (несколько границ) и идёт только до первого
                    ответа. */
                 if (!fl->rev_server_hello) {
-                    d2k_tls_info ri;
-                    if (d2k_tls_parse(pkt + rpay_off, rpay, &ri) == 0) {
+                    d2s_tls_info ri;
+                    if (d2s_tls_parse(pkt + rpay_off, rpay, &ri) == 0) {
                         if (ri.is_server_hello) fl->rev_server_hello = 1;
                         if (ri.is_server_hello || (ri.is_tls_record &&
                             ri.record_type == 23 && ri.have_record_end &&
@@ -1808,7 +1808,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             }
         }
     }
-    /* Ответ, которого очередь не видела (d2k_session_reply_hidden): клиент
+    /* Ответ, которого очередь не видела (d2s_session_reply_hidden): клиент
        подтверждает данные сервера, а с обратной стороны после приветствия
        не пришло ни пакета. Стоит до разбора закрытия и до «нет нагрузки»:
        подтверждение чаще всего едет чистым ACK без нагрузки. Только
@@ -1828,8 +1828,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         /* SYN без ACK — граница соединений на этой пятёрке, а не «первый
            увиденный пакет». Прежде начало потока бралось только при первом
            SYN, и следующее соединение в той же ячейке жило с чужим ISN и
-           чужими отметками (см. d2k_track_new_connection). */
-        d2k_track_new_connection(fl);
+           чужими отметками (см. d2s_track_new_connection). */
+        d2s_track_new_connection(fl);
         fl->syn_ns = now_ns;
         fl->syn_seq = rd32(t + 4);
         fl->saw_syn = 1;
@@ -1862,7 +1862,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         }
         fl->exchange_told = 1;
         s->exchanges++;
-        d2k_jrn_detail det;
+        d2s_jrn_detail det;
         memset(&det, 0, sizeof det);
         det.tos = fl->rev_types;   /* набор увиденных типов записей */
         det.server_hello = fl->rev_server_hello;
@@ -1871,15 +1871,15 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
            само, и последующий RST/молчание по нему — не блок (поле
            15.10.2026, медиа VK: часть соединений «обмен пошёл» без плана,
            часть — «сброс в ответ на приветствие»). */
-        det.planned = fl->plan_done ? D2K_PLANNED_YES : D2K_PLANNED_NO;
-        d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_EXCHANGE,
+        det.planned = fl->plan_done ? D2S_PLANNED_YES : D2S_PLANNED_NO;
+        d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_EXCHANGE,
                         fl->rev_first_type, fl->rev_payload_after_hello,
                         &det, NULL, 0, NULL);
     }
 
     /* Закрытие — повод отпустить ячейку сразу, не дожидаясь молчания.
        Но сперва посмотреть, не улика ли это. */
-    if (rst && !fwd && (fl->guards & D2K_GUARD_RST_ALIEN) && fl->rev_profiled &&
+    if (rst && !fwd && (fl->guards & D2S_GUARD_RST_ALIEN) && fl->rev_profiled &&
         ip.hop_limit != fl->rev_ttl) {
         /* Сброс пришёл с другим TTL, чем всё, что до сих пор отвечало по этому
            соединению, — значит послан не оттуда. Снимаем.
@@ -1891,24 +1891,24 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         fl->rst_dropped++;
         s->rst_dropped++;
         if (fl->saw_hello && rev_before == 0) {
-            d2k_jrn_detail det;
+            d2s_jrn_detail det;
             det.ttl = ip.hop_limit;
             det.ref_ttl = fl->rev_ttl;
             det.tos = pkt[1];
             det.ipid = ip.ip_id;
-            suspect(s, now_ns, &key, fl, D2K_SUSPECT_RST_CUT, &det);
+            suspect(s, now_ns, &key, fl, D2S_SUSPECT_RST_CUT, &det);
         } else if (fl->saw_hello && rev_before > 0 &&
                    (fl->rev_types & (uint8_t)(1u << (23 - 20)))) {
             /* Dropping an alien RST keeps the client alive, but must not
              * hide the residual failure from the narrow RX measurement. */
-            d2k_jrn_detail det;
+            d2s_jrn_detail det;
             memset(&det, 0, sizeof det);
             det.ttl = ip.hop_limit; det.ref_ttl = fl->rev_ttl;
             det.tos = pkt[1]; det.ipid = ip.ip_id;
             det.server_hello = fl->rev_server_hello;
-            suspect(s, now_ns, &key, fl, D2K_SUSPECT_RST_AFTER_APP, &det);
+            suspect(s, now_ns, &key, fl, D2S_SUSPECT_RST_AFTER_APP, &det);
         }
-        out->verdict = D2K_VERDICT_DROP;
+        out->verdict = D2S_VERDICT_DROP;
         out->skipped = "чужой сброс снят защитой";
         return 0;
     }
@@ -1942,16 +1942,16 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             (fl->plan_done || !fl->controller_probe) && response_went_on) {
             uint32_t fin_seq = rd32(t + 4) + (uint32_t)(total - ihl - doff);
             if (fl->pending_fin && fl->pending_fin_seq == fin_seq) {
-                d2k_jrn_detail det;
+                d2s_jrn_detail det;
                 memset(&det, 0, sizeof det);
                 det.server_hello = fl->rev_server_hello;
-                suspect(s, now_ns, &key, fl, D2K_SUSPECT_FIN_RETRY, &det);
+                suspect(s, now_ns, &key, fl, D2S_SUSPECT_FIN_RETRY, &det);
             }
             if (!fl->pending_fin || fl->pending_fin_seq != fin_seq) {
                 fl->pending_fin_ns = now_ns; /* окно повтора — от первого FIN */
             }
             fl->pending_fin = 1; fl->pending_fin_seq = fin_seq;
-            d2k_capture_forget(&s->capture, &key);
+            d2s_capture_forget(&s->capture, &key);
             out->skipped = "клиент закрывает поток после ответа; ждём подтверждение или повтор FIN";
             return 0; /* retain bounded flow metadata, never hold/drop the FIN */
         }
@@ -1961,12 +1961,12 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                §2.4 запрещает выводить из него устройство механизма. Сервер
                мог и правда закрыть соединение. */
             fl->saw_rev_rst = 1;
-            d2k_jrn_detail det;
+            d2s_jrn_detail det;
             det.ttl = ip.hop_limit;
             det.ref_ttl = fl->rev_profiled ? fl->rev_ttl : 0;
             det.tos = pkt[1];
             det.ipid = ip.ip_id;
-            suspect(s, now_ns, &key, fl, D2K_SUSPECT_RST, &det);
+            suspect(s, now_ns, &key, fl, D2S_SUSPECT_RST, &det);
         } else if (rst && fl->saw_hello && rev_before > 0 &&
                    (fl->rev_types & (uint8_t)(1u << (23 - 20)))) {
             /* Только пакет 0x17, БЕЗ свидетельства подтверждением (задача 50,
@@ -1983,20 +1983,20 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                контроллер обязан доказать парой identity/gzip, что режется
                именно входящий объём; без воспроизводимого среза дальнейший
                перебор запрещён. */
-            d2k_jrn_detail det;
+            d2s_jrn_detail det;
             det.ttl = pkt[8];
             det.ref_ttl = fl->rev_profiled ? fl->rev_ttl : 0;
             det.tos = pkt[1];
             det.ipid = rd16(pkt + 4);
             det.server_hello = fl->rev_server_hello;
-            det.planned = fl->plan_done ? D2K_PLANNED_YES : D2K_PLANNED_NO;
-            suspect(s, now_ns, &key, fl, D2K_SUSPECT_RST_AFTER_APP, &det);
+            det.planned = fl->plan_done ? D2S_PLANNED_YES : D2S_PLANNED_NO;
+            suspect(s, now_ns, &key, fl, D2S_SUSPECT_RST_AFTER_APP, &det);
         }
         /* Specific FIN/RST evidence above keeps priority. If it did not fire,
            preserve any eligible ClientHello silence before removing the flow. */
         (void)tcp_silence_observe(s, fl, now_ns);
-        d2k_capture_forget(&s->capture, &key);
-        d2k_track_remove(s->flows, &key);
+        d2s_capture_forget(&s->capture, &key);
+        d2s_track_remove(s->flows, &key);
         out->skipped = rst ? "соединение сброшено" : "соединение закрывается";
         return 0;
     }
@@ -2022,7 +2022,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
      * найдёт, а платить за него на каждом пакете загрузки незачем. Предел
      * здесь свой, а не унаследованный от правила firewall: датапат не
      * вправе считать, что снаружи стоит connbytes. */
-    d2k_tls_info tls;
+    d2s_tls_info tls;
     memset(&tls, 0, sizeof tls);
     /* Повтор приветствия: тот же номер последовательности с той же стороны.
        Клиент повторяет, когда ответа нет, — самая дешёвая улика из доступных,
@@ -2031,7 +2031,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         !fl->rev_tls_reply) {
         fl->hello_repeats++;
         if (fl->hello_repeats >= 2) {
-            suspect(s, now_ns, &key, fl, D2K_SUSPECT_REPEAT, NULL);
+            suspect(s, now_ns, &key, fl, D2S_SUSPECT_REPEAT, NULL);
         }
     }
 
@@ -2046,7 +2046,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         s->pay_reverse++;
     } else if (fl->saw_hello) {
         s->pay_after_hello++;
-    } else if (fl->fwd_pkts > D2K_HELLO_WINDOW) {
+    } else if (fl->fwd_pkts > D2S_HELLO_WINDOW) {
         s->pay_late++;
     }
 
@@ -2070,15 +2070,15 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     /* Порт 80 (ревью M-1): Host без порта означает 80, и запрос на другой
        порт — не наш вход. */
     if (!fl->saw_hello && fwd && t[2] == 0 && t[3] == 80) {
-        d2k_http_req hr;
+        d2s_http_req hr;
         int later = 0, http_tried = 0;
         if (!fl->http_checked && fl->saw_syn && in_seq == fl->syn_seq + 1u) {
             fl->http_checked = 1;
             http_tried = 1;
-            http_hello = d2k_http_request(pkt + payload_off, payload_len, &hr);
+            http_hello = d2s_http_request(pkt + payload_off, payload_len, &hr);
             fl->http_flow = (uint8_t)http_hello;
         } else if (fl->http_headers) {
-            d2k_http_request_stream_feed(&fl->http_request,in_seq,pkt+payload_off,payload_len);
+            d2s_http_request_stream_feed(&fl->http_request,in_seq,pkt+payload_off,payload_len);
             if(fl->http_request.invalid || fl->http_request.past_end) {
                 fl->http_headers=0;s->http_unaligned++;
             } else if(fl->http_request.header_done) {
@@ -2088,7 +2088,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             const int32_t d = (int32_t)(in_seq - fl->http_next);
             if (d == 0) {
                 http_tried = 1;
-                http_hello = d2k_http_request(pkt + payload_off, payload_len, &hr);
+                http_hello = d2s_http_request(pkt + payload_off, payload_len, &hr);
                 later = http_hello;
                 if (!http_hello) {
                     fl->http_conn = 0;              /* на границе не запрос */
@@ -2124,8 +2124,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             http_len = hr.host_len;
             if (later) { s->http_later++; }
             fl->http_conn = 0;
-            d2k_http_request_stream_init(&fl->http_request,in_seq);
-            d2k_http_request_stream_feed(&fl->http_request,in_seq,pkt+payload_off,payload_len);
+            d2s_http_request_stream_init(&fl->http_request,in_seq);
+            d2s_http_request_stream_feed(&fl->http_request,in_seq,pkt+payload_off,payload_len);
             fl->http_headers=!fl->http_request.invalid && !fl->http_request.header_done;
             if (!hr.end_known) {
                 s->http_open_end++;
@@ -2140,8 +2140,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         }
     }
 
-    if (!fl->saw_hello && fwd && fl->fwd_pkts <= D2K_HELLO_WINDOW && !http_hello) {
-        d2k_tls_parse(pkt + payload_off, payload_len, &tls);
+    if (!fl->saw_hello && fwd && fl->fwd_pkts <= D2S_HELLO_WINDOW && !http_hello) {
+        d2s_tls_parse(pkt + payload_off, payload_len, &tls);
         if (!tls.is_client_hello) {
             s->pay_not_hello++;
             /* Первый байт нагрузки — самая дешёвая улика о том, ЧТО это
@@ -2163,13 +2163,13 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
             note_tcp_hello(s, fl, ack, t);
             if (tls.have_sni && !fl->controller_probe) {
                 s->with_sni++;
-                d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_HELLO_SNI, 0, 0,
+                d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_HELLO_SNI, 0, 0,
                                 NULL, pkt + payload_off + tls.sni_off,
                                 tls.sni_len, NULL);
             } else if (tls.have_record_end && !fl->controller_probe) {
                 /* Имени нет — и это нормальное состояние модели (§5.3), а не
                    ошибка разбора. */
-                d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_HELLO_NONAME, 0, 0,
+                d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_HELLO_NONAME, 0, 0,
                                 NULL, NULL, 0, NULL);
             }
         }
@@ -2178,22 +2178,22 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     /* Снимок — только целый ClientHello. Это наблюдение, НЕ замена payload
        текущего пакета: tls ниже по-прежнему описывает именно этот пакет.
        Исполнение на составном входе требует отдельного удержания/выпуска. */
-    if (fwd && !fl->hello_capture_done && fl->fwd_pkts <= D2K_CAPTURE_WINDOW &&
+    if (fwd && !fl->hello_capture_done && fl->fwd_pkts <= D2S_CAPTURE_WINDOW &&
         (ip.fragment & 0x3fff) == 0) {
         const uint8_t *hello;
         size_t hello_len;
         uint32_t hello_seq;
         /* Снимок приветствия собирается от НАЧАЛА ПОТОКА, когда оно известно:
            куски приходят в любом порядке, и угадывать начало по первому байту
-           нельзя (см. d2k_capture_feed). SYN не наблюдался — работаем
+           нельзя (см. d2s_capture_feed). SYN не наблюдался — работаем
            по-прежнему, от куска, начинающего запись. */
-        int captured = d2k_capture_feed(&s->capture, &key, fl->first_ns, now_ns,
+        int captured = d2s_capture_feed(&s->capture, &key, fl->first_ns, now_ns,
                                         in_seq, fl->syn_seq + 1, fl->saw_syn,
                                         pkt + payload_off, payload_len,
                                         &hello, &hello_len, &hello_seq);
         if (captured == 1) {
-            d2k_tls_info complete;
-            d2k_tls_parse(hello, hello_len, &complete);
+            d2s_tls_info complete;
+            d2s_tls_parse(hello, hello_len, &complete);
             if (complete.is_client_hello && complete.have_record_end &&
                 complete.have_hello_middle && !complete.exts_truncated) {
                 size_t k = shape_slot(6, key.family);
@@ -2202,8 +2202,8 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                    быстрого пути (MODERN). Целое приветствие с ECH — факт:
                    Chrome переставляет расширения, и ECH уезжает во второй
                    сегмент (поле 17.10.2026). Подозрение несёт форму потока. */
-                if (complete.ech_offer && fl->client_shape == D2K_PLAN_SHAPE_MODERN)
-                    fl->client_shape = D2K_PLAN_SHAPE_ECH_TCP;
+                if (complete.ech_offer && fl->client_shape == D2S_PLAN_SHAPE_MODERN)
+                    fl->client_shape = D2S_PLAN_SHAPE_ECH_TCP;
                 if (!fl->controller_probe) {
                     memcpy(s->last_hello[k], hello, hello_len);
                     s->last_hello_len[k] = hello_len;
@@ -2226,12 +2226,12 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                 if (!fl->controller_probe && !fl->had_sni && complete.have_sni) {
                     fl->had_sni = 1;
                     s->with_sni++;
-                    d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_HELLO_SNI,
+                    d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_HELLO_SNI,
                                     0, 0, NULL, hello + complete.sni_off,
                                     complete.sni_len, NULL);
                 } else if (!fl->controller_probe && !complete.have_sni &&
                            !(tls.is_client_hello && tls.have_record_end)) {
-                    d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_HELLO_NONAME,
+                    d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_HELLO_NONAME,
                                     0, 0, NULL, NULL, 0, NULL);
                 }
                 int requested_shape = s->shape_armed[k] &&
@@ -2247,7 +2247,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                     s->shape_opts_len[k] = (uint8_t)(doff - 20);
                     memcpy(s->shape_opts[k], t + 20, doff - 20);
                     if (requested_shape) s->shape_armed[k] = 0;
-                    d2k_journal_add(s->jrn, now_ns, &key, D2K_JRN_SHAPE, 0,
+                    d2s_journal_add(s->jrn, now_ns, &key, D2S_JRN_SHAPE, 0,
                                     (uint32_t)hello_len, NULL, NULL, 0, NULL);
                 }
             } else {
@@ -2256,7 +2256,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         }
         if (captured == 1 || captured == -1) {
             fl->hello_capture_done = 1;
-            d2k_capture_forget(&s->capture, &key);
+            d2s_capture_forget(&s->capture, &key);
         }
     }
 
@@ -2280,10 +2280,10 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
 
        Сообщаем ОДИН раз на поток: испорченный поток продолжает слать пакеты,
        и событие на каждом из них забило бы единственное управляющее
-       соединение (события лосси, d2k_ctl.h). */
+       соединение (события лосси, d2s_ctl.h). */
     if (fl->damaged) {
         /* Факт повреждения уже уехал контроллеру В МОМЕНТ установления
-           (d2k_session_exec_failed): замолчавший поток второго пакета мог бы
+           (d2s_session_exec_failed): замолчавший поток второго пакета мог бы
            и не прислать. Здесь только отказываемся применять что-либо ещё —
            повторное событие на каждом пакете забило бы единственное
            управляющее соединение. */
@@ -2293,7 +2293,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
 
     /* Выбор плана по цели. Имя из приветствия точнее адреса и потому идёт
        первым; адрес — запасной ключ, за которым у CDN стоят сотни имён. */
-    const d2k_plan *use = NULL;
+    const d2s_plan *use = NULL;
     if (tls.is_client_hello) {
         /* ФОРМА НАБЛЮДАЕМОГО ПРИВЕТСТВИЯ. План, подтверждённый на приветствии
            одной формы, не применяется к приветствию другой: успех
@@ -2305,26 +2305,26 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
            у браузера supported_versions приезжает вторым сегментом вслед за
            server_name из первого, пересборки у нас нет, и такое приветствие
            получало уверенную и неверную форму. Не разобрали — ANY. */
-        uint8_t seen_shape = D2K_PLAN_SHAPE_ANY;
+        uint8_t seen_shape = D2S_PLAN_SHAPE_ANY;
         if (tls.is_client_hello && tls.have_sni) {
             if (tls.is_tls13) {
                 /* Признак найден — достоверен независимо от обрыва:
                    расширение прочитано целиком. */
-                seen_shape = tls.ech_offer ? D2K_PLAN_SHAPE_ECH_TCP : D2K_PLAN_SHAPE_MODERN;
+                seen_shape = tls.ech_offer ? D2S_PLAN_SHAPE_ECH_TCP : D2S_PLAN_SHAPE_MODERN;
                 /* Absence on an incomplete extension block is unknown.
                  * Keep the old MODERN prefix fast path where no ECH binding
                  * exists; exact probes use their reserved-port identity. */
                 uint16_t probe_port = 0;
                 if (controller_probe) memcpy(&probe_port, t, 2);
                 if (!tls.ech_offer && tls.exts_truncated &&
-                    d2k_plantab_has_ech_target(s->plans,
+                    d2s_plantab_has_ech_target(s->plans,
                         pkt + payload_off + tls.sni_off, tls.sni_len,
                         ip.dst.bytes, ip.family, probe_port))
-                    seen_shape = D2K_PLAN_SHAPE_ANY;
+                    seen_shape = D2S_PLAN_SHAPE_ANY;
             } else if (!tls.exts_truncated) {
                 /* Признака нет, и блок расширений пришёл ВЕСЬ — значит его
                    действительно нет. */
-                seen_shape = D2K_PLAN_SHAPE_LEGACY;
+                seen_shape = D2S_PLAN_SHAPE_LEGACY;
             }
             /* Признака нет, блок оборван — «ещё не всё пришло». Формы не
                объявляем: LEGACY здесь был бы выдуманным замером. */
@@ -2333,7 +2333,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         /* Местный порт — см. ту же оговорку в ветке UDP выше. */
         uint16_t sport_be;
         memcpy(&sport_be, t + 0, 2);
-        use = d2k_plantab_find_target(s->plans,
+        use = d2s_plantab_find_target(s->plans,
                                      tls.have_sni ? pkt + payload_off + tls.sni_off : NULL,
                                      tls.have_sni ? tls.sni_len : 0,
                                      ip.dst.bytes, ip.family, now_ns, seen_shape,
@@ -2346,7 +2346,7 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
            дедушкина запись, ни адрес, ни общий план сюда не доходят. */
         uint16_t sport_be;
         memcpy(&sport_be, t + 0, 2);
-        use = d2k_plantab_find_http(s->plans, pkt + payload_off + http_off, http_len,
+        use = d2s_plantab_find_http(s->plans, pkt + payload_off + http_off, http_len,
                                     ip.family, controller_probe ? sport_be : 0, now_ns);
     }
 
@@ -2360,11 +2360,11 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         /* refuse() — ТОЛЬКО когда это действительно приветствие, которому не
            нашлось плана (ревью, пункт 3), а не на каждом пакете, что сюда
            заходит. use остаётся NULL по ДВУМ разным причинам: либо это
-           приветствие и d2k_plantab_find/s->plan оба ничего не дали (вот
+           приветствие и d2s_plantab_find/s->plan оба ничего не дали (вот
            это и есть «плана для этой цели нет» по смыслу), либо пакет —
            вообще не приветствие (ACK, данные после рукопожатия, обратная
            сторона: tls.is_client_hello тогда ложно по построению, потому что
-           d2k_plantab_find выше зовётся ТОЛЬКО внутри "if
+           d2s_plantab_find выше зовётся ТОЛЬКО внутри "if
            (tls.is_client_hello)") — и это НЕ то же самое наблюдение, хотя
            обе ветки доходят досюда с одинаковым use == NULL. Вторая причина
            встречается на КАЖДОМ пакете каждого потока, у которого план ещё
@@ -2408,18 +2408,18 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     /* ТРЕБОВАНИЯ ПЛАНА К ПОТОКУ — ДО СБОРКИ (замысел 2026-10-23, п. 5.3).
        Профиль tcp-template-v1 со сдвигом метки времени исполним только на
        потоке, который метку предлагает. Прежде это узнавал сборщик: нуль
-       d2k_wire_build, тот же, что «не поместилось», с текстом «буфер отправки
+       d2s_wire_build, тот же, что «не поместилось», с текстом «буфер отправки
        кончился» и без кода — и контроллер читал «план подтверждён, датапат его
        не применял» (поле issue #7, 22.10.2026: ПК без метки — 13 из 13).
        Свой код: для контроллера это «перемерить цель для этого клиента». */
-    if (!http_hello && (d2k_plan_flow_needs(use) & D2K_FLOW_NEED_TCPTS) &&
+    if (!http_hello && (d2s_plan_flow_needs(use) & D2S_FLOW_NEED_TCPTS) &&
         !tcp_options_have_timestamp(t + 20, doff - 20)) {
         out->skipped = "план требует метку времени TCP, а поток клиента её не предлагает";
-        refuse_coded(s, now_ns, &key, out->skipped, D2K_REFUSE_FLOW_UNFIT, use);
+        refuse_coded(s, now_ns, &key, out->skipped, D2S_REFUSE_FLOW_UNFIT, use);
         return 0;
     }
 
-    d2k_pkt in;
+    d2s_pkt in;
     memset(&in, 0, sizeof in);
     in.payload = pkt + payload_off;
     in.payload_len = payload_len;
@@ -2437,9 +2437,9 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         in.sni_len = http_len;
     }
 
-    d2k_actions acts;
+    d2s_actions acts;
     memset(&acts, 0, sizeof acts);
-    if (d2k_plan_apply(use, fl, &in, &acts) != 0) {
+    if (d2s_plan_apply(use, fl, &in, &acts) != 0) {
         /* Неприменим — пропускаем как есть. Отказ исполнителя это результат, а
            не сбой: якорь может быть невычислим для конкретного пакета.
            ПРИЧИНА ИСПОЛНИТЕЛЯ — ДОСЛОВНО. Обобщённый текст уходил и в журнал,
@@ -2451,14 +2451,14 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                                        : "план неприменим к этому пакету";
         if (!http_hello) {
             refuse_coded(s, now_ns, &key, out->skipped,
-                         D2K_REFUSE_NOT_APPLIED, use);
+                         D2S_REFUSE_NOT_APPLIED, use);
         }
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return 0;
     }
 
     /* --- сборка на провод ----------------------------------------------- */
-    d2k_conn c;
+    d2s_conn c;
     memset(&c, 0, sizeof c);
     /* Из пакета, а не из ключа: ключ канонизирован, и «низкая» сторона может
        оказаться сервером. Собранный по нему пакет полетел бы задом наперёд. */
@@ -2475,14 +2475,14 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     if (flow_tracked(fl, &c, 6, 0) != 0) {
         out->skipped = "поток не ведётся conntrack — посылки уйдут мимо NAT";
         if (!http_hello) { refuse(s, now_ns, &key, out->skipped); }
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return 0;
     }
     c.ack = rd32(t + 8);
     c.window = rd16(t + 14);
     c.ttl = ip.hop_limit;
     /* TTL ТОГО, ЧТО ОТВЕЧАЛО по этому соединению — вход эвристики autottl
-       (d2k_wire.h). Ноль, пока ответа не было: сборщик тогда возьмёт заданный
+       (d2s_wire.h). Ноль, пока ответа не было: сборщик тогда возьмёт заданный
        ttl, а без него TTL не тронет. */
     c.rev_ttl = fl->rev_ttl;
     c.ip_id = ip.ip_id;
@@ -2490,25 +2490,25 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
     if (acts.n > sizeof out->out / sizeof out->out[0]) {
         /* Тот же класс отказа, что и made==0 чуть ниже (ревью задачи 4,
            круг 2): repeats фальшивки приходит из TLV байтом без потолка (до
-           255), а out[] ограничен D2K_RESULT_MAX. Обрезать n молча значило бы
+           255), а out[] ограничен D2S_RESULT_MAX. Обрезать n молча значило бы
            "применить" план и отправить на провод меньше посылок, чем он
            описывает, — то есть план, который не исполнялся. Честный исход —
            отказ целиком. */
         out->skipped = "план описывает больше посылок, чем вмещает буфер результата";
         if (!http_hello) { refuse(s, now_ns, &key, out->skipped); }
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return 0;
     }
     size_t used = 0;
     size_t n = acts.n;
     for (size_t i = 0; i < n; i++) {
-        if (acts.v[i].wire_profile == D2K_WIRE_TCP_TEMPLATE) {
+        if (acts.v[i].wire_profile == D2S_WIRE_TCP_TEMPLATE) {
             size_t tcp_header = (size_t)(t[12] >> 4) * 4;
             c.tcp_options_len = (uint8_t)(tcp_header - 20);
             memcpy(c.tcp_options, t + 20, c.tcp_options_len);
             c.ip_id = (uint16_t)(ip.ip_id + i);
         }
-        size_t made = d2k_wire_build(&c, &acts.v[i], buf + used, bufcap - used);
+        size_t made = d2s_wire_build(&c, &acts.v[i], buf + used, bufcap - used);
         if (made == 0) {
             /* Не поместилось. Отменяем то, что ещё не ушло, и спрашиваем
                исполнитель, что делать с оригиналом: половина выпущенного плана
@@ -2520,20 +2520,20 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
                бы оригинал из-за байт, которых на проводе не было. Ничего не
                ушло, значит отказываемся целиком, не меняя воздействия, и
                отпускаем оригинал нетронутым (0009, U3). */
-            d2k_cancel cancel;
-            d2k_actions_cancel(&acts, 0, &cancel);
+            d2s_cancel cancel;
+            d2s_actions_cancel(&acts, 0, &cancel);
             out->n_out = 0;
-            out->verdict = (cancel.fate == D2K_ORIG_DROP) ? D2K_VERDICT_DROP
-                                                          : D2K_VERDICT_ACCEPT;
+            out->verdict = (cancel.fate == D2S_ORIG_DROP) ? D2S_VERDICT_DROP
+                                                          : D2S_VERDICT_ACCEPT;
             if (cancel.stream_damaged) {
                 fl->damaged = 1;
             }
             out->skipped = "буфер отправки кончился";
             if (!http_hello) { refuse(s, now_ns, &key, out->skipped); }
-            d2k_actions_free(&acts);
+            d2s_actions_free(&acts);
             return 0;
         }
-        if (acts.v[i].kind == D2K_EMIT_PAYLOAD && out->first_payload == 0xFF) {
+        if (acts.v[i].kind == D2S_EMIT_PAYLOAD && out->first_payload == 0xFF) {
             out->first_payload = (uint8_t)i;
         }
         out->out[i].delay_us = acts.v[i].delay_us;
@@ -2541,110 +2541,110 @@ static int session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
         out->out[i].len = made;
         used += made;
     }
-    if (acts.fate == D2K_ORIG_HOLD) {
+    if (acts.fate == D2S_ORIG_HOLD) {
         /* Удержание оригинала датапат не умеет: пакет в очереди нельзя держать
            без вердикта, а выпустить его позже самим — отдельная работа с
            отдельной проверкой. Исполнитель такой судьбы сейчас не порождает,
            и проверка стоит здесь именно поэтому: если он начнёт, отказ
            случится сразу, а не превратится тихо в «пропустить». §2.5. */
         out->n_out = 0;
-        out->verdict = D2K_VERDICT_ACCEPT;
+        out->verdict = D2S_VERDICT_ACCEPT;
         out->skipped = "удержание оригинала не поддержано";
         if (!http_hello) { refuse(s, now_ns, &key, out->skipped); }
-        d2k_actions_free(&acts);
+        d2s_actions_free(&acts);
         return 0;
     }
     out->n_out = n;
-    out->verdict = (acts.fate == D2K_ORIG_DROP) ? D2K_VERDICT_DROP
-                                                : D2K_VERDICT_ACCEPT;
+    out->verdict = (acts.fate == D2S_ORIG_DROP) ? D2S_VERDICT_DROP
+                                                : D2S_VERDICT_ACCEPT;
     fl->plan_done = 1;
-    fl->guards = d2k_plan_guards(use);
+    fl->guards = d2s_plan_guards(use);
     s->applied++;
     /* Ключ потока и идентификатор плана — ВЫЗЫВАЮЩЕМУ, до отправки. Без них
        отправляющий видит только байты, и отказ sendto оставался голым
-       счётчиком (d2k_session.h, поля applied/key/plan_id). */
+       счётчиком (d2s_session.h, поля applied/key/plan_id). */
     plan_handed_off(s, out, fl, &key, use, NULL);
     /* Не просто «план применился», а КАКОЙ: без идентификатора контроллер не
        отличит применение своего кандидата от применения предыдущего, чьё
-       событие пришло позже (d2k_ctl.h объявляет APPLIED «ключ + id плана»). */
-    d2k_journal_add_applied(s->jrn, now_ns, &key, d2k_plan_id(use), NULL);
+       событие пришло позже (d2s_ctl.h объявляет APPLIED «ключ + id плана»). */
+    d2s_journal_add_applied(s->jrn, now_ns, &key, d2s_plan_id(use), NULL);
 
-    d2k_actions_free(&acts);
+    d2s_actions_free(&acts);
     return 0;
 }
 
-int d2k_session_packet(d2k_session *s, const uint8_t *pkt, size_t len,
-                       uint64_t now_ns, uint8_t *buf, size_t bufcap, d2k_result *out) {
+int d2s_session_packet(d2s_session *s, const uint8_t *pkt, size_t len,
+                       uint64_t now_ns, uint8_t *buf, size_t bufcap, d2s_result *out) {
     return session_packet(s, pkt, len, now_ns, buf, bufcap, out, 0, 0, 0);
 }
 
-int d2k_session_packet_mtu(d2k_session *s, const uint8_t *pkt, size_t len,
+int d2s_session_packet_mtu(d2s_session *s, const uint8_t *pkt, size_t len,
                            uint64_t now_ns, size_t tcp_segment_cap,
-                           uint8_t *buf, size_t bufcap, d2k_result *out) {
+                           uint8_t *buf, size_t bufcap, d2s_result *out) {
     return session_packet(s, pkt, len, now_ns, buf, bufcap, out, 0, 0,
                           tcp_segment_cap);
 }
 
-int d2k_session_packet_probe(d2k_session *s, const uint8_t *pkt, size_t len,
+int d2s_session_packet_probe(d2s_session *s, const uint8_t *pkt, size_t len,
                              uint64_t now_ns, uint8_t *buf, size_t bufcap,
-                             d2k_result *out) {
+                             d2s_result *out) {
     return session_packet(s, pkt, len, now_ns, buf, bufcap, out, 0, 1, 0);
 }
 
-int d2k_session_packet_probe_mtu(d2k_session *s, const uint8_t *pkt, size_t len,
+int d2s_session_packet_probe_mtu(d2s_session *s, const uint8_t *pkt, size_t len,
                                  uint64_t now_ns, size_t tcp_segment_cap,
-                                 uint8_t *buf, size_t bufcap, d2k_result *out) {
+                                 uint8_t *buf, size_t bufcap, d2s_result *out) {
     return session_packet(s, pkt, len, now_ns, buf, bufcap, out, 0, 1,
                           tcp_segment_cap);
 }
 
-void d2k_session_observe_tcp(d2k_session *s, const uint8_t *p, size_t n, uint64_t now) {
-    d2k_result out;
+void d2s_session_observe_tcp(d2s_session *s, const uint8_t *p, size_t n, uint64_t now) {
+    d2s_result out;
     (void)session_packet(s, p, n, now, NULL, 0, &out, 1, 0, 0);
 }
 
-uint64_t d2k_session_plan_revision(const d2k_session *s) {
-    return s ? s->plan_revision + d2k_plantab_revision(s->plans) : 0;
+uint64_t d2s_session_plan_revision(const d2s_session *s) {
+    return s ? s->plan_revision + d2s_plantab_revision(s->plans) : 0;
 }
 
-int d2k_session_stream_anchor(d2k_session *s, const uint8_t *p, size_t n,
+int d2s_session_stream_anchor(d2s_session *s, const uint8_t *p, size_t n,
                               uint32_t *anchor) {
-    d2k_hold_info v;
-    if (!s || !anchor || !d2k_hold_parse(p, n, &v)) { return 0; }
-    d2k_flow *fl = d2k_track_find(s->flows, &v.key);
+    d2s_hold_info v;
+    if (!s || !anchor || !d2s_hold_parse(p, n, &v)) { return 0; }
+    d2s_flow *fl = d2s_track_find(s->flows, &v.key);
     if (!fl || !fl->saw_syn) { return 0; }
     *anchor = fl->http_flow && fl->http_conn ? fl->http_next : fl->syn_seq + 1;
     return 1;
 }
 
-void d2k_session_set_hook(d2k_session *s, uint8_t hook) {
+void d2s_session_set_hook(d2s_session *s, uint8_t hook) {
     if (s) { s->hook = hook; }
 }
 
-void d2k_session_set_route_mark(d2k_session *s, uint32_t mark) {
+void d2s_session_set_route_mark(d2s_session *s, uint32_t mark) {
     if (s) { s->route_mark = mark; }
 }
 
-uint32_t d2k_session_route_mark(const d2k_session *s) {
+uint32_t d2s_session_route_mark(const d2s_session *s) {
     return s ? s->route_mark : 0;
 }
 
-uint64_t d2k_session_routed_flows(const d2k_session *s) {
+uint64_t d2s_session_routed_flows(const d2s_session *s) {
     return s ? s->routed_flows : 0;
 }
 
-void d2k_session_set_udp_reverse_hook(d2k_session *s, int installed) {
+void d2s_session_set_udp_reverse_hook(d2s_session *s, int installed) {
     if (s) { s->udp_reverse_hook = installed != 0; }
 }
 
-void d2k_session_set_ct_query(d2k_session *s, d2k_ct_query_fn fn, void *ctx) {
+void d2s_session_set_ct_query(d2s_session *s, d2s_ct_query_fn fn, void *ctx) {
     if (s) { s->ct_query = fn; s->ct_query_ctx = ctx; }
 }
 
-int d2k_session_udp_hold_begin(d2k_session *s, const uint8_t *p, size_t n,
-                               uint64_t now_ns, d2k_key *key_out) {
-    d2k_packet_view ip;
-    if (!s || s->route_mark || !d2k_packet_parse(p, n, &ip) || ip.protocol != 17 ||
+int d2s_session_udp_hold_begin(d2s_session *s, const uint8_t *p, size_t n,
+                               uint64_t now_ns, d2s_key *key_out) {
+    d2s_packet_view ip;
+    if (!s || s->route_mark || !d2s_packet_parse(p, n, &ip) || ip.protocol != 17 ||
         (ip.fragment & 0x3fff)) { return 0; }
     size_t ihl = ip.l4;
     const uint8_t *u = p + ihl;
@@ -2658,45 +2658,45 @@ int d2k_session_udp_hold_begin(d2k_session *s, const uint8_t *p, size_t n,
        use any destination port; callers that do not provide a hook retain the
        old 443 fallback so tests/lab tools cannot silently reinterpret an
        unknown direction. */
-    int hook_client = (s->hook == D2K_HOOK_OUTPUT ||
-                       s->hook == D2K_HOOK_POSTROUTING);
-    int hook_server = (s->hook == D2K_HOOK_INPUT ||
-                       s->hook == D2K_HOOK_PREROUTING ||
-                       s->hook == D2K_HOOK_FORWARD);
+    int hook_client = (s->hook == D2S_HOOK_OUTPUT ||
+                       s->hook == D2S_HOOK_POSTROUTING);
+    int hook_server = (s->hook == D2S_HOOK_INPUT ||
+                       s->hook == D2S_HOOK_PREROUTING ||
+                       s->hook == D2S_HOOK_FORWARD);
     if (hook_server || (!hook_client &&
                         (rd16(u + 2) != 443 || rd16(u) == 443)) ||
-        !d2k_quic_is_initial(p + ihl + 8, total - ihl - 8)) {
+        !d2s_quic_is_initial(p + ihl + 8, total - ihl - 8)) {
         return 0;
     }
-    d2k_key key;
-    (void)d2k_key_make_addr(&key, 17, &ip.src, &ip.dst, u, u + 2);
-    d2k_flow *fl = d2k_track_get(s->uflows, &key, now_ns);
+    d2s_key key;
+    (void)d2s_key_make_addr(&key, 17, &ip.src, &ip.dst, u, u + 2);
+    d2s_flow *fl = d2s_track_get(s->uflows, &key, now_ns);
     if (!fl) { return 0; }
     /* За окном поиска сессия выходит раньше блока удержания (ни wait, ни
        ready), и датаграмма осталась бы и в ячейке, и под обычным вердиктом:
        два вердикта на один ID и повторная посылка уже ушедшего (задача 46,
        ревью I1). fwd_pkts растёт уже после этого вызова. */
     if (fl->plan_done || fl->damaged || fl->saw_hello || fl->routed ||
-        fl->fwd_pkts >= D2K_HELLO_WINDOW) { return 0; }
+        fl->fwd_pkts >= D2S_HELLO_WINDOW) { return 0; }
     fl->udp_hold_active = 1;
     if (key_out) { *key_out = key; }
     return 1;
 }
 
-int d2k_session_udp_opening(d2k_session *s, const uint8_t *p, size_t n) {
-    d2k_packet_view ip;
-    if (!s || !d2k_packet_parse(p, n, &ip) || ip.protocol != 17 || (ip.fragment & 0x3fff)) {
+int d2s_session_udp_opening(d2s_session *s, const uint8_t *p, size_t n) {
+    d2s_packet_view ip;
+    if (!s || !d2s_packet_parse(p, n, &ip) || ip.protocol != 17 || (ip.fragment & 0x3fff)) {
         return 0;
     }
     const uint8_t *u = p + ip.l4;
-    d2k_key key;
-    int src_is_low = d2k_key_make_addr(&key, 17, &ip.src, &ip.dst, u, u + 2);
-    d2k_flow *fl = d2k_track_find(s->uflows, &key);
+    d2s_key key;
+    int src_is_low = d2s_key_make_addr(&key, 17, &ip.src, &ip.dst, u, u + 2);
+    d2s_flow *fl = d2s_track_find(s->uflows, &key);
     if (!fl || fl->fwd_pkts != 1) { return 0; }
     int from_client = -1;
-    if (s->hook == D2K_HOOK_OUTPUT || s->hook == D2K_HOOK_POSTROUTING) {
+    if (s->hook == D2S_HOOK_OUTPUT || s->hook == D2S_HOOK_POSTROUTING) {
         from_client = 1;
-    } else if (s->hook == D2K_HOOK_INPUT || s->hook == D2K_HOOK_PREROUTING) {
+    } else if (s->hook == D2S_HOOK_INPUT || s->hook == D2S_HOOK_PREROUTING) {
         from_client = 0;
     }
     if (from_client < 0 && fl->dir_known) {
@@ -2708,26 +2708,26 @@ int d2k_session_udp_opening(d2k_session *s, const uint8_t *p, size_t n) {
     return from_client == 1;
 }
 
-void d2k_session_udp_hold_end(d2k_session *s, const d2k_key *key) {
+void d2s_session_udp_hold_end(d2s_session *s, const d2s_key *key) {
     if (!s || !key) { return; }
-    d2k_flow *fl = d2k_track_find(s->uflows, key);
+    d2s_flow *fl = d2s_track_find(s->uflows, key);
     if (fl) { fl->udp_hold_active = 0; }
 }
 
-void d2k_session_udp_hold_replay(d2k_session *s, const d2k_key *key) {
+void d2s_session_udp_hold_replay(d2s_session *s, const d2s_key *key) {
     if (!s || !key) { return; }
-    d2k_flow *fl = d2k_track_find(s->uflows, key);
+    d2s_flow *fl = d2s_track_find(s->uflows, key);
     if (fl) {
         fl->udp_hold_active = 0;
         fl->udp_hold_replay_first = 1;
     }
 }
 
-void d2k_session_note_unassembled(d2k_session *s, const uint8_t *p, size_t n,
+void d2s_session_note_unassembled(d2s_session *s, const uint8_t *p, size_t n,
                                   uint64_t now_ns) {
-    d2k_hold_info v;
-    if (!s || !d2k_hold_parse(p, n, &v)) { return; }
-    d2k_flow *fl = d2k_track_find(s->flows, &v.key);
+    d2s_hold_info v;
+    if (!s || !d2s_hold_parse(p, n, &v)) { return; }
+    d2s_flow *fl = d2s_track_find(s->flows, &v.key);
     /* НЕ ЧАЩЕ ОДНОГО РАЗА НА ПОТОК: отпускается несколько пакетов, а событие
        про них одно. Потока может и не быть в таблице — тогда сказать нечего,
        и выдумывать ключ незачем. */
@@ -2748,7 +2748,7 @@ void d2k_session_note_unassembled(d2k_session *s, const uint8_t *p, size_t n,
        Объявленная длина записи против пришедшей и есть этот ответ. */
     if (v.payload >= 5) {
         unsigned declared = 5u + (unsigned)rd16(p + v.header + 3);
-        fprintf(stderr, "d2kd: составное приветствие отпущено без сборки: "
+        fprintf(stderr, "d2sd: составное приветствие отпущено без сборки: "
                         "объявлено %u байт записи, в этом куске %zu\n",
                 declared, v.payload);
     }
@@ -2764,11 +2764,11 @@ void d2k_session_note_unassembled(d2k_session *s, const uint8_t *p, size_t n,
  * соединения, приняв их за кусок приветствия. */
 #define HOLD_EARLY_WINDOW 16384u
 
-int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
-    d2k_hold_info v;
-    if (!s || s->route_mark || !d2k_hold_parse(p, n, &v) || !v.payload ||
+int d2s_session_hold_candidate(d2s_session *s, const uint8_t *p, size_t n) {
+    d2s_hold_info v;
+    if (!s || s->route_mark || !d2s_hold_parse(p, n, &v) || !v.payload ||
         (v.flags & ~0x18) || !(v.flags & 0x10)) { return 0; }
-    d2k_flow *fl = d2k_track_find(s->flows, &v.key);
+    d2s_flow *fl = d2s_track_find(s->flows, &v.key);
     /* Do not retain a tail of an already-passed stream or guess direction.
        Only a first payload anchored by the observed client SYN qualifies. */
     if (!fl || !fl->saw_syn || !fl->dir_known || fl->init_low != v.src_low ||
@@ -2787,12 +2787,12 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
         else if(fl->http_flow && fl->http_conn)start=fl->http_next;
         else return 0;
         uint32_t delta=v.seq-start;
-        if(delta>=D2K_CAPTURE_BYTES || v.payload>D2K_CAPTURE_BYTES-delta)return 0;
-        d2k_http_req req;
-        if(!delta && d2k_http_request(p+v.header,v.payload,&req))return 0;
+        if(delta>=D2S_CAPTURE_BYTES || v.payload>D2S_CAPTURE_BYTES-delta)return 0;
+        d2s_http_req req;
+        if(!delta && d2s_http_request(p+v.header,v.payload,&req))return 0;
         if(!delta && (p[v.header]<'A' || p[v.header]>'Z'))return 0;
-        return d2k_plantab_http_candidate(s->plans,v.dst.family,
-            fl->controller_probe?v.sport_be:0)?D2K_HOLD_HTTP:0;
+        return d2s_plantab_http_candidate(s->plans,v.dst.family,
+            fl->controller_probe?v.sport_be:0)?D2S_HOLD_HTTP:0;
     }
     /* Поток открытого HTTP: следующие запросы — не хвост приветствия TLS. */
     if (fl->http_flow) { return 0; }
@@ -2800,7 +2800,7 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
     /* КУСОК ПРИВЕТСТВИЯ МОЖЕТ ПРИЙТИ НЕ ПЕРВЫМ, И ЕГО ТОЖЕ НАДО УДЕРЖАТЬ.
      *
      * Прежнее правило требовало, чтобы сегмент стоял сразу за SYN и НАЧИНАЛ
-     * запись TLS. Поле 17.09.2026, зонд подтверждения d2k на живой линии:
+     * запись TLS. Поле 17.09.2026, зонд подтверждения d2s на живой линии:
      *   seq=3909908605 нагрузка=146   <- ХВОСТ пришёл первым
      *   seq=3909907217 нагрузка=1388  <- голова, после
      * Хвост кандидатом не становился и уходил на провод ГОЛЫМ — прямо в
@@ -2818,7 +2818,7 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
     /* Пометки закрывают поток для НОВОГО удержания, и этого достаточно:
        кусок, пришедший к УЖЕ открытому слоту, берётся самим удержанием
        независимо от этого ответа (allow_start решает только «заводить ли
-       слот», см. d2k_hold_feed). */
+       слот», см. d2s_hold_feed). */
     if (fl->saw_hello || fl->stream_attempted) { return 0; }
     if (!at_head && off >= HOLD_EARLY_WINDOW) { return 0; }
     if (at_head) {
@@ -2829,18 +2829,18 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
         if (v.payload >= 5 && 5u + rd16(p + v.header + 3) <= v.payload) { return 0; }
     }
 
-    d2k_tls_info tls;
+    d2s_tls_info tls;
     memset(&tls, 0, sizeof tls);
     /* Разбирать имеет смысл только голову: у хвоста заголовка записи нет, и
        имя из него не достать. Для него план ищется по адресу и порту — этого
        достаточно, чтобы не удерживать чужие потоки. */
     if (at_head) {
-        d2k_tls_parse(p + v.header, v.payload, &tls);
+        d2s_tls_parse(p + v.header, v.payload, &tls);
         /* Only a target with its own ECH binding needs to wait for an ECH
          * extension potentially hidden in the tail. Reuse the existing
          * bounded, fail-open collection, not a second stream buffer. */
         if (!fl->controller_probe && tls.have_sni && tls.exts_truncated &&
-            !tls.ech_offer && d2k_plantab_has_ech_target(s->plans,
+            !tls.ech_offer && d2s_plantab_has_ech_target(s->plans,
                 p + v.header + tls.sni_off, tls.sni_len,
                 v.dst.bytes, v.dst.family, 0)) {
             fl->stream_attempted = 1;
@@ -2874,16 +2874,16 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
              * keep their prefix fast path to avoid blocking kernel output. */
             if (tls.is_tls13 || !tls.exts_truncated || fl->controller_probe || s->plan)
                 return 0;
-            if (d2k_plantab_find_target(s->plans, p + v.header + tls.sni_off,
+            if (d2s_plantab_find_target(s->plans, p + v.header + tls.sni_off,
                 tls.sni_len, v.dst.bytes, v.dst.family, fl->first_ns,
-                D2K_PLAN_SHAPE_ANY, 0)) return 0;
+                D2S_PLAN_SHAPE_ANY, 0)) return 0;
             /* A grandfather/unshaped plan may already handle the prefix.
              * Otherwise only an existing named stream plan below can own
              * this bounded assembly; unknown targets remain pass-through. */
         }
     }
-    int candidate = d2k_plan_stream_input(s->plan) ||
-        d2k_plantab_stream_candidate_target(s->plans,
+    int candidate = d2s_plan_stream_input(s->plan) ||
+        d2s_plantab_stream_candidate_target(s->plans,
             tls.have_sni ? p + v.header + tls.sni_off : NULL,
             tls.have_sni ? tls.sni_len : 0, v.dst.bytes,
             fl->controller_probe ? v.sport_be : 0, v.dst.family);
@@ -2896,12 +2896,12 @@ int d2k_session_hold_candidate(d2k_session *s, const uint8_t *p, size_t n) {
     return candidate;
 }
 
-int d2k_session_want_shape(d2k_session *s, const uint8_t *name, size_t len,
+int d2s_session_want_shape(d2s_session *s, const uint8_t *name, size_t len,
                            uint8_t transport) {
-    return d2k_session_want_shape_family(s, name, len, transport, 4);
+    return d2s_session_want_shape_family(s, name, len, transport, 4);
 }
 
-int d2k_session_want_shape_family(d2k_session *s, const uint8_t *name, size_t len,
+int d2s_session_want_shape_family(d2s_session *s, const uint8_t *name, size_t len,
                                   uint8_t transport, uint8_t family) {
     if (!s || (family != 4 && family != 6) || (transport != 6 && transport != 17) ||
         (!name && len)) {
@@ -2932,11 +2932,11 @@ int d2k_session_want_shape_family(d2k_session *s, const uint8_t *name, size_t le
     return 0;
 }
 
-const uint8_t *d2k_session_shape(const d2k_session *s, uint8_t transport, size_t *len) {
-    return d2k_session_shape_family(s, transport, 4, len);
+const uint8_t *d2s_session_shape(const d2s_session *s, uint8_t transport, size_t *len) {
+    return d2s_session_shape_family(s, transport, 4, len);
 }
 
-const uint8_t *d2k_session_shape_family(const d2k_session *s, uint8_t transport,
+const uint8_t *d2s_session_shape_family(const d2s_session *s, uint8_t transport,
                                         uint8_t family, size_t *len) {
     if (len) { *len = 0; }
     if (!s || (family != 4 && family != 6) || (transport != 6 && transport != 17)) {
@@ -2952,7 +2952,7 @@ const uint8_t *d2k_session_shape_family(const d2k_session *s, uint8_t transport,
     return s->shape[k];
 }
 
-const uint8_t *d2k_session_shape_tcp_options_family(const d2k_session *s, uint8_t family,
+const uint8_t *d2s_session_shape_tcp_options_family(const d2s_session *s, uint8_t family,
                                                     size_t *len) {
     if (len) { *len = 0; }
     if (!s || (family != 4 && family != 6)) { return NULL; }
@@ -2962,16 +2962,16 @@ const uint8_t *d2k_session_shape_tcp_options_family(const d2k_session *s, uint8_
     return s->shape_opts[k];
 }
 
-d2k_plantab *d2k_session_plans(d2k_session *s) {
+d2s_plantab *d2s_session_plans(d2s_session *s) {
     return s ? s->plans : NULL;
 }
 
-size_t d2k_session_plan_count(const d2k_session *s) {
-    return s ? d2k_plantab_count(s->plans) : 0;
+size_t d2s_session_plan_count(const d2s_session *s) {
+    return s ? d2s_plantab_count(s->plans) : 0;
 }
 
-size_t d2k_session_plan_capacity(const d2k_session *s) {
-    return s ? d2k_plantab_capacity(s->plans) : 0;
+size_t d2s_session_plan_capacity(const d2s_session *s) {
+    return s ? d2s_plantab_capacity(s->plans) : 0;
 }
 
 /* Срок, после которого молчание перестаёт быть задержкой.
@@ -2988,7 +2988,7 @@ size_t d2k_session_plan_capacity(const d2k_session *s) {
  *
  * RTT не измерен (поток подхватили посреди обмена) — берём две секунды: одна
  * на здоровый ответ, одна на неизвестность. */
-static uint64_t silence_deadline(const d2k_flow *f) {
+static uint64_t silence_deadline(const d2s_flow *f) {
     const uint64_t floor_ns = NS_PER_S;
     const uint64_t ceil_ns  = 5 * NS_PER_S;
     if (!f->rtt_ns) {
@@ -3004,7 +3004,7 @@ static uint64_t silence_deadline(const d2k_flow *f) {
    per-flow; empty ACKs establish visibility but only payload counts as a
    response. One same-sequence ClientHello retransmission is an independent
    retry signal; otherwise retain the measured RTT-based wait. */
-static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns) {
+static int tcp_silence_observe(d2s_session *s, d2s_flow *f, uint64_t now_ns) {
     if (!s || !f || f->controller_probe || !f->saw_hello ||
         f->silence_told || f->suspected || f->rev_pkts == 0 ||
         f->rev_payload_after_hello > 0 || f->saw_rev_rst) {
@@ -3017,7 +3017,7 @@ static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns) {
         return 0;
     }
     f->silence_told = 1;
-    suspect(s, now_ns, &f->key, f, D2K_SUSPECT_SILENT, NULL);
+    suspect(s, now_ns, &f->key, f, D2S_SUSPECT_SILENT, NULL);
     return 1;
 }
 
@@ -3033,20 +3033,20 @@ static int tcp_silence_observe(d2k_session *s, d2k_flow *f, uint64_t now_ns) {
  * сигнала, а не ложное срабатывание. После окна запись не говорит ничего и
  * только занимает место в таблице, которая выше трёх четвертей отказывает
  * новым потокам. */
-static uint64_t fin_retry_window(const d2k_flow *f) {
+static uint64_t fin_retry_window(const d2s_flow *f) {
     uint64_t rto = 3 * f->rtt_ns;
     if (rto < NS_PER_S) { rto = NS_PER_S; }
     return 3 * rto;
 }
 
-static int fin_window_over(void *ctx, const d2k_flow *f) {
+static int fin_window_over(void *ctx, const d2s_flow *f) {
     const uint64_t now_ns = *(const uint64_t *)ctx;
     return f->pending_fin && now_ns >= f->pending_fin_ns &&
            now_ns - f->pending_fin_ns >= fin_retry_window(f);
 }
 
 struct sweep_ctx {
-    d2k_session *s;
+    d2s_session *s;
     uint64_t     now_ns;
     size_t       told;
 };
@@ -3054,7 +3054,7 @@ struct sweep_ctx {
 /* Молчание — это ОТСУТСТВИЕ нагрузки в ответ, а не отсутствие пакетов.
  * Сервер, подтвердивший приветствие пустым ACK и замолчавший, и есть картина
  * блокировки: TCP жив, ответа нет. */
-static void sweep_one(void *ctx, d2k_flow *f) {
+static void sweep_one(void *ctx, d2s_flow *f) {
     struct sweep_ctx *c = ctx;
     c->told += (size_t)tcp_silence_observe(c->s, f, c->now_ns);
 }
@@ -3075,17 +3075,17 @@ static void sweep_one(void *ctx, d2k_flow *f) {
  *   ретрансмиссии, которые считает сам транспорт. У UDP их считать некому,
  *   и спрашивать приходится клиента: повторил Initial по своему таймеру PTO
  *   — значит ждёт. Без этого условия «молчанием» стала бы всякая закрытая
- *   вкладка (см. fwd_after_hello в d2k_track.h).
+ *   вкладка (см. fwd_after_hello в d2s_track.h).
  *
  * Сроку это ничего не добавляет: rtt_ns у UDP-потока не измерен никогда — ни
  * SYN, ни SYN-ACK у QUIC нет, — и silence_deadline честно отдаёт свои две
  * секунды «одна на здоровый ответ, одна на неизвестность». Первый повтор PTO
  * к этому времени уже ушёл (RFC 9002 §6.2.2: стартовый RTT 333 мс даёт около
  * секунды), то есть условие про повтор к сроку выполнимо, а не мертво. */
-static void sweep_udp_one(void *ctx, d2k_flow *f) {
+static void sweep_udp_one(void *ctx, d2s_flow *f) {
     struct sweep_ctx *c = ctx;
     /* saw_initial — тот же поток, только имя из Initial не прочиталось
-       (см. d2k_track.h). Молчание по нему — наблюдение не хуже прочих. */
+       (см. d2s_track.h). Молчание по нему — наблюдение не хуже прочих. */
     if ((!f->saw_hello && !f->saw_initial) || f->silence_told || f->suspected ||
         f->quic_deny) {
         return;
@@ -3111,7 +3111,7 @@ static void sweep_udp_one(void *ctx, d2k_flow *f) {
     }
     f->silence_told = 1;
     c->told++;
-    suspect(c->s, c->now_ns, &f->key, f, D2K_SUSPECT_SILENT, NULL);
+    suspect(c->s, c->now_ns, &f->key, f, D2S_SUSPECT_SILENT, NULL);
 }
 
 /* QUIC ЗАМОЛЧАЛ ПОСЛЕ РУКОПОЖАТИЯ (задача 50, раунд 2; поле 04.10, rua.gr в
@@ -3134,7 +3134,7 @@ static void sweep_udp_one(void *ctx, d2k_flow *f) {
  *     пакет, требующий подтверждения, ответил бы за RTT + max_ack_delay.
  * Это подозрение, не диагноз: контроллер обязан воспроизвести остановку
  * своим запросом HTTP/3, прежде чем что-то подбирать. */
-static int quic_watch(const d2k_flow *f) {
+static int quic_watch(const d2s_flow *f) {
     return f->key.proto == 17 && (f->saw_hello || f->saw_initial) &&
            f->rev_after_hello > 0 && !f->suspected && !f->controller_probe &&
            !f->quic_deny &&
@@ -3144,7 +3144,7 @@ static int quic_watch(const d2k_flow *f) {
 /* Прямой кортеж потока, как его ведёт conntrack: клиент → сервер. Для
    транзита очередь стоит до SNAT, и адрес клиента в нём локальный — ровно
    такой же, как в прямом кортеже записи. */
-static void flow_tuple(const d2k_flow *f, d2k_ct_tuple *t) {
+static void flow_tuple(const d2s_flow *f, d2s_ct_tuple *t) {
     memset(t, 0, sizeof *t);
     int v6 = f->key.family == 6;
     t->family = v6 ? 6 : 4;
@@ -3160,19 +3160,19 @@ static void flow_tuple(const d2k_flow *f, d2k_ct_tuple *t) {
 }
 
 struct ct_ctx {
-    d2k_session *s;
+    d2s_session *s;
     uint64_t now_ns;
     size_t told;
 };
 
 /* Один запрос ядру на наблюдаемый поток (раунд 3: не чтение всей таблицы).
    Нет ответа — не знаем, и подозрения нет. */
-static void ct_flow(void *ctx, d2k_flow *f) {
+static void ct_flow(void *ctx, d2s_flow *f) {
     struct ct_ctx *c = ctx;
     if (!quic_watch(f)) { return; }
-    d2k_ct_tuple t;
+    d2s_ct_tuple t;
     flow_tuple(f, &t);
-    d2k_ct_info ci;
+    d2s_ct_info ci;
     memset(&ci, 0, sizeof ci);
     if (c->s->ct_query(c->s->ct_query_ctx, &t, &ci) != 0) { return; }
     uint64_t orig = ci.orig_pkts, reply = ci.reply_pkts;
@@ -3190,7 +3190,7 @@ static void ct_flow(void *ctx, d2k_flow *f) {
     if (pto < NS_PER_S) { pto = NS_PER_S; }
     if (c->now_ns < f->ct_reply_ns || c->now_ns - f->ct_reply_ns < pto) { return; }
     c->told++;
-    suspect(c->s, c->now_ns, &f->key, f, D2K_SUSPECT_QUIC_STALL, NULL);
+    suspect(c->s, c->now_ns, &f->key, f, D2S_SUSPECT_QUIC_STALL, NULL);
 }
 
 /* TCP ВСТАЛ НА БЮДЖЕТЕ КОРОБКИ (задача 56; поле 04.10, Safari: mailsuite.com
@@ -3217,7 +3217,7 @@ static void ct_flow(void *ctx, d2k_flow *f) {
  *     клиент молчит, обрыв от простоя не отличить ничем — подозрение ждёт
  *     его следующего слова;
  *   - пакетов с данными обеих сторон к началу тишины — в полосе бюджета
- *     коробки (D2K_TCP_STALL_SLACK вокруг любого из бюджетов, по умолчанию
+ *     коробки (D2S_TCP_STALL_SLACK вокруг любого из бюджетов, по умолчанию
  *     полевые 25). ЭТО и отличает обрыв от keep-alive после полного ответа:
  *     простаивает соединение на любом числе пакетов, обрыв — на бюджете.
  * Оценка пакетов с данными: точные числа из окна очереди (обе стороны) плюс
@@ -3227,38 +3227,38 @@ static void ct_flow(void *ctx, d2k_flow *f) {
  * против 25. Поток выше полосы больше не спрашивается: число пакетов только
  * растёт. Это подозрение, не диагноз: контроллер требует второй поток имени и
  * RX-пару identity/gzip, прежде чем что-то подбирать. */
-static int tcp_watch(const d2k_flow *f) {
+static int tcp_watch(const d2s_flow *f) {
     return f->key.proto == 6 && f->saw_hello && f->had_sni &&
            f->rev_payload_after_hello > 0 && !f->suspected && !f->controller_probe &&
            !f->pending_fin && !f->tcp_watch_off && !f->routed;
 }
 
-static int tcp_in_band(const d2k_session *s, uint64_t est) {
+static int tcp_in_band(const d2s_session *s, uint64_t est) {
     for (size_t i = 0; i < s->n_stall_budget; i++) {
         uint64_t b = s->stall_budget[i];
-        if (est + D2K_TCP_STALL_SLACK >= b && est <= b + D2K_TCP_STALL_SLACK) { return 1; }
+        if (est + D2S_TCP_STALL_SLACK >= b && est <= b + D2S_TCP_STALL_SLACK) { return 1; }
     }
     return 0;
 }
 
-static uint64_t tcp_band_top(const d2k_session *s) {
+static uint64_t tcp_band_top(const d2s_session *s) {
     uint64_t top = 0;
     for (size_t i = 0; i < s->n_stall_budget; i++) {
         if (s->stall_budget[i] > top) { top = s->stall_budget[i]; }
     }
-    return top + D2K_TCP_STALL_SLACK;
+    return top + D2S_TCP_STALL_SLACK;
 }
 
-static void ct_tcp_flow(void *ctx, d2k_flow *f) {
+static void ct_tcp_flow(void *ctx, d2s_flow *f) {
     struct ct_ctx *c = ctx;
     if (!tcp_watch(f)) { return; }
-    d2k_ct_tuple t;
+    d2s_ct_tuple t;
     flow_tuple(f, &t);
-    d2k_ct_info ci;
+    d2s_ct_info ci;
     memset(&ci, 0, sizeof ci);
     if (c->s->ct_query(c->s->ct_query_ctx, &t, &ci) != 0) { return; }
     if (!ci.tcp_state_known) { return; }
-    if (ci.tcp_state != D2K_CT_TCP_ESTABLISHED) {
+    if (ci.tcp_state != D2S_CT_TCP_ESTABLISHED) {
         /* SYN_SENT/SYN_RECV (0..2) сюда не доходят: у потока уже есть данные
            сервера. Всё дальше ESTABLISHED — закрытие. */
         f->tcp_watch_off = 1;
@@ -3293,20 +3293,20 @@ static void ct_tcp_flow(void *ctx, d2k_flow *f) {
     if (c->now_ns < f->ct_reply_ns || c->now_ns - f->ct_reply_ns < rto) { return; }
     if (!tcp_in_band(c->s, est)) { return; }
     c->told++;
-    d2k_jrn_detail det;
+    d2s_jrn_detail det;
     memset(&det, 0, sizeof det);
     det.server_hello = f->rev_server_hello;
-    suspect_num(c->s, c->now_ns, &f->key, f, D2K_SUSPECT_TCP_STALL, &det,
+    suspect_num(c->s, c->now_ns, &f->key, f, D2S_SUSPECT_TCP_STALL, &det,
                 est > UINT16_MAX ? UINT16_MAX : (uint32_t)est);
 }
 
-int d2k_session_set_stall_budgets(d2k_session *s, const uint16_t *b, size_t n) {
-    if (!s || n > D2K_STALL_BUDGETS_MAX || (n && !b)) { return -1; }
+int d2s_session_set_stall_budgets(d2s_session *s, const uint16_t *b, size_t n) {
+    if (!s || n > D2S_STALL_BUDGETS_MAX || (n && !b)) { return -1; }
     for (size_t i = 0; i < n; i++) {
         if (b[i] == 0) { return -1; }
     }
     if (n == 0) {
-        s->stall_budget[0] = D2K_TCP_STALL_FIELD_BUDGET;
+        s->stall_budget[0] = D2S_TCP_STALL_FIELD_BUDGET;
         s->n_stall_budget = 1;
         return 0;
     }
@@ -3315,7 +3315,7 @@ int d2k_session_set_stall_budgets(d2k_session *s, const uint16_t *b, size_t n) {
     return 0;
 }
 
-size_t d2k_session_stall_budgets(const d2k_session *s, uint16_t *out, size_t cap) {
+size_t d2s_session_stall_budgets(const d2s_session *s, uint16_t *out, size_t cap) {
     if (!s) { return 0; }
     for (size_t i = 0; out && i < s->n_stall_budget && i < cap; i++) {
         out[i] = s->stall_budget[i];
@@ -3323,33 +3323,33 @@ size_t d2k_session_stall_budgets(const d2k_session *s, uint16_t *out, size_t cap
     return s->n_stall_budget;
 }
 
-size_t d2k_session_sweep(d2k_session *s, uint64_t now_ns) {
+size_t d2s_session_sweep(d2s_session *s, uint64_t now_ns) {
     if (!s) {
         return 0;
     }
     struct sweep_ctx c = { s, now_ns, 0 };
-    d2k_track_walk(s->flows, sweep_one, &c);
-    d2k_track_walk(s->uflows, sweep_udp_one, &c);
+    d2s_track_walk(s->flows, sweep_one, &c);
+    d2s_track_walk(s->uflows, sweep_udp_one, &c);
     /* Счётчики — только наблюдаемых потоков, по одному запросу ядру на
        поток (ctnetlink по кортежу, ~10 мкс на роутере). Нет наблюдаемых —
        ни одного запроса. */
     if (s->ct_query) {
         struct ct_ctx cc = { s, now_ns, 0 };
-        d2k_track_walk(s->uflows, ct_flow, &cc);
-        d2k_track_walk(s->flows, ct_tcp_flow, &cc);
+        d2s_track_walk(s->uflows, ct_flow, &cc);
+        d2s_track_walk(s->flows, ct_tcp_flow, &cc);
         c.told += cc.told;
     }
     return c.told;
 }
 
-size_t d2k_session_expire(d2k_session *s, uint64_t now_ns, uint64_t idle_ns) {
+size_t d2s_session_expire(d2s_session *s, uint64_t now_ns, uint64_t idle_ns) {
     if (!s) {
         return 0;
     }
     /* Ровно требование задачи 4: «таблице нужна чистка, иначе она растёт без
-       границ» — тем же способом, что и у TCP, не своим: d2k_track_expire уже
+       границ» — тем же способом, что и у TCP, не своим: d2s_track_expire уже
        обходит ВСЕ живые записи своей таблицы и снимает молчавшие дольше
-       idle_ns, и он не заботится о том, что лежит в d2k_flow — вызов для
+       idle_ns, и он не заботится о том, что лежит в d2s_flow — вызов для
        s->uflows отличается только отсутствием колбэка — и НЕ потому, что для
        UDP наблюдения «приветствие было, ответа не было» нет: оно есть, его
        делает sweep_udp_one, и делает по своему критерию (повтор Initial
@@ -3357,32 +3357,32 @@ size_t d2k_session_expire(d2k_session *s, uint64_t now_ns, uint64_t idle_ns) {
        минуты, когда спрашивать давно поздно, а критерия у него своего нет:
        объявить молчанием всякий забытый UDP-поток с приветствием значило бы
        обойти условие про повтор через заднюю дверь. NULL как on_expire —
-       штатный случай самого d2k_track_expire. */
+       штатный случай самого d2s_track_expire. */
     /* Записи после FIN клиента — по своему окну (fin_retry_window), не по
        молчанию: ответ у них был, и on_flow_expire им сказать нечего. */
-    size_t freed = d2k_track_remove_if(s->flows, fin_window_over, &now_ns);
+    size_t freed = d2s_track_remove_if(s->flows, fin_window_over, &now_ns);
     struct flow_expire_ctx ec = { s, now_ns };
-    freed += d2k_track_expire(s->flows, now_ns, idle_ns, on_flow_expire, &ec);
-    freed += d2k_track_expire(s->uflows, now_ns, idle_ns, NULL, s);
+    freed += d2s_track_expire(s->flows, now_ns, idle_ns, on_flow_expire, &ec);
+    freed += d2s_track_expire(s->uflows, now_ns, idle_ns, NULL, s);
     return freed;
 }
 
-size_t d2k_session_flows(const d2k_session *s) {
-    return s ? d2k_track_count(s->flows) + d2k_track_count(s->uflows) : 0;
+size_t d2s_session_flows(const d2s_session *s) {
+    return s ? d2s_track_count(s->flows) + d2s_track_count(s->uflows) : 0;
 }
 
-int d2k_session_send_pending(d2k_session *s, const d2k_key *k, uint64_t execution) {
+int d2s_session_send_pending(d2s_session *s, const d2s_key *k, uint64_t execution) {
     if (!s || !k || execution == 0) { return 0; }
-    d2k_flow *fl = d2k_track_find(table_of(s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of(s, k), k);
     return fl && fl->execution_id == execution && fl->sends_left && !fl->sends_failed;
 }
 
-void d2k_session_sent(d2k_session *s, uint64_t at_ns, const d2k_key *k,
+void d2s_session_sent(d2s_session *s, uint64_t at_ns, const d2s_key *k,
                        uint64_t execution) {
     if (!s || !k) {
         return;
     }
-    d2k_flow *fl = d2k_track_find(table_of(s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of(s, k), k);
     /* Потока нет (забыт по RST/FIN/молчанию) либо машине по нему ничего не
        должны — объявлять нечего. Молчание здесь честнее выдумки: «доисполнен»
        по потоку, которого уже нет, мы доказать не можем. */
@@ -3394,8 +3394,8 @@ void d2k_session_sent(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     if (fl->sends_done < 0xFF) { fl->sends_done++; }
     if (fl->sends_left == 0 && !fl->sends_failed) {
         s->done++;
-        d2k_journal_add_fate_bound(s->jrn, at_ns, k, D2K_JRN_PLAN_DONE,
-                             D2K_REFUSE_NONE, fl->execution_plan_id,
+        d2s_journal_add_fate_bound(s->jrn, at_ns, k, D2S_JRN_PLAN_DONE,
+                             D2S_REFUSE_NONE, fl->execution_plan_id,
                              fl->execution_trial_id, fl->execution_id, &fl->execution_binding);
     }
 }
@@ -3419,11 +3419,11 @@ void d2k_session_sent(d2k_session *s, uint64_t at_ns, const d2k_key *k,
    Ушедшая нагрузка чистого выхода не оставляет: отпустить оригинал — послать
    те же байты дважды, не отпустить — потерять остаток. Восстановление здесь
    дело ретрансмиссии клиента; сами оригинал не переиздаём, байт у нас нет. */
-int d2k_session_exec_failed(d2k_session *s, uint64_t at_ns, const d2k_key *k,
+int d2s_session_exec_failed(d2s_session *s, uint64_t at_ns, const d2s_key *k,
                             const uint8_t *plan_id, uint8_t code,
                             uint64_t execution, int payload_on_wire, int orig_spent) {
     if (!s || !k) { return 1; }
-    d2k_flow *fl = d2k_track_find(table_of(s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of(s, k), k);
     if (!fl || execution == 0 || fl->execution_id != execution) {
         /* Поток забыт или поколение чужое: старый отказ не относится к тому,
            что происходит сейчас, и портить им новую попытку нельзя. */
@@ -3432,7 +3432,7 @@ int d2k_session_exec_failed(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     /* Запись об отказе — ОДНА на попытку. «Ошибка посылки, затем ошибка
        вердикта» это один несостоявшийся опыт, а не два. */
     if (!fl->sends_failed) {
-        d2k_session_unsent(s, at_ns, k, plan_id, code, execution);
+        d2s_session_unsent(s, at_ns, k, plan_id, code, execution);
     }
     /* UDP: ОРИГИНАЛ ПОТЕРЯН — НЕ ПОТОК ИСПОРЧЕН (задача 42).
        Нагрузка не ушла, а оригинала больше нет: либо его копию сняли вердиктом
@@ -3463,8 +3463,8 @@ int d2k_session_exec_failed(d2k_session *s, uint64_t at_ns, const d2k_key *k,
            вовсе. Один раз на попытку — события лосси по контракту. */
         if (!fl->damaged_told) {
             fl->damaged_told = 1;
-            d2k_journal_add_fate_bound(s->jrn, at_ns, k, D2K_JRN_PLAN_DAMAGED,
-                                 D2K_REFUSE_DAMAGED,
+            d2s_journal_add_fate_bound(s->jrn, at_ns, k, D2S_JRN_PLAN_DAMAGED,
+                                 D2S_REFUSE_DAMAGED,
                                  plan_id ? plan_id : fl->execution_plan_id,
                                  fl->execution_trial_id, fl->execution_id, &fl->execution_binding);
         }
@@ -3473,37 +3473,37 @@ int d2k_session_exec_failed(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     return 1;
 }
 
-uint8_t d2k_session_guards(const d2k_session *s, const d2k_key *k) {
+uint8_t d2s_session_guards(const d2s_session *s, const d2s_key *k) {
     if (!s || !k) { return 0; }
-    d2k_flow *fl = d2k_track_find(table_of((d2k_session *)s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of((d2s_session *)s, k), k);
     return fl ? fl->guards : 0;
 }
 
-uint8_t d2k_session_client_shape(const d2k_session *s, const d2k_key *k) {
+uint8_t d2s_session_client_shape(const d2s_session *s, const d2s_key *k) {
     if (!s || !k) return 0;
-    d2k_flow *fl = d2k_track_find(table_of((d2k_session *)s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of((d2s_session *)s, k), k);
     return fl ? fl->client_shape : 0;
 }
 
-void d2k_session_damaged(d2k_session *s, const d2k_key *k, uint64_t execution) {
+void d2s_session_damaged(d2s_session *s, const d2s_key *k, uint64_t execution) {
     if (!s || !k || execution == 0) {
         return;
     }
-    d2k_flow *fl = d2k_track_find(table_of(s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of(s, k), k);
     if (fl && fl->execution_id == execution) {
         fl->damaged = 1;
     }
 }
 
-void d2k_session_unsent(d2k_session *s, uint64_t at_ns, const d2k_key *k,
+void d2s_session_unsent(d2s_session *s, uint64_t at_ns, const d2s_key *k,
                         const uint8_t *plan_id, uint8_t code, uint64_t execution) {
     if (!s || !k) {
         return;
     }
     /* Устаревший отказ не относится к новой попытке с тем же ключом. */
-    d2k_flow *fl = d2k_track_find(table_of(s, k), k);
+    d2s_flow *fl = d2s_track_find(table_of(s, k), k);
     if (fl && execution != 0 && fl->execution_id == execution) {
-        d2k_journal_add_fate_bound(s->jrn, at_ns, k, D2K_JRN_PLAN_UNSENT, code,
+        d2s_journal_add_fate_bound(s->jrn, at_ns, k, D2S_JRN_PLAN_UNSENT, code,
                              plan_id ? plan_id : fl->execution_plan_id,
                              fl->execution_trial_id, fl->execution_id, &fl->execution_binding);
         fl->sends_left = 0;
@@ -3511,83 +3511,83 @@ void d2k_session_unsent(d2k_session *s, uint64_t at_ns, const d2k_key *k,
     }
 }
 
-uint64_t d2k_session_applied(const d2k_session *s) {
+uint64_t d2s_session_applied(const d2s_session *s) {
     return s ? s->applied : 0;
 }
 
-uint64_t d2k_session_done(const d2k_session *s) {
+uint64_t d2s_session_done(const d2s_session *s) {
     return s ? s->done : 0;
 }
 
-uint64_t d2k_session_damaged_count(const d2k_session *s) {
+uint64_t d2s_session_damaged_count(const d2s_session *s) {
     return s ? s->damaged_flows : 0;
 }
 
-uint64_t d2k_session_sent_lost(const d2k_session *s) {
+uint64_t d2s_session_sent_lost(const d2s_session *s) {
     return s ? s->sent_lost : 0;
 }
 
-uint64_t d2k_session_refusals(const d2k_session *s) {
-    return s ? d2k_track_refusals(s->flows) + d2k_track_refusals(s->uflows) : 0;
+uint64_t d2s_session_refusals(const d2s_session *s) {
+    return s ? d2s_track_refusals(s->flows) + d2s_track_refusals(s->uflows) : 0;
 }
 
-size_t d2k_session_capacity(const d2k_session *s) {
-    return s ? d2k_track_capacity(s->flows) + d2k_track_capacity(s->uflows) : 0;
+size_t d2s_session_capacity(const d2s_session *s) {
+    return s ? d2s_track_capacity(s->flows) + d2s_track_capacity(s->uflows) : 0;
 }
 
-size_t d2k_session_flows_tcp(const d2k_session *s) {
-    return s ? d2k_track_count(s->flows) : 0;
+size_t d2s_session_flows_tcp(const d2s_session *s) {
+    return s ? d2s_track_count(s->flows) : 0;
 }
 
-size_t d2k_session_flows_udp(const d2k_session *s) {
-    return s ? d2k_track_count(s->uflows) : 0;
+size_t d2s_session_flows_udp(const d2s_session *s) {
+    return s ? d2s_track_count(s->uflows) : 0;
 }
 
-size_t d2k_session_capacity_tcp(const d2k_session *s) {
-    return s ? d2k_track_capacity(s->flows) : 0;
+size_t d2s_session_capacity_tcp(const d2s_session *s) {
+    return s ? d2s_track_capacity(s->flows) : 0;
 }
 
-size_t d2k_session_capacity_udp(const d2k_session *s) {
-    return s ? d2k_track_capacity(s->uflows) : 0;
+size_t d2s_session_capacity_udp(const d2s_session *s) {
+    return s ? d2s_track_capacity(s->uflows) : 0;
 }
 
-uint64_t d2k_session_refusals_tcp(const d2k_session *s) {
-    return s ? d2k_track_refusals(s->flows) : 0;
+uint64_t d2s_session_refusals_tcp(const d2s_session *s) {
+    return s ? d2s_track_refusals(s->flows) : 0;
 }
 
-uint64_t d2k_session_refusals_udp(const d2k_session *s) {
-    return s ? d2k_track_refusals(s->uflows) : 0;
+uint64_t d2s_session_refusals_udp(const d2s_session *s) {
+    return s ? d2s_track_refusals(s->uflows) : 0;
 }
 
-uint64_t d2k_session_hellos(const d2k_session *s) {
+uint64_t d2s_session_hellos(const d2s_session *s) {
     return s ? s->hellos : 0;
 }
 
-uint64_t d2k_session_with_sni(const d2k_session *s) {
+uint64_t d2s_session_with_sni(const d2s_session *s) {
     return s ? s->with_sni : 0;
 }
 
-uint64_t d2k_session_suspects(const d2k_session *s) {
+uint64_t d2s_session_suspects(const d2s_session *s) {
     return s ? s->suspects : 0;
 }
 
-uint64_t d2k_session_rst_dropped(const d2k_session *s) {
+uint64_t d2s_session_rst_dropped(const d2s_session *s) {
     return s ? s->rst_dropped : 0;
 }
 
-uint64_t d2k_session_exchanges(const d2k_session *s) {
+uint64_t d2s_session_exchanges(const d2s_session *s) {
     return s ? s->exchanges : 0;
 }
 
-uint64_t d2k_session_reply_hidden(const d2k_session *s) {
+uint64_t d2s_session_reply_hidden(const d2s_session *s) {
     return s ? s->reply_hidden : 0;
 }
 
-uint64_t d2k_session_tcp_hello_flows(const d2k_session *s) {
+uint64_t d2s_session_tcp_hello_flows(const d2s_session *s) {
     return s ? s->tcp_hello_flows : 0;
 }
 
-void d2k_session_payload_stats(const d2k_session *s, d2k_payload_stats *out) {
+void d2s_session_payload_stats(const d2s_session *s, d2s_payload_stats *out) {
     if (!out) {
         return;
     }
@@ -3610,6 +3610,6 @@ void d2k_session_payload_stats(const d2k_session *s, d2k_payload_stats *out) {
     out->http_open_end = s->http_open_end;
 }
 
-const d2k_journal *d2k_session_journal(const d2k_session *s) {
+const d2s_journal *d2s_session_journal(const d2s_session *s) {
     return s ? s->jrn : NULL;
 }

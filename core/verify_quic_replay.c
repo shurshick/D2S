@@ -3,7 +3,7 @@
  * Отдельным файлом, а не в verify.c: функция тянет перезапечатку пачки
  * (quicsnap_reseal.c) и привязку ответа к соединению (quicprobe.c), а verify.o
  * линкуется во многие цели, где этих модулей нет. Нужна только планировщику
- * (sched.c, крючок d2k_sched_quic_replay_ver_hook). */
+ * (sched.c, крючок d2s_sched_quic_replay_ver_hook). */
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
 #include <poll.h>
@@ -16,9 +16,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 
-#include "d2k_quicprobe.h"
-#include "d2k_quicsnap.h"
-#include "d2k_verify.h"
+#include "d2s_quicprobe.h"
+#include "d2s_quicsnap.h"
+#include "d2s_verify.h"
 
 static int64_t replay_now_ms(void) {
     struct timespec ts;
@@ -26,19 +26,19 @@ static int64_t replay_now_ms(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-d2k_ver_result d2k_verify_quic_replay_on(int use_fd, const char *ip, uint16_t port,
+d2s_ver_result d2s_verify_quic_replay_on(int use_fd, const char *ip, uint16_t port,
     const uint8_t *pack, size_t pack_len, int deadline_ms) {
-    d2k_ver_result r;
+    d2s_ver_result r;
     memset(&r, 0, sizeof r);
     r.fd = -1;
     r.name_ok = -1;
     snprintf(r.reason, sizeof r.reason, "повтор не начинался");
-    d2k_qsnap in, out;
-    static __thread uint8_t fresh[D2K_SHAPE_MAX];
+    d2s_qsnap in, out;
+    static __thread uint8_t fresh[D2S_SHAPE_MAX];
     size_t fresh_len = 0;
-    if (!pack || !ip || !ip[0] || d2k_qsnap_parse(pack, pack_len, &in) != 0 ||
-        d2k_qsnap_recid(&in, fresh, sizeof fresh, &fresh_len) != 0 ||
-        d2k_qsnap_parse(fresh, fresh_len, &out) != 0) {
+    if (!pack || !ip || !ip[0] || d2s_qsnap_parse(pack, pack_len, &in) != 0 ||
+        d2s_qsnap_recid(&in, fresh, sizeof fresh, &fresh_len) != 0 ||
+        d2s_qsnap_parse(fresh, fresh_len, &out) != 0) {
         if (use_fd >= 0) close(use_fd);
         snprintf(r.reason, sizeof r.reason,
                  "нет снятой пачки QUIC клиента — повторять нечего");
@@ -80,8 +80,8 @@ d2k_ver_result d2k_verify_quic_replay_on(int use_fd, const char *ip, uint16_t po
             r.local_port = ntohs(a->sin_port);
         }
     }
-    r.level = D2K_VER_TRANSPORT;
-    r.budget = D2K_BUDGET_NOT_APPLICABLE;
+    r.level = D2S_VER_TRANSPORT;
+    r.budget = D2S_BUDGET_NOT_APPLICABLE;
     snprintf(r.budget_note, sizeof r.budget_note,
              "повтор пачки QUIC клиента: без его ключей соединение не продолжить");
     /* Весь полёт, как его слал клиент: та же раскладка по датаграммам, один
@@ -106,8 +106,8 @@ d2k_ver_result d2k_verify_quic_replay_on(int use_fd, const char *ip, uint16_t po
            раскрываемый ключами из нашего DCID и адресованный нашему SCID, или
            Retry с верным тегом (qp_verify_bound). Чужое, VN и мусор —
            не доказательство, что коробка пропустила полёт. */
-        if (d2k_quic_verify_bound(buf, (size_t)n, (d2k_hello){fresh, fresh_len, NULL, 0, 0, 0}) == 0) {
-            r.level = D2K_VER_HANDSHAKE;
+        if (d2s_quic_verify_bound(buf, (size_t)n, (d2s_hello){fresh, fresh_len, NULL, 0, 0, 0}) == 0) {
+            r.level = D2S_VER_HANDSHAKE;
             r.replay_proof = 1;
             snprintf(r.reason, sizeof r.reason,
                      "сервер ответил на повтор пачки QUIC клиента (%zu датаграмм): уровень "

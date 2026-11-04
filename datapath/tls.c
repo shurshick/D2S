@@ -10,7 +10,7 @@
  */
 #include <string.h>
 
-#include "d2k_tls.h"
+#include "d2s_tls.h"
 
 #define REC_HDR      5
 #define HS_HDR       4
@@ -63,7 +63,7 @@ static int skip_u16_vec(const uint8_t *b, size_t len, size_t *off) {
  * значением 0x0304 (RFC 8446 §4.2.1).
  *
  * Тот же признак, по которому форму приветствия различает контроллер
- * (d2k_hello_shape, core/hello.c: have_tls13 → MODERN, иначе LEGACY).
+ * (d2s_hello_shape, core/hello.c: have_tls13 → MODERN, иначе LEGACY).
  * Считается ЗДЕСЬ, а не приносится извне, потому что нужен на ПАКЕТНОМ пути:
  * датапат обязан знать форму приветствия, чтобы не применять к браузеру план,
  * подтверждённый на приветствии другой формы (0009, U5). Переносить ради
@@ -176,7 +176,7 @@ static int find_sni(const uint8_t *b, size_t exts_off, size_t exts_end,
     return -1;
 }
 
-int d2k_tls_parse(const uint8_t *b, size_t len, d2k_tls_info *out) {
+int d2s_tls_parse(const uint8_t *b, size_t len, d2s_tls_info *out) {
     if (!out) {
         return -1;
     }

@@ -4,19 +4,19 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const tmp = fs.mkdtempSync('/tmp/d2k-openwrt-test.');
+const tmp = fs.mkdtempSync('/tmp/d2s-openwrt-test.');
 // OpenWrt ash supports fd 1000; dash does not. Use ash when available.
 const busybox = ['/bin/busybox', '/usr/bin/busybox'].find(p => fs.existsSync(p));
 const shell = busybox || '/bin/bash';
 const shellArgs = busybox ? ['ash', '-c'] : ['-c'];
 try {
   const calls = path.join(tmp, 'calls');
-  const init = path.join(tmp, 'S99d2k');
+  const init = path.join(tmp, 'S99d2s');
   const config = path.join(tmp, 'config');
   const hook = path.join(tmp, 'hook');
-  const source = fs.readFileSync(path.join(__dirname, '../files/d2k-openwrt-init'), 'utf8');
-  fs.writeFileSync(hook, source.replaceAll('/opt/etc/init.d/S99d2k', init)
-    .replaceAll('/opt/d2k/config', config));
+  const source = fs.readFileSync(path.join(__dirname, '../files/d2s-openwrt-init'), 'utf8');
+  fs.writeFileSync(hook, source.replaceAll('/opt/etc/init.d/S99d2s', init)
+    .replaceAll('/opt/d2s/config', config));
   const engine = '#!/bin/sh\nprintf "engine-%s\\n" "$1" >> "$CALLS"\n';
   const prelude = `extra_command() { :; }
 procd_open_instance() { echo "instance-$1" >> "$CALLS"; }
@@ -34,9 +34,9 @@ procd_kill() { echo "kill-$1\${2:+/$2}" >> "$CALLS"; }
   const log = () => fs.existsSync(calls) ? fs.readFileSync(calls, 'utf8') : '';
   function clear() { fs.rmSync(calls, { force: true }); }
   assert.equal(run('start_service').status, 0);
-  assert.match(log(), /command \/bin\/sh \/etc\/rc.common \/etc\/init.d\/d2k boot_wait/);
+  assert.match(log(), /command \/bin\/sh \/etc\/rc.common \/etc\/init.d\/d2s boot_wait/);
   assert(!log().includes('engine-'), 'start registers a worker without blocking boot');
-  assert(!log().includes('respawn'), 'boot bridge must leave daemon supervision to S99d2k');
+  assert(!log().includes('respawn'), 'boot bridge must leave daemon supervision to S99d2s');
   clear();
   // A deterministic late mount: sleep supplies the files on the first wait.
   assert.equal(run(`exec 1000>"$LOCK"
@@ -59,7 +59,7 @@ boot_wait`, { ENGINE: engine, INIT: init, CONFIG: config, LOCK: path.join(tmp, '
   fs.writeFileSync(init, engine, { mode: 0o755 });
   clear();
   assert.equal(run('stop_service').status, 0);
-  assert.equal(log(), 'kill-d2k/boot\nengine-stop\n', 'cancel waiting worker before stopping engine');
+  assert.equal(log(), 'kill-d2s/boot\nengine-stop\n', 'cancel waiting worker before stopping engine');
   clear();
   // rc.common deletes the whole service AFTER stop_service returns. Deleting
   // the entire service inside stop_service made that second delete fail.
@@ -69,12 +69,12 @@ procd_kill() {
     [ "\${2:-}" = boot ] || present=0
 }
 stop_service
-procd_kill d2k`);
+procd_kill d2s`);
   assert.equal(stopped.status, 0);
   assert.equal(stopped.stderr, '', 'rc.common final deletion must not delete an already deleted service');
   clear();
   assert.equal(run('detach').status, 0);
-  assert.equal(log(), 'kill-d2k\n', 'uninstall detaches without stopping engine twice');
+  assert.equal(log(), 'kill-d2s\n', 'uninstall detaches without stopping engine twice');
   clear();
   const missing = run('procd_kill() { echo "Not found" >&2; return 1; }; detach');
   assert.equal(missing.status, 1, 'detach retains procd failure status');

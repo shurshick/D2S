@@ -9,7 +9,7 @@
 
 Измеритель QUIC/voice строит Plan тем же компилятором, что экспортирует
 найденное решение: `core/udpplan.c`. `core/udpruntime.c` загружает канонический
-TLV и вызывает **тот же `d2k_plan_apply` и существующие wire/fragment builders**,
+TLV и вызывает **тот же `d2s_plan_apply` и существующие wire/fragment builders**,
 что живой datapath. Прежде чем отправить первую датаграмму, строится весь
 результат и проверяется его выполнимость. Собственной сборки prefix/split/
 фрагментов в `quicprobe.c` больше нет. Локальная ошибка не включает другой
@@ -25,7 +25,7 @@ NFQUEUE/NAT, интерфейс и фактический выход на лин
 
 Для фрагментов передаются полные IP-пакеты. До первой отправки подготавливаются
 все raw-посылки; при отказе нет fallback на целую UDP-датаграмму. IPv6
-использует существующий общий `d2k_ip6frag_send.h`. Синхронизированный
+использует существующий общий `d2s_ip6frag_send.h`. Синхронизированный
 fragment-ID счётчик с random seed сохранён: UDP-порты не входят в ключ
 IP reassembly. Возможность опустить неподдерживаемую порчу IPID закрыта
 отказом до отправки. Предел результата 26 посылок общий с datapath; это
@@ -43,7 +43,7 @@ IP reassembly. Возможность опустить неподдержива�
 | Независимые YES превращались в fake×length, junk×length или fragment×junk без вопроса произведению | Экспортируется ровно один измеренный вопрос; новое произведение требует отдельного вопроса |
 | Generic length измерял 1300 с padding внутри Initial, экспортировал append100 снаружи | Вопрос теперь выполняет runtime `udplen 100` после fresh-CID сборки; loopback проверяет длину пакета и 100 нулей после него |
 | Generic CRYPTO question пересобирал воздействие отдельно от executor | После построения свежего обычного Initial применяется тот же Plan `quicsplit 1` |
-| TCP split измерял socket-write границы, экспортировал packet split | Production detect исполняет pure split через существующий raw PlanApply; общий `d2k_tcp_split_plan` задаёт segment/wire/pace для измерения и экспорта |
+| TCP split измерял socket-write границы, экспортировал packet split | Production detect исполняет pure split через существующий raw PlanApply; общий `d2s_tcp_split_plan` задаёт segment/wire/pace для измерения и экспорта |
 | Legacy/default TCP и legacy QUIC могли экспортировать неподтверждённый runtime | Scheduler без detect runtime отказывает; bridge не экспортирует socket-only split; QUIC compiler отказывает `!arm.original` |
 
 Порог C 3/3 не менялся. Подбор белого имени по цели не изменялся. Второго
@@ -62,7 +62,7 @@ TCP raw-сборщика не добавлено. Работающий прям�
 | QUIC protocol generation и Retry/PTO | `quicconn.c` строит обычные protocol packets; эффект только first_send через общий runtime | Повторный Initial следует существующей политике без воздействия; loopback Retry и Session same-flow gate, поле отдельно |
 | QUIC delay plan и core properties под установленным планом | Проба посылает обычный protocol request; сам обход исполняет Session | Одномоторный путь; Linux очередь и выпуск отдельно |
 | QUIC version/fixed-bit/source-port/two-datagram диагностические вопросы | Изменяется протокольный запрос; эти свойства не экспортируются самостоятельным bypass Plan | Не считать положительный diagnostic ответ доказанным устанавливаемым обходом |
-| Legacy `d2k_quic_pick_arm` / `props.c frag_real` | Production callsites отсутствуют; прежние диагностические тесты остаются, `!original` arm не экспортируется | Собственный legacy fragment sender не выдаётся за рабочий production engine |
+| Legacy `d2s_quic_pick_arm` / `props.c frag_real` | Production callsites отсутствуют; прежние диагностические тесты остаются, `!original` arm не экспортируется | Собственный legacy fragment sender не выдаётся за рабочий production engine |
 | HTTP portal, включая split/checksum/product | Trial и permanent устанавливаются одним `hs_hex` в Session; зонд отправляет исходный GET | `test_http_runtime` сравнивает реальные callbacks и весь каталог, IPv4/6; ответ пока только headers |
 | TCP property probes / `props_contact_on_family` | Ставят Plan, посылают исходный hello; сегментацию делает Session | Собственного bypass builder нет |
 | STUN voice | STUN generator/parser только протокол; fake/copies/pace — общий UDP Plan runtime | Copies1/6 и voice Plan10 в gate; успех STUN не равен звуку |
@@ -82,7 +82,7 @@ checksum, ID или нормализации байтов перед сравн�
   нескольких входных размерах, IPv4/6. Измерительный sender и runtime
   сравниваются на одном явном transport context. Отдельный `test_probe_plan`:
   12 inputs, 85 catalog hypotheses, 12 questions, 31 skipped, 0 mismatches
-  (`/tmp/d2k-runtime-probe-plan-final.log`); skipped SYN-data не выдаётся
+  (`/tmp/d2s-runtime-probe-plan-final.log`); skipped SYN-data не выдаётся
   за покрытую runtime-гипотезу.
 - UDP gate вызывает настоящий `quicarms`: **каждый фактически заданный
   уникальный вопрос**, включая NO, автоматически попадает в сравнитель.
@@ -135,13 +135,13 @@ regression отдельно линкует именно baseline composer, не 
 | test_voice | 0 | 1 | Измеренная1 экспортируется2 |
 | test_udp_compose_exact | 0 | 1 | Junk copies, неизмеренные комбинации, legacy export |
 
-Путь: `/tmp/d2k-runtime-red-final-path`; manifest:
-`/tmp/d2k-runtime-red-final-results.json`; отдельные build/run логи
-`/tmp/d2k-runtime-red-final-*.log`. CHECK накопительный, зачтён exit процесса.
-Отдельный свежий TCP archive7ac234a: `/tmp/d2k-tcp-runtime-red-path`,
-manifest `/tmp/d2k-tcp-runtime-red-results.json`. Все четыре теста
+Путь: `/tmp/d2s-runtime-red-final-path`; manifest:
+`/tmp/d2s-runtime-red-final-results.json`; отдельные build/run логи
+`/tmp/d2s-runtime-red-final-*.log`. CHECK накопительный, зачтён exit процесса.
+Отдельный свежий TCP archive7ac234a: `/tmp/d2s-tcp-runtime-red-path`,
+manifest `/tmp/d2s-tcp-runtime-red-results.json`. Все четыре теста
 `test_raw`, `test_repeats`, `test_bridge`, `test_sched_default` имеют
-build0/run1 после touch; логи `/tmp/d2k-tcp-runtime-red-*.log`.
+build0/run1 после touch; логи `/tmp/d2s-tcp-runtime-red-*.log`.
 Для standalone scheduler явно собраны три отсутствовавшие в старом Makefile
 зависимости; текущий Makefile теперь перечисляет их.
 
@@ -165,23 +165,23 @@ handoff/report/checklist файлы.
 | make -C core san-udp-runtime | exit0 |
 | git diff --check | exit0 |
 
-Логи `/tmp/d2k-runtime-{core,detect,datapath,cross}-final.log`,
-`/tmp/d2k-runtime-san-final.log`. Прерванный устаревший core-прогон не зачтён;
+Логи `/tmp/d2s-runtime-{core,detect,datapath,cross}-final.log`,
+`/tmp/d2s-runtime-san-final.log`. Прерванный устаревший core-прогон не зачтён;
 итоговый запуск сделан после стабилизации production-кода. Первый полный
 проход выявил устаревший scheduler oracle, требовавший junk×2 вместо
 измеренного junk×1; исправлен только CHECK/комментарий и повторён полный
 core check. Его исходный fail сохранён в
-`/tmp/d2k-runtime-core-stale-oracle-red.log`. Следующий проход прошёл весь
+`/tmp/d2s-runtime-core-stale-oracle-red.log`. Следующий проход прошёл весь
 scheduler, но выявил настоящий build fail `test_catalog_sync`: позднее
 `SRC +=` добавляло UDP objects в recipe, но не в уже раскрытые prerequisites.
 Объявление перенесено до правил; targeted catalog и весь оставшийся хвост
 собраны/пройдены exit0, затем снова выполнен полный core check. Red сохранён
-в `/tmp/d2k-runtime-core-catalog-build-red.log`, green —
-`/tmp/d2k-runtime-catalog-build-green.log` и
-`/tmp/d2k-runtime-core-tail-green.log`. Дополнительно `make -n -W
-include/d2k_udpruntime.h udpplan.o udpruntime.o` сначала ошибочно считал
+в `/tmp/d2s-runtime-core-catalog-build-red.log`, green —
+`/tmp/d2s-runtime-catalog-build-green.log` и
+`/tmp/d2s-runtime-core-tail-green.log`. Дополнительно `make -n -W
+include/d2s_udpruntime.h udpplan.o udpruntime.o` сначала ошибочно считал
 объекты актуальными, после dependency fix назначает обе компиляции;
-`/tmp/d2k-runtime-header-deps-{red,green}.log`. Этот последний dependency-only
+`/tmp/d2s-runtime-header-deps-{red,green}.log`. Этот последний dependency-only
 fix не менял C-код, заголовки или входы уже идущего полного прогона. timeout/gtimeout
 не использовались. Независимое read-only review выявило и помогло закрыть
 fragment-ID regression и неподдерживаемую sink-порчу; финальное review
@@ -190,7 +190,7 @@ fragment-ID regression и неподдерживаемую sink-порчу; фи
 
 ## Что теперь повторить в поле — только координатору
 
-Сначала записать точный HEAD/dirty, существующие D2K службы/правила/марки,
+Сначала записать точный HEAD/dirty, существующие D2S службы/правила/марки,
 маршрут, каталог и восстановление. Использовать ограниченный собственный
 trial/временный каталог, не стирать подтверждённые решения. `field-observe.sh`
 может менять роутер: прочитать его заголовок и аргументы перед запуском.

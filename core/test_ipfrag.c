@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "d2k_ipfrag.h"
+#include "d2s_ipfrag.h"
 static int fails;
 #define CHECK(x) do {if(!(x)){printf("FAIL %d %s\n",__LINE__,#x);fails++;}}while(0)
 static unsigned rd16(const uint8_t *p){return (unsigned)p[0]*256+p[1];}
@@ -15,12 +15,12 @@ int main(void) {
     const size_t off[][3]={{0,8,0},{0,8,0},{0,8,24},{0,8,40}};
     const size_t len[][3]={{8,1200,0},{8,1200,0},{8,24,1184},{16,40,1168}};
     for(int shape=1;shape<=4;shape++) {
-        d2k_ipfrag_plan p;d2k_ipfrag_span cuts[3],spans[3];
-        CHECK(d2k_ipfrag_shape(shape,&p)==0);
-        size_t n=d2k_ipfrag_cuts(1208,&p,cuts);
+        d2s_ipfrag_plan p;d2s_ipfrag_span cuts[3],spans[3];
+        CHECK(d2s_ipfrag_shape(shape,&p)==0);
+        size_t n=d2s_ipfrag_cuts(1208,&p,cuts);
         CHECK(n==(shape<3?2u:3u));
         for(size_t i=0;i<n;i++)CHECK(cuts[i].off==off[shape-1][i] && cuts[i].len==len[shape-1][i]);
-        n=d2k_udpfrag_build(src,dst,51234,443,payload,sizeof payload,&p,0x1234,out,sizeof out,spans);
+        n=d2s_udpfrag_build(src,dst,51234,443,payload,sizeof payload,&p,0x1234,out,sizeof out,spans);
         CHECK(n==(shape<3?2u:3u));
         uint8_t restored[1208]={0};
         for(size_t i=0;i<n;i++) {
@@ -39,21 +39,21 @@ int main(void) {
             memcpy(pseudo,src,4);memcpy(pseudo+4,dst,4);pseudo[9]=17;pseudo[10]=4;pseudo[11]=184;
             memcpy(pseudo+12,restored,1208);CHECK(sum(pseudo,sizeof pseudo)==65535);
         }
-        CHECK(d2k_udpfrag_build(src,dst,1,2,payload,sizeof payload,&p,0,out,sizeof out,spans)==0);
+        CHECK(d2s_udpfrag_build(src,dst,1,2,payload,sizeof payload,&p,0,out,sizeof out,spans)==0);
         memset(out,0xab,sizeof out);
-        CHECK(d2k_udpfrag_build(src,dst,1,2,payload,sizeof payload,&p,1,out,27,spans)==0);
+        CHECK(d2s_udpfrag_build(src,dst,1,2,payload,sizeof payload,&p,1,out,27,spans)==0);
         CHECK(out[0]==0xab); /* no partial output on insufficient capacity */
     }
-    d2k_ipfrag_plan p={.pos1=30};d2k_ipfrag_span cuts[3];
+    d2s_ipfrag_plan p={.pos1=30};d2s_ipfrag_span cuts[3];
     {
         uint8_t s6[16] = {0x20,1}, d6[16] = {0x20,1};
         s6[15] = 1; d6[15] = 2;
         for (int shape = 1; shape <= 4; shape++) {
-            d2k_ipfrag_plan plan;
-            d2k_ipfrag_span spans[3], logical[3];
-            CHECK(d2k_ipfrag_shape(shape, &plan) == 0);
-            size_t count = d2k_ipfrag_cuts(1208, &plan, logical);
-            size_t n = d2k_udpfrag6_build_ex(s6, d6, 51234, 443, payload, sizeof payload,
+            d2s_ipfrag_plan plan;
+            d2s_ipfrag_span spans[3], logical[3];
+            CHECK(d2s_ipfrag_shape(shape, &plan) == 0);
+            size_t count = d2s_ipfrag_cuts(1208, &plan, logical);
+            size_t n = d2s_udpfrag6_build_ex(s6, d6, 51234, 443, payload, sizeof payload,
                 &plan, 0x12345678, 57, 0xa5, 0xabcde, out, sizeof out, spans);
             CHECK(n == count);
             uint8_t restored[1208] = {0};
@@ -76,14 +76,14 @@ int main(void) {
             CHECK(sum(pseudo, sizeof pseudo) == 65535);
             CHECK(!memcmp(restored + 8, payload, sizeof payload));
             memset(out, 0xab, sizeof out);
-            CHECK(!d2k_udpfrag6_build_ex(s6, d6, 1, 2, payload, sizeof payload,
+            CHECK(!d2s_udpfrag6_build_ex(s6, d6, 1, 2, payload, sizeof payload,
                 &plan, 1, 64, 0, 0, out, 48, spans) && out[0] == 0xab);
         }
     }
-    CHECK(d2k_ipfrag_cuts(1208,&p,cuts)==2 && cuts[0].len==24);
+    CHECK(d2s_ipfrag_cuts(1208,&p,cuts)==2 && cuts[0].len==24);
     p.three=1;p.pos1=8;p.pos2=0;
-    CHECK(d2k_ipfrag_cuts(1208,&p,cuts)==3 && cuts[1].len==24);
-    CHECK(d2k_ipfrag_cuts(20,&p,cuts)==0);
+    CHECK(d2s_ipfrag_cuts(1208,&p,cuts)==3 && cuts[1].len==24);
+    CHECK(d2s_ipfrag_cuts(20,&p,cuts)==0);
     if(fails)return 1;
     puts("original IP fragments: passed");return 0;
 }

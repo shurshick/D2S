@@ -2,10 +2,10 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
-#include "d2k_compose.h"
-#include "d2k_quic_arms.h"
-#include "d2k_quicprobe.h"
-#include "d2k_voice.h"
+#include "d2s_compose.h"
+#include "d2s_quic_arms.h"
+#include "d2s_quicprobe.h"
+#include "d2s_voice.h"
 
 static int append_fmt(char *buf, size_t cap, size_t *pos, const char *fmt, ...) {
     va_list ap;
@@ -27,7 +27,7 @@ static int append_fmt(char *buf, size_t cap, size_t *pos, const char *fmt, ...) 
  * в самом тексте плана. */
 static int emit_header_proto(char *buf, size_t cap, size_t *pos, const char *proto) {
     static const char zero32[] = "00000000000000000000000000000000000000";
-    if (append_fmt(buf, cap, pos, "d2k-plan 1 1\n") != 0) { return -1; }
+    if (append_fmt(buf, cap, pos, "d2s-plan 1 1\n") != 0) { return -1; }
     if (append_fmt(buf, cap, pos, "id %.32s\n", zero32) != 0) { return -1; }
     if (append_fmt(buf, cap, pos, "proto %s\n", proto) != 0) { return -1; }
     return 0;
@@ -45,12 +45,12 @@ static int append_hex(char *buf, size_t cap, size_t *pos,
  * another measured question; the compiler never invents their product. */
 #define QUIC_JUNK_LEN 16u
 #define QUIC_JUNK_REPEATS 1u
-#define QUIC_UDPLEN_INCREMENT D2K_QUIC_LENGTH_INCREMENT
+#define QUIC_UDPLEN_INCREMENT D2S_QUIC_LENGTH_INCREMENT
 
-static int quic_arm_found(const d2k_quic_arm *a) {
-    return a && (a->kind == D2K_QA_BLOB || a->kind == D2K_QA_COPIES ||
-                 a->kind == D2K_QA_TTL || a->kind == D2K_QA_FRAG ||
-                 a->kind == D2K_QA_SPLIT || a->kind == D2K_QA_UDPLEN);
+static int quic_arm_found(const d2s_quic_arm *a) {
+    return a && (a->kind == D2S_QA_BLOB || a->kind == D2S_QA_COPIES ||
+                 a->kind == D2S_QA_TTL || a->kind == D2S_QA_FRAG ||
+                 a->kind == D2S_QA_SPLIT || a->kind == D2S_QA_UDPLEN);
 }
 
 /* Задача 40: разрез ClientHello на два кадра CRYPTO внутри того же Initial —
@@ -59,14 +59,14 @@ static int quic_arm_found(const d2k_quic_arm *a) {
 static int quic_split_plan_text(char *buf, size_t cap) {
     size_t pos = 0;
     return append_fmt(buf, cap, &pos,
-                      "d2k-plan 1 10\nid 00000000000000000000000000000000\n"
+                      "d2s-plan 1 10\nid 00000000000000000000000000000000\n"
                       "proto udp quic\nquicsplit 1\norder forward\n");
 }
 
 /* Один сборщик QUIC-плана на оба входа (плечо askArms и свойства вопросника)
    — та же склейка, что у compose донора, а не два похожих сборщика.
    arm == NULL — плеча нет; junk/udplen — подтверждённые свойства. */
-static int quic_plan_text(const d2k_quic_arm *arm, const uint8_t *blob, size_t blen,
+static int quic_plan_text(const d2s_quic_arm *arm, const uint8_t *blob, size_t blen,
                           int junk, unsigned udplen, char *buf, size_t cap) {
     static const uint8_t junk_bytes[QUIC_JUNK_LEN];
     unsigned repeats = 1;
@@ -76,19 +76,19 @@ static int quic_plan_text(const d2k_quic_arm *arm, const uint8_t *blob, size_t b
 
     if (arm) {
         switch (arm->kind) {
-        case D2K_QA_SPLIT:
+        case D2S_QA_SPLIT:
             if(!arm->original || arm->frag_kind || arm->ttl) return -1;
             break;
-        case D2K_QA_BLOB:   break;
-        case D2K_QA_COPIES:
+        case D2S_QA_BLOB:   break;
+        case D2S_QA_COPIES:
             if (arm->copies <= 0 || arm->copies > 255) { return -1; }
             repeats = (unsigned)arm->copies;
             break;
-        case D2K_QA_TTL:
+        case D2S_QA_TTL:
             if (arm->ttl <= 0 || arm->ttl > 255) { return -1; }
             ttl = arm->ttl;
             break;
-        case D2K_QA_FRAG:
+        case D2S_QA_FRAG:
             if (!arm->original || arm->len || blen || !arm->frag_kind) return -1;
             break;
         default:
@@ -97,9 +97,9 @@ static int quic_plan_text(const d2k_quic_arm *arm, const uint8_t *blob, size_t b
         /* Original compose combines fake and fragment; no invented fake for a
            fragment-only result. Survival on the neutral control is mandatory. */
         frag = arm->frag_kind;
-        has_fake = arm->kind != D2K_QA_FRAG;
+        has_fake = arm->kind != D2S_QA_FRAG;
         if (frag && (!arm->original || frag < 1 || frag > 4 ||
-                     arm->frag_survives != D2K_PROP_YES)) return -1;
+                     arm->frag_survives != D2S_PROP_YES)) return -1;
         if (arm->original) {
             if (has_fake && (arm->copies <= 0 || arm->copies > 255 ||
                 arm->len == 0 || arm->len > sizeof arm->bytes || !blob ||
@@ -128,15 +128,15 @@ static int quic_plan_text(const d2k_quic_arm *arm, const uint8_t *blob, size_t b
     if (!has_fake && !frag && !udplen) { return -1; }
 
     size_t pos = 0;
-    if (arm && arm->kind==D2K_QA_SPLIT) {
-        if(append_fmt(buf,cap,&pos,"d2k-plan 1 10\nid 00000000000000000000000000000000\nproto udp quic\nquicsplit 1\n")!=0) return -1;
+    if (arm && arm->kind==D2S_QA_SPLIT) {
+        if(append_fmt(buf,cap,&pos,"d2s-plan 1 10\nid 00000000000000000000000000000000\nproto udp quic\nquicsplit 1\n")!=0) return -1;
     } else if (frag) {
-        if (append_fmt(buf,cap,&pos,"d2k-plan 1 7\nid 00000000000000000000000000000000\n"
+        if (append_fmt(buf,cap,&pos,"d2s-plan 1 7\nid 00000000000000000000000000000000\n"
                                    "proto udp quic\nipfrag %d\n",frag)!=0) return -1;
     } else if (udplen) {
         /* minexec=9: старый исполнитель записи udplen не знает и откажет
            громко, а не выпустит датаграмму без удлинения. */
-        if (append_fmt(buf, cap, &pos, "d2k-plan 1 9\nid 00000000000000000000000000000000\n"
+        if (append_fmt(buf, cap, &pos, "d2s-plan 1 9\nid 00000000000000000000000000000000\n"
                                        "proto udp quic\n") != 0) return -1;
     } else if (emit_header_proto(buf, cap, &pos, "udp quic") != 0) { return -1; }
     if (has_fake) {
@@ -164,59 +164,59 @@ static int quic_plan_text(const d2k_quic_arm *arm, const uint8_t *blob, size_t b
     }
     if (append_fmt(buf, cap, &pos, "order forward\n") != 0) { return -1; }
     if (arm && !arm->original &&
-        append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_SETTLE_US) != 0) {
+        append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_SETTLE_US) != 0) {
         return -1;
     }
     return 0;
 }
 
-int d2k_quic_arm_plan(const d2k_quic_arm *arm, const uint8_t *blob, size_t blen,
+int d2s_quic_arm_plan(const d2s_quic_arm *arm, const uint8_t *blob, size_t blen,
                       char *buf, size_t cap) {
     if (!arm || !arm->original || !buf || cap == 0 || !quic_arm_found(arm)) { return -1; }
-    if(arm->kind==D2K_QA_UDPLEN) {
-        if(arm->udplen!=D2K_QUIC_LENGTH_INCREMENT || arm->len || blen ||
+    if(arm->kind==D2S_QA_UDPLEN) {
+        if(arm->udplen!=D2S_QUIC_LENGTH_INCREMENT || arm->len || blen ||
            arm->ttl || arm->frag_kind || arm->copies)return -1;
         return quic_plan_text(NULL,NULL,0,0,arm->udplen,buf,cap);
     }
     if(arm->udplen)return -1;
-    if (arm->kind == D2K_QA_SPLIT && !arm->len) {
+    if (arm->kind == D2S_QA_SPLIT && !arm->len) {
         return arm->original && !blen ? quic_split_plan_text(buf, cap) : -1;
     }
     return quic_plan_text(arm, blob, blen, 0, 0, buf, cap);
 }
 
-int d2k_quic_compose_plan(const d2k_quic_arm *arm, const d2k_quic_props *p,
+int d2s_quic_compose_plan(const d2s_quic_arm *arm, const d2s_quic_props *p,
                           char *buf, size_t cap) {
     if (!p || !buf || cap == 0) { return -1; }
-    if(arm && arm->udplen && arm->kind!=D2K_QA_UDPLEN)return -1;
+    if(arm && arm->udplen && arm->kind!=D2S_QA_UDPLEN)return -1;
     /* Метки опытов не подтверждены — верить нельзя ни плечу, ни свойствам
        того же прогона. */
-    if (arm && arm->kind == D2K_QA_FLAKY) { return -1; }
-    if (arm && arm->kind == D2K_QA_SPLIT && !arm->len) {
+    if (arm && arm->kind == D2S_QA_FLAKY) { return -1; }
+    if (arm && arm->kind == D2S_QA_SPLIT && !arm->len) {
         return arm->original && arm->len == 0 ? quic_split_plan_text(buf, cap) : -1;
     }
-    const d2k_quic_arm *use = quic_arm_found(arm) ? arm : NULL;
-    if(use)return d2k_quic_arm_plan(use,use->len?use->bytes:NULL,use->len,buf,cap);
-    int junk=p->junk_ahead==D2K_PROP_YES;
+    const d2s_quic_arm *use = quic_arm_found(arm) ? arm : NULL;
+    if(use)return d2s_quic_arm_plan(use,use->len?use->bytes:NULL,use->len,buf,cap);
+    int junk=p->junk_ahead==D2S_PROP_YES;
     return quic_plan_text(NULL,NULL,0,junk,
-        !junk && p->longer==D2K_PROP_YES?QUIC_UDPLEN_INCREMENT:0,buf,cap);
+        !junk && p->longer==D2S_PROP_YES?QUIC_UDPLEN_INCREMENT:0,buf,cap);
 }
 
-int d2k_quic_delay_plan(char *buf, size_t cap) {
+int d2s_quic_delay_plan(char *buf, size_t cap) {
     if (!buf || cap == 0) { return -1; }
     size_t pos = 0;
     /* minexec=6: выдержку перед единственной посылкой старый исполнитель не
-       знает и молча выпустил бы её без паузы (см. d2k_plan.h). */
+       знает и молча выпустил бы её без паузы (см. d2s_plan.h). */
     if (append_fmt(buf, cap, &pos,
-                   "d2k-plan 1 6\nid 00000000000000000000000000000000\n"
+                   "d2s-plan 1 6\nid 00000000000000000000000000000000\n"
                    "proto udp quic\ndelay %u\n",
-                   (unsigned)D2K_QUIC_DELAY_US) != 0) {
+                   (unsigned)D2S_QUIC_DELAY_US) != 0) {
         return -1;
     }
     return 0;
 }
 
-int d2k_voice_arm_plan(const uint8_t *decoy, size_t dlen, unsigned copies,
+int d2s_voice_arm_plan(const uint8_t *decoy, size_t dlen, unsigned copies,
                        char *buf, size_t cap) {
     if (!decoy || dlen == 0 || !buf || cap == 0 || copies == 0 || copies > 32) { return -1; }
     size_t pos = 0;
@@ -232,35 +232,35 @@ int d2k_voice_arm_plan(const uint8_t *decoy, size_t dlen, unsigned copies,
         return -1;
     }
     if (append_fmt(buf, cap, &pos, "order forward\n") != 0) { return -1; }
-    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2K_PACE_SETTLE_US) != 0) {
+    if (append_fmt(buf, cap, &pos, "pace %u\n", (unsigned)D2S_PACE_SETTLE_US) != 0) {
         return -1;
     }
     return 0;
 }
 
-int d2k_voice_plan(const uint8_t *decoy, size_t dlen, char *buf, size_t cap) {
-    return d2k_voice_arm_plan(decoy, dlen, D2K_VOICE_DECOY_REPEATS, buf, cap);
+int d2s_voice_plan(const uint8_t *decoy, size_t dlen, char *buf, size_t cap) {
+    return d2s_voice_arm_plan(decoy, dlen, D2S_VOICE_DECOY_REPEATS, buf, cap);
 }
 
 
-#include "d2k_udpruntime.h"
-int d2k_quic_question_plan(const d2k_quic_arm_question *q,char *text,size_t cap) {
-    if(!q || !text || !cap || q->blob_len>sizeof ((d2k_quic_arm *)0)->bytes ||
+#include "d2s_udpruntime.h"
+int d2s_quic_question_plan(const d2s_quic_arm_question *q,char *text,size_t cap) {
+    if(!q || !text || !cap || q->blob_len>sizeof ((d2s_quic_arm *)0)->bytes ||
        (q->blob_len && !q->blob) || q->copies<0 || q->copies>255 ||
        q->ttl<0 || q->ttl>255 || (q->frag && (q->split || q->blob_len)))return -1;
     if(q->udplen) {
-        if(q->udplen!=D2K_QUIC_LENGTH_INCREMENT || q->blob_len || q->split ||
+        if(q->udplen!=D2S_QUIC_LENGTH_INCREMENT || q->blob_len || q->split ||
            q->ttl || q->frag || q->control || q->benign || q->copies>1)return -1;
-        d2k_quic_arm a={0};a.original=1;a.kind=D2K_QA_UDPLEN;a.udplen=q->udplen;
-        return d2k_quic_arm_plan(&a,NULL,0,text,cap);
+        d2s_quic_arm a={0};a.original=1;a.kind=D2S_QA_UDPLEN;a.udplen=q->udplen;
+        return d2s_quic_arm_plan(&a,NULL,0,text,cap);
     }
     if(!q->blob_len && !q->split && !q->frag && !q->ttl)
-        return snprintf(text,cap,"d2k-plan 1 1\nid 00000000000000000000000000000000\nproto udp quic\norder forward\n")>=(int)cap?-1:0;
-    d2k_quic_arm a;memset(&a,0,sizeof a);a.original=1;
-    a.kind=q->frag?D2K_QA_FRAG:q->split?D2K_QA_SPLIT:q->ttl?D2K_QA_TTL:D2K_QA_BLOB;
-    a.frag_kind=q->frag;a.frag_survives=D2K_PROP_YES;
+        return snprintf(text,cap,"d2s-plan 1 1\nid 00000000000000000000000000000000\nproto udp quic\norder forward\n")>=(int)cap?-1:0;
+    d2s_quic_arm a;memset(&a,0,sizeof a);a.original=1;
+    a.kind=q->frag?D2S_QA_FRAG:q->split?D2S_QA_SPLIT:q->ttl?D2S_QA_TTL:D2S_QA_BLOB;
+    a.frag_kind=q->frag;a.frag_survives=D2S_PROP_YES;
     a.ttl=q->ttl;a.copies=q->copies>0?q->copies:1;
     a.len=q->blob_len;
     if(a.len)memcpy(a.bytes,q->blob,a.len);
-    return d2k_quic_arm_plan(&a,a.len?a.bytes:NULL,a.len,text,cap);
+    return d2s_quic_arm_plan(&a,a.len?a.bytes:NULL,a.len,text,cap);
 }

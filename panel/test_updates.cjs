@@ -1,5 +1,5 @@
 "use strict";
-// Раздел «Обновления»: состояние из d2k-update.sh (state/update.json) и
+// Раздел «Обновления»: состояние из d2s-update.sh (state/update.json) и
 // команды службы /api/control/update-*; без роутера.
 const assert = require('node:assert/strict');
 const { App } = require('../internal/web/assets/panel.js');

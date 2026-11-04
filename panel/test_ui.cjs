@@ -109,7 +109,7 @@ assert.equal(ui.shapeLabel(undefined, undefined), 'протокол не ука�
 
 // Выжимка плана не показывает полезную нагрузку.
 {
-  const gist = ui.planGist('d2k-plan 1 1\nid 00\nproto tcp tls\npayload 1 0f0f0f0f\nsplit payload_start +1\norder reverse\n');
+  const gist = ui.planGist('d2s-plan 1 1\nid 00\nproto tcp tls\npayload 1 0f0f0f0f\nsplit payload_start +1\norder reverse\n');
   assert.equal(gist, 'split payload_start +1 · order reverse');
 }
 

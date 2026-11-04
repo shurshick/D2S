@@ -7,7 +7,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_journal.h"
+#include "d2s_journal.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -19,48 +19,48 @@ static int fails;
     } while (0)
 
 /* Транспорт здесь не предмет проверки — всегда 6 (TCP). */
-static d2k_key mk(uint16_t port) {
-    d2k_key k;
+static d2s_key mk(uint16_t port) {
+    d2s_key k;
     uint8_t s[4] = {192, 168, 1, 67}, d[4] = {1, 2, 3, 4};
     uint8_t sp[2], dp[2] = {0x01, 0xbb};
     memcpy(sp, &port, 2);
-    d2k_key_make(&k, 6, s, d, sp, dp);
+    d2s_key_make(&k, 6, s, d, sp, dp);
     return k;
 }
 
 int main(void) {
     /* --- порядок от старой к новой ---------------------------------------- */
     {
-        d2k_journal *j = d2k_journal_new(8);
+        d2s_journal *j = d2s_journal_new(8);
         CHECK(j != NULL, "журнал не создался");
-        CHECK(d2k_journal_count(j) == 0, "новый журнал не пуст");
-        CHECK(d2k_journal_at(j, 0) == NULL, "из пустого журнала что-то взялось");
+        CHECK(d2s_journal_count(j) == 0, "новый журнал не пуст");
+        CHECK(d2s_journal_at(j, 0) == NULL, "из пустого журнала что-то взялось");
 
         for (uint16_t i = 0; i < 5; i++) {
-            d2k_key k = mk(i);
-            d2k_journal_add(j, 1000 + i, &k, D2K_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
+            d2s_key k = mk(i);
+            d2s_journal_add(j, 1000 + i, &k, D2S_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
         }
-        CHECK(d2k_journal_count(j) == 5, "счётчик записей неверен");
+        CHECK(d2s_journal_count(j) == 5, "счётчик записей неверен");
         for (uint64_t i = 0; i < 5; i++) {
-            const d2k_jrn_entry *e = d2k_journal_at(j, (size_t)i);
+            const d2s_jrn_entry *e = d2s_journal_at(j, (size_t)i);
             CHECK(e && e->at_ns == 1000 + i, "порядок записей нарушен");
         }
-        CHECK(d2k_journal_dropped(j) == 0, "потери там, где ничего не терялось");
-        d2k_journal_free(j);
+        CHECK(d2s_journal_dropped(j) == 0, "потери там, где ничего не терялось");
+        d2s_journal_free(j);
     }
 
     /* --- переполнение: старое затирается, потери считаются ------------------ */
     {
-        d2k_journal *j = d2k_journal_new(4);
+        d2s_journal *j = d2s_journal_new(4);
         for (uint16_t i = 0; i < 10; i++) {
-            d2k_key k = mk(i);
-            d2k_journal_add(j, 2000 + i, &k, D2K_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
+            d2s_key k = mk(i);
+            d2s_journal_add(j, 2000 + i, &k, D2S_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
         }
-        CHECK(d2k_journal_count(j) == 4, "кольцо выросло за предел");
-        CHECK(d2k_journal_dropped(j) == 6, "потерянные записи не посчитаны");
+        CHECK(d2s_journal_count(j) == 4, "кольцо выросло за предел");
+        CHECK(d2s_journal_dropped(j) == 6, "потерянные записи не посчитаны");
         /* Остаться должны последние четыре: 2006..2009. */
         for (size_t i = 0; i < 4; i++) {
-            const d2k_jrn_entry *e = d2k_journal_at(j, i);
+            const d2s_jrn_entry *e = d2s_journal_at(j, i);
             if (!e || e->at_ns != 2006 + i) {
                 printf("ПРОВАЛ: на позиции %zu ожидалось %llu, пришло %llu\n",
                        i, (unsigned long long)(2006 + i),
@@ -68,22 +68,22 @@ int main(void) {
                 fails++;
             }
         }
-        CHECK(d2k_journal_at(j, 4) == NULL, "за пределом кольца что-то нашлось");
-        d2k_journal_free(j);
+        CHECK(d2s_journal_at(j, 4) == NULL, "за пределом кольца что-то нашлось");
+        d2s_journal_free(j);
     }
 
     /* --- обрезка имени ------------------------------------------------------ */
     {
-        d2k_journal *j = d2k_journal_new(4);
-        d2k_key k = mk(1);
+        d2s_journal *j = d2s_journal_new(4);
+        d2s_key k = mk(1);
         char longname[300];
         memset(longname, 'a', sizeof longname);
-        d2k_journal_add(j, 1, &k, D2K_JRN_HELLO_SNI, 0, 0, NULL,
+        d2s_journal_add(j, 1, &k, D2S_JRN_HELLO_SNI, 0, 0, NULL,
                         (const uint8_t *)longname, sizeof longname, NULL);
-        const d2k_jrn_entry *e = d2k_journal_at(j, 0);
-        CHECK(e && e->name_len == D2K_JRN_NAME_MAX, "имя обрезано не по пределу");
-        CHECK(e && strlen(e->name) == D2K_JRN_NAME_MAX, "имя не завершено нулём");
-        d2k_journal_free(j);
+        const d2s_jrn_entry *e = d2s_journal_at(j, 0);
+        CHECK(e && e->name_len == D2S_JRN_NAME_MAX, "имя обрезано не по пределу");
+        CHECK(e && strlen(e->name) == D2S_JRN_NAME_MAX, "имя не завершено нулём");
+        d2s_journal_free(j);
     }
 
     /* --- имя из сети может быть любым --------------------------------------
@@ -92,11 +92,11 @@ int main(void) {
      * выглядеть как несколько. Экранирование для HTML — дело панели, здесь
      * снимается только то, что ломает печать как таковую.                    */
     {
-        d2k_journal *j = d2k_journal_new(4);
-        d2k_key k = mk(1);
+        d2s_journal *j = d2s_journal_new(4);
+        d2s_key k = mk(1);
         const uint8_t nasty[] = {'a', '\n', 'b', 0x1b, '[', '2', 'J', 0x00, 'c', 0xff};
-        d2k_journal_add(j, 1, &k, D2K_JRN_HELLO_SNI, 0, 0, NULL, nasty, sizeof nasty, NULL);
-        const d2k_jrn_entry *e = d2k_journal_at(j, 0);
+        d2s_journal_add(j, 1, &k, D2S_JRN_HELLO_SNI, 0, 0, NULL, nasty, sizeof nasty, NULL);
+        const d2s_jrn_entry *e = d2s_journal_at(j, 0);
         CHECK(e != NULL, "запись с грязным именем не появилась");
         if (e) {
             CHECK(e->name_len == sizeof nasty, "длина грязного имени изменилась");
@@ -106,7 +106,7 @@ int main(void) {
                   "нулевой байт внутри имени обрезал строку");
             CHECK(strcmp(e->name, "a.b.[2J.c.") == 0, "замена байтов не та");
         }
-        d2k_journal_free(j);
+        d2s_journal_free(j);
     }
 
     /* --- подробности наблюдения ---------------------------------------------
@@ -114,37 +114,37 @@ int main(void) {
      * с нулевыми подробностями — разные вещи только на бумаге, поэтому здесь
      * проверяется, что переданное доезжает целиком.                          */
     {
-        d2k_journal *j = d2k_journal_new(4);
-        d2k_key k = mk(1);
-        d2k_jrn_detail det = {.ttl = 127, .ref_ttl = 124, .tos = 0x88, .ipid = 54321, .client_shape = 1};
-        d2k_journal_add(j, 1, &k, D2K_JRN_SUSPECT, D2K_SUSPECT_RST, 0, &det,
+        d2s_journal *j = d2s_journal_new(4);
+        d2s_key k = mk(1);
+        d2s_jrn_detail det = {.ttl = 127, .ref_ttl = 124, .tos = 0x88, .ipid = 54321, .client_shape = 1};
+        d2s_journal_add(j, 1, &k, D2S_JRN_SUSPECT, D2S_SUSPECT_RST, 0, &det,
                         NULL, 0, NULL);
-        const d2k_jrn_entry *e = d2k_journal_at(j, 0);
+        const d2s_jrn_entry *e = d2s_journal_at(j, 0);
         CHECK(e && e->d_ttl == 127, "TTL подозрительного пакета потерян");
         CHECK(e && e->d_ref_ttl == 124, "ориентир TTL потерян");
         CHECK(e && e->d_tos == 0x88, "ToS потерян");
         CHECK(e && e->d_ipid == 54321, "идентификатор IP потерян");
-        CHECK(e && e->code == D2K_SUSPECT_RST, "код причины потерян");
+        CHECK(e && e->code == D2S_SUSPECT_RST, "код причины потерян");
         CHECK(e && e->d_client_shape == 1, "flow protocol survives expiry in journal");
 
         /* Без подробностей поля обязаны остаться нулевыми, а не мусорными. */
-        d2k_journal_add(j, 2, &k, D2K_JRN_SUSPECT, D2K_SUSPECT_SILENT, 0, NULL,
+        d2s_journal_add(j, 2, &k, D2S_JRN_SUSPECT, D2S_SUSPECT_SILENT, 0, NULL,
                         NULL, 0, NULL);
-        e = d2k_journal_at(j, 1);
+        e = d2s_journal_at(j, 1);
         CHECK(e && e->d_ttl == 0 && e->d_ipid == 0,
               "запись без подробностей унаследовала чужие");
-        d2k_journal_free(j);
+        d2s_journal_free(j);
     }
 
     /* --- журнал нулевой глубины: законный режим ----------------------------- */
     {
-        d2k_journal *j = d2k_journal_new(0);
+        d2s_journal *j = d2s_journal_new(0);
         CHECK(j != NULL, "журнал нулевой глубины не создался");
-        d2k_key k = mk(1);
-        d2k_journal_add(j, 1, &k, D2K_JRN_HELLO_SNI, 0, 0, NULL, (const uint8_t *)"x", 1, NULL);
-        CHECK(d2k_journal_count(j) == 0, "в выключенный журнал что-то записалось");
-        CHECK(d2k_journal_dropped(j) == 0, "выключенный журнал считает потери");
-        d2k_journal_free(j);
+        d2s_key k = mk(1);
+        d2s_journal_add(j, 1, &k, D2S_JRN_HELLO_SNI, 0, 0, NULL, (const uint8_t *)"x", 1, NULL);
+        CHECK(d2s_journal_count(j) == 0, "в выключенный журнал что-то записалось");
+        CHECK(d2s_journal_dropped(j) == 0, "выключенный журнал считает потери");
+        d2s_journal_free(j);
     }
 
     /* --- идентификатор плана: двоичный, не чистится под печать --------------
@@ -154,18 +154,18 @@ int main(void) {
      * непечатные нарочно: на печатных эта проверка прошла бы и с дорогой
      * через name, то есть не проверяла бы ничего. */
     {
-        d2k_journal *j = d2k_journal_new(4);
+        d2s_journal *j = d2s_journal_new(4);
         CHECK(j != NULL, "журнал для идентификатора не создался");
-        d2k_key k = mk(7);
-        uint8_t id[D2K_PLAN_ID_LEN];
+        d2s_key k = mk(7);
+        uint8_t id[D2S_PLAN_ID_LEN];
         for (size_t i = 0; i < sizeof id; i++) { id[i] = (uint8_t)(0xA0 + i); }
-        uint8_t trial[D2K_TRIAL_ID_LEN];
+        uint8_t trial[D2S_TRIAL_ID_LEN];
         memset(trial, 0xA5, sizeof trial);
-        d2k_journal_add_applied(j, 42, &k, id, trial);
-        const d2k_jrn_entry *e = d2k_journal_at(j, 0);
+        d2s_journal_add_applied(j, 42, &k, id, trial);
+        const d2s_jrn_entry *e = d2s_journal_at(j, 0);
         CHECK(e != NULL, "запись применения не легла в журнал");
         if (e) {
-            CHECK(e->kind == D2K_JRN_PLAN_APPLIED, "вид записи не «план применён»");
+            CHECK(e->kind == D2S_JRN_PLAN_APPLIED, "вид записи не «план применён»");
             CHECK(memcmp(e->plan_id, id, sizeof id) == 0,
                   "идентификатор плана в журнале не тот, что положили");
             CHECK(memcmp(e->trial_id, trial, sizeof trial) == 0,
@@ -173,42 +173,42 @@ int main(void) {
         }
         /* Плана без записи REC_ID разбор не запрещает: поле обязано остаться
            нулевым, а не мусором — это и означает «плану нечем представиться». */
-        d2k_journal_add_applied(j, 43, &k, NULL, NULL);
-        const d2k_jrn_entry *e2 = d2k_journal_at(j, 1);
+        d2s_journal_add_applied(j, 43, &k, NULL, NULL);
+        const d2s_jrn_entry *e2 = d2s_journal_at(j, 1);
         CHECK(e2 != NULL, "вторая запись применения не легла в журнал");
         if (e2) {
             int zero = 1;
-            for (size_t i = 0; i < D2K_PLAN_ID_LEN; i++) {
+            for (size_t i = 0; i < D2S_PLAN_ID_LEN; i++) {
                 if (e2->plan_id[i] != 0) { zero = 0; }
             }
             CHECK(zero, "идентификатора не давали, а поле не нулевое");
         }
-        d2k_journal_free(j);
+        d2s_journal_free(j);
     }
 
     /* --- нулевые аргументы --------------------------------------------------- */
     {
-        d2k_journal_free(NULL);
-        d2k_journal_add(NULL, 1, NULL, 0, 0, 0, NULL, NULL, 0, NULL);
+        d2s_journal_free(NULL);
+        d2s_journal_add(NULL, 1, NULL, 0, 0, 0, NULL, NULL, 0, NULL);
         /* Хранить негде — записывать некуда, но и падать не на чем: у журнала
            нулевой глубины (и у отсутствующего) ячейки нет вовсе. */
-        d2k_journal_add_applied(NULL, 1, NULL, NULL, NULL);
+        d2s_journal_add_applied(NULL, 1, NULL, NULL, NULL);
         {
-            d2k_journal *off = d2k_journal_new(0);
-            d2k_key k0 = mk(9);
-            uint8_t id0[D2K_PLAN_ID_LEN];
+            d2s_journal *off = d2s_journal_new(0);
+            d2s_key k0 = mk(9);
+            uint8_t id0[D2S_PLAN_ID_LEN];
             memset(id0, 0x5A, sizeof id0);
-            d2k_journal_add_applied(off, 1, &k0, id0, NULL);
-            CHECK(d2k_journal_count(off) == 0, "в выключенный журнал легло применение");
-            d2k_journal_free(off);
+            d2s_journal_add_applied(off, 1, &k0, id0, NULL);
+            CHECK(d2s_journal_count(off) == 0, "в выключенный журнал легло применение");
+            d2s_journal_free(off);
         }
-        CHECK(d2k_journal_count(NULL) == 0, "счётчик нулевого журнала не ноль");
-        CHECK(d2k_journal_at(NULL, 0) == NULL, "из нулевого журнала что-то взялось");
-        CHECK(d2k_journal_dropped(NULL) == 0, "потери нулевого журнала не ноль");
-        d2k_journal *j = d2k_journal_new(4);
-        d2k_journal_add(j, 1, NULL, D2K_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
-        CHECK(d2k_journal_count(j) == 1, "запись без ключа потеряна");
-        d2k_journal_free(j);
+        CHECK(d2s_journal_count(NULL) == 0, "счётчик нулевого журнала не ноль");
+        CHECK(d2s_journal_at(NULL, 0) == NULL, "из нулевого журнала что-то взялось");
+        CHECK(d2s_journal_dropped(NULL) == 0, "потери нулевого журнала не ноль");
+        d2s_journal *j = d2s_journal_new(4);
+        d2s_journal_add(j, 1, NULL, D2S_JRN_HELLO_NONAME, 0, 0, NULL, NULL, 0, NULL);
+        CHECK(d2s_journal_count(j) == 1, "запись без ключа потеряна");
+        d2s_journal_free(j);
     }
 
     if (fails) {

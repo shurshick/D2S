@@ -5,7 +5,7 @@
 # обновление, остановка, возврат в прежний режим и удаление. Ни одна из них
 # не проверяется чтением скрипта: установщик правит /opt, ставит init-скрипт
 # и правила экрана, и «на взгляд правильно» здесь стоит ровно столько же,
-# сколько стоило в files/S99d2k до scripts/check_firewall.sh — то есть нисколько.
+# сколько стоило в files/S99d2s до scripts/check_firewall.sh — то есть нисколько.
 #
 # Роутер не трогается ничем. Всё происходит в контейнере, чей /opt и чей
 # сетевой namespace создаются заново на каждый запуск, и который после
@@ -49,8 +49,8 @@ cat > "$WORK/install-lab.sh" <<'DRIVER'
 set -e
 cd /w
 
-INIT=/opt/etc/init.d/S99d2k
-DIR=/opt/d2k
+INIT=/opt/etc/init.d/S99d2s
+DIR=/opt/d2s
 REL=/tmp/rel
 
 fail() { echo "ПРОВАЛ: $*" >&2; dump; exit 1; }
@@ -58,23 +58,23 @@ dump() {
     echo "--- статус ---";  [ -x "$INIT" ] && "$INIT" status 2>&1 || true
     echo "--- API-панели ---"; curl -fsS http://127.0.0.1:8090/api/status 2>&1 || true; echo
     echo "--- повторная диагностика reapply ---"; sh -x "$INIT" reapply 2>&1 || true
-    echo "--- правила ---"; iptables -t mangle -S 2>&1 | grep -i d2k || echo "(нет)"
+    echo "--- правила ---"; iptables -t mangle -S 2>&1 | grep -i d2s || echo "(нет)"
     echo "--- журналы ---"; tail -n 15 "$DIR"/log/*.log 2>/dev/null || true
 }
 sha() { sha256sum "$1" 2>/dev/null | cut -d' ' -f1; }
-# Действия панели асинхронны (POST отвечает «запущено», S99d2k идёт фоном):
+# Действия панели асинхронны (POST отвечает «запущено», S99d2s идёт фоном):
 # итог проверяем, дав ему до 30 с, а не в ту же миллисекунду.
 await() { for _ in $(seq 1 30); do sh -c "$1" && return 0; sleep 1; done; sh -c "$1"; }
 # POST действия панели. Пока предыдущее действие идёт, панель отвечает 409
 # «Предыдущая команда ещё выполняется» — это не отказ, ждём и повторяем.
 panel_post() {
     for _ in $(seq 1 60); do
-        panel_curl -sS -X POST -H 'Origin: http://127.0.0.1:8090' "http://127.0.0.1:8090/api/control/$1" >/tmp/d2k-panel-post.json 2>/dev/null || true
-        grep -q 'Предыдущая команда ещё выполняется' /tmp/d2k-panel-post.json || break
+        panel_curl -sS -X POST -H 'Origin: http://127.0.0.1:8090' "http://127.0.0.1:8090/api/control/$1" >/tmp/d2s-panel-post.json 2>/dev/null || true
+        grep -q 'Предыдущая команда ещё выполняется' /tmp/d2s-panel-post.json || break
         sleep 1
     done
-    cat /tmp/d2k-panel-post.json
-    grep -q '"ok":true' /tmp/d2k-panel-post.json || return 1
+    cat /tmp/d2s-panel-post.json
+    grep -q '"ok":true' /tmp/d2s-panel-post.json || return 1
     # Принятая команда идёт фоном: ждём её итога (control_state != running),
     # чтобы следующие проверки читали результат, а не полпути.
     for _ in $(seq 1 60); do
@@ -94,7 +94,7 @@ nfq6_direct() {
         ip6tables -t mangle -I OUTPUT -d ::1 -p "$proto" \
             -j NFQUEUE --queue-num 2000 --queue-bypass
     done
-    /tmp/d2k-ipv6-direct || fail "IPv6 TCP/UDP не проходит очередь"
+    /tmp/d2s-ipv6-direct || fail "IPv6 TCP/UDP не проходит очередь"
     ip6tables -t mangle -nvx -L OUTPUT | awk '
         $3 == "NFQUEUE" && $1 > 0 { seen++ } END { exit seen == 2 ? 0 : 1 }' \
         || fail "прямой IPv6 тест не прошёл оба NFQUEUE правила"
@@ -118,38 +118,38 @@ echo "арка: $(uname -m) -> $ARCH"
 echo "== сборка того, что будет установлено =="
 # Сборка НАТИВНАЯ: контейнер той же арки, что и роутер Марка (aarch64).
 # Кросс-сборка проверяется отдельно, гейтом; здесь проверяется установка.
-make -s -C core d2kc d2kfetch
-make -s -C datapath d2kd
-cc -Wall -Wextra -Werror -o /tmp/d2k-ipv6-direct tests/ipv6-direct.c
+make -s -C core d2sc d2sfetch
+make -s -C datapath d2sd
+cc -Wall -Wextra -Werror -o /tmp/d2s-ipv6-direct tests/ipv6-direct.c
 
 mkdir -p "$REL/builds" "$REL/files/fake" "$REL/internal/web/assets" "$REL/scripts"
 cp scripts/select-panel-ip.sh scripts/architecture.sh scripts/check-cpu.sh "$REL/scripts/"
-cp core/d2kc     "$REL/builds/d2kc-linux-$ARCH"
-cp core/d2kfetch "$REL/builds/d2kfetch-linux-$ARCH"
-cp datapath/d2kd "$REL/builds/d2kd-linux-$ARCH"
+cp core/d2sc     "$REL/builds/d2sc-linux-$ARCH"
+cp core/d2sfetch "$REL/builds/d2sfetch-linux-$ARCH"
+cp datapath/d2sd "$REL/builds/d2sd-linux-$ARCH"
 # Для лабораторной установки собирается текущий C-прокси. Статический OpenSSL
 # для роутерного выпуска по-прежнему собирает scripts/build-router.sh.
-make -s -C telegram BUILD_DIR=build-lab d2ktg
-cp telegram/build-lab/d2ktg "$REL/builds/d2ktg-linux-$ARCH"
+make -s -C telegram BUILD_DIR=build-lab d2stg
+cp telegram/build-lab/d2stg "$REL/builds/d2stg-linux-$ARCH"
 make -s -C panel clean >/dev/null
-make -s -C panel d2kpanel
-cp panel/d2kpanel "$REL/builds/d2kpanel-linux-$ARCH"
-cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2o-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
-cc -O2 -std=c11 -o "$REL/builds/d2o-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
-cp files/d2k-lan.sh files/d2k-meta-dns-core.sh files/d2k-meta-dns-library.sh files/d2k-meta-dns-scheduler-core.sh files/d2k-whatsapp-media.sh files/S96d2o-resolver files/S97d2o-dns-watch "$REL/files/"
+make -s -C panel d2spanel
+cp panel/d2spanel "$REL/builds/d2spanel-linux-$ARCH"
+cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2s-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
+cc -O2 -std=c11 -o "$REL/builds/d2s-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
+cp files/d2s-lan.sh files/d2s-meta-dns-core.sh files/d2s-meta-dns-library.sh files/d2s-meta-dns-scheduler-core.sh files/d2s-whatsapp-media.sh files/S96d2s-resolver files/S97d2s-dns-watch "$REL/files/"
 
 cp internal/web/assets/index.html internal/web/assets/panel.css internal/web/assets/panel.js internal/web/assets/telegram-flow.js internal/web/assets/telegram-flow-prototype.js internal/web/assets/diagnostics.js internal/web/assets/gsap.js "$REL/internal/web/assets/"
 cp internal/web/assets/favicon.svg "$REL/internal/web/assets/"
 mkdir -p "$REL/internal/web/assets/fonts"
 cp internal/web/assets/fonts/onest.woff2 internal/web/assets/fonts/OFL-onest.txt internal/web/assets/fonts/jbmono.woff2 internal/web/assets/fonts/OFL-jbmono.txt "$REL/internal/web/assets/fonts/"
-cp files/S99d2k files/config files/d2k-fw-heal.sh files/001-d2k.sh "$REL/files/"
-cp files/d2k-ppe-deoffload.sh files/d2k-log-maintenance.sh files/d2k-update.sh "$REL/files/"
-cp files/d2k-openwrt-init "$REL/files/"
-cp files/d2k-tg-firewall.sh files/d2k-tg-watchdog.sh files/d2k-instagram-dns.sh \
-    files/d2k-instagram-dns-scheduler.sh files/meta-ranges.txt files/tg-roots.pem "$REL/files/"
+cp files/S99d2s files/config files/d2s-fw-heal.sh files/001-d2s.sh "$REL/files/"
+cp files/d2s-ppe-deoffload.sh files/d2s-log-maintenance.sh files/d2s-update.sh "$REL/files/"
+cp files/d2s-openwrt-init "$REL/files/"
+cp files/d2s-tg-firewall.sh files/d2s-tg-watchdog.sh files/d2s-instagram-dns.sh \
+    files/d2s-instagram-dns-scheduler.sh files/meta-ranges.txt files/tg-roots.pem "$REL/files/"
 cp files/fake/stun.bin files/fake/quic_initial_dbankcloud_ru.bin "$REL/files/fake/"
-# В лаборатории watchdog также проверяет только локальный heartbeat d2ktg.
-# Every path the installer will fetch must be staged: with D2K_LOCAL it dies
+# В лаборатории watchdog также проверяет только локальный heartbeat d2stg.
+# Every path the installer will fetch must be staged: with D2S_LOCAL it dies
 # on the first missing file, before installing anything (install.sh fetch).
 for staged in $(sed -n 's/^fetch "\([^"]*\)".*/\1/p' scripts/install.sh | sed "s/\\\$ARCH/$ARCH/"); do
     [ -s "$REL/$staged" ] || fail "лабораторный пакет без $staged — установщик его потребует"
@@ -157,13 +157,13 @@ done
 
 # Keenetic DNS lifecycle is exercised with a stateful ndmc double. curl is
 # wrapped only for the external resolver and Instagram probes; the real curl
-# still checks the local D2K panel below.
-mkdir -p /tmp/d2k-test-bin
-mkdir -p /tmp/d2k-install-bin
+# still checks the local D2S panel below.
+mkdir -p /tmp/d2s-test-bin
+mkdir -p /tmp/d2s-install-bin
 LAN_TEST_IP=$(hostname -I | awk '{print $1}')
 [ -n "$LAN_TEST_IP" ] || fail "не определить IPv4 контейнера для проверки LAN-панели"
 export LAN_TEST_IP
-cat > /tmp/d2k-install-bin/ip <<'IP'
+cat > /tmp/d2s-install-bin/ip <<'IP'
 #!/bin/sh
 case "$*" in
     "-4 -o addr show scope global")
@@ -175,27 +175,27 @@ case "$*" in
     *) echo "unexpected ip invocation: $*" >&2; exit 2 ;;
 esac
 IP
-chmod +x /tmp/d2k-install-bin/ip
-export PATH="/tmp/d2k-install-bin:$PATH"
-cat > /tmp/d2k-test-bin/ndmc <<'NDMC'
+chmod +x /tmp/d2s-install-bin/ip
+export PATH="/tmp/d2s-install-bin:$PATH"
+cat > /tmp/d2s-test-bin/ndmc <<'NDMC'
 #!/bin/sh
 case "$*" in
-    *"show running-config"*) cat /tmp/d2k-ndmc-state ;;
+    *"show running-config"*) cat /tmp/d2s-ndmc-state ;;
     *"system configuration save"*) : ;;
     *"-c ip host "*)
         set -- $*
-        printf 'ip host %s %s\n' "$4" "$5" >> /tmp/d2k-ndmc-state
+        printf 'ip host %s %s\n' "$4" "$5" >> /tmp/d2s-ndmc-state
         ;;
     *"-c no ip host "*)
         set -- $*
         host=$5; ip=$6
-        awk -v h="$host" -v ip="$ip" '!( $1=="ip" && $2=="host" && $3==h && $4==ip )' /tmp/d2k-ndmc-state > /tmp/d2k-ndmc-state.new
-        mv /tmp/d2k-ndmc-state.new /tmp/d2k-ndmc-state
+        awk -v h="$host" -v ip="$ip" '!( $1=="ip" && $2=="host" && $3==h && $4==ip )' /tmp/d2s-ndmc-state > /tmp/d2s-ndmc-state.new
+        mv /tmp/d2s-ndmc-state.new /tmp/d2s-ndmc-state
         ;;
     *) echo "unexpected ndmc: $*" >&2; exit 2 ;;
 esac
 NDMC
-cat > /tmp/d2k-test-bin/curl <<'CURL'
+cat > /tmp/d2s-test-bin/curl <<'CURL'
 #!/bin/sh
 case "$*" in
     *https://192.0.2.44.nip.io:9443/resolve*)
@@ -209,7 +209,7 @@ case "$*" in
 esac
 exec /usr/bin/curl "$@"
 CURL
-cat > /tmp/d2k-test-bin/d2ktg <<'TGPROBE'
+cat > /tmp/d2s-test-bin/d2stg <<'TGPROBE'
 #!/bin/sh
 if [ "$1" = --check-instagram-ip ]; then
     [ "$#" = 4 ] || exit 2
@@ -218,15 +218,15 @@ if [ "$1" = --check-instagram-ip ]; then
         *) exit 1 ;;
     esac
 fi
-exec /opt/sbin/d2ktg "$@"
+exec /opt/sbin/d2stg "$@"
 TGPROBE
-chmod +x /tmp/d2k-test-bin/ndmc /tmp/d2k-test-bin/curl /tmp/d2k-test-bin/d2ktg
-printf 'ip host www.instagram.com 157.240.9.175\nip host instagram.com 203.0.113.10\nip host unrelated.example 192.0.2.7\n' > /tmp/d2k-ndmc-state
-export D2K_STUB_PATH=/tmp/d2k-test-bin
+chmod +x /tmp/d2s-test-bin/ndmc /tmp/d2s-test-bin/curl /tmp/d2s-test-bin/d2stg
+printf 'ip host www.instagram.com 157.240.9.175\nip host instagram.com 203.0.113.10\nip host unrelated.example 192.0.2.7\n' > /tmp/d2s-ndmc-state
+export D2S_STUB_PATH=/tmp/d2s-test-bin
 # The integration fixture provides an explicit test resolver; its curl wrapper
 # above serves the fixed response. Without this, refresh correctly skips when
-# D2K_RELAY_URL is unset and the lifecycle check has nothing to assert.
-export D2K_RELAY_URL=https://192.0.2.44.nip.io:9443/resolve
+# D2S_RELAY_URL is unset and the lifecycle check has nothing to assert.
+export D2S_RELAY_URL=https://192.0.2.44.nip.io:9443/resolve
 panel_curl() {
     curl --connect-to "127.0.0.1:8090:$LAN_TEST_IP:8090" "$@"
 }
@@ -237,52 +237,52 @@ CLEAN_RULES=$(rules)
 
 echo "== 1. чистая установка =="
 [ -e "$DIR" ] && fail "система не чистая: $DIR уже есть"
-D2K_LOCAL="$REL" sh scripts/install.sh 2>&1 | tee /tmp/install1.log
+D2S_LOCAL="$REL" sh scripts/install.sh 2>&1 | tee /tmp/install1.log
 [ "$(tail -1 /tmp/install1.log)" != "" ] || true
 grep -q "готово" /tmp/install1.log || fail "установка с чистого состояния не прошла: $(tail -3 /tmp/install1.log)"
 [ "$(stat -c '%a' "$DIR/config")" = 600 ] || fail "конфигурация должна быть доступна только root"
-[ "$(grep -c '^MODE=apply$' "$DIR/config")" = 1 ] || fail "чистая установка должна включать активный режим D2K"
+[ "$(grep -c '^MODE=apply$' "$DIR/config")" = 1 ] || fail "чистая установка должна включать активный режим D2S"
 [ "$(grep -c "^PANEL_LISTEN=$LAN_TEST_IP:8090$" "$DIR/config")" = 1 ] || fail "чистая установка не привязала панель к LAN-адресу"
 
 "$INIT" status | grep -q "датапат: работает" || fail "после установки датапат не работает"
 "$INIT" status | grep -q "правила: стоят"    || fail "после установки правил нет"
 "$INIT" status | grep -q "очередь .*привязана" || fail "очередь не привязана"
-ip6tables -t mangle -C POSTROUTING -j D2K_OUT || fail "установщик не включил IPv6"
+ip6tables -t mangle -C POSTROUTING -j D2S_OUT || fail "установщик не включил IPv6"
 nfq6_direct
-[ -x /opt/sbin/d2kd ] || fail "d2kd не установлен"
-[ -x /opt/sbin/d2kc ] || fail "d2kc не установлен"
-[ -x /opt/sbin/d2kfetch ] || fail "d2kfetch не установлен"
-[ -x /opt/sbin/d2ktg ] || fail "C-туннель Telegram не установлен"
-[ -x "$DIR/d2k-tg-firewall.sh" ] || fail "не установлен firewall Telegram"
-[ -x "$DIR/d2k-tg-watchdog.sh" ] || fail "не установлен сторож Telegram"
-[ -x "$DIR/d2k-instagram-dns.sh" ] || fail "не установлен Instagram DNS manager"
+[ -x /opt/sbin/d2sd ] || fail "d2sd не установлен"
+[ -x /opt/sbin/d2sc ] || fail "d2sc не установлен"
+[ -x /opt/sbin/d2sfetch ] || fail "d2sfetch не установлен"
+[ -x /opt/sbin/d2stg ] || fail "C-туннель Telegram не установлен"
+[ -x "$DIR/d2s-tg-firewall.sh" ] || fail "не установлен firewall Telegram"
+[ -x "$DIR/d2s-tg-watchdog.sh" ] || fail "не установлен сторож Telegram"
+[ -x "$DIR/d2s-instagram-dns.sh" ] || fail "не установлен Instagram DNS manager"
 [ -s "$DIR/files/meta-ranges.txt" ] || fail "не установлены диапазоны Meta для проверки VPS-ответа"
 # The first DNS refresh runs in the background (service scheduler), not in the installer.
 dns_wait=0
 while [ "$dns_wait" -lt 30 ] && [ ! -s "$DIR/state/instagram-dns-last-success" ]; do
     sleep 1; dns_wait=$((dns_wait + 1))
 done
-[ "$(grep -c '^ip host instagram.com 157.240.9.174$' /tmp/d2k-ndmc-state)" = 1 ] || fail "фоновое обновление не применило VPS Instagram-резолв"
-[ "$(grep -c '^ip host web.whatsapp.com 157.240.9.52$' /tmp/d2k-ndmc-state)" = 1 ] || fail "фоновое обновление не прописало WhatsApp Web"
+[ "$(grep -c '^ip host instagram.com 157.240.9.174$' /tmp/d2s-ndmc-state)" = 1 ] || fail "фоновое обновление не применило VPS Instagram-резолв"
+[ "$(grep -c '^ip host web.whatsapp.com 157.240.9.52$' /tmp/d2s-ndmc-state)" = 1 ] || fail "фоновое обновление не прописало WhatsApp Web"
 [ "$(grep -c '^instagram.com 157.240.9.174$' "$DIR/state/instagram-ip-hosts.tsv")" = 1 ] || fail "установщик не сохранил владение Instagram-записью"
 [ "$(grep -c '^www.instagram.com 157.240.9.175$' "$DIR/state/instagram-ip-hosts.tsv" || true)" = 0 ] || fail "установщик присвоил себе заранее существующую запись"
 [ -s "$DIR/files/tg-roots.pem" ] || fail "не установлен CA bundle Telegram"
-/opt/sbin/d2ktg --version | grep -q 'telegram-local-tcp-epoll' || fail "нет локального Telegram-прокси на C"
+/opt/sbin/d2stg --version | grep -q 'telegram-local-tcp-epoll' || fail "нет локального Telegram-прокси на C"
 [ "$(grep -c '^TG_ENABLED=1$' "$DIR/config")" = 1 ] || fail "Telegram должен быть включён по умолчанию"
 [ "$(grep -c '^TG_MODE=local$' "$DIR/config")" = 1 ] || fail "Telegram должен использовать локальный режим"
 [ "$(grep -Ec '^[[:space:]]*TG_RELAY_(URL|SECRET)=|^[[:space:]]*TG_ENROLL_PORT=' "$DIR/config" || true)" = 0 ] || fail "новая конфигурация не должна содержать relay-поля"
-[ -e "$DIR/run/d2ktg.pid" ] || fail "Telegram не запущен установщиком"
-[ -x /opt/sbin/d2kpanel ] || fail "C-панель не установлена"
-[ ! -x /opt/sbin/d2k ] || fail "legacy Go-панель осталась установленной"
+[ -e "$DIR/run/d2stg.pid" ] || fail "Telegram не запущен установщиком"
+[ -x /opt/sbin/d2spanel ] || fail "C-панель не установлена"
+[ ! -x /opt/sbin/d2s ] || fail "legacy Go-панель осталась установленной"
 [ -s "$DIR/panel/index.html" ] && [ -s "$DIR/panel/panel.css" ] && [ -s "$DIR/panel/panel.js" ] && [ -s "$DIR/panel/telegram-flow-prototype.js" ] && [ -s "$DIR/panel/gsap.js" ] && [ -s "$DIR/panel/fonts/onest.woff2" ] && [ -s "$DIR/panel/fonts/jbmono.woff2" ] || fail "не установлены статические ресурсы панели"
 [ -x "$INIT" ]        || fail "init-скрипт не установлен"
-[ -f "$DIR/run/d2k-panel.pid" ] || fail "C-панель не получила pid-файл"
-PANEL_PID=$(cat "$DIR/run/d2k-panel.pid")
+[ -f "$DIR/run/d2s-panel.pid" ] || fail "C-панель не получила pid-файл"
+PANEL_PID=$(cat "$DIR/run/d2s-panel.pid")
 [ -d "/proc/$PANEL_PID" ] || fail "C-панель умерла после старта"
 PANEL_OK=0
 i=0
 while [ "$i" -lt 30 ]; do
-    if panel_curl -fsS http://127.0.0.1:8090/api/status -o /tmp/d2k-panel-status.json; then
+    if panel_curl -fsS http://127.0.0.1:8090/api/status -o /tmp/d2s-panel-status.json; then
         PANEL_OK=1
         break
     fi
@@ -290,37 +290,37 @@ while [ "$i" -lt 30 ]; do
     sleep 0.1
 done
 [ "$PANEL_OK" = 1 ] || fail "C-панель не отдала /api/status"
-grep -q '"snapshot"' /tmp/d2k-panel-status.json || fail "API не вернул status snapshot"
-grep -q '"controls_enabled":true' /tmp/d2k-panel-status.json || fail "loopback-панель не включила управление сервисом"
-grep -q '"telegram_enabled":true' /tmp/d2k-panel-status.json || fail "API считает включённый Telegram выключенным"
-grep -q '"telegram_configured":true' /tmp/d2k-panel-status.json || fail "API не распознал локальный режим Telegram"
-grep -q '"telegram_status":"local"' /tmp/d2k-panel-status.json || fail "панель не показала запущенный локальный прокси"
-if grep -q 'TG_RELAY_SECRET\|relay_secret\|telegram.*secret' /tmp/d2k-panel-status.json; then
+grep -q '"snapshot"' /tmp/d2s-panel-status.json || fail "API не вернул status snapshot"
+grep -q '"controls_enabled":true' /tmp/d2s-panel-status.json || fail "loopback-панель не включила управление сервисом"
+grep -q '"telegram_enabled":true' /tmp/d2s-panel-status.json || fail "API считает включённый Telegram выключенным"
+grep -q '"telegram_configured":true' /tmp/d2s-panel-status.json || fail "API не распознал локальный режим Telegram"
+grep -q '"telegram_status":"local"' /tmp/d2s-panel-status.json || fail "панель не показала запущенный локальный прокси"
+if grep -q 'TG_RELAY_SECRET\|relay_secret\|telegram.*secret' /tmp/d2s-panel-status.json; then
     fail "API раскрыл поле или значение секрета ретранслятора"
 fi
 panel_curl -fsS http://127.0.0.1:8090/ | grep -q 'id="app"' || fail "C-панель не отдала главную страницу через LAN-привязку"
-panel_curl -fsS http://127.0.0.1:8090/assets/gsap.js -o /tmp/d2k-gsap.js || fail "C-панель не отдала библиотеку анимаций"
-panel_curl -fsS http://127.0.0.1:8090/assets/telegram-flow.js -o /tmp/d2k-telegram-flow.js || fail "C-панель не отдала анимацию Telegram"
-panel_curl -fsS http://127.0.0.1:8090/assets/telegram-flow-prototype.js -o /tmp/d2k-telegram-flow-prototype.js || fail "C-панель не отдала макет Telegram"
-panel_curl -fsS http://127.0.0.1:8090/assets/onest.woff2 -o /tmp/d2k-onest.woff2 || fail "C-панель не отдала шрифт"
+panel_curl -fsS http://127.0.0.1:8090/assets/gsap.js -o /tmp/d2s-gsap.js || fail "C-панель не отдала библиотеку анимаций"
+panel_curl -fsS http://127.0.0.1:8090/assets/telegram-flow.js -o /tmp/d2s-telegram-flow.js || fail "C-панель не отдала анимацию Telegram"
+panel_curl -fsS http://127.0.0.1:8090/assets/telegram-flow-prototype.js -o /tmp/d2s-telegram-flow-prototype.js || fail "C-панель не отдала макет Telegram"
+panel_curl -fsS http://127.0.0.1:8090/assets/onest.woff2 -o /tmp/d2s-onest.woff2 || fail "C-панель не отдала шрифт"
 panel_post stop | grep -q '"ok":true' || fail "локальная панель не остановила движок"
 [ -d "/proc/$PANEL_PID" ] || fail "остановка движка погасила панель управления"
-# Действие панели асинхронно: POST отвечает «запущено», S99d2k stop идёт фоном.
+# Действие панели асинхронно: POST отвечает «запущено», S99d2s stop идёт фоном.
 # Ждём его итога (до 30 с), а не опрашиваем статус в ту же миллисекунду.
 for _ in $(seq 1 30); do
-    panel_curl -fsS http://127.0.0.1:8090/api/status -o /tmp/d2k-panel-stopped.json || fail "панель недоступна после остановки движка"
-    grep -q '"engine_running":false' /tmp/d2k-panel-stopped.json && break
+    panel_curl -fsS http://127.0.0.1:8090/api/status -o /tmp/d2s-panel-stopped.json || fail "панель недоступна после остановки движка"
+    grep -q '"engine_running":false' /tmp/d2s-panel-stopped.json && break
     sleep 1
 done
-grep -q '"engine_running":false' /tmp/d2k-panel-stopped.json || fail "после остановки API продолжает считать движок работающим"
-grep -q '"controller_running":false' /tmp/d2k-panel-stopped.json || fail "после остановки API продолжает считать контроллер работающим"
-grep -Eq '"linked"[[:space:]]*:[[:space:]]*false' /tmp/d2k-panel-stopped.json || fail "API сохранил linked=true после остановки движка"
+grep -q '"engine_running":false' /tmp/d2s-panel-stopped.json || fail "после остановки API продолжает считать движок работающим"
+grep -q '"controller_running":false' /tmp/d2s-panel-stopped.json || fail "после остановки API продолжает считать контроллер работающим"
+grep -Eq '"linked"[[:space:]]*:[[:space:]]*false' /tmp/d2s-panel-stopped.json || fail "API сохранил linked=true после остановки движка"
 panel_post start | grep -q '"ok":true' || fail "локальная панель не запустила движок"
 await "\"$INIT\" status | grep -q 'датапат: работает'" || fail "движок не восстановился из панели"
 echo "== параллельное восстановление правил =="
 REAPPLY_PIDS=
 for i in 1 2 3 4; do
-    sh "$INIT" reapply >"/tmp/d2k-reapply-$i.log" 2>&1 &
+    sh "$INIT" reapply >"/tmp/d2s-reapply-$i.log" 2>&1 &
     REAPPLY_PIDS="$REAPPLY_PIDS $!"
 done
 REAPPLY_FAILED=0
@@ -329,54 +329,54 @@ for pid in $REAPPLY_PIDS; do wait "$pid" || REAPPLY_FAILED=1; done
 "$INIT" status | grep -q "правила: стоят" || fail "параллельное восстановление оставило firewall частичным"
 panel_post telegram-disable | grep -q '"ok":true' || fail "панель не выключила Telegram"
 echo "== Telegram: локальный старт, redirect, отключение =="
-# Сторож включается отдельно, после запуска d2ktg и появления heartbeat.
-chmod -x "$DIR/d2k-tg-watchdog.sh"
+# Сторож включается отдельно, после запуска d2stg и появления heartbeat.
+chmod -x "$DIR/d2s-tg-watchdog.sh"
 panel_post telegram-enable | grep -q '"ok":true' || fail "панель не включила настроенный Telegram-туннель"
-await "[ -f \"$DIR/run/d2ktg.pid\" ]" || fail "d2ktg не создал pid-файл после включения"
-TG_PID_NOW=$(cat "$DIR/run/d2ktg.pid")
-[ -d "/proc/$TG_PID_NOW" ] || fail "d2ktg завершился после включения"
+await "[ -f \"$DIR/run/d2stg.pid\" ]" || fail "d2stg не создал pid-файл после включения"
+TG_PID_NOW=$(cat "$DIR/run/d2stg.pid")
+[ -d "/proc/$TG_PID_NOW" ] || fail "d2stg завершился после включения"
 await "\"$INIT\" status | grep -q 'Telegram tunnel: работает'" || fail "служба не показывает активный Telegram-туннель"
-ipset test d2k_tg_dc 149.154.167.51 >/dev/null 2>&1 || fail "ipset не содержит Telegram DC IPv4"
-! ipset test d2k_tg_dc 203.0.113.1 >/dev/null 2>&1 || fail "ipset ошибочно включает посторонний IPv4"
-iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram PREROUTING redirect"
-iptables -t nat -C OUTPUT -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram OUTPUT redirect"
-iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram PREROUTING redirect для 5222"
-iptables -t nat -C OUTPUT -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram OUTPUT redirect для 5222"
-if ipset test d2k_tg_dc6 2001:67c:4e8::1 >/dev/null 2>&1; then
+ipset test d2s_tg_dc 149.154.167.51 >/dev/null 2>&1 || fail "ipset не содержит Telegram DC IPv4"
+! ipset test d2s_tg_dc 203.0.113.1 >/dev/null 2>&1 || fail "ipset ошибочно включает посторонний IPv4"
+iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram PREROUTING redirect"
+iptables -t nat -C OUTPUT -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram OUTPUT redirect"
+iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram PREROUTING redirect для 5222"
+iptables -t nat -C OUTPUT -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "нет Telegram OUTPUT redirect для 5222"
+if ipset test d2s_tg_dc6 2001:67c:4e8::1 >/dev/null 2>&1; then
     echo "IPv6 Telegram set and rules are available"
     if ip6tables -t nat -S >/dev/null 2>&1; then
         for port in 443 5222; do
-            ip6tables -t nat -C PREROUTING -p tcp --dport "$port" -m set --match-set d2k_tg_dc6 dst -j REDIRECT --to-port 1443 || fail "нет IPv6 PREROUTING redirect для порта $port"
-            ip6tables -t nat -C OUTPUT -p tcp --dport "$port" -m set --match-set d2k_tg_dc6 dst -j REDIRECT --to-port 1443 || fail "нет IPv6 OUTPUT redirect для порта $port"
+            ip6tables -t nat -C PREROUTING -p tcp --dport "$port" -m set --match-set d2s_tg_dc6 dst -j REDIRECT --to-port 1443 || fail "нет IPv6 PREROUTING redirect для порта $port"
+            ip6tables -t nat -C OUTPUT -p tcp --dport "$port" -m set --match-set d2s_tg_dc6 dst -j REDIRECT --to-port 1443 || fail "нет IPv6 OUTPUT redirect для порта $port"
         done
-        ip6tables -t nat -C OUTPUT -m mark --mark 0x31 -m comment --comment d2k-tg-outbound -j RETURN || fail "нет исключения помеченных IPv6-подключений C11"
-        ! ip6tables -C FORWARD -p tcp -m set --match-set d2k_tg_dc6 dst -j REJECT --reject-with tcp-reset || fail "IPv6 Telegram трафик всё ещё отклоняется"
-        ! ip6tables -C OUTPUT -p tcp -m set --match-set d2k_tg_dc6 dst -j REJECT --reject-with tcp-reset || fail "IPv6 Telegram исходящие подключения всё ещё отклоняются"
+        ip6tables -t nat -C OUTPUT -m mark --mark 0x31 -m comment --comment d2s-tg-outbound -j RETURN || fail "нет исключения помеченных IPv6-подключений C11"
+        ! ip6tables -C FORWARD -p tcp -m set --match-set d2s_tg_dc6 dst -j REJECT --reject-with tcp-reset || fail "IPv6 Telegram трафик всё ещё отклоняется"
+        ! ip6tables -C OUTPUT -p tcp -m set --match-set d2s_tg_dc6 dst -j REJECT --reject-with tcp-reset || fail "IPv6 Telegram исходящие подключения всё ещё отклоняются"
     else
         echo "В ядре контейнера недоступен IPv6 NAT (на роутере используется nftables)"
     fi
 else
     echo "IPv6 Telegram rules unavailable in this container kernel (donor behavior is best-effort)"
 fi
-iptables -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443
-chmod +x "$DIR/d2k-tg-watchdog.sh"
-if timeout 2 "$DIR/d2k-tg-watchdog.sh" >/tmp/d2k-tg-watchdog.log 2>&1; then
+iptables -t nat -D PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443
+chmod +x "$DIR/d2s-tg-watchdog.sh"
+if timeout 2 "$DIR/d2s-tg-watchdog.sh" >/tmp/d2s-tg-watchdog.log 2>&1; then
     fail "watchdog неожиданно завершился вместо продолжения цикла"
 else
     WATCHDOG_RC=$?
     [ "$WATCHDOG_RC" = 124 ] || [ "$WATCHDOG_RC" = 143 ] || {
-        cat /tmp/d2k-tg-watchdog.log >&2
+        cat /tmp/d2s-tg-watchdog.log >&2
         fail "локальный watchdog завершился с кодом $WATCHDOG_RC"
     }
 fi
-iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "watchdog не восстановил Telegram redirect"
-iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 || fail "watchdog не сохранил Telegram redirect для 5222"
+iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "watchdog не восстановил Telegram redirect"
+iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 || fail "watchdog не сохранил Telegram redirect для 5222"
 panel_post telegram-disable | grep -q '"ok":true' || fail "панель не отключила Telegram-туннель"
-[ ! -e "$DIR/run/d2ktg.pid" ] || fail "pid-файл d2ktg остался после отключения"
-! iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "PREROUTING redirect остался после отключения"
-! iptables -t nat -C OUTPUT -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "OUTPUT redirect остался после отключения"
-! iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "PREROUTING redirect для 5222 остался после отключения"
-! iptables -t nat -C OUTPUT -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "OUTPUT redirect для 5222 остался после отключения"
+[ ! -e "$DIR/run/d2stg.pid" ] || fail "pid-файл d2stg остался после отключения"
+! iptables -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "PREROUTING redirect остался после отключения"
+! iptables -t nat -C OUTPUT -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "OUTPUT redirect остался после отключения"
+! iptables -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "PREROUTING redirect для 5222 остался после отключения"
+! iptables -t nat -C OUTPUT -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443 2>/dev/null || fail "OUTPUT redirect для 5222 остался после отключения"
 await "grep -q '^TG_ENABLED=0\$' \"$DIR/config\"" || fail "disable не сохранил TG_ENABLED=0"
 panel_post reapply | grep -q '"ok":true' || fail "локальная панель не восстановила правила"
 echo "установлено и работает"
@@ -388,42 +388,42 @@ sed -i 's/^TG_MODE=local$/TG_MODE=relay/' "$DIR/config"
 printf 'TG_RELAY_URL=wss://relay.invalid/ws\nTG_RELAY_SECRET=lab-old-secret\n' >> "$DIR/config"
 # Метка человека в конфигурации: обновление обязано её сохранить.
 echo "# метка человека" >> "$DIR/config"
-PID_BEFORE=$(cat "$DIR/run/d2kd.pid")
+PID_BEFORE=$(cat "$DIR/run/d2sd.pid")
 
 # ДРУГИЕ БАЙТЫ, ТО ЖЕ ПОВЕДЕНИЕ: пересобираем с другой оптимизацией. Это
 # настоящая смена версии с точки зрения установщика (файл другой), и при
 # этом не требует выдумывать «версию 2» там, где её ещё нет.
 make -s -C panel clean >/dev/null
-make -s -C panel d2kpanel CFLAGS="-O1 -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L"
-cp panel/d2kpanel "$REL/builds/d2kpanel-linux-$ARCH"
-cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2o-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
-cc -O2 -std=c11 -o "$REL/builds/d2o-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
-cp files/d2k-lan.sh files/d2k-meta-dns-core.sh files/d2k-meta-dns-library.sh files/d2k-meta-dns-scheduler-core.sh files/d2k-whatsapp-media.sh files/S96d2o-resolver files/S97d2o-dns-watch "$REL/files/"
+make -s -C panel d2spanel CFLAGS="-O1 -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L"
+cp panel/d2spanel "$REL/builds/d2spanel-linux-$ARCH"
+cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2s-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
+cc -O2 -std=c11 -o "$REL/builds/d2s-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
+cp files/d2s-lan.sh files/d2s-meta-dns-core.sh files/d2s-meta-dns-library.sh files/d2s-meta-dns-scheduler-core.sh files/d2s-whatsapp-media.sh files/S96d2s-resolver files/S97d2s-dns-watch "$REL/files/"
 
-SHA_NEW=$(sha "$REL/builds/d2kpanel-linux-$ARCH")
-[ "$SHA_NEW" != "$(sha /opt/sbin/d2kpanel)" ] || fail "новая сборка побайтно совпала со старой — переход версии не проверить"
+SHA_NEW=$(sha "$REL/builds/d2spanel-linux-$ARCH")
+[ "$SHA_NEW" != "$(sha /opt/sbin/d2spanel)" ] || fail "новая сборка побайтно совпала со старой — переход версии не проверить"
 
-D2K_LOCAL="$REL" sh scripts/install.sh 2>&1 | tee /tmp/install2.log
+D2S_LOCAL="$REL" sh scripts/install.sh 2>&1 | tee /tmp/install2.log
 grep -q "готово" /tmp/install2.log || fail "переход версии не прошёл: $(tail -3 /tmp/install2.log)"
 [ "$(grep -c '^TG_MODE=local$' "$DIR/config")" = 1 ] || fail "обновление не мигрировало relay на локальный Telegram"
 grep -q '^TG_RELAY_SECRET=lab-old-secret$' "$DIR/config" || fail "миграция удалила сохранённое поле relay"
-[ "$(sha /opt/sbin/d2kpanel)" = "$SHA_NEW" ] || fail "после обновления на месте осталась старая C-панель"
+[ "$(sha /opt/sbin/d2spanel)" = "$SHA_NEW" ] || fail "после обновления на месте осталась старая C-панель"
 grep -q "^# метка человека" "$DIR/config" || fail "обновление затёрло конфигурацию человека"
-PID_AFTER=$(cat "$DIR/run/d2kd.pid")
+PID_AFTER=$(cat "$DIR/run/d2sd.pid")
 [ "$PID_AFTER" != "$PID_BEFORE" ] || fail "служба не перезапустилась — работает старый процесс"
 "$INIT" status | grep -q "датапат: работает" || fail "после обновления датапат не работает"
 echo "версия сменилась, конфигурация сохранена, служба перезапущена"
 
 echo "== 3. неудачное обновление не трогает работающую =="
-SHA_OK=$(sha /opt/sbin/d2kpanel)
-PID_OK=$(cat "$DIR/run/d2kd.pid")
-printf 'это не бинарник' > "$REL/builds/d2kpanel-linux-$ARCH"
-if D2K_LOCAL="$REL" sh scripts/install.sh >/tmp/badinstall.log 2>&1; then
+SHA_OK=$(sha /opt/sbin/d2spanel)
+PID_OK=$(cat "$DIR/run/d2sd.pid")
+printf 'это не бинарник' > "$REL/builds/d2spanel-linux-$ARCH"
+if D2S_LOCAL="$REL" sh scripts/install.sh >/tmp/badinstall.log 2>&1; then
     fail "установщик принял испорченный бинарник"
 fi
 grep -q "не запускается" /tmp/badinstall.log || fail "отказ произошёл не там, где ждали: $(tail -1 /tmp/badinstall.log)"
-[ "$(sha /opt/sbin/d2kpanel)" = "$SHA_OK" ] || fail "неудачное обновление подменило рабочую C-панель"
-[ "$(cat "$DIR/run/d2kd.pid")" = "$PID_OK" ] || fail "неудачное обновление уронило работающую службу"
+[ "$(sha /opt/sbin/d2spanel)" = "$SHA_OK" ] || fail "неудачное обновление подменило рабочую C-панель"
+[ "$(cat "$DIR/run/d2sd.pid")" = "$PID_OK" ] || fail "неудачное обновление уронило работающую службу"
 [ -d "/proc/$PID_OK" ] || fail "процесс службы умер после неудачного обновления"
 "$INIT" status | grep -q "правила: стоят" || fail "неудачное обновление сняло правила"
 echo "отказ до подмены: рабочая версия и правила не тронуты"
@@ -448,33 +448,33 @@ echo "== 5. возврат в прежний режим =="
 echo "остановка и повторный запуск возвращают систему в оба состояния"
 
 echo "== 6. удаление =="
-# Simulate the explicitly D2K-owned rollback snapshots left by earlier router
+# Simulate the explicitly D2S-owned rollback snapshots left by earlier router
 # development installs. A full uninstall must remove these, not only runtime.
-touch /opt/sbin/d2kc.before-d2k-lab /opt/sbin/d2kc.pre-goal-lab /opt/sbin/d2kc.pre-sched-lab
+touch /opt/sbin/d2sc.before-d2s-lab /opt/sbin/d2sc.pre-goal-lab /opt/sbin/d2sc.pre-sched-lab
 sh scripts/uninstall.sh >/dev/null
-[ -e /opt/sbin/d2kd ] && fail "после удаления остался d2kd"
-[ -e /opt/sbin/d2ktg ] && fail "после удаления остался C-туннель Telegram"
-[ -e /opt/sbin/d2kc ] && fail "после удаления остался d2kc"
-[ -e /opt/sbin/d2kfetch ] && fail "после удаления остался d2kfetch"
-[ -e /opt/sbin/d2kpanel ] && fail "после удаления осталась C-панель"
+[ -e /opt/sbin/d2sd ] && fail "после удаления остался d2sd"
+[ -e /opt/sbin/d2stg ] && fail "после удаления остался C-туннель Telegram"
+[ -e /opt/sbin/d2sc ] && fail "после удаления остался d2sc"
+[ -e /opt/sbin/d2sfetch ] && fail "после удаления остался d2sfetch"
+[ -e /opt/sbin/d2spanel ] && fail "после удаления осталась C-панель"
 [ -e "$DIR/panel" ] && fail "после удаления остались ресурсы панели"
-[ -e "$DIR/d2k-tg-firewall.sh" ] && fail "после удаления остался firewall Telegram"
-[ -e "$DIR/d2k-tg-watchdog.sh" ] && fail "после удаления остался сторож Telegram"
-[ -e "$DIR/d2k-instagram-dns.sh" ] && fail "после удаления остался Instagram DNS manager"
+[ -e "$DIR/d2s-tg-firewall.sh" ] && fail "после удаления остался firewall Telegram"
+[ -e "$DIR/d2s-tg-watchdog.sh" ] && fail "после удаления остался сторож Telegram"
+[ -e "$DIR/d2s-instagram-dns.sh" ] && fail "после удаления остался Instagram DNS manager"
 [ -e "$DIR/files/meta-ranges.txt" ] && fail "после удаления остались диапазоны Meta"
-[ "$(grep -c '^ip host instagram.com 157.240.9.174$' /tmp/d2k-ndmc-state || true)" = 0 ] || fail "деинсталлятор оставил D2K Instagram запись"
-[ "$(grep -c '^ip host web.whatsapp.com 157.240.9.52$' /tmp/d2k-ndmc-state || true)" = 0 ] || fail "деинсталлятор оставил D2K WhatsApp запись"
-[ "$(grep -c '^ip host www.instagram.com 157.240.9.175$' /tmp/d2k-ndmc-state)" = 1 ] || fail "деинсталлятор удалил существовавшую до D2K запись"
-[ "$(grep -c '^ip host instagram.com 203.0.113.10$' /tmp/d2k-ndmc-state)" = 1 ] || fail "деинсталлятор удалил пользовательскую запись"
+[ "$(grep -c '^ip host instagram.com 157.240.9.174$' /tmp/d2s-ndmc-state || true)" = 0 ] || fail "деинсталлятор оставил D2S Instagram запись"
+[ "$(grep -c '^ip host web.whatsapp.com 157.240.9.52$' /tmp/d2s-ndmc-state || true)" = 0 ] || fail "деинсталлятор оставил D2S WhatsApp запись"
+[ "$(grep -c '^ip host www.instagram.com 157.240.9.175$' /tmp/d2s-ndmc-state)" = 1 ] || fail "деинсталлятор удалил существовавшую до D2S запись"
+[ "$(grep -c '^ip host instagram.com 203.0.113.10$' /tmp/d2s-ndmc-state)" = 1 ] || fail "деинсталлятор удалил пользовательскую запись"
 [ -e "$DIR/files/tg-roots.pem" ] && fail "после удаления остался CA bundle Telegram"
-ipset list d2k_tg_dc >/dev/null 2>&1 && fail "после удаления остался IPv4 Telegram ipset"
-ipset list d2k_tg_dc6 >/dev/null 2>&1 && fail "после удаления остался IPv6 Telegram ipset"
+ipset list d2s_tg_dc >/dev/null 2>&1 && fail "после удаления остался IPv4 Telegram ipset"
+ipset list d2s_tg_dc6 >/dev/null 2>&1 && fail "после удаления остался IPv6 Telegram ipset"
 [ -e "$INIT" ]        && fail "после удаления остался init-скрипт"
-[ -e /opt/sbin/d2kc.before-d2k-lab ] && fail "после удаления остался before-d2k backup"
-[ -e /opt/sbin/d2kc.pre-goal-lab ] && fail "после удаления остался pre-goal backup"
-[ -e /opt/sbin/d2kc.pre-sched-lab ] && fail "после удаления остался pre-sched backup"
+[ -e /opt/sbin/d2sc.before-d2s-lab ] && fail "после удаления остался before-d2s backup"
+[ -e /opt/sbin/d2sc.pre-goal-lab ] && fail "после удаления остался pre-goal backup"
+[ -e /opt/sbin/d2sc.pre-sched-lab ] && fail "после удаления остался pre-sched backup"
 [ "$(rules)" = "$CLEAN_RULES" ] || fail "после удаления список правил не совпал с исходным"
-[ -e "$DIR" ] && fail "обычное удаление оставило каталог D2K"
+[ -e "$DIR" ] && fail "обычное удаление оставило каталог D2S"
 echo "удалено без следов, включая каталог коробок"
 
 echo

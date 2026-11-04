@@ -26,7 +26,7 @@
  *   TTL <= hops коробка ОСМАТРИВАЕТ (он отравляет её сборку) и роняет —
  *   ровно то, что делает настоящая сеть.
  *
- * Это НЕ часть продукта и не участвует в сборке d2k. Живёт в spike/ вместе с
+ * Это НЕ часть продукта и не участвует в сборке d2s. Живёт в spike/ вместе с
  * остальными вспомогательными стендами.
  */
 #define _DEFAULT_SOURCE 1
@@ -37,10 +37,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_nfq.h"
-#include "d2k_nl.h"
-#include "d2k_quic.h"
-#include "d2k_packet.h"
+#include "d2s_nfq.h"
+#include "d2s_nl.h"
+#include "d2s_quic.h"
+#include "d2s_packet.h"
 
 #define NF_DROP   0u
 #define NF_ACCEPT 1u
@@ -63,7 +63,7 @@ typedef struct {
 static flow flows[FLOWS];
 static unsigned long long n_seen, n_dropped_name, n_dropped_ttl, n_pass;
 
-static flow *flow_of(const d2k_packet_view *ip, const uint8_t *tcp) {
+static flow *flow_of(const d2s_packet_view *ip, const uint8_t *tcp) {
     for (size_t i = 0; i < FLOWS; i++) {
         flow *f = &flows[i];
         if (!f->used) { continue; }
@@ -128,12 +128,12 @@ static void place(flow *f, uint32_t seq, const uint8_t *p, size_t len, int last_
  *
  * Это игрушечный цензор в его самой простой форме — ровно то, что делает
  * `iptables -m string`: строка встретилась в этом пакете — пакет снят. Такая
- * коробка честно обходится разрезом, и именно её обход d2k показывает в
+ * коробка честно обходится разрезом, и именно её обход d2s показывает в
  * lab-censor.sh.
  *
  * Зачем она здесь, рядом с собирающей: собирающая коробка разрезом НЕ
  * обходится, и обход на неё — открытый вопрос (см. lab-censor.sh, режим
- * D2K_LAB_REASM). Стенду, который проверяет ДРУГОЕ утверждение — что
+ * D2S_LAB_REASM). Стенду, который проверяет ДРУГОЕ утверждение — что
  * найденный обход доходит до клиента за NAT, — нужна коробка, обход которой
  * уже доказан: иначе красный результат ничего не говорит о транзите. */
 static int packet_has_name(const uint8_t *p, size_t len, const char *name) {
@@ -180,7 +180,7 @@ typedef struct {
 
 static uflow g_uflows[UFLOWS];
 
-static uflow *uflow_of(const d2k_packet_view *ip, uint16_t sport, uint16_t dport) {
+static uflow *uflow_of(const d2s_packet_view *ip, uint16_t sport, uint16_t dport) {
     uflow *free_slot = NULL;
     for (size_t i = 0; i < UFLOWS; i++) {
         uflow *f = &g_uflows[i];
@@ -246,14 +246,14 @@ int main(int argc, char **argv) {
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    d2k_nfq_cfg cfg;
+    d2s_nfq_cfg cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.queue = queue;
     cfg.copy_range = 2000;
     cfg.maxlen = 1024;
     cfg.fail_open = 1;
     char err[200];
-    d2k_nfq *q = d2k_nfq_open(&cfg, err, sizeof err);
+    d2s_nfq *q = d2s_nfq_open(&cfg, err, sizeof err);
     if (!q) { fprintf(stderr, "labdpi: очередь не открылась: %s\n", err); return 1; }
     printf("labdpi: очередь %u, имя \"%s\", коробка в %d хопах, %s\n",
            (unsigned)queue, name, hops,
@@ -265,19 +265,19 @@ int main(int argc, char **argv) {
 
     static uint8_t buf[65536];
     while (!stop_now) {
-        ssize_t n = d2k_nfq_recv(q, buf, sizeof buf, err, sizeof err);
+        ssize_t n = d2s_nfq_recv(q, buf, sizeof buf, err, sizeof err);
         if (n == 0) { continue; }
         if (n < 0) { if (n == -2) { continue; } break; }
-        d2k_nl_iter it;
-        d2k_nl_iter_init(&it, buf, (size_t)n);
-        d2k_nl_msg m;
-        while (d2k_nl_next(&it, &m)) {
-            d2k_nl_pkt p;
-            if (d2k_nl_packet(&m, &p) != 0 || !p.have_hdr) { continue; }
+        d2s_nl_iter it;
+        d2s_nl_iter_init(&it, buf, (size_t)n);
+        d2s_nl_msg m;
+        while (d2s_nl_next(&it, &m)) {
+            d2s_nl_pkt p;
+            if (d2s_nl_packet(&m, &p) != 0 || !p.have_hdr) { continue; }
             uint32_t verdict = NF_ACCEPT;
-            d2k_packet_view view;
+            d2s_packet_view view;
             int parsed = p.have_payload && !p.truncated &&
-                         d2k_packet_parse(p.payload, p.payload_len, &view);
+                         d2s_packet_parse(p.payload, p.payload_len, &view);
             /* QUIC: имя лежит в ЗАШИФРОВАННОМ Initial, и настоящая коробка
                достаёт его ровно так же, как мы — ключами, выведенными из
                идентификатора соединения, который лежит открытым текстом
@@ -299,8 +299,8 @@ int main(int argc, char **argv) {
                     }
                     char sni[256];
                     int matched = look &&
-                                  d2k_quic_is_initial(udp + 8, plen) &&
-                                  d2k_quic_sni(udp + 8, plen, sni, sizeof sni) == 0 &&
+                                  d2s_quic_is_initial(udp + 8, plen) &&
+                                  d2s_quic_sni(udp + 8, plen, sni, sizeof sni) == 0 &&
                                   strcmp(sni, name) == 0;
                     int first_decision = f && !f->decided;
                     if (f) {
@@ -319,7 +319,7 @@ int main(int argc, char **argv) {
                            blocked, so every later Initial is censored. This
                            is a lab fixture for the product's rev_seen gate,
                            not a datapath policy. */
-                        /* The d2k controller marks its own verification/search
+                        /* The d2s controller marks its own verification/search
                            probes (45 in the lab). Warm only the user's first
                            Initial; otherwise every probe would be allowed its
                            first packet and the fixture would report CLEAR. */
@@ -342,7 +342,7 @@ int main(int argc, char **argv) {
                         n_pass++;
                     }
                 }
-                (void)d2k_nfq_verdict(q, p.id, verdict, err, sizeof err);
+                (void)d2s_nfq_verdict(q, p.id, verdict, err, sizeof err);
                 continue;
             }
             if (parsed && view.protocol == 6) {
@@ -393,11 +393,11 @@ int main(int argc, char **argv) {
                     }
                 }
             }
-            (void)d2k_nfq_verdict(q, p.id, verdict, err, sizeof err);
+            (void)d2s_nfq_verdict(q, p.id, verdict, err, sizeof err);
         }
     }
     printf("labdpi: пакетов %llu, снято по имени %llu, снято по расстоянию %llu, пропущено %llu\n",
            n_seen, n_dropped_name, n_dropped_ttl, n_pass);
-    d2k_nfq_close(q);
+    d2s_nfq_close(q);
     return 0;
 }

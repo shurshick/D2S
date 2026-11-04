@@ -1,9 +1,9 @@
 #include <stddef.h>
 #include <string.h>
-#include "include/d2k_domain.h"
+#include "include/d2s_domain.h"
 #include "profiles/psl_index.h"
 
-int d2k_domain_normalize(const char *name, char out[256]) {
+int d2s_domain_normalize(const char *name, char out[256]) {
     if (!name || !out) return -1;
     size_t n = strlen(name);
     if (n && name[n-1] == '.') n--;
@@ -29,19 +29,19 @@ int d2k_domain_normalize(const char *name, char out[256]) {
 }
 
 static int rule_exists(const char *rule) {
-    size_t lo=0, hi=sizeof d2k_psl_offsets/sizeof d2k_psl_offsets[0];
+    size_t lo=0, hi=sizeof d2s_psl_offsets/sizeof d2s_psl_offsets[0];
     while (lo<hi) {
         size_t mid=lo+(hi-lo)/2;
-        int cmp=strcmp(rule,d2k_psl_blob+d2k_psl_offsets[mid]);
+        int cmp=strcmp(rule,d2s_psl_blob+d2s_psl_offsets[mid]);
         if (!cmp) return 1;
         if (cmp<0) hi=mid; else lo=mid+1;
     }
     return 0;
 }
 
-int d2k_domain_base(const char *name, char out[256]) {
+int d2s_domain_base(const char *name, char out[256]) {
     char norm[256], pattern[258];
-    if (!out || d2k_domain_normalize(name,norm)) return -1;
+    if (!out || d2s_domain_normalize(name,norm)) return -1;
     /* Longest rule wins; exceptions outrank wildcard, unknown TLD is unsafe. */
     size_t starts[128], count=1, suffix_count=0, exception_count=0;
     starts[0]=0;
@@ -63,10 +63,10 @@ int d2k_domain_base(const char *name, char out[256]) {
     return 0;
 }
 
-int d2k_domain_member(const char *name, const char *suffix) {
+int d2s_domain_member(const char *name, const char *suffix) {
     char n[256], s[256], base[256];
-    if (d2k_domain_normalize(name,n) || d2k_domain_normalize(suffix,s) ||
-        d2k_domain_base(s,base)) return 0;
+    if (d2s_domain_normalize(name,n) || d2s_domain_normalize(suffix,s) ||
+        d2s_domain_base(s,base)) return 0;
     size_t nl=strlen(n), sl=strlen(s);
     return nl>=sl && !strcmp(n+nl-sl,s) && (nl==sl || n[nl-sl-1]=='.');
 }

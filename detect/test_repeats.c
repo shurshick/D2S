@@ -17,13 +17,13 @@ static int transport_getaddrinfo(const char *, const char *, const struct addrin
 static int transport_setsockopt(int, int, int, const void *, socklen_t);
 #define getaddrinfo transport_getaddrinfo
 #define setsockopt transport_setsockopt
-#define d2k_raw_probe_handshake_as     fake_handshake
-#define d2k_raw_probe_poison_family    fake_poison
-#define d2k_raw_supported              fake_raw_supported
-#define d2k_raw_rst_fail_count         fake_rst_fail_count
+#define d2s_raw_probe_handshake_as     fake_handshake
+#define d2s_raw_probe_poison_family    fake_poison
+#define d2s_raw_supported              fake_raw_supported
+#define d2s_raw_rst_fail_count         fake_rst_fail_count
 /* Настоящий вопрос определён в самом classify.c, поэтому подменяется место
  * вызова, а не имя функции. */
-#define D2K_DATA_ACK_PROBE             fake_data_ack
+#define D2S_DATA_ACK_PROBE             fake_data_ack
 #include "classify.c"
 #include "props.c"
 #undef getaddrinfo
@@ -64,7 +64,7 @@ typedef struct { const char *name; const char *pat; } script_ent;
 static const script_ent *g_script;
 static const char *g_default = "-";
 static const char *g_selftest = "+";
-static const d2k_result *g_res;   /* чей прогон идёт: номер строки трассы = вопрос */
+static const d2s_result *g_res;   /* чей прогон идёт: номер строки трассы = вопрос */
 static int g_ask = -1, g_rep;     /* текущий вопрос сырого слоя и номер его повтора */
 static int g_hs_calls;
 static int g_poison_calls;
@@ -94,7 +94,7 @@ unsigned long fake_rst_fail_count(void) { return 0; }
    находка 7): стенд запоминает, предлагалась ли метка времени. */
 static int g_hs_offer_ts = -1;
 int fake_handshake(const uint8_t *ip, uint8_t family, uint16_t port, int timeout_ms,
-                   uint32_t mark, const d2k_detect_stop *cancel, int offer_ts,
+                   uint32_t mark, const d2s_detect_stop *cancel, int offer_ts,
                    char *err, size_t errcap)
 {
     int rc;
@@ -106,9 +106,9 @@ int fake_handshake(const uint8_t *ip, uint8_t family, uint16_t port, int timeout
     return rc;
 }
 
-int fake_poison(const uint8_t *ip, uint8_t family, uint16_t port, const d2k_trigger *tr,
-                const d2k_poison *p, int timeout_ms, uint32_t mark,
-                const d2k_detect_stop *cancel, char *err, size_t errcap)
+int fake_poison(const uint8_t *ip, uint8_t family, uint16_t port, const d2s_trigger *tr,
+                const d2s_poison *p, int timeout_ms, uint32_t mark,
+                const d2s_detect_stop *cancel, char *err, size_t errcap)
 {
     const char *pat = g_default;
     int i, rc;
@@ -142,7 +142,7 @@ int fake_poison(const uint8_t *ip, uint8_t family, uint16_t port, const d2k_trig
 static const char *g_ack_pat = "+";
 static int g_ack_calls;
 
-int fake_data_ack(const char *host, const char *port, const d2k_opts *opt,
+int fake_data_ack(const char *host, const char *port, const d2s_opts *opt,
                   char *err, size_t errcap)
 {
     size_t n = strlen(g_ack_pat);
@@ -225,12 +225,12 @@ typedef struct {
 } scenario;
 
 /* Фильтр находок, как plannable_hit в bridge.c: NULL — берётся любая. */
-static int (*g_accept)(const d2k_poison *p, void *ctx);
+static int (*g_accept)(const d2s_poison *p, void *ctx);
 
-static void run(const scenario *s, d2k_result *res)
+static void run(const scenario *s, d2s_result *res)
 {
-    d2k_opts opt;
-    d2k_trigger t;
+    d2s_opts opt;
+    d2s_trigger t;
     memset(&opt, 0, sizeof opt);
     opt.allow_loopback = 1;
     opt.repeats = 3;
@@ -247,7 +247,7 @@ static void run(const scenario *s, d2k_result *res)
     snprintf(opt.control.name, sizeof opt.control.name, "control");
     memcpy(opt.control.payload, CTL, sizeof(CTL) - 1);
     opt.control.len = sizeof(CTL) - 1;
-    opt.control.accept = D2K_ACCEPT_ANY;
+    opt.control.accept = D2S_ACCEPT_ANY;
     memset(&opt.white, 0, sizeof opt.white);
     if (s->white) {
         /* Белое имя сети приманкой: содержимое для стенда неважно (fake_poison
@@ -255,7 +255,7 @@ static void run(const scenario *s, d2k_result *res)
         static const uint8_t wrec[] = {0x16, 0x03, 0x01, 0x00, 0x05, 1, 0, 0, 1, 0};
         memcpy(opt.white.payload, wrec, sizeof wrec);
         opt.white.len = sizeof wrec;
-        opt.white.accept = D2K_ACCEPT_TLSRECORD;
+        opt.white.accept = D2S_ACCEPT_TLSRECORD;
         snprintf(opt.white.name, sizeof opt.white.name, "white");
     }
     memset(&t, 0, sizeof t);
@@ -266,7 +266,7 @@ static void run(const scenario *s, d2k_result *res)
     snprintf(t.name, sizeof t.name, "test");
     memcpy(t.payload, PAY, sizeof(PAY) - 1);
     t.len = sizeof(PAY) - 1;
-    t.accept = D2K_ACCEPT_ANY;
+    t.accept = D2S_ACCEPT_ANY;
 
     g_script = s->script;
     g_default = s->dflt ? s->dflt : "-";
@@ -279,20 +279,20 @@ static void run(const scenario *s, d2k_result *res)
     g_ask = -1;
     g_hs_calls = 0;
     g_poison_calls = 0;
-    d2k_classify_run(g_addr, &t, &opt, res);
+    d2s_classify_run(g_addr, &t, &opt, res);
 }
 
 /* Подпись исхода: всё, что уходит наружу, кроме числа зондов и трассы. */
-static void sig(const d2k_result *r, char *out, size_t cap)
+static void sig(const d2s_result *r, char *out, size_t cap)
 {
-    const d2k_dprops *p = &r->props;
+    const d2s_dprops *p = &r->props;
     /* Подпись для сравнения исходов: обрезка по буферу допустима. */
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
     snprintf(out, cap, "%s|%s|%s|%s|%d%d%d%d%d%d%d|%d|u%d|f%d|%s",
-             d2k_verdict_name(r->verdict), r->path, r->has_hit ? r->hit.name : "-",
+             d2s_verdict_name(r->verdict), r->path, r->has_hit ? r->hit.name : "-",
              r->strategy, p->reassembles, p->parses_l7, p->validates_checksum,
              p->tolerates_reorder, p->tolerates_left_overlap, p->counts_duplicates,
              p->inspects_syn, p->hop_ttl, r->raw_usable, r->raw_selftest_failed, r->reason);
@@ -301,7 +301,7 @@ static void sig(const d2k_result *r, char *out, size_t cap)
 #endif
 }
 
-static void dump(const d2k_result *r)
+static void dump(const d2s_result *r)
 {
     int i;
     for (i = 0; i < r->ntrace; i++) {
@@ -345,7 +345,7 @@ static scenario SC[] = {
 static void bind_list_names(void)
 {
     int n;
-    const d2k_poison *l = d2k_poisons(&n);
+    const d2s_poison *l = d2s_poisons(&n);
     /* rutracker: сорок первая гипотеза перебора срабатывает. */
     S_RUTRACKER[0].name = l[40].name;
     /* flaky: 2 из 3 на одной, единогласие на следующей. */
@@ -394,7 +394,7 @@ static int after_count(const char *name)
        неизменно: находки раньше прежнего места SYN либо все вопросы заданы.
        Снижение на один для MD5/seq/TS проверяется в test_props_fields. */
     /* 14.10.2026: вопрос о свойствах отвечает БОЛЬШИНСТВОМ (props.c,
-       d2k_prop_majority): промах стоит два зонда вместо одного, проход —
+       d2s_prop_majority): промах стоит два зонда вместо одного, проход —
        два вместо трёх; «flaky» (приём через раз) берётся вопросом, а не
        перебором. */
     /* 23.10.2026: вопросы «TTL по пути» (ip_autottl) и «метка первой в
@@ -447,7 +447,7 @@ static void fresh_process(void)
     pthread_mutex_unlock(&g_selftest_mu);
 }
 
-static const d2k_obs *find_obs(const d2k_result *r, const char *probe)
+static const d2s_obs *find_obs(const d2s_result *r, const char *probe)
 {
     int i;
     for (i = 0; i < r->ntrace; i++) {
@@ -457,7 +457,7 @@ static const d2k_obs *find_obs(const d2k_result *r, const char *probe)
 }
 
 /* Трасса честна: сумма pass+fail по строкам = число сделанных зондов. */
-static int trace_probes(const d2k_result *r)
+static int trace_probes(const d2s_result *r)
 {
     int i, n = 0;
     for (i = 0; i < r->ntrace; i++) { n += r->trace[i].pass + r->trace[i].fail; }
@@ -470,7 +470,7 @@ static void test_equivalence(void)
     printf("до/после: одинаковые ответы — одинаковый исход\n");
     for (i = 0; i < NSC; i++) {
         const golden *g = find_gold(SC[i].name);
-        d2k_result r;
+        d2s_result r;
         char s[1400];
         fresh_process();
         run(&SC[i], &r);
@@ -488,8 +488,8 @@ static void test_equivalence(void)
 
 static void test_counts_per_question(void)
 {
-    d2k_result r;
-    const d2k_obs *o;
+    d2s_result r;
+    const d2s_obs *o;
     printf("повторы по вопросам\n");
     fresh_process();
     run(find_sc("youtube"), &r);
@@ -559,15 +559,15 @@ static void test_white_ts(void)
     static const script_ent s_white[] = {
         {"ts", "-"}, {"white-hello-ts", "+"}, {NULL, NULL}};
     scenario sc = {"white-ts", s_white, "-", NULL, NULL, 0, NULL, 1, 0};
-    d2k_result r;
+    d2s_result r;
     memset(&r, 0, sizeof r);
     run(&sc, &r);
     CHECK(r.has_hit && !strcmp(r.hit.name, "white-hello-ts"),
           "составной вопрос семейства C не стал находкой");
     CHECK(!strcmp(r.path, "свойство"), "путь находки «%s», ждали «свойство» (не перебор)", r.path);
-    CHECK(r.props.validates_timestamps == D2K_TRI_FALSE,
+    CHECK(r.props.validates_timestamps == D2S_TRI_FALSE,
           "проход составного вопроса не записал «метку не сверяет»");
-    CHECK(r.props.parses_l7 == D2K_TRI_TRUE,
+    CHECK(r.props.parses_l7 == D2S_TRI_TRUE,
           "проход составного вопроса не записал «разбирает L7»");
     /* Находка несёт ВЕСЬ механизм семейства C, а не одиночную копию без разреза. */
     CHECK(r.hit.tcp_ts && r.hit.decoy_hello,
@@ -584,7 +584,7 @@ static void test_white_ts(void)
     run(&sc,&r);
     CHECK(r.has_hit && !strcmp(r.hit.name,"white-hello-ts") && !strcmp(r.path,"свойство"),
           "timeout seed prevented fresh silent-trigger/control/C measurement");
-    const d2k_obs *whole=find_obs(&r,"whole");
+    const d2s_obs *whole=find_obs(&r,"whole");
     CHECK(whole && whole->fail==3 && !whole->err[0],"fresh post-trigger silence must replace transport error");
     g_silent=g_timeout_seed=0;
 
@@ -602,7 +602,7 @@ static const script_ent S_FIELD_SYN[] = {{"syndata", "+"}, {NULL, NULL}};
 static void test_syndata_after_misses(void)
 {
     static const scenario syn = {"props-syn-last", S_FIELD_SYN, NULL, NULL, NULL, 0, NULL, 0, 0};
-    d2k_result r;
+    d2s_result r;
     fresh_process();
     run(&syn, &r);
     CHECK(r.has_hit && r.hit.syn_data, "последний вопрос syndata не задан");
@@ -614,7 +614,7 @@ static void test_syndata_after_misses(void)
     CHECK(r.probes == 28, "syndata: зондов %d, ждали 28", r.probes);
     CHECK(r.nanswered == 10 && r.answered[r.nanswered - 1].syn_data,
           "syndata не последний отвеченный вопрос");
-    CHECK(r.props.inspects_syn == D2K_TRI_FALSE, "ответ SYN не записан");
+    CHECK(r.props.inspects_syn == D2S_TRI_FALSE, "ответ SYN не записан");
 }
 
 /* ОСИ, КОТОРЫЕ ПОЛЕ ПРИЗНАЛО НЕДОСТИЖИМЫМИ, НЕ СПРАШИВАЮТСЯ.
@@ -655,34 +655,34 @@ static void test_props_fields(void)
     static const scenario md5 = {"props-md5", S_FIELD_MD5, NULL, NULL, NULL, 0, NULL, 0, 0};
     static const scenario seq = {"props-seq", S_FIELD_SEQ, NULL, NULL, NULL, 0, NULL, 0, 0};
     static const scenario ts  = {"props-ts",  S_FIELD_TS,  NULL, NULL, NULL, 0, NULL, 0, 0};
-    d2k_result r;
+    d2s_result r;
     printf("свойства: сверка полей подделки\n");
     fresh_process();
     run(&md5, &r);
-    CHECK(r.props.validates_md5 == D2K_TRI_FALSE, "MD5: проход не записан");
+    CHECK(r.props.validates_md5 == D2S_TRI_FALSE, "MD5: проход не записан");
     CHECK(r.has_hit && !strcmp(r.hit.name, "md5"), "MD5: приём не стал находкой");
     /* syndata stays last and unasked after these findings. Under the
      * majority rule each earlier miss costs two probes and the finding two:
      * MD5 20, seq 22, TS 24. */
     CHECK(r.probes == 20, "MD5: зондов %d, ждали 20", r.probes);
-    CHECK(r.props.inspects_syn == D2K_TRI_UNSET, "SYN спросили до MD5");
+    CHECK(r.props.inspects_syn == D2S_TRI_UNSET, "SYN спросили до MD5");
     fresh_process();
     run(&seq, &r);
-    CHECK(r.props.validates_seq_window == D2K_TRI_FALSE, "окно seq: проход не записан");
+    CHECK(r.props.validates_seq_window == D2S_TRI_FALSE, "окно seq: проход не записан");
     CHECK(r.probes == 22, "seq: зондов %d, ждали 22", r.probes);
-    CHECK(r.props.validates_md5 == D2K_TRI_UNSET, "MD5 записан без прохода");
+    CHECK(r.props.validates_md5 == D2S_TRI_UNSET, "MD5 записан без прохода");
     fresh_process();
     run(&ts, &r);
-    CHECK(r.props.validates_timestamps == D2K_TRI_FALSE, "метка времени: проход не записан");
+    CHECK(r.props.validates_timestamps == D2S_TRI_FALSE, "метка времени: проход не записан");
     CHECK(r.probes == 24, "TS: зондов %d, ждали 24", r.probes);
-    CHECK(r.props.counts_duplicates == D2K_TRI_UNSET, "дубликаты записаны без прохода");
+    CHECK(r.props.counts_duplicates == D2S_TRI_UNSET, "дубликаты записаны без прохода");
 }
 
 /* The real bridge still rejects syndata. This test additionally rejects
  * expressible MD5 through its explicit acceptance filter: a rejected hit
  * must not hide the later timestamp question. syndata is now last and is
  * never asked after a usable timestamp finding. */
-static int no_syn_md5(const d2k_poison *p, void *ctx)
+static int no_syn_md5(const d2s_poison *p, void *ctx)
 {
     (void)ctx;
     return !p->syn_data && !p->md5;
@@ -691,7 +691,7 @@ static const script_ent S_SYN_TS[] = {{"syndata", "+"}, {"md5", "+"}, {"ts", "+"
 static void test_props_skip_unplannable(void)
 {
     static const scenario sc = {"syn-ts", S_SYN_TS, "-", NULL, NULL, 0, NULL, 0, 0};
-    d2k_result r;
+    d2s_result r;
     printf("свойства: невыразимая находка не останавливает вопросы\n");
     fresh_process();
     g_accept = no_syn_md5;
@@ -700,9 +700,9 @@ static void test_props_skip_unplannable(void)
     CHECK(r.has_hit && !strcmp(r.hit.name, "ts"), "находка — не метка времени (%s)",
           r.has_hit ? r.hit.name : "нет");
     CHECK(!strcmp(r.path, "свойство"), "путь «%s», ждали «свойство»", r.path);
-    CHECK(r.props.inspects_syn == D2K_TRI_UNSET, "SYN спросили раньше выразимой находки");
-    CHECK(r.props.validates_md5 == D2K_TRI_FALSE, "ответ о MD5 не записан");
-    CHECK(r.props.validates_timestamps == D2K_TRI_FALSE, "ответ о метке времени не записан");
+    CHECK(r.props.inspects_syn == D2S_TRI_UNSET, "SYN спросили раньше выразимой находки");
+    CHECK(r.props.validates_md5 == D2S_TRI_FALSE, "ответ о MD5 не записан");
+    CHECK(r.props.validates_timestamps == D2S_TRI_FALSE, "ответ о метке времени не записан");
     CHECK(find_obs(&r, "poison:syndata") == NULL, "перебор переспросил отвеченный syndata");
 }
 
@@ -717,7 +717,7 @@ static void test_sweep_skips_answered(void)
         "seqovl-1", "disorder", "badsum", "badsum+hello", "badsum-x2-g20",
         "syndata", "md5", "seq-out-of-window", "badsum-x7"};
     static const scenario err = {"md5-err", S_MD5_ERR, "-", NULL, NULL, 0, NULL, 0, 0};
-    d2k_result r;
+    d2s_result r;
     char nm[96];
     size_t i;
     printf("перебор: отвеченные свойства второй раз не спрашиваются\n");
@@ -740,13 +740,13 @@ static void test_sweep_skips_answered(void)
  * бросался без вердикта и через 10 мин начинался снова. */
 static void test_address_silence(void)
 {
-    d2k_result r;
-    const d2k_obs *o;
+    d2s_result r;
+    const d2s_obs *o;
     printf("адрес не принимает данных\n");
     fresh_process();
     run(find_sc("addr-silent"), &r);
-    CHECK(r.verdict == D2K_DV_ADDRESS, "вердикт %s, ждали address (%s)",
-          d2k_verdict_name(r.verdict), r.reason);
+    CHECK(r.verdict == D2S_DV_ADDRESS, "вердикт %s, ждали address (%s)",
+          d2s_verdict_name(r.verdict), r.reason);
     CHECK(strstr(r.reason, "нейтральн") != NULL, "причина не называет измерение: %s", r.reason);
     CHECK(r.strategy[0] == '\0', "для блока адреса предложена стратегия «%s»", r.strategy);
     CHECK(g_poison_calls == 0 && g_hs_calls == 0,
@@ -758,8 +758,8 @@ static void test_address_silence(void)
     /* Один подтверждённый байт — адрес данные принимает; дальше по-старому. */
     fresh_process();
     run(find_sc("addr-silent-late"), &r);
-    CHECK(r.verdict == D2K_DV_INCONCLUSIVE, "подтверждённый байт: вердикт %s",
-          d2k_verdict_name(r.verdict));
+    CHECK(r.verdict == D2S_DV_INCONCLUSIVE, "подтверждённый байт: вердикт %s",
+          d2s_verdict_name(r.verdict));
     CHECK(g_poison_calls > 0, "подтверждённый байт снял перебор");
     o = find_obs(&r, "neutral-ack");
     CHECK(o && o->pass == 1 && o->fail == 1, "нейтральный байт: ждали остановку на первом проходе");
@@ -767,17 +767,17 @@ static void test_address_silence(void)
     /* Не наблюдаемо или локальная ошибка — не свойство адреса. */
     fresh_process();
     run(find_sc("addr-ack-unseen"), &r);
-    CHECK(r.verdict == D2K_DV_INCONCLUSIVE && g_poison_calls > 0,
-          "ненаблюдаемое подтверждение выдано за тишину адреса: %s", d2k_verdict_name(r.verdict));
+    CHECK(r.verdict == D2S_DV_INCONCLUSIVE && g_poison_calls > 0,
+          "ненаблюдаемое подтверждение выдано за тишину адреса: %s", d2s_verdict_name(r.verdict));
     fresh_process();
     run(find_sc("addr-ack-err"), &r);
-    CHECK(r.verdict == D2K_DV_INCONCLUSIVE && g_poison_calls > 0,
-          "локальная ошибка выдана за тишину адреса: %s", d2k_verdict_name(r.verdict));
+    CHECK(r.verdict == D2S_DV_INCONCLUSIVE && g_poison_calls > 0,
+          "локальная ошибка выдана за тишину адреса: %s", d2s_verdict_name(r.verdict));
 }
 
 static void test_selftest_cache(void)
 {
-    d2k_result r;
+    d2s_result r;
     char s[1400];
     const golden *g;
     printf("самопроверка сырого слоя: раз на процесс\n");
@@ -799,31 +799,31 @@ static void test_selftest_cache(void)
 
     /* Подряд идущие локальные ошибки сырых зондов — самопроверка снова. */
     {
-        d2k_result junk;
+        d2s_result junk;
         memset(&junk, 0, sizeof junk);
-        d2k_raw_note_rc(&junk, 4, -1);
-        d2k_raw_note_rc(&junk, 4, -1);
-        d2k_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
     }
     run(find_sc("youtube"), &r);
     CHECK(g_hs_calls == 1, "после серии отказов: самопроверок %d, ждали 1", g_hs_calls);
 
     /* Удача сбрасывает счёт: две ошибки, удача, две ошибки — кэш жив. */
     {
-        d2k_result junk;
+        d2s_result junk;
         memset(&junk, 0, sizeof junk);
-        d2k_raw_note_rc(&junk, 4, -1);
-        d2k_raw_note_rc(&junk, 4, -1);
-        d2k_raw_note_rc(&junk, 4, 0);
-        d2k_raw_note_rc(&junk, 4, -1);
-        d2k_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, 0);
+        d2s_raw_note_rc(&junk, 4, -1);
+        d2s_raw_note_rc(&junk, 4, -1);
     }
     run(find_sc("youtube"), &r);
     CHECK(g_hs_calls == 0, "ошибки вперемешку с удачей: самопроверок %d, ждали 0", g_hs_calls);
 
     /* Кэш стареет. */
     pthread_mutex_lock(&g_selftest_mu);
-    g_selftest_at[0] -= D2K_SELFTEST_TTL_MS + 1;
+    g_selftest_at[0] -= D2S_SELFTEST_TTL_MS + 1;
     pthread_mutex_unlock(&g_selftest_mu);
     run(find_sc("youtube"), &r);
     CHECK(g_hs_calls == 1, "кэш старше срока: самопроверок %d, ждали 1", g_hs_calls);
@@ -864,13 +864,13 @@ static void test_selftest_cache(void)
 }
 
 static void test_local_plan_error_is_not_a_property(void) {
-    d2k_result r = {0}; d2k_opts opt = {0}; d2k_trigger tr = {0}; d2k_poison hit = {0};
+    d2s_result r = {0}; d2s_opts opt = {0}; d2s_trigger tr = {0}; d2s_poison hit = {0};
     opt.repeats = 3; opt.white.len = 2;
     tr.len = 2049; tr.sni_off = 100; tr.sni_len = 11;
     g_script = NULL; g_default = "e"; g_res = &r; g_ask = -1;
-    CHECK(d2k_run_properties((uint8_t[]){192,0,2,1}, 443, &tr, &opt, &r, &hit) == 0,
+    CHECK(d2s_run_properties((uint8_t[]){192,0,2,1}, 443, &tr, &opt, &r, &hit) == 0,
           "локальный отказ стал находкой");
-    d2k_dprops expected = {0};
+    d2s_dprops expected = {0};
     CHECK(!memcmp(&r.props, &expected, sizeof expected), "локальный отказ изменил свойства коробки");
     CHECK(r.nanswered == 0, "локальный отказ стал ответом сети");
 }
@@ -882,13 +882,13 @@ static void test_local_plan_error_is_not_a_property(void) {
    Составной вопрос семейства C при этом задаётся обоим — у клиента без метки
    он собирается с порчей, которую поток несёт (см. тест ниже). Набор опций не
    снят — весь прежний состав вопросов, как раньше. */
-static int trace_count(const d2k_result *r, const char *needle) {
+static int trace_count(const d2s_result *r, const char *needle) {
     int n = 0;
     for (int i = 0; i < r->ntrace; i++) if (strstr(r->trace[i].probe, needle)) n++;
     return n;
 }
 static void test_timestamp_questions_follow_client_profile(void) {
-    d2k_result r; d2k_opts opt; d2k_trigger tr; d2k_poison hit;
+    d2s_result r; d2s_opts opt; d2s_trigger tr; d2s_poison hit;
     for (int known = 0; known < 2; known++) {
         memset(&r, 0, sizeof r); memset(&opt, 0, sizeof opt); memset(&tr, 0, sizeof tr);
         memset(&hit, 0, sizeof hit);
@@ -896,7 +896,7 @@ static void test_timestamp_questions_follow_client_profile(void) {
         tr.len = 300; tr.sni_off = 100; tr.sni_len = 11;
         tr.client_tcp_known = known; tr.client_tcp_options_len = 0;
         g_script = NULL; g_default = "-"; g_res = &r; g_ask = -1;
-        CHECK(d2k_run_properties((uint8_t[]){192,0,2,1}, 443, &tr, &opt, &r, &hit) == 0,
+        CHECK(d2s_run_properties((uint8_t[]){192,0,2,1}, 443, &tr, &opt, &r, &hit) == 0,
               "клиентский профиль: вопросы дали находку на стенде промахов");
         int ts = trace_count(&r, "метка времени");
         int white = trace_count(&r, "ECH-приветствие под");
@@ -923,7 +923,7 @@ static void test_composite_assembled_for_client_without_ts(void) {
     static const script_ent s_white[] = {
         {"white-hello-ts", "+"}, {NULL, NULL}};
     scenario sc = {"white-ts-noopts", s_white, "-", NULL, NULL, 0, NULL, 1, 1};
-    d2k_result r;
+    d2s_result r;
     memset(&r, 0, sizeof r);
     run(&sc, &r);
     CHECK(find_obs(&r, "свойство:метка времени") == NULL,
@@ -938,9 +938,9 @@ static void test_composite_assembled_for_client_without_ts(void) {
     CHECK(r.hit.badsum, "порча составного вопроса не взята из измеренного (битая сумма)");
     CHECK(r.hit.decoy_hello && r.hit.repeats == 8 && r.hit.split_pos == 2,
           "множители составного вопроса потеряны (приманка/серия/разрез)");
-    CHECK(r.props.parses_l7 == D2K_TRI_TRUE,
+    CHECK(r.props.parses_l7 == D2S_TRI_TRUE,
           "проход составного вопроса не записал «разбирает L7»");
-    CHECK(r.props.validates_timestamps == D2K_TRI_UNSET,
+    CHECK(r.props.validates_timestamps == D2S_TRI_UNSET,
           "по проходу без метки записано «метку не сверяет» — метки в зонде не было");
 }
 
@@ -950,7 +950,7 @@ static void test_composite_assembled_for_client_without_ts(void) {
    бы промахи во всех вопросах и живой слой в самопроверке, и промахи зачлись
    бы ответами коробки (запрет §2.4). */
 static void test_selftest_uses_client_tcp_profile(void) {
-    d2k_result r;
+    d2s_result r;
     scenario with_ts = {"selftest-ts", NULL, "-", NULL, NULL, 0, NULL, 0, 0};
     scenario no_ts   = {"selftest-no-ts", NULL, "-", NULL, NULL, 0, NULL, 0, 1};
     fresh_process();
@@ -965,15 +965,15 @@ static void test_selftest_uses_client_tcp_profile(void) {
 
 static void test_split_uses_runtime(void) {
     scenario sc = {"split-runtime", NULL, "-", NULL, "+", 0, NULL, 0, 0};
-    d2k_result r;
+    d2s_result r;
     g_split_success = 1; g_split_calls = g_split_gaps = 0;
     run(&sc, &r);
-    CHECK(r.verdict == D2K_DV_WHOLE_PACKET && g_split_calls == 9 && g_split_gaps == 3,
+    CHECK(r.verdict == D2S_DV_WHOLE_PACKET && g_split_calls == 9 && g_split_gaps == 3,
           "split measurement bypassed the production packet runtime: verdict=%d calls=%d gaps=%d",
           r.verdict, g_split_calls, g_split_gaps);
     g_split_success = -1; g_split_calls = 0;
     run(&sc, &r);
-    CHECK(r.verdict == D2K_DV_FLAKY && g_poison_calls == 0 && g_split_calls == 3,
+    CHECK(r.verdict == D2S_DV_FLAKY && g_poison_calls == 0 && g_split_calls == 3,
           "failed raw split is a local failure, not a negative DPI property");
     g_split_success = 0;
 }
@@ -981,19 +981,19 @@ static void test_split_uses_runtime(void) {
 static const char *transport_cancel_at;
 static int transport_cancelled;
 static int transport_is_cancelled(void *ctx) { (void)ctx; return transport_cancelled; }
-static void transport_progress(void *ctx, const d2k_obs *o) {
+static void transport_progress(void *ctx, const d2s_obs *o) {
     *(int *)ctx += o->pass + o->fail;
     if (transport_cancel_at && !strcmp(o->probe, transport_cancel_at)) transport_cancelled = 1;
 }
 
 static void test_split_recovers_only_unsent_transport_failure(void) {
-    d2k_opts opt = {0}; d2k_trigger tr = {0}; d2k_result r = {0};
+    d2s_opts opt = {0}; d2s_trigger tr = {0}; d2s_result r = {0};
     int cut = 1, units = 0; const char *port = strrchr(g_addr, ':') + 1;
     opt.on_obs = transport_progress; opt.on_obs_ctx = &units;
     opt.repeats = 3; opt.timeout_ms = 100; opt.mark = 0;
     memcpy(tr.payload, PAY, sizeof PAY - 1); tr.len = sizeof PAY - 1;
     g_split_success = 1; g_split_calls = 0; g_split_connect_failures = 1;
-    d2k_tally tally = measure("127.0.0.1", port, &tr, &opt, "split", &cut, 1, 0, &r, 0);
+    d2s_tally tally = measure("127.0.0.1", port, &tr, &opt, "split", &cut, 1, 0, &r, 0);
     CHECK(!tally.has_err && tally.pass == 3 && tally.fail == 0,
           "an unsent split prevents three actual successful trials");
     CHECK(r.probes == 5 && g_split_calls == 4 && units == 5,
@@ -1050,12 +1050,12 @@ static void test_split_recovers_only_unsent_transport_failure(void) {
 
     /* Exercise the complete classifier, not only its repeat helper. */
     scenario sc = {"split-recovered", NULL, "-", NULL, "+", 0, NULL, 0, 0};
-    d2k_result before, after;
+    d2s_result before, after;
     g_split_connect_failures = 0; g_split_calls = 0;
     run(&sc, &before);
     g_split_connect_failures = 1; g_split_calls = 0;
     run(&sc, &after);
-    CHECK(after.verdict == D2K_DV_WHOLE_PACKET && after.split_pos == before.split_pos &&
+    CHECK(after.verdict == D2S_DV_WHOLE_PACKET && after.split_pos == before.split_pos &&
           after.probes == before.probes + 2 && g_split_calls == 10,
           "recovered classifier lost the measured split or entered fallback");
     g_split_success = 0;
@@ -1072,7 +1072,7 @@ int main(void)
     if (getenv("CAPTURE")) {
         int i;
         for (i = 0; i < NSC; i++) {
-            d2k_result r;
+            d2s_result r;
             char s[1400];
             run(&SC[i], &r);
             sig(&r, s, sizeof s);

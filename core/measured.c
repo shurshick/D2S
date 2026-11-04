@@ -1,6 +1,6 @@
 /* One serialized TCP measurement program, executed by detect and datapath. */
-#include "d2k_compose.h"
-#include "d2k_hello.h"
+#include "d2s_compose.h"
+#include "d2s_hello.h"
 #include "profiles/rx_fake.h"
 #include <stdarg.h>
 #include <stdint.h>
@@ -30,13 +30,13 @@ static int append_hex(char *buf, size_t cap, size_t *pos,
 /* Полный TLS-record ClientHello с именем name в SNI, из восстановленного
    fake_default_tls (profiles/rx_fake.h). Один источник для RX-лестницы и для
    приманки вопроса «приветствие под меткой времени» (поле 10.10.2026). */
-int d2k_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len) {
+int d2s_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len) {
     size_t hl = 0;
     if (!out || cap < 5 || !name || !name[0] ||
-        d2k_hello_rename(d2k_rx_fake_template + 5, sizeof d2k_rx_fake_template - 5,
+        d2s_hello_rename(d2s_rx_fake_template + 5, sizeof d2s_rx_fake_template - 5,
                           name, out + 5, cap - 5, &hl) != 0) { return -1; }
     /* hello_rename accepts the handshake, not its record wrapper. */
-    memcpy(out, d2k_rx_fake_template, 3);
+    memcpy(out, d2s_rx_fake_template, 3);
     out[3] = (uint8_t)(hl >> 8);
     out[4] = (uint8_t)hl;
     *len = hl + 5;
@@ -61,11 +61,11 @@ static int template_plan(const uint8_t *hello, size_t hello_len, unsigned split,
     if (!hello || !hello_len || !split) return -1;
     if (!tcpts && !badsum && !autottl) return -1;
     if (send_cap > 0 && (hello_len > send_cap || send_cap - hello_len < 132)) return -1;
-    unsigned seg = d2k_arm_segment(send_cap);
+    unsigned seg = d2s_arm_segment(send_cap);
     if (!seg) return -1;
     /* minexec: autottl исполняет только датапат версии 13 и выше. */
     if (append_fmt(buf, cap, &pos,
-            "d2k-plan 1 %u\nid 00000000000000000000000000000000\n"
+            "d2s-plan 1 %u\nid 00000000000000000000000000000000\n"
             "proto tcp tls\nwire tcp-template-v1\ninput tls-sni\nsegment %u\n",
             autottl ? 13u : 8u, seg) ||
         append_fmt(buf, cap, &pos, "payload 1 ") ||
@@ -73,29 +73,29 @@ static int template_plan(const uint8_t *hello, size_t hello_len, unsigned split,
         append_fmt(buf, cap, &pos, "\npoison 1%s%s",
             badsum ? " badsum" : "", tcpts ? " tcpts" : "") ||
         (autottl && append_fmt(buf, cap, &pos, " autottl=%d,%u-%u",
-                               D2K_RX_AUTOTTL_DELTA, D2K_RX_AUTOTTL_MIN,
-                               D2K_RX_AUTOTTL_MAX)) ||
+                               D2S_RX_AUTOTTL_DELTA, D2S_RX_AUTOTTL_MIN,
+                               D2S_RX_AUTOTTL_MAX)) ||
         append_fmt(buf, cap, &pos,
             "\nfake payload=1 poison=1 repeats=8 gap_us=0 place=before tlsmod=rnd,dupsid\n"
             "split payload_start +%u\norder forward\n", split)) return -1;
     return 0;
 }
 
-int d2k_rx_volume_plan_named(unsigned variant, d2k_shape shape, size_t send_cap,
+int d2s_rx_volume_plan_named(unsigned variant, d2s_shape shape, size_t send_cap,
                              const char *name, char *buf, size_t cap) {
     /* Прежняя подпись — прежняя программа с меткой времени. */
-    return d2k_rx_volume_plan_client(variant, shape, send_cap, name, 1, buf, cap);
+    return d2s_rx_volume_plan_client(variant, shape, send_cap, name, 1, buf, cap);
 }
 
-int d2k_rx_volume_plan_client(unsigned variant, d2k_shape shape, size_t send_cap,
+int d2s_rx_volume_plan_client(unsigned variant, d2s_shape shape, size_t send_cap,
                               const char *name, int client_has_ts,
                               char *buf, size_t cap) {
-    static const unsigned split_at[D2K_RX_VOLUME_PLAN_VARIANTS] = {2, 1, 3, 4, 5};
-    uint8_t hello[D2K_ARM_DECOY_MAX];
+    static const unsigned split_at[D2S_RX_VOLUME_PLAN_VARIANTS] = {2, 1, 3, 4, 5};
+    uint8_t hello[D2S_ARM_DECOY_MAX];
     size_t hello_len = 0;
-    if (!buf || !cap || variant >= D2K_RX_VOLUME_PLAN_VARIANTS ||
-        shape != D2K_SHAPE_MODERN ||
-        d2k_white_decoy_hello(name, hello, sizeof hello, &hello_len)) return -1;
+    if (!buf || !cap || variant >= D2S_RX_VOLUME_PLAN_VARIANTS ||
+        shape != D2S_SHAPE_MODERN ||
+        d2s_white_decoy_hello(name, hello, sizeof hello, &hello_len)) return -1;
     /* Запасная лестница — ВОССТАНОВЛЕННАЯ ПРОГРАММА ПОЛЯ (plan-680fbe00): её
        порча измерена не здесь и не этим клиентом, она часть самой программы.
        Но программа держится на метке времени, а метку даёт КЛИЕНТ: у клиента
@@ -111,9 +111,9 @@ int d2k_rx_volume_plan_client(unsigned variant, d2k_shape shape, size_t send_cap
 
 /* Имя приманки по умолчанию, пока белое имя сети не подобрано (поле
  * 10.10.2026 взяло его первым): семя из восстановленной ручной команды. */
-int d2k_rx_volume_plan(unsigned variant, d2k_shape shape, size_t send_cap,
+int d2s_rx_volume_plan(unsigned variant, d2s_shape shape, size_t send_cap,
                        char *buf, size_t cap) {
-    return d2k_rx_volume_plan_named(variant, shape, send_cap, "hcaptcha.com", buf, cap);
+    return d2s_rx_volume_plan_named(variant, shape, send_cap, "hcaptcha.com", buf, cap);
 }
 
 /* Compact text, exact binary payload: keep the measured prefix and the
@@ -137,24 +137,24 @@ static int measured_payload(char *buf, size_t cap, size_t *pos, unsigned id,
     return append_fmt(buf, cap, pos, "\n");
 }
 
-int d2k_tcp_split_plan(size_t trigger_len, unsigned split, uint32_t gap_us,
+int d2s_tcp_split_plan(size_t trigger_len, unsigned split, uint32_t gap_us,
                        size_t send_cap, char *buf, size_t cap) {
-    if (!buf || !cap || trigger_len > D2K_ARM_TRIGGER_MAX ||
+    if (!buf || !cap || trigger_len > D2S_ARM_TRIGGER_MAX ||
         !split || split >= trigger_len) return -1;
-    unsigned seg = d2k_arm_segment(send_cap);
+    unsigned seg = d2s_arm_segment(send_cap);
     if (!seg) return -1;
     int n = snprintf(buf, cap,
-        "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+        "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
         "wire detect-tcp-v1\nsegment %u\nsplit payload_start +%u\norder forward\npace %u\n",
         seg, split, (unsigned)gap_us);
     return n > 0 && (size_t)n < cap ? 0 : -1;
 }
 
-int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
+int d2s_arm_plan_measured_cap(const d2s_arm *a, const d2s_arm_input *in,
                               size_t send_cap, char *buf, size_t cap) {
     if (!a || !in || !buf || !cap) { return -1; }
     buf[0] = '\0';
-    if (in->trigger_len < 2 || in->trigger_len > D2K_ARM_TRIGGER_MAX ||
+    if (in->trigger_len < 2 || in->trigger_len > D2S_ARM_TRIGGER_MAX ||
         in->decoy_len > sizeof in->decoy || in->sni_off > in->trigger_len ||
         in->sni_len > in->trigger_len - in->sni_off || a->repeats > 255 ||
         a->ttl > 255 || a->gap_ms > UINT32_MAX / 1000u) { return -1; }
@@ -162,12 +162,12 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
         !a->seq_out && !a->decoy_hello && !a->tcpts && !a->ipidzero &&
         !a->disorder && !a->disorder_pos && !a->between && !a->seqovl &&
         !a->seqovl_hello && !a->oob) {
-        return d2k_tcp_split_plan(in->trigger_len, a->split_pos, a->gap_ms * 1000u,
+        return d2s_tcp_split_plan(in->trigger_len, a->split_pos, a->gap_ms * 1000u,
                                   send_cap, buf, cap);
     }
     /* Сегмент — под предел канала, один для всех посылок плана; тот же
-       потолок ставит себе отправитель замера (d2k_raw_set_segment_max). */
-    unsigned seg = d2k_arm_segment(send_cap);
+       потолок ставит себе отправитель замера (d2s_raw_set_segment_max). */
+    unsigned seg = d2s_arm_segment(send_cap);
     if (!seg) { return -1; }
     /* The composite ECH question is the recovered field program. The raw
        probe executes this very text, so it cannot measure padded 2*n bytes
@@ -193,7 +193,7 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
             a->oob || a->split_pos) { return -1; }
         size_t plan_pos = 0;
         if (append_fmt(buf, cap, &plan_pos,
-            "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\n")) { return -1; }
         /* A fixed payload cut does not require a name. Preserve the reusable
          * SNI contract for named inputs, and bind nameless measured inputs. */
@@ -212,13 +212,13 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
             in->sni_off + in->sni_len > in->trigger_len) { return -1; }
         size_t pos = 0;
         return append_fmt(buf, cap, &pos,
-            "d2k-plan 1 8\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 8\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\noob sni_middle 0f\norder forward\n",
             seg);
     }
     size_t n = in->trigger_len, pos = 0;
     size_t ov = a->seqovl_hello ? in->decoy_len : a->seqovl;
-    if (ov > D2K_ARM_DECOY_MAX) { return -1; }
+    if (ov > D2S_ARM_DECOY_MAX) { return -1; }
     int between = a->between;
     /* Метка времени — тоже подделка (сервер отбросит её по PAWS): вопрос о
        ней задаётся без битой суммы (§0.1, 07.10.2026). */
@@ -244,21 +244,21 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
     if (!fake && !between && !disorder && !ov && !a->disorder_pos && !a->split_pos) { return -1; }
     /* ПРЕДЕЛ ОТПРАВКИ (задача 37, I2; поле 22.10.2026, issue #5/#7). Посылки
        плана режутся сегментом seg — тем же потолком, что у сырого отправителя
-       замера (detect/raw.c, d2k_raw_set_segment_max), так что найденное
+       замера (detect/raw.c, d2s_raw_set_segment_max), так что найденное
        воздействие уходит теми же сегментами, что и на замере. Сегмент берётся
-       под предел канала (d2k_arm_segment): при обычном канале (1500, 1492) это
+       под предел канала (d2s_arm_segment): при обычном канале (1500, 1492) это
        прежние 1400 и самая длинная посылка 1440(+12 с меткой времени); при
        узком канале фальшивка и приставка идут более короткими сегментами, а не
        урезаются и не отвергаются. Прежде плечо при пределе ниже 1452 не
        задавалось вовсе — датапат отверг бы 1440 как BAD_PLAN, — и у человека с
        туннелем или LTE измеренных TCP-планов не было. Датапат считает, как
-       d2k_plan_max_emit: фальшивки и приставка по сегменту плюс заголовки
-       IPv4; seg уложен под худшие заголовки (D2K_ARM_SEGMENT_HEADS), поэтому
+       d2s_plan_max_emit: фальшивки и приставка по сегменту плюс заголовки
+       IPv4; seg уложен под худшие заголовки (D2S_ARM_SEGMENT_HEADS), поэтому
        отдельной проверки длины здесь больше нет. */
     if (a->disorder_pos) {
         if (a->disorder_pos >= n) { return -1; }
         if (append_fmt(buf, cap, &pos,
-            "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\n"
             "split payload_start +%u\norder reverse\n",
             seg, a->disorder_pos)) { return -1; }
@@ -272,7 +272,7 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
      * входа, а не доказанная приманка, должны быть параметрическими. */
     if (disorder && !fake && in->sni_off > 0 && in->sni_len > 1) {
         if (append_fmt(buf, cap, &pos,
-            "d2k-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 5\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\n",
             seg)) { return -1; }
         if (ov) {
@@ -324,11 +324,11 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
            больший: иначе план с MD5 объявил бы себя исполнимым датапатом,
            который этой записи не знает. */
         if (append_fmt(buf, cap, &pos,
-            "d2k-plan 1 %u\nid 00000000000000000000000000000000\nproto tcp tls\n"
+            "d2s-plan 1 %u\nid 00000000000000000000000000000000\nproto tcp tls\n"
             "wire detect-tcp-v1\ninput tls-sni\nsegment %u\n",
             a->autottl ? 13u : a->md5 ? 12u : 5u, seg)) { return -1; }
     } else if (append_fmt(buf, cap, &pos,
-        "d2k-plan 1 %u\nid 00000000000000000000000000000000\nproto tcp tls\nwire detect-tcp-v1\n"
+        "d2s-plan 1 %u\nid 00000000000000000000000000000000\nproto tcp tls\nwire detect-tcp-v1\n"
         "input %zu %zu %zu\nsegment %u\n",
         a->autottl ? 13u : a->md5 ? 12u : 4u, n, in->sni_off, in->sni_len, seg)) { return -1; }
     size_t flen = between ? n - mid : 2 * n;
@@ -384,7 +384,7 @@ int d2k_arm_plan_measured_cap(const d2k_arm *a, const d2k_arm_input *in,
     return 0;
 }
 
-int d2k_arm_plan_measured(const d2k_arm *a, const d2k_arm_input *in,
+int d2s_arm_plan_measured(const d2s_arm *a, const d2s_arm_input *in,
                           char *buf, size_t cap) {
-    return d2k_arm_plan_measured_cap(a, in, 0, buf, cap);
+    return d2s_arm_plan_measured_cap(a, in, 0, buf, cap);
 }

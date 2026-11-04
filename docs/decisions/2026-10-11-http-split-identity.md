@@ -30,7 +30,7 @@ Session: prefilter не даёт права применить чужой пла
 запроса используется доказанная framing-граница предыдущего. Таймаут или
 смена таблицы отпускают оригиналы и инвалидируют границу неполного HTTP.
 
-В d2kd наблюдение HTTP перенесено после owning hold. WAIT не поступает ни
+В d2sd наблюдение HTTP перенесено после owning hold. WAIT не поступает ни
 наблюдателю, ни Session; READY даёт обоим одну собранную картину запроса.
 Этот синтетический пакет **не отправляется**. Вердикт относится к точным
 ID удержанных оригиналов. Для fake-badsum-whole на провод уходят приманка
@@ -39,10 +39,10 @@ ID удержанных оригиналов. Для fake-badsum-whole на пр
 ## Воспроизведение, равенство исполнения, проверки
 
 - Начальный новый test_http_live на прежней реализации: make exit 2,
-  14 CHECK (`/tmp/d2k-http-split-identity-red.log`).
+  14 CHECK (`/tmp/d2s-http-split-identity-red.log`).
 - Окончательный расширенный тест свежескомпилирован с session/plans/hold/
   capture из `4ef3c8b` в отдельном каталоге: сборка exit 0, выполнение
-  exit 1, 136 CHECK (`/tmp/d2k-http-hold-baseline-{build,run}.log`).
+  exit 1, 136 CHECK (`/tmp/d2s-http-hold-baseline-{build,run}.log`).
   Checkout и старые объектники этих модулей не использовались.
 - Исправленный тест: IPv4/IPv6 × первый/следующий запрос × пробная/постоянная
   установка × timeout/revision — 0 failures. Вызываются production
@@ -50,7 +50,7 @@ ID удержанных оригиналов. Для fake-badsum-whole на пр
   с точным execution/binding/request. Освобождение проверяет ID и memcmp
   оригинала, поздний хвост не получает исполнение.
 - `--diverge` намеренно портит пакет: exit 1, 46 CHECK. Равенство не является
-  сравнением двух описаний Plan (`/tmp/d2k-http-hold-diverge.log`).
+  сравнением двух описаний Plan (`/tmp/d2s-http-hold-diverge.log`).
 - Read-only review обнаружил в промежуточной правке TLS-on-80 регрессию.
   Новый test_session дал 6 CHECK до её исправления, затем прошёл: оба
   порядка сегментов, полные собранные байты и фактическое применение TLS.
@@ -66,7 +66,7 @@ ID удержанных оригиналов. Для fake-badsum-whole на пр
 - `git diff --check` — чисто. Два dirty builds владельца исключены
   из коммита; SHA-256 перед фиксацией совпал с исходным.
 
-Логи проверок: `/tmp/d2k-http-hold-{datapath-check,detect-check,cross,san,core-check}.log`.
+Логи проверок: `/tmp/d2s-http-hold-{datapath-check,detect-check,cross,san,core-check}.log`.
 
 ## Границы и следующий шаг
 

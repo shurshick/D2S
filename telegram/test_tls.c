@@ -220,7 +220,7 @@ static int capture_large_message(void *opaque, const uint8_t *data, size_t len) 
 }
 
 static void test_sni_and_certificate_validation(void) {
-    char dir[] = "/tmp/d2k-tg-tls-XXXXXX", cert_path[256], key_path[256];
+    char dir[] = "/tmp/d2s-tg-tls-XXXXXX", cert_path[256], key_path[256];
     EVP_PKEY *key;
     X509 *cert;
     SSL_CTX *client_ctx;
@@ -275,7 +275,7 @@ static void test_sni_and_certificate_validation(void) {
 }
 
 static void test_tls_client_preparation_is_nonblocking(void) {
-    char dir[] = "/tmp/d2k-tg-tls-async-XXXXXX", cert_path[256];
+    char dir[] = "/tmp/d2s-tg-tls-async-XXXXXX", cert_path[256];
     int sockets[2];
     assert(mkdtemp(dir) != NULL);
     snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", dir);
@@ -410,7 +410,7 @@ static void test_shipped_relay_trust_bundle_loads(void) {
 }
 
 static void test_websocket_upgrade_fragmentation_and_text_rejection(void) {
-    char dir[] = "/tmp/d2k-tg-ws-XXXXXX", cert_path[256], key_path[256];
+    char dir[] = "/tmp/d2s-tg-ws-XXXXXX", cert_path[256], key_path[256];
     EVP_PKEY *key; X509 *cert; SSL_CTX *client_ctx; SSL *ssl;
     pthread_t thread; server_args args = {0};
     tg_ws_pump pump; pump_capture capture={0};
@@ -446,7 +446,7 @@ static void test_websocket_upgrade_fragmentation_and_text_rejection(void) {
 
 static void test_websocket_pump_grows_and_releases_large_receive_buffers(void) {
     const size_t payload_len = 1024u * 1024u;
-    char dir[] = "/tmp/d2k-tg-ws-large-XXXXXX", cert_path[256], key_path[256];
+    char dir[] = "/tmp/d2s-tg-ws-large-XXXXXX", cert_path[256], key_path[256];
     assert(mkdtemp(dir) != NULL);
     snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", dir);
     snprintf(key_path, sizeof(key_path), "%s/key.pem", dir);

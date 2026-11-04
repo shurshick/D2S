@@ -1,15 +1,15 @@
-/* main.c — d2k-detect: командная строка инструмента «Поиск по домену» на C.
+/* main.c — d2s-detect: командная строка инструмента «Поиск по домену» на C.
  *
  * Флаги и формат вывода повторяют `z2k-detect classify` эталона, чтобы вывод
  * можно было сверять построчно, а не пересказывать. Отличие одно и оно
  * названо в trigger.c: приветствие собирается из снятого профиля, поэтому
  * сверка алгоритма идёт на общем триггере (--raw).
  */
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 /* core/measured.c (SHARED_SRC): то же ECH-приветствие белого имени, что
    планировщик кладёт в opt.white. */
-int d2k_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len);
+int d2s_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len);
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,7 +19,7 @@ int d2k_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *le
 static void usage(void)
 {
     fprintf(stderr,
-        "d2k-detect classify <host:port> [флаги]\n"
+        "d2s-detect classify <host:port> [флаги]\n"
         "\n"
         "  --sni ИМЯ          собрать триггер как ClientHello с этим именем\n"
         "  --raw HEX          триггер шестнадцатеричной строкой (для не-TLS протоколов)\n"
@@ -36,7 +36,7 @@ static void usage(void)
         "  --hello modern|legacy   какое приветствие TLS мерить\n"
         "  --no-raw           выключить сырые зонды\n"
         "  --mark HEX         метка SO_MARK для всех зондов (умолчание 0x40000000 — z2k).\n"
-        "                     У d2k метка своя, её задаёт --mark датапату: с чужой зонд\n"
+        "                     У d2s метка своя, её задаёт --mark датапату: с чужой зонд\n"
         "                     пойдёт ЧЕРЕЗ наш обход и замерит его, а не коробку\n"
         "  --allow-loopback   снять защиту от цели на localhost (для стенда)\n"
         "  --json             выдать результат как JSON\n"
@@ -64,21 +64,21 @@ static void print_json_str(const char *s)
     putchar('"');
 }
 
-static void print_tri(const char *key, d2k_tri t)
+static void print_tri(const char *key, d2s_tri t)
 {
-    if (t == D2K_TRI_UNSET) {
+    if (t == D2S_TRI_UNSET) {
         return;
     }
-    printf(",\n    \"%s\": %s", key, t == D2K_TRI_TRUE ? "true" : "false");
+    printf(",\n    \"%s\": %s", key, t == D2S_TRI_TRUE ? "true" : "false");
 }
 
-static void print_json(const d2k_result *r)
+static void print_json(const d2s_result *r)
 {
     int i, j;
     printf("{\n  \"target\": ");
     print_json_str(r->target);
     printf(",\n  \"verdict\": ");
-    print_json_str(d2k_verdict_name(r->verdict));
+    print_json_str(d2s_verdict_name(r->verdict));
     printf(",\n  \"reason\": ");
     print_json_str(r->reason);
     printf(",\n  \"repeats\": %d", r->repeats);
@@ -96,8 +96,8 @@ static void print_json(const d2k_result *r)
     if (r->split_pos > 0) {
         printf(",\n  \"split_pos\": %d", r->split_pos);
     }
-    if (r->reassembles != D2K_TRI_UNSET) {
-        printf(",\n  \"reassembles\": %s", r->reassembles == D2K_TRI_TRUE ? "true" : "false");
+    if (r->reassembles != D2S_TRI_UNSET) {
+        printf(",\n  \"reassembles\": %s", r->reassembles == D2S_TRI_TRUE ? "true" : "false");
     }
     if (r->strategy[0]) {
         printf(",\n  \"strategy\": ");
@@ -113,14 +113,14 @@ static void print_json(const d2k_result *r)
     }
     if (r->has_response) {
         printf(",\n  \"response\": {\n    \"verdict\": ");
-        print_json_str(d2k_resp_name(r->response.verdict));
+        print_json_str(d2s_resp_name(r->response.verdict));
         printf(",\n    \"reason\": ");
         print_json_str(r->response.reason);
         printf(",\n    \"target\": %d,\n    \"control\": %d\n  }",
                r->response.target, r->response.control);
     }
-    if (r->covers_tls12 != D2K_TRI_UNSET) {
-        printf(",\n  \"covers_tls12\": %s", r->covers_tls12 == D2K_TRI_TRUE ? "true" : "false");
+    if (r->covers_tls12 != D2S_TRI_UNSET) {
+        printf(",\n  \"covers_tls12\": %s", r->covers_tls12 == D2S_TRI_TRUE ? "true" : "false");
     }
     printf(",\n  \"props\": {");
     {
@@ -130,7 +130,7 @@ static void print_json(const d2k_result *r)
         const char *keys[7] = {"reassembles", "parses_l7", "validates_checksum",
                                "tolerates_reorder", "tolerates_left_overlap",
                                "counts_duplicates", "inspects_syn"};
-        d2k_tri vals[7];
+        d2s_tri vals[7];
         vals[0] = r->props.reassembles;
         vals[1] = r->props.parses_l7;
         vals[2] = r->props.validates_checksum;
@@ -139,11 +139,11 @@ static void print_json(const d2k_result *r)
         vals[5] = r->props.counts_duplicates;
         vals[6] = r->props.inspects_syn;
         for (i = 0; i < 7; i++) {
-            if (vals[i] == D2K_TRI_UNSET) {
+            if (vals[i] == D2S_TRI_UNSET) {
                 continue;
             }
             if (first) {
-                printf("\n    \"%s\": %s", keys[i], vals[i] == D2K_TRI_TRUE ? "true" : "false");
+                printf("\n    \"%s\": %s", keys[i], vals[i] == D2S_TRI_TRUE ? "true" : "false");
                 first = 0;
             } else {
                 print_tri(keys[i], vals[i]);
@@ -163,7 +163,7 @@ static void print_json(const d2k_result *r)
     printf(",\n  \"raw_usable\": %s", r->raw_usable ? "true" : "false");
     printf(",\n  \"trace\": [");
     for (i = 0; i < r->ntrace; i++) {
-        const d2k_obs *o = &r->trace[i];
+        const d2s_obs *o = &r->trace[i];
         printf("%s\n    {\n      \"probe\": ", i ? "," : "");
         print_json_str(o->probe);
         if (o->ncuts > 0) {
@@ -190,34 +190,34 @@ static void print_json(const d2k_result *r)
  *
  * Именно в stderr, а не в stdout: разбор вывода (--json и человеческий отчёт)
  * не должен спотыкаться о прогресс, а человек увидит его в терминале рядом. */
-static void print_progress(void *ctx, const d2k_obs *o)
+static void print_progress(void *ctx, const d2s_obs *o)
 {
     int64_t *t0 = ctx;
     fprintf(stderr, "  [%4ld с] %-28s прошло=%d не прошло=%d %s\n",
-            (long)((d2k_now_ms() - *t0) / 1000), o->probe, o->pass, o->fail, o->err);
+            (long)((d2s_now_ms() - *t0) / 1000), o->probe, o->pass, o->fail, o->err);
     fflush(stderr);
 }
 
-static const char *tri_word(d2k_tri t)
+static const char *tri_word(d2s_tri t)
 {
-    if (t == D2K_TRI_UNSET) { return "не измерено"; }
-    return t == D2K_TRI_TRUE ? "да" : "нет";
+    if (t == D2S_TRI_UNSET) { return "не измерено"; }
+    return t == D2S_TRI_TRUE ? "да" : "нет";
 }
 
-static void print_human(const d2k_result *r, const d2k_trigger *tr)
+static void print_human(const d2s_result *r, const d2s_trigger *tr)
 {
-    const d2k_dprops *pr = &r->props;
+    const d2s_dprops *pr = &r->props;
     int i, j;
 
     printf("Цель:     %s\n", r->target);
     printf("Триггер:  %s (%d байт)\n", tr->name, r->trigger_len);
-    printf("Вердикт:  %s — %s\n", d2k_verdict_name(r->verdict), r->reason);
+    printf("Вердикт:  %s — %s\n", d2s_verdict_name(r->verdict), r->reason);
     printf("Зондов:   %d за %ldms (по %d повтора)\n", r->probes, r->duration_ms, r->repeats);
     if (r->boundary > 0) {
         printf("Граница:  сигнатура кончается на байте %d\n", r->boundary);
     }
-    if (r->reassembles != D2K_TRI_UNSET) {
-        printf(r->reassembles == D2K_TRI_TRUE
+    if (r->reassembles != D2S_TRI_UNSET) {
+        printf(r->reassembles == D2S_TRI_TRUE
                ? "Пересборка: ЕСТЬ — при паузе блок возвращается\n"
                : "Пересборка: нет\n");
     }
@@ -234,18 +234,18 @@ static void print_human(const d2k_result *r, const d2k_trigger *tr)
     }
     if (r->has_response) {
         printf("Ответ:    %s — %s (цель %d, контроль %d)\n",
-               d2k_resp_name(r->response.verdict), r->response.reason,
+               d2s_resp_name(r->response.verdict), r->response.reason,
                r->response.target, r->response.control);
     }
     for (i = 0; i < r->nnotes; i++) {
         printf("Оговорка:  %s\n", r->notes[i]);
     }
-    if (r->verdict == D2K_DV_OPAQUE && !r->raw_usable) {
+    if (r->verdict == D2S_DV_OPAQUE && !r->raw_usable) {
         printf("ВНИМАНИЕ: сырые зонды не отработали — отрицательный вывод про отравление НЕ значим\n");
     }
-    if (pr->reassembles != D2K_TRI_UNSET || pr->parses_l7 != D2K_TRI_UNSET ||
-        pr->validates_checksum != D2K_TRI_UNSET || pr->tolerates_reorder != D2K_TRI_UNSET ||
-        pr->tolerates_left_overlap != D2K_TRI_UNSET || pr->hop_ttl > 0) {
+    if (pr->reassembles != D2S_TRI_UNSET || pr->parses_l7 != D2S_TRI_UNSET ||
+        pr->validates_checksum != D2S_TRI_UNSET || pr->tolerates_reorder != D2S_TRI_UNSET ||
+        pr->tolerates_left_overlap != D2S_TRI_UNSET || pr->hop_ttl > 0) {
         printf("Свойства коробки:\n");
         printf("  пересобирает поток:        %s\n", tri_word(pr->reassembles));
         printf("  разбирает протокол:        %s\n", tri_word(pr->parses_l7));
@@ -258,7 +258,7 @@ static void print_human(const d2k_result *r, const d2k_trigger *tr)
     }
     printf("Трасса:\n");
     for (i = 0; i < r->ntrace; i++) {
-        const d2k_obs *o = &r->trace[i];
+        const d2s_obs *o = &r->trace[i];
         char cuts[32];
         if (o->ncuts == 0) {
             snprintf(cuts, sizeof(cuts), "-");
@@ -276,9 +276,9 @@ static void print_human(const d2k_result *r, const d2k_trigger *tr)
 
 int main(int argc, char **argv)
 {
-    d2k_opts opt;
-    d2k_trigger tr;
-    d2k_result res;
+    d2s_opts opt;
+    d2s_trigger tr;
+    d2s_result res;
     char err[256];
     const char *addr = NULL;
 
@@ -309,7 +309,7 @@ int main(int argc, char **argv)
         else if (strcmp(a, "--long-gap") == 0 && v)     { opt.long_gap_ms = atoi(v); i++; }
         else if (strcmp(a, "--only") == 0 && v)         { snprintf(opt.only, sizeof(opt.only), "%s", v); i++; }
         else if (strcmp(a, "--skip") == 0 && v)         {
-            if (opt.nskip < D2K_SKIP_MAX) {
+            if (opt.nskip < D2S_SKIP_MAX) {
                 snprintf(opt.skip[opt.nskip++], sizeof(opt.skip[0]), "%s", v);
             }
             i++;
@@ -344,7 +344,7 @@ int main(int argc, char **argv)
     }
 
     if (raw) {
-        if (d2k_trigger_raw_hex(raw, &tr, err, sizeof(err)) != 0) {
+        if (d2s_trigger_raw_hex(raw, &tr, err, sizeof(err)) != 0) {
             fprintf(stderr, "%s\n", err);
             return 1;
         }
@@ -370,7 +370,7 @@ int main(int argc, char **argv)
             memcpy(name, addr, n);
             name[n] = '\0';
         }
-        if (d2k_trigger_tls(name, strcmp(hello, "legacy") == 0, &tr, err, sizeof(err)) != 0) {
+        if (d2s_trigger_tls(name, strcmp(hello, "legacy") == 0, &tr, err, sizeof(err)) != 0) {
             fprintf(stderr, "%s\n", err);
             return 1;
         }
@@ -401,7 +401,7 @@ int main(int argc, char **argv)
         /* Контроль задан байтами. Поручительства это НЕ даёт: оператор назвал
          * байты, а не ручался, что сервер обслуживает это имя, — а именно
          * поручительство превращает молчание контроля в «блок по адресу». */
-        if (d2k_trigger_raw_hex(ctl_raw, &opt.control, err, sizeof(err)) != 0) {
+        if (d2s_trigger_raw_hex(ctl_raw, &opt.control, err, sizeof(err)) != 0) {
             fprintf(stderr, "%s\n", err);
             return 1;
         }
@@ -409,37 +409,37 @@ int main(int argc, char **argv)
         /* Доказательством прохода для контроля служит ЛЮБАЯ запись TLS,
          * включая алерт: сервер, отвечающий отказом на незнакомое имя, — это
          * всё равно сервер, до которого дошли. */
-        opt.control.accept = D2K_ACCEPT_TLSRECORD;
+        opt.control.accept = D2S_ACCEPT_TLSRECORD;
     } else if (ctl_sni) {
         /* Имя названо руками — значит за базу ручается оператор, и молчание
          * контроля можно засчитать как блок по адресу. */
-        if (d2k_trigger_tls(ctl_sni, 0, &opt.control, err, sizeof(err)) == 0) {
+        if (d2s_trigger_tls(ctl_sni, 0, &opt.control, err, sizeof(err)) == 0) {
             snprintf(opt.control.name, sizeof(opt.control.name), "control:%s", ctl_sni);
             opt.control_vouched = 1;
         }
     } else {
-        (void)d2k_trigger_control("d2k", &opt.control, err, sizeof(err));
+        (void)d2s_trigger_control("d2s", &opt.control, err, sizeof(err));
     }
 
     if (white_name) {
         /* Тот же вход, что даёт планировщик (bridge_input): без него вопрос
            «ECH-приветствие под меткой» утилитой не задавался вовсе. */
         size_t wl = 0;
-        if (d2k_white_decoy_hello(white_name, opt.white.payload, sizeof opt.white.payload, &wl) != 0) {
+        if (d2s_white_decoy_hello(white_name, opt.white.payload, sizeof opt.white.payload, &wl) != 0) {
             fprintf(stderr, "classify: --white %s: приветствие не собралось\n", white_name);
             return 2;
         }
         opt.white.len = wl;
-        opt.white.accept = D2K_ACCEPT_TLSRECORD;
+        opt.white.accept = D2S_ACCEPT_TLSRECORD;
         snprintf(opt.white.name, sizeof opt.white.name, "white");
     }
 
-    int64_t progress_t0 = d2k_now_ms();
+    int64_t progress_t0 = d2s_now_ms();
     if (progress) {
         opt.on_obs = print_progress;
         opt.on_obs_ctx = &progress_t0;
     }
-    d2k_classify_run(addr, &tr, &opt, &res);
+    d2s_classify_run(addr, &tr, &opt, &res);
 
     if (as_json) {
         print_json(&res);

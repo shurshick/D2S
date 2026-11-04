@@ -12,7 +12,7 @@
 # Эталон — САМ исходный файл оригинала (z2k-detect/internal/voiceprobe/
 # target_linux.go), без единой правки: к нему приставляется только main,
 # задающий путь таблицы через ConntrackPath (переменная заведена в оригинале
-# «ради тестов») и печатающий цели. Порт — d2kvoice --list.
+# «ради тестов») и печатающий цели. Порт — d2svoice --list.
 #
 # Порт держит ПОТОКИ раздельно (пятёрка), эталон сливает их по адресу
 # точки. Для сверки поток порта складывается по точке — ровно так, как это
@@ -22,7 +22,7 @@
 #   порт 50100   — эталон берёт (его диапазон 50000–50100), порт нет: у
 #                  боевого профиля discord_udp и у эталона bol-van граница
 #                  50099 (сверка 18.09, docs/field/2026-09-17-voice-port-map.md);
-#   IPv6         — эталон берёт, порт нет: датапат d2k сегодня только IPv4;
+#   IPv6         — эталон берёт, порт нет: датапат d2s сегодня только IPv4;
 #   100.64/10    — эталон берёт, порт нет: разделяемое пространство
 #                  провайдера (RFC 6598), голосового сервера там не бывает;
 #                  у Go IsPrivate его нет.
@@ -31,8 +31,8 @@
 # Роутер только читает таблицу: трафик не трогается, z2k гасить не нужно.
 set -eu
 
-ROUTER=${D2K_ROUTER:-192.168.1.1}
-SSH_PORT=${D2K_SSH_PORT:-222}
+ROUTER=${D2S_ROUTER:-192.168.1.1}
+SSH_PORT=${D2S_SSH_PORT:-222}
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 Z2K=${Z2K_DETECT:-/Library/Zapret2/z2k/z2k-detect}
 GO=${GO:-$HOME/go/bin/go1.25.12}
@@ -40,8 +40,8 @@ SSH="ssh -n -p $SSH_PORT -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519 root@$RO
 SSH_IN="ssh -p $SSH_PORT -o IdentitiesOnly=yes -i $HOME/.ssh/id_ed25519 root@$ROUTER"
 say() { printf '%s\n' "$*" >&2; }
 
-WORK=$(mktemp -d /tmp/d2kvc.XXXXXX)
-TOK="d2kvc$$"
+WORK=$(mktemp -d /tmp/d2svc.XXXXXX)
+TOK="d2svc$$"
 # Invoked by the EXIT/INT/TERM trap below.
 # shellcheck disable=SC2329
 # shellcheck disable=SC2317  # вызывается через trap
@@ -81,9 +81,9 @@ grep -v '^package ' "$WORK/ref/target_linux.go" > "$WORK/copy.body"
 cmp -s "$WORK/orig.body" "$WORK/copy.body" ||
     { say "исходник эталона изменился при копировании"; exit 1; }
 
-say "== порт: d2kvoice =="
-make -C "$REPO/core" d2kvoice-linux-arm64 >/dev/null
-PORT_BIN="$REPO/builds/d2kvoice-linux-arm64"
+say "== порт: d2svoice =="
+make -C "$REPO/core" d2svoice-linux-arm64 >/dev/null
+PORT_BIN="$REPO/builds/d2svoice-linux-arm64"
 
 say "== доставка =="
 $SSH_IN "cat > /tmp/$TOK.ref && chmod +x /tmp/$TOK.ref" < "$WORK/ref-bin"
@@ -113,7 +113,7 @@ compare() {
         a=${l%% *}
         case "$a" in
             *:50100)       say "  объявлено: $l — порт 50100 вне профиля" ;;
-            \[*)           say "  объявлено: $l — IPv6, датапат d2k только IPv4" ;;
+            \[*)           say "  объявлено: $l — IPv6, датапат d2s только IPv4" ;;
             100.6[4-9].*|100.[7-9][0-9].*|100.1[01][0-9].*|100.12[0-7].*)
                            say "  объявлено: $l — 100.64/10, разделяемое пространство провайдера" ;;
             *)             say "  ПРОВАЛ: только у эталона: $l"; echo x >> "$WORK/fail" ;;

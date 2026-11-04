@@ -2,14 +2,14 @@
  *
  * Поле 14.10.2026, fost.club (172.67.220.65): вопрос «ECH-приветствие под
  * меткой» к одному адресу — 3/3, 0/1, 2/3, 1/2, с любой приманкой. Стенд шлёт
- * тот же приём тем же зондом (d2k_raw_probe_poison_family, общий с датапатом
+ * тот же приём тем же зондом (d2s_raw_probe_poison_family, общий с датапатом
  * plan_apply) N раз подряд и печатает исход каждой попытки с меткой времени,
  * чтобы сверить с tcpdump на роутере. Только для опытов: в сборку не входит.
  *
  *   whitets <ip> <имя> <белое-имя> <попыток> <пауза-мс> [копий] [ts 0|1] [метка]
  */
 #define _POSIX_C_SOURCE 200809L
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 #include <arpa/inet.h>
 #include <stdio.h>
@@ -17,7 +17,7 @@
 #include <string.h>
 #include <time.h>
 
-int d2k_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len);
+int d2s_white_decoy_hello(const char *name, uint8_t *out, size_t cap, size_t *len);
 
 static long long now_ms(void) {
     struct timespec t;
@@ -38,14 +38,14 @@ int main(int argc, char **argv) {
     uint32_t mark = argc > 8 ? (uint32_t)strtoul(argv[8], NULL, 0) : 0x2f;
     int ttl = argc > 9 ? atoi(argv[9]) : 0;
     int badsum = argc > 10 ? atoi(argv[10]) : 0;
-    d2k_trigger tr;
+    d2s_trigger tr;
     char err[200];
     memset(&tr, 0, sizeof tr);
-    if (d2k_trigger_tls(argv[2], 0, &tr, err, sizeof err) != 0) { fprintf(stderr, "%s\n", err); return 1; }
+    if (d2s_trigger_tls(argv[2], 0, &tr, err, sizeof err) != 0) { fprintf(stderr, "%s\n", err); return 1; }
     static uint8_t white[2048];
     size_t wl = 0;
-    if (d2k_white_decoy_hello(argv[3], white, sizeof white, &wl) != 0) { fprintf(stderr, "белое\n"); return 1; }
-    d2k_poison p;
+    if (d2s_white_decoy_hello(argv[3], white, sizeof white, &wl) != 0) { fprintf(stderr, "белое\n"); return 1; }
+    d2s_poison p;
     memset(&p, 0, sizeof p);
     snprintf(p.name, sizeof p.name, "white-hello-ts");
     p.tcp_ts = ts;
@@ -56,13 +56,13 @@ int main(int argc, char **argv) {
     p.split_pos = 2;
     p.ttl = ttl;
     p.badsum = badsum;
-    d2k_detect_stop stop;
+    d2s_detect_stop stop;
     memset(&stop, 0, sizeof stop);
     int pass = 0;
     for (int i = 0; i < n; i++) {
         long long t0 = now_ms();
         err[0] = 0;
-        int rc = d2k_raw_probe_poison_family(ip, 4, 443, &tr, &p, 6000, mark, &stop, err, sizeof err);
+        int rc = d2s_raw_probe_poison_family(ip, 4, 443, &tr, &p, 6000, mark, &stop, err, sizeof err);
         long long t1 = now_ms();
         if (rc > 0) pass++;
         time_t sec = (time_t)(t0 / 1000);

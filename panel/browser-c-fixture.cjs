@@ -3,7 +3,7 @@
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net');
 const {spawn}=require('node:child_process');
 module.exports=async function(visualFixture){
- const temp=fs.mkdtempSync(path.join(os.tmpdir(),'d2k-c-browser-'));
+ const temp=fs.mkdtempSync(path.join(os.tmpdir(),'d2s-c-browser-'));
  const config=path.join(temp,'config'),live=path.join(temp,'live.json'),log=path.join(temp,'actions');
  const engine=path.join(temp,'engine.pid'),controller=path.join(temp,'controller.pid'),telegram=path.join(temp,'telegram.pid');
  const tgStatus=path.join(temp,'tg-status'),tgStats=path.join(temp,'telegram-stats.sock'),service=path.join(temp,'service');
@@ -25,7 +25,7 @@ module.exports=async function(visualFixture){
   'fs.appendFileSync(paths.log,action+"\\n");\n',{mode:0o700});
  const socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));
  const port=socket.address().port;await new Promise(r=>socket.close(r));
- const child=spawn(path.join(__dirname,'d2kpanel'),['serve','--config',config,'--listen','127.0.0.1:'+port,
+ const child=spawn(path.join(__dirname,'d2spanel'),['serve','--config',config,'--listen','127.0.0.1:'+port,
   '--live',live,'--assets',path.resolve(__dirname,'../internal/web/assets'),'--service',service,
   '--engine-pid',engine,'--controller-pid',controller,'--telegram-pid',telegram,'--telegram-status',tgStatus,
   '--telegram-stats',tgStats],{stdio:'ignore'});

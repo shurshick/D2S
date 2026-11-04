@@ -16,14 +16,14 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_plan.h"
-#include "d2k_arm.h"
+#include "d2s_plan.h"
+#include "d2s_arm.h"
 #include "plan_internal.h"
-#include "d2k_quic.h" /* d2k_quic_initial_split_crypto — задача 40 */
+#include "d2s_quic.h" /* d2s_quic_initial_split_crypto — задача 40 */
 
 /* Разрешение якоря. Невычислимый якорь — ОТКАЗ, а не нулевое смещение:
  * молчаливый ноль исполнил бы не тот план, который измеряли. */
-static int anchor_offset(const d2k_pkt *in, uint16_t anchor, size_t *out,
+static int anchor_offset(const d2s_pkt *in, uint16_t anchor, size_t *out,
                          const char **why) {
     switch (anchor) {
     case ANCHOR_PAYLOAD_START:
@@ -87,7 +87,7 @@ static int cmp_size(const void *a, const void *b) {
 /* Позиции разрезов: якорь плюс смещение, отсортированы по возрастанию и
  * очищены от повторов и краёв. Порядок именно возрастающий, а не порядок
  * записей: иначе перестановка записей в плане меняла бы куски. */
-static int split_points(const d2k_plan *p, const d2k_pkt *in,
+static int split_points(const d2s_plan *p, const d2s_pkt *in,
                         size_t *pts, size_t *n_out, const char **why) {
     size_t n = 0;
     for (size_t i = 0; i < p->n_splits; i++) {
@@ -170,8 +170,8 @@ static void wr24(uint8_t *b, size_t off, size_t v) {
     b[off + 2] = (uint8_t)v;
 }
 
-static int fake_tls_bytes(const d2k_plan *p, const struct d2k_fake *f,
-                          const struct d2k_payload *pl, const d2k_pkt *in,
+static int fake_tls_bytes(const d2s_plan *p, const struct d2s_fake *f,
+                          const struct d2s_payload *pl, const d2s_pkt *in,
                           uint8_t **owned, const char **why) {
     size_t fake_rnd, fake_sid, fake_sid_len;
     size_t real_rnd, real_sid, real_sid_len;
@@ -180,34 +180,34 @@ static int fake_tls_bytes(const d2k_plan *p, const struct d2k_fake *f,
        and session-ID fields have the same layout; unequal SID lengths are
        handled below without resizing the template. Keep the older native
        modifier profile's input contract unchanged. */
-    if (!in->is_tls13 && p->wire_profile != D2K_WIRE_TCP_TEMPLATE) {
+    if (!in->is_tls13 && p->wire_profile != D2S_WIRE_TCP_TEMPLATE) {
         *why = "правка приветствия просит TLS 1.3, а у этого пакета форма другая";
         return -1;
     }
     if (tls_ch_layout(in->payload, in->payload_len,
-            p->wire_profile == D2K_WIRE_TCP_TEMPLATE,
+            p->wire_profile == D2S_WIRE_TCP_TEMPLATE,
             &real_rnd, &real_sid, &real_sid_len, why) != 0 ||
         tls_ch_layout(pl->bytes, pl->len, 0, &fake_rnd, &fake_sid,
                       &fake_sid_len, why) != 0) { return -1; }
-    if (p->wire_profile == D2K_WIRE_TCP_TEMPLATE) {
+    if (p->wire_profile == D2S_WIRE_TCP_TEMPLATE) {
         /* Original TLSMod: randomize fake random/SID, then duplicate SID only
          * when lengths match. It does not resize fake_default_tls. */
         uint8_t *b = malloc(pl->len);
         if (!b) { *why = "нет памяти на правку приветствия"; return -1; }
         memcpy(b, pl->bytes, pl->len);
-        if ((f->tls_mod & D2K_TLS_MOD_RND) &&
+        if ((f->tls_mod & D2S_TLS_MOD_RND) &&
             (random_bytes(b + fake_rnd, 32) != 0 ||
              random_bytes(b + fake_sid, fake_sid_len) != 0)) {
             *why = "случайные байты не прочитаны (/dev/urandom)";
             free(b); return -1;
         }
-        if ((f->tls_mod & D2K_TLS_MOD_DUPSID) && fake_sid_len == real_sid_len)
+        if ((f->tls_mod & D2S_TLS_MOD_DUPSID) && fake_sid_len == real_sid_len)
             memcpy(b + fake_sid, in->payload + real_sid, real_sid_len);
         *owned = b;
         return 0;
     }
     size_t out_len = pl->len;
-    if (f->tls_mod & D2K_TLS_MOD_DUPSID) {
+    if (f->tls_mod & D2S_TLS_MOD_DUPSID) {
         out_len = pl->len - fake_sid_len + real_sid_len;
         if (out_len > 65540 || out_len < 9 || out_len - 5 > 65535 || out_len - 9 > 0xffffff) {
             *why = "правка приветствия: копия session id не влезает в запись TLS";
@@ -216,7 +216,7 @@ static int fake_tls_bytes(const d2k_plan *p, const struct d2k_fake *f,
     }
     uint8_t *b = malloc(out_len);
     if (!b) { *why = "нет памяти на правку приветствия"; return -1; }
-    if (f->tls_mod & D2K_TLS_MOD_DUPSID) {
+    if (f->tls_mod & D2S_TLS_MOD_DUPSID) {
         memcpy(b, pl->bytes, fake_sid);
         memcpy(b + fake_sid, in->payload + real_sid, real_sid_len);
         memcpy(b + fake_sid + real_sid_len, pl->bytes + fake_sid + fake_sid_len,
@@ -227,7 +227,7 @@ static int fake_tls_bytes(const d2k_plan *p, const struct d2k_fake *f,
     } else {
         memcpy(b, pl->bytes, pl->len);
     }
-    if ((f->tls_mod & D2K_TLS_MOD_RND) && random_bytes(b + fake_rnd, 32) != 0) {
+    if ((f->tls_mod & D2S_TLS_MOD_RND) && random_bytes(b + fake_rnd, 32) != 0) {
         *why = "случайные байты не прочитаны (/dev/urandom)";
         free(b); return -1;
     }
@@ -236,14 +236,14 @@ static int fake_tls_bytes(const d2k_plan *p, const struct d2k_fake *f,
     return 0;
 }
 
-static int emit_fake(d2k_emit *e, const d2k_plan *p, const struct d2k_fake *f,
-                     const d2k_pkt *in, uint32_t seq, uint32_t delay,
+static int emit_fake(d2s_emit *e, const d2s_plan *p, const struct d2s_fake *f,
+                     const d2s_pkt *in, uint32_t seq, uint32_t delay,
                      const char **why) {
-    const struct d2k_payload *pl = d2k_find_payload(p, f->payload_id);
-    const struct d2k_poison *po = f->poison_id ? d2k_find_poison(p, f->poison_id) : NULL;
+    const struct d2s_payload *pl = d2s_find_payload(p, f->payload_id);
+    const struct d2s_poison *po = f->poison_id ? d2s_find_poison(p, f->poison_id) : NULL;
     if (!pl) { *why = "фальшивка плана ссылается на нагрузку, которой нет"; return -1; }
     memset(e, 0, sizeof *e);
-    e->kind = D2K_EMIT_FAKE;
+    e->kind = D2S_EMIT_FAKE;
     e->delay_us = delay;
     e->seq = seq;
     e->bytes = pl->bytes;
@@ -265,7 +265,7 @@ static int emit_fake(d2k_emit *e, const d2k_plan *p, const struct d2k_fake *f,
     return 0;
 }
 
-static void emit_vec_free(d2k_emit *v, size_t n) {
+static void emit_vec_free(d2s_emit *v, size_t n) {
     if (!v) { return; }
     for (size_t i = 0; i < n; i++) { free(v[i].owned_bytes); }
     free(v);
@@ -282,44 +282,44 @@ static void emit_vec_free(d2k_emit *v, size_t n) {
 /* Метка времени TCP: NOP, NOP, тип 8, длина 10 — см. TS_OPT_LEN в wire.c. */
 #define EMIT_TS_OPT   12
 
-static size_t emit_overhead(const d2k_plan *p, const struct d2k_poison *po) {
+static size_t emit_overhead(const d2s_plan *p, const struct d2s_poison *po) {
     /* Транспорт не объявлен — считаем по TCP: его заголовок шире, и ошибка в
        эту сторону отвергает лишнее, а не пропускает непроходимое. */
     size_t hdr = EMIT_IP_HDR + ((p->transport == 17) ? EMIT_UDP_HDR : EMIT_TCP_HDR);
     if (po && p->transport != 17) {
         /* MD5 replaces the timestamp option in detect/raw.c and wire.c. */
-        if (po->flags & D2K_POISON_MD5) { hdr += 20; }
-        else if (po->flags & D2K_POISON_TCPTS_BACK) { hdr += EMIT_TS_OPT; }
+        if (po->flags & D2S_POISON_MD5) { hdr += 20; }
+        else if (po->flags & D2S_POISON_TCPTS_BACK) { hdr += EMIT_TS_OPT; }
     }
     return hdr;
 }
 
-size_t d2k_plan_max_emit(const d2k_plan *p) {
+size_t d2s_plan_max_emit(const d2s_plan *p) {
     if (!p) {
         return 0;
     }
     size_t max = 0;
     for (size_t i = 0; i < p->n_fakes; i++) {
-        const struct d2k_payload *pl = d2k_find_payload(p, p->fakes[i].payload_id);
+        const struct d2s_payload *pl = d2s_find_payload(p, p->fakes[i].payload_id);
         if (!pl) {
             continue;   /* висячая ссылка отвергается разбором, сюда не доходит */
         }
-        const struct d2k_poison *po = p->fakes[i].poison_id
-            ? d2k_find_poison(p, p->fakes[i].poison_id) : NULL;
-        size_t body = pl->len + ((p->fakes[i].tls_mod & D2K_TLS_MOD_DUPSID) ? 32u : 0u);
+        const struct d2s_poison *po = p->fakes[i].poison_id
+            ? d2s_find_poison(p, p->fakes[i].poison_id) : NULL;
+        size_t body = pl->len + ((p->fakes[i].tls_mod & D2S_TLS_MOD_DUPSID) ? 32u : 0u);
         if (p->segment_size && body > p->segment_size) { body = p->segment_size; }
         size_t n = emit_overhead(p, po) + body;
         if (n > max) { max = n; }
     }
     for (size_t i = 0; i < p->n_seqovls; i++) {
-        const struct d2k_payload *pl = d2k_find_payload(p, p->seqovls[i].payload_id);
+        const struct d2s_payload *pl = d2s_find_payload(p, p->seqovls[i].payload_id);
         if (!pl) {
             continue;
         }
-        const struct d2k_poison *po = p->seqovls[i].poison_id
-            ? d2k_find_poison(p, p->seqovls[i].poison_id) : NULL;
+        const struct d2s_poison *po = p->seqovls[i].poison_id
+            ? d2s_find_poison(p, p->seqovls[i].poison_id) : NULL;
         /* Только приставка: кусок нагрузки, к которому она приклеивается,
-           приходит из пакета — см. d2k_plan_max_emit в d2k_plan.h про то,
+           приходит из пакета — см. d2s_plan_max_emit в d2s_plan.h про то,
            почему он здесь не считается. */
         size_t body = pl->len;
         if (p->segment_size && body > p->segment_size) { body = p->segment_size; }
@@ -340,8 +340,8 @@ size_t d2k_plan_max_emit(const d2k_plan *p) {
     return max;
 }
 
-int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
-                   const d2k_pkt *in, d2k_actions *out) {
+int d2s_plan_apply(const d2s_plan *p, const d2s_flow *f,
+                   const d2s_pkt *in, d2s_actions *out) {
     (void)f;
     if (!p || !in || !out) {
         return -1;
@@ -359,8 +359,8 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
     }
     /* HTTP-план — только запросу HTTP, прочий план — только не ему (шаг 4
        задачи 51): якоря «sni_*» у них считаются от разного. */
-    if ((p->proto == D2K_PLAN_PROTO_HTTP) != (in->is_http != 0)) {
-        out->refuse_why = p->proto == D2K_PLAN_PROTO_HTTP
+    if ((p->proto == D2S_PLAN_PROTO_HTTP) != (in->is_http != 0)) {
+        out->refuse_why = p->proto == D2S_PLAN_PROTO_HTTP
             ? "план открытого HTTP, а пакет — не запрос HTTP"
             : "пакет — запрос HTTP, а план объявлен не для него";
         return -1;
@@ -368,7 +368,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
     if (p->qdeny) {
         /* Не воздействие: оригинал снимается, посылок нет (сессия решает
            это раньше; здесь — чтобы исполнитель не выдумал иного). */
-        out->fate = D2K_ORIG_DROP;
+        out->fate = D2S_ORIG_DROP;
         return 0;
     }
     if (in->is_http && (p->input_tls || p->input_len || p->oob_enabled || p->ipfrag ||
@@ -382,7 +382,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
          * SNI metadata is provided by the normal session TLS parser. */
         const uint8_t *b = in->payload;
         size_t n = in->payload_len;
-        if (n < 9 || n > D2K_ARM_TRIGGER_MAX || b[0] != 0x16 || b[1] != 3 || b[5] != 1 ||
+        if (n < 9 || n > D2S_ARM_TRIGGER_MAX || b[0] != 0x16 || b[1] != 3 || b[5] != 1 ||
             !in->have_sni || in->sni_len <= 1 || !in->sni_off ||
             in->sni_off > n || in->sni_len > n - in->sni_off) {
             out->refuse_why = !in->have_sni
@@ -469,7 +469,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
         }
     }
 
-    d2k_emit *v = NULL;
+    d2s_emit *v = NULL;
     size_t n = 0;
     int owns_payload = 1;
     if (p->oob_enabled) {
@@ -483,12 +483,12 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
         }
         v = calloc(3, sizeof *v);
         if (!v) { out->refuse_why = "нет памяти на посылки плана"; return -1; }
-        v[0].kind = D2K_EMIT_PAYLOAD;
+        v[0].kind = D2S_EMIT_PAYLOAD;
         v[0].seq = in->seq;
         v[0].bytes = in->payload;
         v[0].len = mid;
 
-        v[1].kind = D2K_EMIT_PAYLOAD;
+        v[1].kind = D2S_EMIT_PAYLOAD;
         v[1].seq = in->seq + (uint32_t)mid;
         v[1].bytes = &p->oob_byte;
         v[1].len = 1;
@@ -498,7 +498,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
         /* TCP sequence space includes urgent data even though the receiving
            application normally removes that byte from its in-band stream.
            Therefore replay the original suffix unchanged at seq+mid+1. */
-        v[2].kind = D2K_EMIT_PAYLOAD;
+        v[2].kind = D2S_EMIT_PAYLOAD;
         v[2].seq = in->seq + (uint32_t)mid + 1u;
         v[2].bytes = in->payload + mid;
         v[2].len = in->payload_len - mid;
@@ -528,10 +528,10 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                        (p->settle_us > 0) || (p->delay_us > 0) || p->ipfrag ||
                        p->udplen || p->qsplit;
     /* Оригинал, отданный ядру после наших сырых фальшивок, может не уйти
-       вовсе (см. own_after_fakes в d2k_plan.h). Тогда правда — последняя
+       вовсе (см. own_after_fakes в d2s_plan.h). Тогда правда — последняя
        посылка плана, сразу за фальшивками, без собственной паузы. */
     /* Задача 47: не только фальшивки «перед». Любая сырая посылка плана
-       выходит раньше вердикта оригинала (d2kd шлёт посылки до вердикта, а
+       выходит раньше вердикта оригинала (d2sd шлёт посылки до вердикта, а
        отложенные — до отложенного вердикта), и запись создаёт она. Поэтому
        при own_after_fakes оригинал — всегда посылка плана, если фальшивки
        есть вообще. Сегодня у датаграммы другого места для фальшивки нет
@@ -577,7 +577,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
     }
     if (max_emits == 0) {
         free(pts);
-        out->fate = D2K_ORIG_PASS;
+        out->fate = D2S_ORIG_PASS;
         return 0;
     }
 
@@ -601,7 +601,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                           &out->refuse_why) != 0) {
                 free(pts); emit_vec_free(v, n); return -1;
             }
-            if (r && p->wire_profile == D2K_WIRE_TCP_TEMPLATE && v[n].owned_bytes) {
+            if (r && p->wire_profile == D2S_WIRE_TCP_TEMPLATE && v[n].owned_bytes) {
                 /* repeats retransmits the same mutated fake, not eight
                  * independently randomized ClientHellos. */
                 memcpy(v[n].owned_bytes, v[n - r].bytes, v[n].len);
@@ -618,21 +618,21 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
            в поток и разберёт не то, что разберёт сервер.
            Это ответ на коробку, которая ПЕРЕСОБИРАЕТ: разрез её не берёт,
            потому что она склеивает куски, а вот отравить склейку можно. */
-        const struct d2k_payload *ovl = NULL;
-        const struct d2k_poison  *ovl_po = NULL;
+        const struct d2s_payload *ovl = NULL;
+        const struct d2s_poison  *ovl_po = NULL;
         if (p->n_seqovls > 0) {
-            ovl = d2k_find_payload(p, p->seqovls[0].payload_id);
+            ovl = d2s_find_payload(p, p->seqovls[0].payload_id);
             if (p->seqovls[0].poison_id) {
-                ovl_po = d2k_find_poison(p, p->seqovls[0].poison_id);
+                ovl_po = d2s_find_poison(p, p->seqovls[0].poison_id);
             }
         }
 
         size_t start = 0;
         for (size_t i = 0; i <= n_pts; i++) {
             size_t end = (i < n_pts) ? pts[i] : in->payload_len;
-            d2k_emit *e = &v[n++];
+            d2s_emit *e = &v[n++];
             memset(e, 0, sizeof *e);
-            e->kind = D2K_EMIT_PAYLOAD;
+            e->kind = D2S_EMIT_PAYLOAD;
             e->ipfrag = p->ipfrag;
             /* Разнос проставляется НЕ здесь, а после возможного переворота
                порядка: задержка — свойство МЕСТА в очереди отправки, а не
@@ -650,12 +650,12 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                    нетронутым, а не «почти так, как мерили». */
                 uint8_t *re = malloc(e->len);
                 size_t re_len = 0;
-                int src = re ? d2k_quic_initial_split_crypto(e->bytes, e->len, re, e->len,
+                int src = re ? d2s_quic_initial_split_crypto(e->bytes, e->len, re, e->len,
                                                              &re_len) : -1;
                 if (src != 0 || re_len != e->len) {
                     /* Причина — вызывающему (журнал отказов): разрез, которого
                        не мерили, не выдаётся за применённый план. */
-                    out->refuse_why = src == D2K_QUIC_SPLIT_NO_NAME
+                    out->refuse_why = src == D2S_QUIC_SPLIT_NO_NAME
                         ? "разрез CRYPTO: имени нет в этой датаграмме "
                           "(ClientHello шире датаграммы) — такой разрез не мерили"
                         : "разрез CRYPTO неприменим: не Initial, чужой кадр или нет добивки";
@@ -734,7 +734,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                указателей оператором `<` не определено языком и «работало»
                только при удачной случайной раскладке кучи. kind проставлен
                явно при формировании каждой посылки (emit_fake ставит
-               D2K_EMIT_FAKE, кусок нагрузки — D2K_EMIT_PAYLOAD чуть выше),
+               D2S_EMIT_FAKE, кусок нагрузки — D2S_EMIT_PAYLOAD чуть выше),
                и сравнение через него определено всегда, а не по счастливой
                случайности.
 
@@ -748,11 +748,11 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                уходило в беззнаковое переполнение и писало за границу массива. */
             size_t i = 0, j = n;
             while (i < j) {
-                if (v[i].kind != D2K_EMIT_PAYLOAD) {
+                if (v[i].kind != D2S_EMIT_PAYLOAD) {
                     i++;
                     continue;
                 }
-                if (v[j - 1].kind != D2K_EMIT_PAYLOAD) {
+                if (v[j - 1].kind != D2S_EMIT_PAYLOAD) {
                     j--;
                     continue;
                 }
@@ -761,7 +761,7 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
                        ни одного — меняться больше нечему. */
                     break;
                 }
-                d2k_emit t = v[i];
+                d2s_emit t = v[i];
                 v[i] = v[j - 1];
                 v[j - 1] = t;
                 i++;
@@ -784,14 +784,14 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
      */
     if (p->pace_us > 0) {
         for (size_t i = 0; i < n; i++) {
-            if (v[i].kind != D2K_EMIT_PAYLOAD) { continue; }
+            if (v[i].kind != D2S_EMIT_PAYLOAD) { continue; }
             v[i].delay_us = (i == 0) ? 0 : p->pace_us;
         }
     }
 
     if (p->settle_us > 0) {
         for (size_t i = 0; i < n; i++) {
-            if (v[i].kind != D2K_EMIT_PAYLOAD) { continue; }
+            if (v[i].kind != D2S_EMIT_PAYLOAD) { continue; }
             if (i > 0) { v[i].delay_us = p->settle_us; }
             break;
         }
@@ -799,10 +799,10 @@ int d2k_plan_apply(const d2k_plan *p, const d2k_flow *f,
 
     /* ВЫДЕРЖКА ПЕРЕД ПЕРВОЙ НАГРУЗКОЙ — независимо от того, стоит ли что-то
        перед ней. Этим и отличается от settle, который молчит на посылке с
-       нулевым номером (см. d2k_plan_internal.h про delay_us). */
+       нулевым номером (см. d2s_plan_internal.h про delay_us). */
     if (p->delay_us > 0) {
         for (size_t i = 0; i < n; i++) {
-            if (v[i].kind != D2K_EMIT_PAYLOAD) { continue; }
+            if (v[i].kind != D2S_EMIT_PAYLOAD) { continue; }
             v[i].delay_us = p->delay_us;
             break;
         }
@@ -822,7 +822,7 @@ finalize:
             size_t bytes = v[i].pre_len + v[i].len;
             size_t limit = p->segment_size;
             if (in->segment_cap && (!p->transport || p->transport == 6) &&
-                !p->ipfrag && v[i].kind == D2K_EMIT_PAYLOAD &&
+                !p->ipfrag && v[i].kind == D2S_EMIT_PAYLOAD &&
                 (!limit || in->segment_cap < limit)) {
                 limit = in->segment_cap;
             }
@@ -833,7 +833,7 @@ finalize:
             }
             count += chunks;
         }
-        d2k_emit *split = calloc(count, sizeof *split);
+        d2s_emit *split = calloc(count, sizeof *split);
         if (!split) {
             out->refuse_why = "нет памяти на нарезку посылок";
             emit_vec_free(v, n); return -1;
@@ -842,13 +842,13 @@ finalize:
         for (size_t i = 0; i < n; i++) {
             size_t limit = p->segment_size;
             if (in->segment_cap && (!p->transport || p->transport == 6) &&
-                !p->ipfrag && v[i].kind == D2K_EMIT_PAYLOAD &&
+                !p->ipfrag && v[i].kind == D2S_EMIT_PAYLOAD &&
                 (!limit || in->segment_cap < limit)) {
                 limit = in->segment_cap;
             }
             size_t total = v[i].pre_len + v[i].len, off = 0;
             do {
-                d2k_emit *e = &split[k++];
+                d2s_emit *e = &split[k++];
                 *e = v[i];
                 size_t take = total - off;
                 if (limit && take > limit) { take = limit; }
@@ -868,7 +868,7 @@ finalize:
     }
     out->v = v;
     out->n = n;
-    out->fate = owns_payload ? D2K_ORIG_DROP : D2K_ORIG_PASS;
+    out->fate = owns_payload ? D2S_ORIG_DROP : D2S_ORIG_PASS;
     return 0;
 }
 
@@ -888,13 +888,13 @@ finalize:
  *    записывать ни успех, ни неудачу: коробка видела не тот набор пакетов,
  *    который описывает план, а §2.3 запрещает сохранять неподтверждённое.
  */
-void d2k_actions_cancel(const d2k_actions *a, size_t emitted, d2k_cancel *out) {
+void d2s_actions_cancel(const d2s_actions *a, size_t emitted, d2s_cancel *out) {
     if (!out) {
         return;
     }
     memset(out, 0, sizeof *out);
     if (!a) {
-        out->fate = D2K_ORIG_PASS;
+        out->fate = D2S_ORIG_PASS;
         return;
     }
     if (emitted > a->n) {
@@ -903,7 +903,7 @@ void d2k_actions_cancel(const d2k_actions *a, size_t emitted, d2k_cancel *out) {
 
     int payload_out = 0;
     for (size_t i = 0; i < emitted; i++) {
-        if (a->v[i].kind == D2K_EMIT_PAYLOAD) {
+        if (a->v[i].kind == D2S_EMIT_PAYLOAD) {
             payload_out = 1;
             break;
         }
@@ -914,13 +914,13 @@ void d2k_actions_cancel(const d2k_actions *a, size_t emitted, d2k_cancel *out) {
 
     if (payload_out) {
         /* Байты нагрузки уже на проводе: повторять их нельзя. */
-        out->fate = D2K_ORIG_DROP;
+        out->fate = D2S_ORIG_DROP;
     } else {
-        out->fate = D2K_ORIG_PASS;
+        out->fate = D2S_ORIG_PASS;
     }
 }
 
-void d2k_actions_free(d2k_actions *a) {
+void d2s_actions_free(d2s_actions *a) {
     if (!a) {
         return;
     }

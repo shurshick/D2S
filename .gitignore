@@ -5,20 +5,20 @@ docs/field/raw/
 spike/nfqview-c/nfqview-c-linux-*
 spike/bench/results/
 # builds/ — каталог сборки, а не канал установки. Бинарники на роутер идут
-# только подписанным выпуском (scripts/install.sh и files/d2k-update.sh берут
-# один и тот же архив), поэтому d2kd, d2kc и d2kpanel здесь больше не
+# только подписанным выпуском (scripts/install.sh и files/d2s-update.sh берут
+# один и тот же архив), поэтому d2sd, d2sc и d2spanel здесь больше не
 # коммитятся: держать их в git значило держать комплект, который обновляет
 # человек, — 13.10.2026 ручная установка так и поставила движок от 12.10.
 #
-# Исключение одно — d2ktg. Его собирают со статическим OpenSSL (минуты на
+# Исключение одно — d2stg. Его собирают со статическим OpenSSL (минуты на
 # арку), а scripts/lab-install.sh нужен готовый бинарник, чтобы пройти
 # установку целиком в контейнере. Это испытательный образец, не артефакт
-# выпуска: выпуск собирает свой d2ktg сам.
+# выпуска: выпуск собирает свой d2stg сам.
 builds/*
 # D2S: all binaries are release artifacts; none are committed.
 /build/
 /telegram/build/
-/panel/d2kpanel
+/panel/d2spanel
 /panel/test_server
 /panel/test_server_san
 /panel/test_config_values
@@ -64,7 +64,7 @@ core/*
 # !core/profiles/ строкой выше, возвращаем её в белый список. Без этой
 # строки тест зелёный только там, где его писали: на другой машине
 # testdata/catalog-real.json просто не доедет до репозитория, и
-# d2k_catalog_load упадёт на отсутствующем файле, а не на разборе.
+# d2s_catalog_load упадёт на отсутствующем файле, а не на разборе.
 !core/testdata/
 
 # detect/ — тот же белый список и по той же причине, что у датапата выше:

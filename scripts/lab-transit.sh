@@ -31,7 +31,7 @@ WORK=$(mktemp -d)
 # Журналы прогона переживают контейнер: он уходит с --rm, а разбирать потом
 # приходится именно их (см. keep_logs в драйвере). Каталог называется явно,
 # чтобы человек знал, куда смотреть, а не искал во временной директории.
-LABOUT=${D2K_LAB_OUT:-/tmp/d2k-lab-transit}
+LABOUT=${D2S_LAB_OUT:-/tmp/d2s-lab-transit}
 trap 'mkdir -p "$LABOUT" 2>/dev/null; cp -R "$WORK/labout/." "$LABOUT/" 2>/dev/null; rm -rf "$WORK"' EXIT
 tar -C "$ROOT" -cf - --exclude='.git' --exclude='*.o' --exclude='state' . | tar -C "$WORK" -xf -
 
@@ -40,8 +40,8 @@ cat > "$WORK/transit.sh" <<'DRIVER'
 set -e
 cd /w
 
-NAME=${D2K_LAB_TRANSIT_NAME:-tranzit.example}
-TARGET=${D2K_LAB_TRANSIT_TARGET:-local}
+NAME=${D2S_LAB_TRANSIT_NAME:-tranzit.example}
+TARGET=${D2S_LAB_TRANSIT_TARGET:-local}
 QUEUE=2101
 MARK=0x2d
 PROBE_MARK=0x2e
@@ -55,9 +55,9 @@ SRV_GW=10.50.0.1
 fail() { echo "ПРОВАЛ: $*" >&2; dump; exit 1; }
 dump() {
     echo "--- цензор ---";  tail -5 /tmp/labdpi.log 2>/dev/null || true
-    echo "--- d2kd ---";    tail -25 /tmp/d2kd.log 2>/dev/null || true
-    echo "--- d2kc ---";    tail -25 /tmp/d2kc.log 2>/dev/null || true
-    echo "--- правила ---"; iptables -t mangle -S 2>/dev/null | grep -i d2k || true
+    echo "--- d2sd ---";    tail -25 /tmp/d2sd.log 2>/dev/null || true
+    echo "--- d2sc ---";    tail -25 /tmp/d2sc.log 2>/dev/null || true
+    echo "--- правила ---"; iptables -t mangle -S 2>/dev/null | grep -i d2s || true
     keep_logs
 }
 
@@ -73,7 +73,7 @@ dump() {
 # — первое, что понадобится.
 keep_logs() {
     mkdir -p /w/labout 2>/dev/null || return 0
-    for f in d2kd d2kc labdpi server; do
+    for f in d2sd d2sc labdpi server; do
         [ -f "/tmp/$f.log" ] && cp "/tmp/$f.log" "/w/labout/$f.log" 2>/dev/null
     done
     cp /tmp/ctmiss-*.txt /tmp/ctbefore-*.txt /w/labout/ 2>/dev/null || true
@@ -104,7 +104,7 @@ apt-get install -y -qq iptables iproute2 curl iputils-ping libssl-dev >/dev/null
 # живёт в своём пространстве и ходит через NAT контейнера. Просто «снаружи»
 # теперь тоже наше — ещё одно пространство, а не чужая сеть.
 #
-# Внешняя цель остаётся ключом D2K_LAB_TRANSIT_TARGET=external: это другой
+# Внешняя цель остаётся ключом D2S_LAB_TRANSIT_TARGET=external: это другой
 # опыт, и читать его надо с оговоркой про чужую линию.
 if [ "$TARGET" = "local" ]; then
     IP=$SRV_IP
@@ -165,8 +165,8 @@ echo "== сборка =="
 cc -std=c99 -O2 -Wall -Wextra -Werror -Idatapath/include -Icore/include \
    -o /tmp/labdpi spike/labdpi.c datapath/nfq.c datapath/nl.c \
    core/quic.c core/quicwire.c core/crypto.c
-make -s -C datapath d2kd
-make -s -C core d2kc
+make -s -C datapath d2sd
+make -s -C core d2sc
 if [ "$TARGET" = "local" ]; then
     # Тот же форкающий сервер, что в lab-censor.sh, и по той же причине:
     # s_server обслуживает по очереди и виснет на зарезанном рукопожатии.
@@ -200,9 +200,9 @@ echo "== цензор =="
 # DROP локально рождённого пакета возвращает отправителю EPERM — и датапат
 # мерил бы собственную реакцию на локальный отказ вместо цензуры (найдено в
 # lab-censor.sh).
-iptables -t mangle -N D2KQ 2>/dev/null || iptables -t mangle -F D2KQ
-iptables -t mangle -A POSTROUTING -j D2KQ
-iptables -t mangle -A D2KQ -p tcp --dport 443 -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
+iptables -t mangle -N D2SQ 2>/dev/null || iptables -t mangle -F D2SQ
+iptables -t mangle -A POSTROUTING -j D2SQ
+iptables -t mangle -A D2SQ -p tcp --dport 443 -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
 /tmp/labdpi "$QUEUE" "$NAME" 62 --naive > /tmp/labdpi.log 2>&1 &
 DPI=$!
 sleep 1
@@ -212,24 +212,24 @@ if inns curl -4 -sk -o /dev/null --resolve "$NAME:443:$IP" --max-time 12 "https:
 fi
 echo "цензор на месте: клиент за NAT к $NAME не проходит"
 
-echo "== d2k =="
-mkdir -p /tmp/d2kst
-# Правила — ТЕ ЖЕ, что ставит files/S99d2k на роутере, включая MASQUERADE для
+echo "== d2s =="
+mkdir -p /tmp/d2sst
+# Правила — ТЕ ЖЕ, что ставит files/S99d2s на роутере, включая MASQUERADE для
 # собственных посылок по UDP: стенд обязан проверять продукт, а не свою
 # выдумку о нём.
-iptables -t mangle -N D2K_OUT 2>/dev/null || iptables -t mangle -F D2K_OUT
-iptables -t mangle -N D2K_IN  2>/dev/null || iptables -t mangle -F D2K_IN
-iptables -t mangle -A D2K_OUT -m mark --mark "$MARK" -j RETURN
-iptables -t mangle -A D2K_OUT -p tcp --dport 443 \
+iptables -t mangle -N D2S_OUT 2>/dev/null || iptables -t mangle -F D2S_OUT
+iptables -t mangle -N D2S_IN  2>/dev/null || iptables -t mangle -F D2S_IN
+iptables -t mangle -A D2S_OUT -m mark --mark "$MARK" -j RETURN
+iptables -t mangle -A D2S_OUT -p tcp --dport 443 \
     -m connbytes --connbytes 0:8 --connbytes-dir original --connbytes-mode packets \
     -j NFQUEUE --queue-num 2000 --queue-bypass
-iptables -t mangle -A D2K_IN -p tcp --sport 443 \
+iptables -t mangle -A D2S_IN -p tcp --sport 443 \
     -m connbytes --connbytes 0:8 --connbytes-dir reply --connbytes-mode packets \
     -j NFQUEUE --queue-num 2000 --queue-bypass
 iptables -t nat -A POSTROUTING -p udp -m mark --mark "$MARK" -j MASQUERADE
 # ИСХОДЯЩЕЕ ЛОВИМ В OUTPUT И FORWARD, А НЕ В POSTROUTING — требование
 # СТЕНДА, не продукта. Вердикт очереди завершает проход ЦЕПОЧКИ: правило
-# цензора, стоящее в той же цепочке после d2k, не выполняется вовсе (та же
+# цензора, стоящее в той же цепочке после d2s, не выполняется вовсе (та же
 # находка, что в docs/field/2026-09-13-lab-censor.md про --queue-bypass).
 # Цензор обязан видеть то, что ВЫПУСТИЛ датапат, — значит он остаётся один в
 # POSTROUTING, а датапат разводится по двум цепочкам, которые проходятся
@@ -237,19 +237,19 @@ iptables -t nat -A POSTROUTING -p udp -m mark --mark "$MARK" -j MASQUERADE
 # контроллера. Без OUTPUT зонд подтверждения не получает плана и не может
 # подтвердить ничего.
 #
-# На роутере обе роли берёт одна цепочка в POSTROUTING (files/S99d2k); здесь
+# На роутере обе роли берёт одна цепочка в POSTROUTING (files/S99d2s); здесь
 # она разделена только затем, чтобы поместить между ними цензор.
-iptables -t mangle -I FORWARD -j D2K_OUT
-iptables -t mangle -I FORWARD -j D2K_IN
-iptables -t mangle -I OUTPUT -j D2K_OUT
-iptables -t mangle -I INPUT -j D2K_IN
+iptables -t mangle -I FORWARD -j D2S_OUT
+iptables -t mangle -I FORWARD -j D2S_IN
+iptables -t mangle -I OUTPUT -j D2S_OUT
+iptables -t mangle -I INPUT -j D2S_IN
 
-./datapath/d2kd --mode apply --control /tmp/d2kst/sock --queue 2000 --mark 45 --probe-mark "$PROBE_MARK" \
-    --journal 400 --duration 300 --stats 30 > /tmp/d2kd.log 2>&1 &
+./datapath/d2sd --mode apply --control /tmp/d2sst/sock --queue 2000 --mark 45 --probe-mark "$PROBE_MARK" \
+    --journal 400 --duration 300 --stats 30 > /tmp/d2sd.log 2>&1 &
 DPID=$!
-i=0; while [ ! -S /tmp/d2kst/sock ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
-[ -S /tmp/d2kst/sock ] || fail "датапат не открыл управляющий сокет"
-./core/d2kc --control /tmp/d2kst/sock --catalog /tmp/d2kst/catalog.json --mark "$PROBE_MARK" > /tmp/d2kc.log 2>&1 &
+i=0; while [ ! -S /tmp/d2sst/sock ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
+[ -S /tmp/d2sst/sock ] || fail "датапат не открыл управляющий сокет"
+./core/d2sc --control /tmp/d2sst/sock --catalog /tmp/d2sst/catalog.json --mark "$PROBE_MARK" > /tmp/d2sc.log 2>&1 &
 CPID=$!
 sleep 1
 
@@ -272,12 +272,12 @@ done
 WAITED=0
 i=0
 while [ $i -lt 120 ]; do
-    grep -q "ПОДТВЕРЖДЕНО" /tmp/d2kc.log 2>/dev/null && break
-    grep -q "брошен" /tmp/d2kc.log 2>/dev/null && break
+    grep -q "ПОДТВЕРЖДЕНО" /tmp/d2sc.log 2>/dev/null && break
+    grep -q "брошен" /tmp/d2sc.log 2>/dev/null && break
     i=$((i+1)); WAITED=$((WAITED+3)); sleep 3
 done
 echo "ждали подтверждения $WAITED с"
-sed -n 's/.*вердикт: \(.*\)/  вердикт: \1/p' /tmp/d2kc.log | tail -2
+sed -n 's/.*вердикт: \(.*\)/  вердикт: \1/p' /tmp/d2sc.log | tail -2
 
 echo "== проверка: прошёл ли КЛИЕНТ, а не зонд =="
 # СКОЛЬКО РАЗ СПРАШИВАТЬ КЛИЕНТОМ. Три — рабочее умолчание: столько нужно,
@@ -286,15 +286,15 @@ echo "== проверка: прошёл ли КЛИЕНТ, а не зонд =="
 #
 # Больше нужно для РЕДКИХ отказов: 17.09 один клиент из двадцати остался без
 # обхода (план не применился, conntrack не нашёл поток), и на трёх попытках
-# такое ловится раз в несколько прогонов. D2K_LAB_CLIENT_TRIES=30 превращает
+# такое ловится раз в несколько прогонов. D2S_LAB_CLIENT_TRIES=30 превращает
 # стенд в нагрузочный, не меняя того, что он проверяет: доля остаётся той же.
-TRIES=${D2K_LAB_CLIENT_TRIES:-3}
+TRIES=${D2S_LAB_CLIENT_TRIES:-3}
 # СКОЛЬКО КЛИЕНТОВ РАЗОМ. Один по очереди — не роутер: там разом ходят
 # телефон, телевизор и ноутбук, и таблица соединений всё это время меняется
 # под руками. Промах conntrack (17.09) ловится именно конкуренцией: на
 # последовательных запросах с паузами он выпадает раз в несколько прогонов,
 # и отличить «починили» от «не повезло воспроизвести» на них нельзя.
-PAR=${D2K_LAB_CLIENT_PAR:-1}
+PAR=${D2S_LAB_CLIENT_PAR:-1}
 NEED=$(( TRIES * 2 / 3 ))
 [ "$NEED" -lt 1 ] && NEED=1
 OK=0
@@ -357,7 +357,7 @@ echo "цензор снял по имени: $DROPPED"
 [ "$DROPPED" -gt 0 ] || fail "цензор не снял НИ ОДНОГО пакета по имени — прогон ничего не проверил"
 
 # Обход обязан быть НАЙДЕН И ПРИМЕНЁН, а не «клиент случайно прошёл».
-grep -q "ПОДТВЕРЖДЕНО" /tmp/d2kc.log 2>/dev/null || \
+grep -q "ПОДТВЕРЖДЕНО" /tmp/d2sc.log 2>/dev/null || \
     fail "клиент прошёл, но план никто не подтверждал — прошёл не обход"
 
 if [ "$OK" -ge "$NEED" ]; then
@@ -368,7 +368,7 @@ if [ "$OK" -ge "$NEED" ]; then
     # grep -c возвращает код 1 без совпадений; не добавлять второй «0» через
     # `|| echo 0`, иначе BusyBox test получает многострочное число и портит
     # уже успешный transit-прогон сообщением Illegal number.
-    MISSED=$(grep -c "не ведётся conntrack" /tmp/d2kd.log 2>/dev/null || true)
+    MISSED=$(grep -c "не ведётся conntrack" /tmp/d2sd.log 2>/dev/null || true)
     MISSED=${MISSED:-0}
     [ "$MISSED" -gt 0 ] && echo "ВНИМАНИЕ: планов не применено из-за conntrack: $MISSED"
     keep_logs
@@ -378,7 +378,7 @@ fi
 
 # Зонд, подтвердивший план, при неработающем клиенте — это ровно тот случай,
 # ради которого стенд написан: доказательство настоящее, но не про тот путь.
-if grep -q "ПОДТВЕРЖДЕНО" /tmp/d2kc.log 2>/dev/null; then
+if grep -q "ПОДТВЕРЖДЕНО" /tmp/d2sc.log 2>/dev/null; then
     fail "зонд подтвердил план, а клиент за NAT не прошёл — обход не доходит до транзита"
 fi
 fail "обход не найден вовсе (клиент за NAT: $OK из $TRIES)"
@@ -389,8 +389,8 @@ DRIVER
 # клиент оказывается рядом с датапатом, и проверять нечего.
 docker run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW --cap-add=SYS_ADMIN \
     --sysctl net.ipv4.ip_forward=1 \
-    -e "D2K_LAB_TRANSIT_NAME=${D2K_LAB_TRANSIT_NAME:-tranzit.example}" \
-    -e "D2K_LAB_TRANSIT_TARGET=${D2K_LAB_TRANSIT_TARGET:-local}" \
-    -e "D2K_LAB_CLIENT_TRIES=${D2K_LAB_CLIENT_TRIES:-3}" \
-    -e "D2K_LAB_CLIENT_PAR=${D2K_LAB_CLIENT_PAR:-1}" \
+    -e "D2S_LAB_TRANSIT_NAME=${D2S_LAB_TRANSIT_NAME:-tranzit.example}" \
+    -e "D2S_LAB_TRANSIT_TARGET=${D2S_LAB_TRANSIT_TARGET:-local}" \
+    -e "D2S_LAB_CLIENT_TRIES=${D2S_LAB_CLIENT_TRIES:-3}" \
+    -e "D2S_LAB_CLIENT_PAR=${D2S_LAB_CLIENT_PAR:-1}" \
     -v "$WORK:/w" -w /w gcc:14 sh /w/transit.sh

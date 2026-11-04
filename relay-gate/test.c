@@ -1,4 +1,4 @@
-/* Тесты d2k-gate без сети: разбор, список, пересборка, адреса, частота и
+/* Тесты d2s-gate без сети: разбор, список, пересборка, адреса, частота и
    путь отказа через пару сокетов. */
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
@@ -117,6 +117,6 @@ int main(void) {
     refused_with("CONNECT example.com:443 HTTP/1.1\r\n\r\n", "HTTP/1.1 403");
     refused_with("CONNECT github.com:22 HTTP/1.1\r\n\r\n", "HTTP/1.1 403");
     refused_with("GET /x HTTP/1.1\r\n\r\n", "HTTP/1.1 400");
-    puts("d2k-gate: все проверки прошли");
+    puts("d2s-gate: все проверки прошли");
     return 0;
 }

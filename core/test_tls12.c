@@ -10,8 +10,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 
-#include "d2k_tls12.h"
-#include "d2k_tls13core.h"
+#include "d2s_tls12.h"
+#include "d2s_tls13core.h"
 
 static int fails;
 
@@ -41,7 +41,7 @@ static void test_prf_vector(void) {
         0x87,0x34,0x7b,0x66
     };
     unsigned char got[100];
-    d2k_tls12_prf_for_test(secret, sizeof secret, "test label", seed, sizeof seed,
+    d2s_tls12_prf_for_test(secret, sizeof secret, "test label", seed, sizeof seed,
                            got, sizeof got);
     check(memcmp(got, want, sizeof want) == 0,
           "PRF не сошёлся с опубликованным вектором — ключи будут неверны, "
@@ -55,9 +55,9 @@ static void test_prf_partial_block(void) {
     static const unsigned char secret[4] = {1, 2, 3, 4};
     static const unsigned char seed[4] = {5, 6, 7, 8};
     unsigned char full[64], part[40];
-    d2k_tls12_prf_for_test(secret, sizeof secret, "key expansion", seed, sizeof seed,
+    d2s_tls12_prf_for_test(secret, sizeof secret, "key expansion", seed, sizeof seed,
                            full, sizeof full);
-    d2k_tls12_prf_for_test(secret, sizeof secret, "key expansion", seed, sizeof seed,
+    d2s_tls12_prf_for_test(secret, sizeof secret, "key expansion", seed, sizeof seed,
                            part, sizeof part);
     check(memcmp(full, part, sizeof part) == 0,
           "короткая развёртка PRF не совпала с началом длинной");
@@ -85,10 +85,10 @@ struct conn_arg { int fd; const char *sni; };
 
 static void *conn_thread(void *p) {
     struct conn_arg *a = p;
-    d2k_tls12 *t = NULL;
+    d2s_tls12 *t = NULL;
     char err[128];
-    if (d2k_tls12_connect(a->fd, a->sni, 3000, 0, &t, err, sizeof err) == 0) {
-        d2k_tls12_free(t);
+    if (d2s_tls12_connect(a->fd, a->sni, 3000, 0, &t, err, sizeof err) == 0) {
+        d2s_tls12_free(t);
     }
     return NULL;
 }
@@ -103,7 +103,7 @@ static int has_str(const unsigned char *b, size_t n, const char *s) {
 
 static void test_clienthello_not_shared(void) {
     const char *snia = "alpha-aaaa.example.com", *snib = "bravo-b.example.org";
-    d2k_tls12_test_barrier = test_barrier;
+    d2s_tls12_test_barrier = test_barrier;
     for (int it = 0; it < 200; it++) {
         int sa[2], sb[2];
         if (socketpair(AF_UNIX, SOCK_STREAM, 0, sa) != 0 ||
@@ -131,7 +131,7 @@ static void test_clienthello_not_shared(void) {
             break;
         }
     }
-    d2k_tls12_test_barrier = NULL;
+    d2s_tls12_test_barrier = NULL;
 }
 
 /* ОБЕ ВЕРСИИ В ОДНОМ ПРИВЕТСТВИИ (поле 07.10.2026: сервера «только 1.2»
@@ -145,18 +145,18 @@ static int has_bytes(const uint8_t *b, size_t n, const uint8_t *pat, size_t pn) 
 
 static void test_offer_tls12(void) {
     uint8_t pub[32] = {1}, rnd[32] = {2}, ch[2048];
-    d2k_t13_ch_opts o;
+    d2s_t13_ch_opts o;
     memset(&o, 0, sizeof o);
     o.sni = "example.test"; o.pub = pub; o.random = rnd; o.session_id_len = 32;
     static const uint8_t v13only[] = {0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04};
     static const uint8_t vboth[] = {0x00, 0x2b, 0x00, 0x05, 0x04, 0x03, 0x04, 0x03, 0x03};
     static const uint8_t suites12[] = {0x00, 0x06, 0x13, 0x01, 0xc0, 0x2b, 0xc0, 0x2f};
     static const uint8_t groups[] = {0x00, 0x0a, 0x00, 0x06, 0x00, 0x04, 0x00, 0x1d, 0x00, 0x17};
-    size_t n = d2k_t13_ch_build(&o, ch, sizeof ch);
+    size_t n = d2s_t13_ch_build(&o, ch, sizeof ch);
     check(n > 0 && has_bytes(ch, n, v13only, sizeof v13only) && !has_bytes(ch, n, vboth, sizeof vboth),
           "без offer_tls12 приветствие изменилось");
     o.offer_tls12 = 1;
-    n = d2k_t13_ch_build(&o, ch, sizeof ch);
+    n = d2s_t13_ch_build(&o, ch, sizeof ch);
     check(n > 0 && has_bytes(ch, n, vboth, sizeof vboth), "offer_tls12: нет 0304+0303 в supported_versions");
     check(has_bytes(ch, n, suites12, sizeof suites12), "offer_tls12: нет шифров c02b/c02f");
     check(has_bytes(ch, n, groups, sizeof groups), "offer_tls12: нет secp256r1 в группах");
@@ -168,11 +168,11 @@ static void test_offer_tls12(void) {
     sh[q++] = 3; sh[q++] = 3; memset(sh + q, 7, 32); q += 32;
     sh[q++] = 0; sh[q++] = 0xc0; sh[q++] = 0x2f; sh[q++] = 0;
     size_t bare = q;
-    check(d2k_t13_sh_version(sh, bare) == 0x0303, "ServerHello без расширений не прочитан как 1.2");
+    check(d2s_t13_sh_version(sh, bare) == 0x0303, "ServerHello без расширений не прочитан как 1.2");
     sh[q++] = 0; sh[q++] = 6;                            /* расширения: 6 байт */
     sh[q++] = 0; sh[q++] = 0x2b; sh[q++] = 0; sh[q++] = 2; sh[q++] = 3; sh[q++] = 4;
-    check(d2k_t13_sh_version(sh, q) == 0x0304, "supported_versions 0304 не прочитан как 1.3");
-    check(d2k_t13_sh_version(sh, 10) == 0, "обрезанный ServerHello не отвергнут");
+    check(d2s_t13_sh_version(sh, q) == 0x0304, "supported_versions 0304 не прочитан как 1.3");
+    check(d2s_t13_sh_version(sh, 10) == 0, "обрезанный ServerHello не отвергнут");
 }
 
 int main(void) {

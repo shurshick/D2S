@@ -122,7 +122,7 @@
 
   /* Краткая выжимка плана — только директивы, без полезной нагрузки. */
   function planGist(text) {
-    var skip = { "d2k-plan": 1, id: 1, proto: 1, payload: 1, wire: 1, input: 1 };
+    var skip = { "d2s-plan": 1, id: 1, proto: 1, payload: 1, wire: 1, input: 1 };
     return str(text).split("\n").map(function (line) { return line.trim(); }).filter(function (line) {
       return line && !skip[line.split(/\s+/)[0]];
     }).map(function (line) {
@@ -239,9 +239,9 @@
       var plugins = [global.Flip, global.MotionPathPlugin, global.DrawSVGPlugin, global.MorphSVGPlugin,
         global.ScrollToPlugin, global.SplitText, global.CustomEase, global.CustomWiggle].filter(Boolean);
       if (plugins.length) g.registerPlugin.apply(g, plugins);
-      if (global.CustomEase) global.CustomEase.create("d2k", ".16,1,.3,1");
-      g.defaults({ ease: global.CustomEase ? "d2k" : "power3.out", duration: 0.5 });
-      if (global.CustomWiggle) global.CustomWiggle.create("d2kShake", { wiggles: 5, type: "easeOut" });
+      if (global.CustomEase) global.CustomEase.create("d2s", ".16,1,.3,1");
+      g.defaults({ ease: global.CustomEase ? "d2s" : "power3.out", duration: 0.5 });
+      if (global.CustomWiggle) global.CustomWiggle.create("d2sShake", { wiggles: 5, type: "easeOut" });
       if (doc && doc.documentElement) doc.documentElement.classList.add("has-gsap");
     }
     function on() { return !!g && !(mq && mq.matches); }
@@ -305,7 +305,7 @@
   /* Раздел перерисовывается, только если изменились его данные: так не теряются
      раскрытые подробности, фокус и выделение текста. */
   function section(node, key, build) {
-    if (node.__d2kKey === key) return false;
+    if (node.__d2sKey === key) return false;
     var open = {};
     var nodes = node.querySelectorAll("details[data-key]");
     for (var i = 0; i < nodes.length; i++) if (nodes[i].open) open[nodes[i].getAttribute("data-key")] = true;
@@ -320,7 +320,7 @@
     node.replaceChildren.apply(node, fresh);
     var again = node.querySelectorAll("details[data-key]");
     for (var j = 0; j < again.length; j++) if (open[again[j].getAttribute("data-key")]) again[j].open = true;
-    node.__d2kKey = key;
+    node.__d2sKey = key;
     return true;
   }
 
@@ -442,7 +442,7 @@
       .then(function () { self.win.clearTimeout(timer); self.inflight = false; });
   };
 
-  /* Автообновление: состояние — файл d2k-update.sh (GET /api/update), действия —
+  /* Автообновление: состояние — файл d2s-update.sh (GET /api/update), действия —
      команды службы, как у кнопок движка. Установка перезапускает и панель. */
   App.prototype.initUpdates = function () {
     var self = this;
@@ -647,8 +647,8 @@
     var text = state.querySelector(".mast-state-text");
     /* Живой регион трогаем только при смене текста: иначе диктор повторяет его на каждом опросе. */
     var stateKey = m.state + "|" + m.stateDetail;
-    if (text.__d2kKey !== stateKey) {
-      text.__d2kKey = stateKey;
+    if (text.__d2sKey !== stateKey) {
+      text.__d2sKey = stateKey;
       text.replaceChildren(doc.createTextNode(m.state), el(doc, "small", "", m.stateDetail));
     }
     doc.title = (m.hunting ? "● " : "") + "D2S — " + m.state;
@@ -662,8 +662,8 @@
     var snap = m.snap;
     var busy = snap.control_state === "running" || !!this.pending;
     var key = JSON.stringify([snap.controls_enabled, m.engine, busy, this.pending, this.armed, snap.mode]);
-    if (box.__d2kKey === key) return;
-    box.__d2kKey = key;
+    if (box.__d2sKey === key) return;
+    box.__d2sKey = key;
     var focused = doc.activeElement && box.contains(doc.activeElement) ? doc.activeElement.getAttribute("data-control") : null;
     var buttons = [];
     if (!snap.controls_enabled) {
@@ -675,7 +675,7 @@
           buttons.push(this.button("cancel", "Отмена", null, "ghost", false));
         } else {
           /* «Очистить подобранное» стоит там, где прежде была «Восстановить
-             правила»: правила и без кнопки ставит сторож (S99d2k heal каждые
+             правила»: правила и без кнопки ставит сторож (S99d2s heal каждые
              60 с), а снять найденное замером руками было нечем. Вариант
              danger, и нажатие само ничего не делает — спрашивает диалог. */
           buttons.push(this.button("clear-found", "Очистить подобранное", "erase", "danger", busy, "Очистить"));
@@ -940,7 +940,7 @@
   App.prototype.shake = function (action) {
     if (!Motion.on()) return;
     var b = this.doc.querySelector('[data-control="' + action + '"]');
-    if (b) Motion.g.fromTo(b, { x: 0 }, { x: 7, duration: 0.6, ease: global.CustomWiggle ? "d2kShake" : "power1.inOut", clearProps: "transform" });
+    if (b) Motion.g.fromTo(b, { x: 0 }, { x: 7, duration: 0.6, ease: global.CustomWiggle ? "d2sShake" : "power1.inOut", clearProps: "transform" });
   };
 
   App.prototype.act = function (action, confirmed) {
@@ -1022,8 +1022,8 @@
       return;
     }
     var key = tone + "|" + parts.map(function (x) { return x && x.textContent !== undefined ? x.textContent : String(x); }).join("");
-    if (key === n.__d2kKey && !n.hidden && !n.__closing) return;
-    n.__d2kKey = key;
+    if (key === n.__d2sKey && !n.hidden && !n.__closing) return;
+    n.__d2sKey = key;
     var appearing = n.hidden || n.__closing;
     if (n.__closing) { Motion.g.killTweensOf(n); n.__closing = false; Motion.g.set(n, { clearProps: "all" }); }
     n.hidden = false;
@@ -1039,10 +1039,10 @@
     var doc = this.doc;
     var title = this.$("now-title");
     var h = JSON.stringify(m.headline);
-    if (title.__d2kKey !== h) {
-      var prev = title.__d2kHeadline;
-      title.__d2kKey = h;
-      title.__d2kHeadline = m.headline;
+    if (title.__d2sKey !== h) {
+      var prev = title.__d2sHeadline;
+      title.__d2sKey = h;
+      title.__d2sHeadline = m.headline;
       var apply = function () { title.replaceChildren(doc.createTextNode(m.headline[0]), el(doc, "em", "", m.headline[1])); };
       var from = prev && /^(\d+) /.exec(prev[1]), to = /^(\d+) /.exec(m.headline[1]);
       if (!prev || !Motion.on()) {
@@ -1075,7 +1075,7 @@
 
     var slots = this.$("slots");
     var meas = m.k.measurements;
-    var wasActive = slots.__d2kActive;
+    var wasActive = slots.__d2sActive;
     var rebuilt = section(slots, JSON.stringify([m.linked, meas, m.k.targets, m.k.confirms, m.k.probes_used, m.k.client_unfit, m.groups.length, m.boxes.length]), function () {
       var out = [];
       if (m.linked && meas && num(meas.limit)) {
@@ -1135,7 +1135,7 @@
         Motion.g.from(dim, { backgroundColor: sig, duration: 0.6, ease: "power2.out", clearProps: "all" });
       }
     }
-    slots.__d2kActive = nowActive === null ? undefined : nowActive;
+    slots.__d2sActive = nowActive === null ? undefined : nowActive;
 
     this.renderSearches(m);
   };
@@ -1162,17 +1162,17 @@
       });
       return;
     }
-    if (listNode.__d2kKey === "none" || (listNode.__d2kKey && listNode.__d2kKey.indexOf("absent:") === 0)) {
+    if (listNode.__d2sKey === "none" || (listNode.__d2sKey && listNode.__d2sKey.indexOf("absent:") === 0)) {
       listNode.replaceChildren();
     }
-    var firstLive = listNode.__d2kKey !== "live";
-    listNode.__d2kKey = "live";
+    var firstLive = listNode.__d2sKey !== "live";
+    listNode.__d2sKey = "live";
     var animate = Motion.on() && Motion.Flip;
     var stable = [];
     for (var si = 0; si < listNode.children.length; si++) if (!listNode.children[si].__leaving) stable.push(listNode.children[si]);
     var wantKeys = m.running.map(function (x) { return JSON.stringify([x.target, x.family, x.transport, x.ip, x.port]); });
     if (m.queued.length) wantKeys.push("queue");
-    var haveKeys = stable.map(function (r) { return r.__d2kKey; });
+    var haveKeys = stable.map(function (r) { return r.__d2sKey; });
     var flipState = animate && stable.length && wantKeys.join("\n") !== haveKeys.join("\n") ? Motion.Flip.getState(stable) : null;
     if (flipState) stable.forEach(function (r) { r.__oldTop = r.getBoundingClientRect().top; });
     var entered = [], moved = false;
@@ -1183,20 +1183,20 @@
       keep[key] = true;
       var row = null;
       for (var i = 0; i < listNode.children.length; i++) {
-        if (listNode.children[i].__d2kKey === key) { row = listNode.children[i]; break; }
+        if (listNode.children[i].__d2sKey === key) { row = listNode.children[i]; break; }
       }
       if (!row) {
         row = self.searchRow(s);
-        row.__d2kKey = key;
+        row.__d2sKey = key;
         entered.push(row);
       }
       self.updateSearch(row, s);
       if (listNode.children[index] !== row) { listNode.insertBefore(row, listNode.children[index] || null); moved = true; }
     });
     var queue = null;
-    for (var q = 0; q < listNode.children.length; q++) if (listNode.children[q].__d2kKey === "queue") queue = listNode.children[q];
+    for (var q = 0; q < listNode.children.length; q++) if (listNode.children[q].__d2sKey === "queue") queue = listNode.children[q];
     if (m.queued.length) {
-      if (!queue) { queue = el(doc, "li", "queue"); queue.__d2kKey = "queue"; }
+      if (!queue) { queue = el(doc, "li", "queue"); queue.__d2sKey = "queue"; }
       keep.queue = true;
       this.updateQueue(queue, m.queued);
       if (listNode.lastChild !== queue) { listNode.appendChild(queue); moved = true; }
@@ -1204,7 +1204,7 @@
     var leaving = [];
     for (var j = listNode.children.length - 1; j >= 0; j--) {
       var gone = listNode.children[j];
-      if (keep[gone.__d2kKey] || gone.__leaving) continue;
+      if (keep[gone.__d2sKey] || gone.__leaving) continue;
       if (animate) leaving.push(gone); else listNode.removeChild(gone);
     }
     if (!animate) return;
@@ -1240,8 +1240,8 @@
   App.prototype.updateQueue = function (li, queued) {
     var doc = this.doc, self = this;
     var key = JSON.stringify(queued.map(function (s) { return [s.target, s.family, s.transport, s.ip, s.port, s.since]; }));
-    if (li.__d2kData !== key) {
-      li.__d2kData = key;
+    if (li.__d2sData !== key) {
+      li.__d2sData = key;
       var head = el(doc, "p", "queue-head");
       add(head, el(doc, "b", "", "Ждут свободного слота замера: " + queued.length),
         " — замеры идут не больше, чем позволяет свободный процессор.");
@@ -1286,8 +1286,8 @@
     var doc = this.doc, p = li.__parts;
     p.target.textContent = targetLabel(s.target);
     var metaKey = JSON.stringify([s.shape, s.transport, s.family, s.ip, s.port, s.source, s.attempts, s.probes]);
-    if (p.meta.__d2kKey !== metaKey) {
-      p.meta.__d2kKey = metaKey;
+    if (p.meta.__d2sKey !== metaKey) {
+      p.meta.__d2sKey = metaKey;
       var addr = s.ip ? (s.family === 6 ? "[" + s.ip + "]" : s.ip) + (s.port ? ":" + s.port : "") : "";
       p.meta.replaceChildren();
       add(p.meta,
@@ -1324,8 +1324,8 @@
     if (!tr) { p.track.hidden = true; return; }
     p.track.hidden = false;
     var trackKey = (tr.voice ? "v" : "t");
-    if (p.track.__d2kKey !== trackKey) {
-      p.track.__d2kKey = trackKey;
+    if (p.track.__d2sKey !== trackKey) {
+      p.track.__d2sKey = trackKey;
       p.track.replaceChildren(p.fill, p.puck);
       tr.steps.forEach(function (step) { p.track.appendChild(el(doc, "span", "track-step", step.label)); });
       p.track.style.setProperty("--steps", String(tr.steps.length));
@@ -1336,8 +1336,8 @@
         steps[i].setAttribute("data-state", i === target && cur >= target - 0.02 ? "now" : i < cur + 0.02 ? "past" : "next");
       }
     };
-    var oldAt = p.track.__d2kAt;
-    p.track.__d2kAt = tr.at;
+    var oldAt = p.track.__d2sAt;
+    p.track.__d2sAt = tr.at;
     if (p.track.__tween) p.track.__tween.kill();
     if (oldAt !== undefined && oldAt !== tr.at && Motion.on()) {
       /* Маркер переезжает к новому этапу; точки загораются, когда он их проходит. */
@@ -1366,7 +1366,7 @@
     var rows = this.$("searches").children;
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].__parts) this.updateClock(rows[i]);
-      else if (rows[i].__d2kKey === "queue") this.updateQueue(rows[i], this.m ? this.m.queued : []);
+      else if (rows[i].__d2sKey === "queue") this.updateQueue(rows[i], this.m ? this.m.queued : []);
     }
     var staleBefore = bodyAttribute(this.doc, "data-stale");
     this.renderNotice();
@@ -1387,9 +1387,9 @@
     if (!force && key === this.catalogKey) return;
     this.catalogKey = key;
     var self = this;
-    var famBody = this.$("families-body"), famKey = famBody.__d2kKey;
+    var famBody = this.$("families-body"), famKey = famBody.__d2sKey;
     this.renderFamilies(m);
-    if (famBody.__d2kKey !== famKey && !force) this.swingTags();
+    if (famBody.__d2sKey !== famKey && !force) this.swingTags();
     if (this.renderBoxes(m) === false) this.catalogKey = null;
     var families = m.groups.filter(function (g) { return self.familyMatches(g); }).length;
     var bindings = 0;
@@ -1440,7 +1440,7 @@
         stamp.setAttribute("data-active", String(active));
         if (!active) stamp.title = "Решение сохранено, но применение к семейству сейчас не подтверждено";
         var ev = list(g.evidence);
-        /* Отказы узла — по одной строке на узел, с причиной: d2k хранит отказ
+        /* Отказы узла — по одной строке на узел, с причиной: d2s хранит отказ
            каждого плана отдельно, человеку нужен узел, а не журнал. */
         var dead = [], seen = {};
         list(g.exceptions).forEach(function (x) {
@@ -1996,10 +1996,10 @@
     var stale = doc.body.getAttribute("data-stale") === "true";
     var key = JSON.stringify([st, snap.telegram_enabled, snap.telegram_configured, stats,
       snap.controls_enabled, busy, this.pending, stale]);
-    if (!force && body.__d2kKey === key) return;
+    if (!force && body.__d2sKey === key) return;
     var focused = doc.activeElement && body.contains(doc.activeElement)
       ? doc.activeElement.getAttribute("data-control") : null;
-    body.__d2kKey = key;
+    body.__d2sKey = key;
     var ui = body.__tgUi;
     if (!ui) {
       var scene = tunnelScene(doc);

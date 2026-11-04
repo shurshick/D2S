@@ -8,14 +8,14 @@
  * правдоподобный снимок приветствия QUIC (test_sched.c) — для них третья и
  * четвёртая копия тех же 1200 байт была бы просто шумом.
  */
-#ifndef D2K_TEST_QUIC_VECTOR_H
-#define D2K_TEST_QUIC_VECTOR_H
+#ifndef D2S_TEST_QUIC_VECTOR_H
+#define D2S_TEST_QUIC_VECTOR_H
 
 #include <stdint.h>
 
 /* RFC 9001 Appendix A.2 — клиентский Initial версии 1. ClientHello внутри
  * содержит расширение server_name со значением "example.com". */
-static const uint8_t d2k_test_v1_initial[1200] = {
+static const uint8_t d2s_test_v1_initial[1200] = {
     0xc0, 0x00, 0x00, 0x00, 0x01, 0x08, 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51,
     0x57, 0x08, 0x00, 0x00, 0x44, 0x9e, 0x7b, 0x9a, 0xec, 0x34, 0xd1, 0xb1,
     0xc9, 0x8d, 0xd7, 0x68, 0x9f, 0xb8, 0xec, 0x11, 0xd2, 0x42, 0xb1, 0x23,
@@ -118,4 +118,4 @@ static const uint8_t d2k_test_v1_initial[1200] = {
     0x86, 0x00, 0x18, 0xab, 0x08, 0x56, 0x97, 0x2e, 0x19, 0x4c, 0xd9, 0x34,
 };
 
-#endif /* D2K_TEST_QUIC_VECTOR_H */
+#endif /* D2S_TEST_QUIC_VECTOR_H */

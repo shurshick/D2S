@@ -19,7 +19,7 @@
 
 ## Изменение
 
-- Raw API возвращает отдельный `D2K_RAW_CONNECT_TIMEOUT` только до отправки
+- Raw API возвращает отдельный `D2S_RAW_CONNECT_TIMEOUT` только до отправки
   триггера. Локальный сбой остаётся `-1`, неуспех отправленного триггера — `0`.
 - При этом исходе вопрос разреза записывает отдельную transport-попытку и
   проверяет обычное TCP-соединение без прикладной нагрузки. Control и один
@@ -59,8 +59,8 @@ DNS rollover, отказ SO_MARK и отмену до/после контрол�
 
 Свежая отдельная сборка окончательных тестов с `raw.c`/`classify.c` из
 `3d67d66`: raw — exit 1 / 6 ошибок; repeats — exit 1 / 9 ошибок.
-Логи: `/tmp/d2k-transport-baseline-raw.log`,
-`/tmp/d2k-transport-baseline-repeats.log`. Никакого checkout исходников или
+Логи: `/tmp/d2s-transport-baseline-raw.log`,
+`/tmp/d2s-transport-baseline-repeats.log`. Никакого checkout исходников или
 переиспользования старого бинарника для red не было. На исправленном коде
 оба целевых теста прошли; дополнительные review-границы также сначала
 воспроизведены падающими тестами.
@@ -84,15 +84,15 @@ Scheduler cooldown пока не менялся: постоянный raw-отк
 
 Окончательные проверки: `make -C detect check cross`,
 `make -C datapath check cross`, `make -C core check` — все exit 0.
-Логи: `/tmp/d2k-transport-{detect,datapath,core}-check.log`.
+Логи: `/tmp/d2s-transport-{detect,datapath,core}-check.log`.
 Release arm64/mipsel линкуются в отдельном временном каталоге;
 общий UDP runtime — 198 full-packet cases / 53 questions / 0 failures;
 HTTP live IPv4/IPv6 и QUIC first-send — 0 failures; TCP raw runtime
 сверен полностью для семейства C и 84 гипотез, 6 длин, IPv4/IPv6.
 `git diff --check` чист. Проверки не прерывались.
 
-Dirty владельца сохранён: `builds/d2kc-linux-arm64`
+Dirty владельца сохранён: `builds/d2sc-linux-arm64`
 SHA256 `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`,
-`builds/d2kd-linux-arm64`
+`builds/d2sd-linux-arm64`
 SHA256 `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.
 Эти файлы не входят в коммит. Поле не проверено, вся цель остаётся открытой.

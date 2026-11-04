@@ -3,10 +3,10 @@
 // Ни роутера, ни /opt: всё во временном каталоге.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {spawn}=require('node:child_process');
-const profile=fs.mkdtempSync(path.join(os.tmpdir(),'d2k-browser-'));
+const profile=fs.mkdtempSync(path.join(os.tmpdir(),'d2s-browser-'));
 const chromeArgs=['--headless','--no-first-run','--hide-scrollbars','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'];
 // The isolated GitHub runner restricts Chrome's user namespace sandbox.
-if(process.env.D2K_CHROME_NO_SANDBOX==='1')chromeArgs.unshift('--no-sandbox');
+if(process.env.D2S_CHROME_NO_SANDBOX==='1')chromeArgs.unshift('--no-sandbox');
 let chromeError='';
 const chrome=spawn(process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
  chromeArgs,{stdio:['ignore','ignore','pipe']});
@@ -50,7 +50,7 @@ const fixture={telegramStats:{
  groups:[{suffix:'example.com',transport:6,family:4,shape:1,evidence_count:3,plan_id:'plan-a',probe_path:'/',ech_origin:'',active:true,
   evidence:['a.example.com','b.example.com','c.example.com'],exceptions:[{name:'skip.example.com'}]}],
  boxes:[{id:'box-a',created:iso(3600),updated:iso(60),signals:[{kind:'silent',human:'ответа на приветствие не было',seen:3}],
-  plans:[{id:'plan-a',proto:'tls',successes:4,enabled:true,human:'',text:'d2k-plan 1 1\nproto tcp tls\nsplit payload_start +1\norder reverse\n'}],
+  plans:[{id:'plan-a',proto:'tls',successes:4,enabled:true,human:'',text:'d2s-plan 1 1\nproto tcp tls\nsplit payload_start +1\norder reverse\n'}],
   bindings:[
    {target:'<img src=x onerror=alert(1)>',family:4,transport:6,shape:1,kind:'name',level:2,level_name:'сервер ответил',successes:1,confirmed:iso(90),enabled:true,recheck:false},
    {target:'a.example.com',family:4,transport:6,shape:1,kind:'name',level:3,level_name:'обмен прошёл',successes:2,confirmed:iso(120),enabled:true,recheck:false},
@@ -94,7 +94,7 @@ async function main(){
    return fillRect.call(this,x,y,width,height);
   };
  })()`});
- const out=process.env.D2K_CAPTURE_DIR;
+ const out=process.env.D2S_CAPTURE_DIR;
  const panel=await require('./browser-c-fixture.cjs')(fixture);
  try{
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
@@ -122,7 +122,7 @@ async function main(){
   await until('window.__tgStartupParticles.length>0','fresh real C11 route events animate on the first panel view');
   assert.ok(await evaluate('window.__tgStartupParticles.length>0'),
    'recent C11 events present in the first stats snapshot are not silently skipped');
-  if(process.env.D2K_RECORD_TUNNEL){
+  if(process.env.D2S_RECORD_TUNNEL){
    const playbackSessions=[
     {...fixture.telegramStats.active_sessions[0],stage:'first_wss_binary_response',
      telegram_response_seen:true,bytes_from_clients:10000,bytes_from_upstreams:8000,events:[]},
@@ -169,15 +169,15 @@ async function main(){
    }
    await wait(1800);
    const video=await evaluate('window.__tgStopVideo()');
-   fs.mkdirSync(path.dirname(process.env.D2K_RECORD_TUNNEL),{recursive:true});
-   fs.writeFileSync(process.env.D2K_RECORD_TUNNEL,Buffer.from(video,'base64'));
+   fs.mkdirSync(path.dirname(process.env.D2S_RECORD_TUNNEL),{recursive:true});
+   fs.writeFileSync(process.env.D2S_RECORD_TUNNEL,Buffer.from(video,'base64'));
    const samples=await evaluate('window.__tgPacketSamples');
    assert(samples.length>20,'confirmed byte deltas draw many glowing packets');
    assert(Math.min(...samples.map(sample=>sample.x))<500&&Math.max(...samples.map(sample=>sample.x))>700,
     'packets travel over the full selected route to and from Telegram DCs');
    assert(samples.some(sample=>sample.glow>=8),'request particles retain the prototype glow');
-   console.log('Telegram animation WebM:',process.env.D2K_RECORD_TUNNEL,
-    'bytes:',fs.statSync(process.env.D2K_RECORD_TUNNEL).size,'packet samples:',samples.length);
+   console.log('Telegram animation WebM:',process.env.D2S_RECORD_TUNNEL,
+    'bytes:',fs.statSync(process.env.D2S_RECORD_TUNNEL).size,'packet samples:',samples.length);
    panel.telegramStats(fixture.telegramStats);
    await evaluate('document.dispatchEvent(new Event("visibilitychange"))');
    await until('document.querySelector("[data-tg-active-count]").textContent==="4"',
@@ -186,7 +186,7 @@ async function main(){
   async function checkLayout(){
   // Раскладка на ширинах содержимого.
   for(const [name,width,height] of [['narrow',320,740],['phone',390,844],['compact-boundary',640,1020],['overlap-regression',649,1020],['small-tablet',650,1020],['chrome-report',678,1020],['mid-tablet',700,1020],['tablet',768,1024],['tablet-boundary',820,1020],['full-label-boundary',821,1020],['status-regression',854,1020],['large-tablet',971,1020],['nav-boundary',1080,1020],['laptop',1280,800],['wide',1920,1080]]){
-   if(process.env.D2K_BASELINE_OVERLAP==='1'&&width!==649)continue;
+   if(process.env.D2S_BASELINE_OVERLAP==='1'&&width!==649)continue;
    await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:width<600});
    await evaluate('scrollTo(0,0)');await wait(120);
    const state=await evaluate(`(()=>{
@@ -227,7 +227,7 @@ async function main(){
    await evaluate('scrollTo(0,0)');await wait(120);
   }
   }
-  if(process.env.D2K_LAYOUT_ONLY){await checkLayout();return;}
+  if(process.env.D2S_LAYOUT_ONLY){await checkLayout();return;}
   assert.match(await evaluate('document.querySelector("#now-title").textContent'),/Идёт 3 поиска/);
   assert.equal(await evaluate('document.querySelectorAll(".queue-list li").length'),1,'queued searches are listed compactly');
   assert.match(await evaluate('document.querySelector("#engine-state").textContent.trim()'),/^Движок работает, идёт подборрежим: применение$/,
@@ -254,7 +254,7 @@ async function main(){
 
   // Telegram: маршруты, DC, media и состояния совпадают со снимком C11.
   await evaluate('document.querySelector("#telegram").scrollIntoView({block:"center"})');
-  const shots=process.env.D2K_TUNNEL_SHOTS;
+  const shots=process.env.D2S_TUNNEL_SHOTS;
   if(shots)fs.mkdirSync(shots,{recursive:true});
   const tunnelShot=async name=>{if(!shots)return;
    const b=await evaluate('(()=>{const r=document.querySelector("#telegram-body").getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}})()');
@@ -282,7 +282,7 @@ async function main(){
     'failure gate and live route cooldown are announced from C11 statistics');
   assert.doesNotMatch(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/Резервный TCP/,
     'unused routes are omitted from the diagram');
-  assert.doesNotMatch(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/d2ktg C11/);
+  assert.doesNotMatch(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/d2stg C11/);
   assert.match(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/Прямой TCP passthrough/);
   assert.equal(await evaluate('window.tgFlowCanvas===document.querySelector("#telegram-body .tg-flow-canvas")'),true,'route canvas is mounted once');
   await wait(700);
@@ -415,7 +415,7 @@ async function main(){
   await evaluate('document.querySelector(".crate-lid").click()');
   await until('!document.querySelector(".crate").open','box closes again');
   assert.equal(await evaluate('!!document.querySelector(".index-marker")&&getComputedStyle(document.querySelector(".index-marker")).display'),'block','navigation marker is present');
-  assert.match(await evaluate('document.title'),/^(● )?D2K — Движок работает, идёт подбор$/,'title carries the engine state and no theme name');
+  assert.match(await evaluate('document.title'),/^(● )?D2S — Движок работает, идёт подбор$/,'title carries the engine state and no theme name');
   assert.equal(await evaluate('document.body.textContent.includes("Ведомость")'),false,'the theme name is not shown in the interface');
 
   // Опрос не сбрасывает раскрытые подробности, фокус и фильтр.
@@ -505,9 +505,9 @@ async function main(){
   await evaluate('(()=>{window.__tgReducedMotionFrames=0;const raf=window.requestAnimationFrame;window.requestAnimationFrame=function(cb){return raf.call(window,ts=>{window.__tgReducedMotionFrames++;cb(ts)})};document.querySelector("#telegram-body .tg-flow-canvas").scrollIntoView({block:"center"})})()');
   await until('window.__tgReducedMotionFrames>0',
    'the visible Telegram route visualization continues animating when Windows requests reduced motion');
-  if(process.env.D2K_TUNNEL_SHOTS){await evaluate('document.querySelector("#telegram").scrollIntoView({block:"center"})');await wait(200);
+  if(process.env.D2S_TUNNEL_SHOTS){await evaluate('document.querySelector("#telegram").scrollIntoView({block:"center"})');await wait(200);
    const b=await evaluate('(()=>{const r=document.querySelector("#telegram-body").getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}})()');
-   const s=await call('Page.captureScreenshot',{format:'png',clip:{...b,scale:2}});fs.writeFileSync(path.join(process.env.D2K_TUNNEL_SHOTS,'9-reduced-motion-connected.png'),Buffer.from(s.data,'base64'))}
+   const s=await call('Page.captureScreenshot',{format:'png',clip:{...b,scale:2}});fs.writeFileSync(path.join(process.env.D2S_TUNNEL_SHOTS,'9-reduced-motion-connected.png'),Buffer.from(s.data,'base64'))}
   await call('Emulation.setEmulatedMedia',{features:[]});
   await until('document.querySelector("#diagnostic-status").textContent.includes("Сбор выключен")','сбор диагностики по умолчанию выключен');
   assert.equal(await evaluate('document.querySelector("#diagnostic-download").hidden'),true,'выгрузка диагностики скрыта при выключенном сборе');

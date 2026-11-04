@@ -37,7 +37,7 @@ main() {
     ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
     cd "$ROOT"
     J=$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-    LOG=$(mktemp -d "${TMPDIR:-/tmp}/d2k-check.XXXXXX")
+    LOG=$(mktemp -d "${TMPDIR:-/tmp}/d2s-check.XXXXXX")
     START=$(date +%s)
 
     # ── Фаза 1: сборка и тесты ──────────────────────────────────────────────────
@@ -48,8 +48,8 @@ main() {
 
     echo "== ядро: сборка и тесты (-j$J) =="
     make -C core clean
-    # d2kc нужен интеграционному тесту рукопожатия контроллера в фазе 2.
-    make -C core -j"$J" check d2kc
+    # d2sc нужен интеграционному тесту рукопожатия контроллера в фазе 2.
+    make -C core -j"$J" check d2sc
 
     # ── Фаза 2: независимые дорожки ─────────────────────────────────────────────
 
@@ -82,7 +82,7 @@ main() {
         sh scripts/ci-core-shard.sh verify
         sh scripts/ci-core-san-shard.sh verify
         # Один список с CI (scripts/lint-shell.sh): он же ловит init-скрипты
-        # files/ без расширения — S99d2k и остальные, которых глоб *.sh не видит.
+        # files/ без расширения — S99d2s и остальные, которых глоб *.sh не видит.
         sh scripts/lint-shell.sh
         # Каждый scripts/test-*, а не список руками: список руками отстаёт от
         # дерева (так test-field-controller-return.sh месяцами стоял красным
@@ -132,10 +132,10 @@ main() {
         exit 1
     fi
 
-    # Синтаксис files/S99d2k проверен выше; ПОВЕДЕНИЕ его правил firewall —
+    # Синтаксис files/S99d2s проверен выше; ПОВЕДЕНИЕ его правил firewall —
     # отдельным scripts/check_firewall.sh настоящим iptables в контейнере. Не
     # вызывается отсюда: Docker — не зависимость остального гейта. Запускать
-    # вручную при правке firewall-части S99d2k.
+    # вручную при правке firewall-части S99d2s.
 
     echo "ВСЁ ЗЕЛЕНО за $(( ($(date +%s) - START) / 60 )) мин $(( ($(date +%s) - START) % 60 )) с (журналы: $LOG)"
 }

@@ -7,7 +7,7 @@ import tempfile
 with tempfile.TemporaryDirectory() as directory:
     dest = Path(directory) / 'report.json'
     subprocess.run([str(Path(__file__).resolve().parent / 'test_diagnostics')],
-                   env=dict(os.environ, D2K_TEST_DIAG_JSON=str(dest)), check=True)
+                   env=dict(os.environ, D2S_TEST_DIAG_JSON=str(dest)), check=True)
     report = json.loads(dest.read_text())
     assert report['schema'] == 1 and report['enabled'] is True
     assert report['ring_bytes'] <= 128 * 1024
@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory() as directory:
 print('JSON диагностики: сериализатор прошёл')
 
 details = report['memory_details'][0]
-assert details['name'] == 'd2kc'
+assert details['name'] == 'd2sc'
 assert details['first']['mono_ms'] == 0
 assert details['first']['rss_kib'] == 1024
 assert details['latest']['mono_ms'] == 60000

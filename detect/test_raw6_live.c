@@ -10,7 +10,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 struct server { int fd; int payload; int received; };
 static void *serve(void *arg) {
@@ -44,14 +44,14 @@ int main(void) {
         pthread_t thread;
         assert(pthread_create(&thread, NULL, serve, &s) == 0);
         char err[200] = {0};
-        d2k_detect_stop cancel = {0};
-        d2k_trigger tr = {0};
-        memcpy(tr.payload, "hello", 5); tr.len = 5; tr.accept = D2K_ACCEPT_ANY;
-        d2k_poison poison = {0};
+        d2s_detect_stop cancel = {0};
+        d2s_trigger tr = {0};
+        memcpy(tr.payload, "hello", 5); tr.len = 5; tr.accept = D2S_ACCEPT_ANY;
+        d2s_poison poison = {0};
         int rc = payload
-            ? d2k_raw_probe_poison_family((const uint8_t *)&addr.sin6_addr, 6,
+            ? d2s_raw_probe_poison_family((const uint8_t *)&addr.sin6_addr, 6,
                 ntohs(addr.sin6_port), &tr, &poison, 2000, 0xd200, &cancel, err, sizeof err)
-            : d2k_raw_probe_handshake_family((const uint8_t *)&addr.sin6_addr, 6,
+            : d2s_raw_probe_handshake_family((const uint8_t *)&addr.sin6_addr, 6,
                 ntohs(addr.sin6_port), 2000, 0xd200, &cancel, err, sizeof err);
         pthread_join(thread, NULL); close(s.fd);
         if (rc != 1 || (payload && !s.received)) {

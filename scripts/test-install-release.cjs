@@ -91,17 +91,17 @@ exit 0`));
   fixture('scripts/architecture.sh',
     sh('printf "arch %s %s\\n" "$1" "$2" >> "$CALLS"; printf "amd64\\n"'));
   for (const name of ['check-cpu.sh', 'select-panel-ip.sh']) fixture(`scripts/${name}`, sh('exit 0'));
-  fixture('builds/d2kpanel-linux-amd64', sh('echo features=telegram-control'));
-  fixture('builds/d2ktg-linux-amd64', sh('echo features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v3'));
-  fixture('builds/d2kd-linux-amd64', sh('exit 0'));
-  fixture('builds/d2kc-linux-amd64', sh('exit 2'));
-  fixture('builds/d2kfetch-linux-amd64', sh('exit 2'));
-  fixture('files/S99d2k', sh('printf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0'));
+  fixture('builds/d2spanel-linux-amd64', sh('echo features=telegram-control'));
+  fixture('builds/d2stg-linux-amd64', sh('echo features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v3'));
+  fixture('builds/d2sd-linux-amd64', sh('exit 0'));
+  fixture('builds/d2sc-linux-amd64', sh('exit 2'));
+  fixture('builds/d2sfetch-linux-amd64', sh('exit 2'));
+  fixture('files/S99d2s', sh('printf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0'));
   fixture('files/config', 'PANEL_LISTEN=192.168.1.1:8090\nTG_ENABLED=0\nTG_MODE=local\n');
-  fixture('files/d2k-ppe-deoffload.sh', sh('d2k_ppe_remove() { :; }'));
-  for (const name of ['d2k-fw-heal.sh', '001-d2k.sh', 'd2k-tg-firewall.sh', 'd2k-tg-watchdog.sh',
-    'd2k-instagram-dns-scheduler.sh', 'd2k-instagram-dns.sh', 'd2k-log-maintenance.sh', 'd2k-update.sh']) fixture(`files/${name}`, sh('exit 0'));
-  fixture('files/d2k-openwrt-init', fs.readFileSync(path.join(root, 'files/d2k-openwrt-init'), 'utf8').replace(/\r\n/g, '\n')
+  fixture('files/d2s-ppe-deoffload.sh', sh('d2s_ppe_remove() { :; }'));
+  for (const name of ['d2s-fw-heal.sh', '001-d2s.sh', 'd2s-tg-firewall.sh', 'd2s-tg-watchdog.sh',
+    'd2s-instagram-dns-scheduler.sh', 'd2s-instagram-dns.sh', 'd2s-log-maintenance.sh', 'd2s-update.sh']) fixture(`files/${name}`, sh('exit 0'));
+  fixture('files/d2s-openwrt-init', fs.readFileSync(path.join(root, 'files/d2s-openwrt-init'), 'utf8').replace(/\r\n/g, '\n')
     .replaceAll('/etc/rc.common', path.join(tmp, 'etc/rc.common')));
   for (const name of ['meta-ranges.txt', 'tg-roots.pem', 'fake/stun.bin', 'fake/quic_initial_dbankcloud_ru.bin']) fixture(`files/${name}`, 'fixture\n');
   for (const name of ['index.html', 'favicon.svg', 'panel.css', 'panel.js', 'telegram-flow.js', 'telegram-flow-prototype.js', 'diagnostics.js', 'gsap.js', 'fonts/onest.woff2',
@@ -121,10 +121,10 @@ exit 0`));
     .replaceAll('/opt', path.join(tmp, 'opt'))
     .replaceAll('/etc/openwrt_release', release)
     .replaceAll('/etc/rc.common', path.join(tmp, 'etc/rc.common'))
-    .replaceAll('/etc/init.d/d2k', path.join(tmp, 'etc/init.d/d2k'))
+    .replaceAll('/etc/init.d/d2s', path.join(tmp, 'etc/init.d/d2s'))
     .replaceAll('/lib/functions/procd.sh', path.join(tmp, 'lib/functions/procd.sh'))
     .replaceAll('/proc/', `${path.join(tmp, 'proc')}/`)
-    .replaceAll('/tmp/d2k', runtime);
+    .replaceAll('/tmp/d2s', runtime);
   fs.writeFileSync(path.join(tmp, 'install.sh'), installer);
   // В архиве лежит он же: выпуск ставит СВОЙ установщик, не чужой.
   fixture('scripts/install.sh', installer);
@@ -134,9 +134,9 @@ exit 0`));
   execFileSync(openssl, ['genpkey', '-algorithm', 'ED25519', '-out', keyPem]);
   const pub = execFileSync(openssl, ['pkey', '-in', keyPem, '-pubout']).toString()
     .split('\n').filter(l => l && !l.startsWith('-----')).join('');
-  const rid = 'd2k-20261014-0900-abcdef0';
+  const rid = 'd2s-20261014-0900-abcdef0';
   function publish({ sum, arch = 'amd64', sign = true } = {}) {
-    const tar = path.join(src, rid, 'd2k-amd64.tar.gz');
+    const tar = path.join(src, rid, 'd2s-amd64.tar.gz');
     fs.mkdirSync(path.dirname(tar), { recursive: true });
     execFileSync('tar', ['-czf', tar, '-C', src, 'builds', 'scripts', 'files', 'internal']);
     const real = execFileSync(openssl, ['dgst', '-sha256', '-r', tar]).toString().split(' ')[0];
@@ -155,11 +155,11 @@ exit 0`));
 
   const calls = path.join(tmp, 'calls');
   const env = {
-    PATH: `${bin}:${sys}`, HOME: tmp, CALLS: calls, D2K_KEEP_STATE: '1',
-    D2K_BASE: 'http://fixture.test',
-    D2K_UPDATE_LATEST: 'http://fixture.test/latest', D2K_UPDATE_DOWNLOAD: 'http://fixture.test',
-    D2K_UPDATE_KEY: pub, D2K_GATE: 'http://192.0.2.44:9444', D2K_GATE: 'http://192.0.2.44:9444',
-    D2K_OPENWRT_APK: path.join(bin, 'apk'), D2K_OPENWRT_OPKG: path.join(tmp, 'no-opkg'),
+    PATH: `${bin}:${sys}`, HOME: tmp, CALLS: calls, D2S_KEEP_STATE: '1',
+    D2S_BASE: 'http://fixture.test',
+    D2S_UPDATE_LATEST: 'http://fixture.test/latest', D2S_UPDATE_DOWNLOAD: 'http://fixture.test',
+    D2S_UPDATE_KEY: pub, D2S_GATE: 'http://192.0.2.44:9444', D2S_GATE: 'http://192.0.2.44:9444',
+    D2S_OPENWRT_APK: path.join(bin, 'apk'), D2S_OPENWRT_OPKG: path.join(tmp, 'no-opkg'),
   };
   const read = (f) => { try { return fs.readFileSync(f, 'utf8'); } catch { return ''; } };
   const reset = () => { for (const f of [calls, log('apk'), log('wget'), log('curl'), log('curl-gate'),
@@ -167,8 +167,8 @@ exit 0`));
   const run = (extra = {}) => spawnSync('/bin/sh', [path.join(tmp, 'install.sh')],
     { env: { ...env, ...extra }, encoding: 'utf8', timeout: 30000 });
   const ok = (r) => { assert.equal(r.status, 0, r.stderr || r.stdout); return r.stdout + r.stderr; };
-  const d2kd = path.join(tmp, 'opt/sbin/d2kd');
-  const releaseId = path.join(tmp, 'opt/d2k/release-id');
+  const d2sd = path.join(tmp, 'opt/sbin/d2sd');
+  const releaseId = path.join(tmp, 'opt/d2s/release-id');
 
   // 1. Чистая 25.12 без curl и openssl: пакеты, затем подписанный выпуск.
   reset();
@@ -182,19 +182,19 @@ exit 0`));
     'до пакетов качается только определение арки');
   assert.deepEqual(read(log('curl')).trim().split('\n'),
     ['http://fixture.test/latest/latest.json', 'http://fixture.test/latest/latest.json.sig',
-      `http://fixture.test/${rid}/d2k-amd64.tar.gz`],
+      `http://fixture.test/${rid}/d2s-amd64.tar.gz`],
     'выпуск берётся перечнем, подписью и архивом — в этом порядке');
   // Каждая загрузка выпуска сперва идёт через проводник на VPS (CONNECT).
   const GATE = 'http://192.0.2.44:9444';
   const releaseUrls = ['http://fixture.test/latest/latest.json', 'http://fixture.test/latest/latest.json.sig',
-    `http://fixture.test/${rid}/d2k-amd64.tar.gz`];
+    `http://fixture.test/${rid}/d2s-amd64.tar.gz`];
   assert.deepEqual(read(log('curl-gate')).trim().split('\n'), releaseUrls.map((u) => `${GATE} ${u}`),
     'выпуск сперва качается через проводник на VPS');
   assert.match(fresh, /подпись сошлась/, 'установка должна сказать, что подпись проверена');
-  assert(fs.existsSync(d2kd), 'комплект должен встать');
+  assert(fs.existsSync(d2sd), 'комплект должен встать');
   assert.equal(read(releaseId).trim(), rid,
     'номер выпуска пишется на роутер: иначе ночное обновление поставит то же самое заново');
-  assert.equal(read(path.join(tmp, 'opt/d2k/release-arch')).trim(), 'amd64');
+  assert.equal(read(path.join(tmp, 'opt/d2s/release-arch')).trim(), 'amd64');
   // Комплект раскладывает установщик ИЗ архива, а не этот: арку он считает
   // второй раз, уже файлом из подписанного дерева.
   assert.equal(read(calls).match(/^arch /gm).length, 2,
@@ -202,14 +202,14 @@ exit 0`));
   assert(read(calls).includes('service-start'), 'служба должна запуститься');
 
   // 2. Подпись не сошлась: прежняя версия остаётся как была.
-  const before = fs.readFileSync(d2kd);
+  const before = fs.readFileSync(d2sd);
   publish({ sign: false });
   reset();
   let bad = run();
   assert.notEqual(bad.status, 0, 'подложная подпись обязана отказать');
   assert.match(bad.stdout + bad.stderr, /подпись выпуска не сошлась/, bad.stdout + bad.stderr);
   assert(!read(calls).includes('service-stop'), 'служба не останавливается');
-  assert.deepEqual(fs.readFileSync(d2kd), before, 'бинарники не подменяются');
+  assert.deepEqual(fs.readFileSync(d2sd), before, 'бинарники не подменяются');
 
   // 3. Хеш архива не тот, что в подписанном перечне.
   publish({ sum: 'f'.repeat(64) });
@@ -217,7 +217,7 @@ exit 0`));
   bad = run();
   assert.notEqual(bad.status, 0, 'чужой архив обязан отказать');
   assert.match(bad.stdout + bad.stderr, /не совпал с подписанным хешем/, bad.stdout + bad.stderr);
-  assert.deepEqual(fs.readFileSync(d2kd), before, 'бинарники не подменяются');
+  assert.deepEqual(fs.readFileSync(d2sd), before, 'бинарники не подменяются');
 
   // 4. В выпуске нет сборки для этой арки — отказ называет арку.
   publish({ arch: 'riscv64' });
@@ -247,9 +247,9 @@ exit 0`));
 
   // 7. Ветка как источник разработчика: подписи нет, бинарники из builds/.
   reset();
-  ok(run({ D2K_SOURCE: 'ref', APK_HAVE: have }));
-  assert(read(log('curl')).includes('http://fixture.test/builds/d2kd-linux-amd64'),
-    'D2K_SOURCE=ref берёт бинарники из builds/ ветки');
+  ok(run({ D2S_SOURCE: 'ref', APK_HAVE: have }));
+  assert(read(log('curl')).includes('http://fixture.test/builds/d2sd-linux-amd64'),
+    'D2S_SOURCE=ref берёт бинарники из builds/ ветки');
   assert.equal(read(releaseId).trim(), '', 'установка из ветки номера выпуска не знает');
 
   // 8. Проводник недоступен: каждая загрузка повторяется напрямую, установка
@@ -264,10 +264,10 @@ exit 0`));
   for (const u of releaseUrls) assert(direct.includes(u), `после отказа проводника — напрямую: ${u}`);
   assert.equal(read(releaseId).trim(), rid, 'упавший проводник не мешает установке');
 
-  // 9. D2K_GATE= — без проводника: только напрямую.
+  // 9. D2S_GATE= — без проводника: только напрямую.
   reset();
-  ok(run({ D2K_GATE: '' }));
-  assert.equal(read(log('curl-gate')), '', 'пустой D2K_GATE выключает проводник');
+  ok(run({ D2S_GATE: '' }));
+  assert.equal(read(log('curl-gate')), '', 'пустой D2S_GATE выключает проводник');
   for (const u of releaseUrls) assert(read(log('curl')).includes(u), `напрямую: ${u}`);
 
   // 10. Пакеты OpenWrt через проводник: в попытке только штатные зеркала
@@ -280,7 +280,7 @@ exit 0`));
   put(path.join(apkEtc, 'repositories.d/customfeeds.list'),
     '# add your custom package feeds here\nhttps://example.org/feed/packages.adb\n', 0o644);
   reset();
-  ok(run({ D2K_OPENWRT_APK_ETC: apkEtc }));
+  ok(run({ D2S_OPENWRT_APK_ETC: apkEtc }));
   assert.match(read(log('apk-gate')), new RegExp(`^${GATE} update$`, 'm'), 'индекс — через проводник');
   assert.match(read(log('apk-gate')),
     new RegExp(`^${GATE} add$`, 'm'), 'пакеты — через проводник');
@@ -293,7 +293,7 @@ exit 0`));
 
   // 11. Проводник лёг и для пакетов: apk ставит напрямую, как прежде.
   reset();
-  ok(run({ D2K_OPENWRT_APK_ETC: apkEtc, GATE_DOWN: '1' }));
+  ok(run({ D2S_OPENWRT_APK_ETC: apkEtc, GATE_DOWN: '1' }));
   assert.match(read(log('apk-gate')), new RegExp(`^${GATE} update$`, 'm'), 'попытка через проводник была');
   assert.match(read(log('apk')), /^add kmod-nft-queue kmod-nfnetlink-queue kmod-nf-conntrack-netlink ca-bundle/m,
     'после отказа проводника пакеты ставятся напрямую');

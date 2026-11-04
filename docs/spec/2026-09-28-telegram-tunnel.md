@@ -1,6 +1,6 @@
 # Telegram tunnel port — implementation brief
 
-**Goal:** Add the existing z2k Telegram TCP tunnel to d2k as a native C
+**Goal:** Add the existing z2k Telegram TCP tunnel to d2s as a native C
 runtime, installable on the currently supported ARM64 Keenetic target.
 
 **Scope ruling:** “C runtime” means the complete router-side client and its
@@ -11,9 +11,9 @@ The adjacent CDN HTTP tunnel on :1444 is not part of this Telegram feature.
 
 ## Required behavior
 
-- A separate `/opt/sbin/d2ktg` process listens on TCP :1443, reads
+- A separate `/opt/sbin/d2stg` process listens on TCP :1443, reads
   `SO_ORIGINAL_DST`, rejects self-dials, and tunnels only connections
-  redirected for Telegram DC IPv4 ranges. d2kd/NFQUEUE remains independent.
+  redirected for Telegram DC IPv4 ranges. d2sd/NFQUEUE remains independent.
 - Use TLS-verified WSS to `/ws`; retain hostname/SNI/certificate verification
   when connecting directly to the IPv4 encoded by the relay's `nip.io` name.
   Ship a trust bundle and use OpenSSL as the C TLS/crypto dependency; the
@@ -34,9 +34,9 @@ The adjacent CDN HTTP tunnel on :1444 is not part of this Telegram feature.
   bounded logs, health status and a concise enable/status control in the
   existing panel. Start only when configured and enabled; never expose the
   relay secret in process arguments, logs, or the UI.
-- Install/update/uninstall d2ktg and its owned files atomically without
+- Install/update/uninstall d2stg and its owned files atomically without
   overwriting an existing user config. Unsupported architectures must fail
-  clearly; current D2K install support is ARM64 only.
+  clearly; current D2S install support is ARM64 only.
 - Do not modify the z2k donor. Keenetic deployment/field testing requires
   separate approval; the user granted that approval on 2026-09-28 for testing
   service installation and traffic redirection.
@@ -53,7 +53,7 @@ authorized and demonstrated.
 
 ## Panel treatment
 
-Add one compact Telegram status row/card to the approved D2K panel; reuse its
+Add one compact Telegram status row/card to the approved D2S panel; reuse its
 existing type scale, palette, mascot/logo treatment, spacing and control
 patterns. Show only “not configured / stopped / connecting / connected” plus
 an enable/disable action. No new illustration, dashboard redesign, or

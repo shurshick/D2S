@@ -9,7 +9,7 @@
  *     обоснование: сверено с донором z2k-detect/internal/quicprobe и
  *     независимым пересчётом через crypto/aes+crypto/cipher стандартной
  *     библиотеки Go). Здесь его же гоняет ПУБЛИЧНЫЙ интерфейс модуля
- *     (d2k_quic_is_initial/d2k_quic_sni), а не отдельные примитивы.
+ *     (d2s_quic_is_initial/d2s_quic_sni), а не отдельные примитивы.
  *   - RFC 9369, приложение A.2 — версия 2 ТОГО ЖЕ ClientHello (нарочно
  *     опубликована авторами RFC для лёгкой сверки реализаций: тот же DCID,
  *     тот же ClientHello с именем example.com, другие соль/метки/номер
@@ -49,8 +49,8 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_quic.h"
-#include "d2k_quicwire.h"
+#include "d2s_quic.h"
+#include "d2s_quicwire.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -417,11 +417,11 @@ static const uint8_t v1_ack_huge_range_count[66] = {
 };
 
 static void check_v1(void) {
-    CHECK(d2k_quic_is_initial(v1_initial, sizeof v1_initial) == 1,
+    CHECK(d2s_quic_is_initial(v1_initial, sizeof v1_initial) == 1,
           "настоящий клиентский Initial v1 (RFC 9001 A.2) не узнан");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    int rc = d2k_quic_sni(v1_initial, sizeof v1_initial, out, sizeof out);
+    int rc = d2s_quic_sni(v1_initial, sizeof v1_initial, out, sizeof out);
     CHECK(rc == 0, "имя не извлечено из настоящего v1 Initial");
     if (rc == 0) {
         CHECK(strcmp(out, "example.com") == 0, "извлечённое имя v1 не example.com");
@@ -433,11 +433,11 @@ static void check_v2(void) {
      * (соль/метки/тип пакета версии 2) — если бы разбор был захардкожен на
      * v1, этот пакет не опознался бы как Initial вовсе (тип 0b01 не совпал
      * бы с ожидаемым для v1 0b00), и это ровно предупреждение брифа. */
-    CHECK(d2k_quic_is_initial(v2_initial, sizeof v2_initial) == 1,
+    CHECK(d2s_quic_is_initial(v2_initial, sizeof v2_initial) == 1,
           "настоящий клиентский Initial v2 (RFC 9369 A.2) не узнан — похоже на v1-заглушку вместо версии");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    int rc = d2k_quic_sni(v2_initial, sizeof v2_initial, out, sizeof out);
+    int rc = d2s_quic_sni(v2_initial, sizeof v2_initial, out, sizeof out);
     CHECK(rc == 0, "имя не извлечено из настоящего v2 Initial");
     if (rc == 0) {
         CHECK(strcmp(out, "example.com") == 0, "извлечённое имя v2 не example.com");
@@ -446,9 +446,9 @@ static void check_v2(void) {
 
 static void check_garbage(void) {
     static const uint8_t http[] = "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n";
-    CHECK(d2k_quic_is_initial(http, sizeof http - 1) == 0, "HTTP принят за QUIC Initial");
+    CHECK(d2s_quic_is_initial(http, sizeof http - 1) == 0, "HTTP принят за QUIC Initial");
     char out[64];
-    CHECK(d2k_quic_sni(http, sizeof http - 1, out, sizeof out) == -1, "имя добыто из мусора");
+    CHECK(d2s_quic_sni(http, sizeof http - 1, out, sizeof out) == -1, "имя добыто из мусора");
 
     /* Короткий заголовок (старший бит первого байта — 0) — валиден для QUIC,
      * но это точно не Initial: до него в Initial-пространстве дело не
@@ -456,7 +456,7 @@ static void check_garbage(void) {
     uint8_t short_hdr[30];
     memset(short_hdr, 0x41, sizeof short_hdr);
     short_hdr[0] = 0x40; /* биты формы=0 (короткий), fixed=1 */
-    CHECK(d2k_quic_is_initial(short_hdr, sizeof short_hdr) == 0, "короткий заголовок принят за Initial");
+    CHECK(d2s_quic_is_initial(short_hdr, sizeof short_hdr) == 0, "короткий заголовок принят за Initial");
 
     /* Длинный заголовок, но версия ни v1, ни v2 — например, Version
      * Negotiation (версия 0) или произвольный будущий номер. */
@@ -464,10 +464,10 @@ static void check_garbage(void) {
     memset(unknown_version, 0, sizeof unknown_version);
     unknown_version[0] = 0xc0; /* длинный заголовок, fixed=1, тип=00 */
     /* version остаётся 0x00000000 — Version Negotiation, не Initial. */
-    CHECK(d2k_quic_is_initial(unknown_version, sizeof unknown_version) == 0,
+    CHECK(d2s_quic_is_initial(unknown_version, sizeof unknown_version) == 0,
           "Version Negotiation (версия 0) принята за Initial");
     unknown_version[4] = 0x07; /* версия 0x00000007 — не существует ни у v1, ни у v2 */
-    CHECK(d2k_quic_is_initial(unknown_version, sizeof unknown_version) == 0,
+    CHECK(d2s_quic_is_initial(unknown_version, sizeof unknown_version) == 0,
           "неизвестная версия протокола принята за Initial");
 }
 
@@ -479,16 +479,16 @@ static void check_prefix_rejected(const uint8_t *full, size_t cut_len, const cha
         /* нулевая длина: VLA размера 0 — неопределённое поведение по C99,
            а функция обязана отказать раньше первого обращения к p[..] —
            проверяем это напрямую на исходном указателе. */
-        CHECK(d2k_quic_is_initial(full, 0) == 0, why);
+        CHECK(d2s_quic_is_initial(full, 0) == 0, why);
         char out[64];
-        CHECK(d2k_quic_sni(full, 0, out, sizeof out) == -1, why);
+        CHECK(d2s_quic_sni(full, 0, out, sizeof out) == -1, why);
         return;
     }
     uint8_t buf[cut_len];
     memcpy(buf, full, cut_len);
-    CHECK(d2k_quic_is_initial(buf, cut_len) == 0, why);
+    CHECK(d2s_quic_is_initial(buf, cut_len) == 0, why);
     char out[64];
-    CHECK(d2k_quic_sni(buf, cut_len, out, sizeof out) == -1, why);
+    CHECK(d2s_quic_sni(buf, cut_len, out, sizeof out) == -1, why);
 }
 
 static void check_truncated(void) {
@@ -512,31 +512,31 @@ static void check_bitflip(void) {
     uint8_t broken[1200];
     memcpy(broken, v1_initial, sizeof broken);
     broken[100] ^= 0xFF;
-    CHECK(d2k_quic_is_initial(broken, sizeof broken) == 1,
+    CHECK(d2s_quic_is_initial(broken, sizeof broken) == 1,
           "порча байта шифротекста повлияла на распознавание заголовка — не должна была");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    CHECK(d2k_quic_sni(broken, sizeof broken, out, sizeof out) == -1,
+    CHECK(d2s_quic_sni(broken, sizeof broken, out, sizeof out) == -1,
           "имя извлечено из пакета с испорченным шифротекстом");
-    CHECK((unsigned char)out[0] == 0xAA, "out тронут при отказе — нарушен контракт d2k_aes128_gcm_decrypt-подобных функций");
+    CHECK((unsigned char)out[0] == 0xAA, "out тронут при отказе — нарушен контракт d2s_aes128_gcm_decrypt-подобных функций");
 
     /* DCID испорчен — производные ключи станут другими, тег тоже не сойдётся
      * (ключи выводятся из ЭТОГО ЖЕ DCID, RFC 9001 §5.2). */
     uint8_t bad_dcid[1200];
     memcpy(bad_dcid, v1_initial, sizeof bad_dcid);
     bad_dcid[6] ^= 0xFF; /* байт 6 — начало DCID (после первого байта и версии) */
-    CHECK(d2k_quic_is_initial(bad_dcid, sizeof bad_dcid) == 1,
+    CHECK(d2s_quic_is_initial(bad_dcid, sizeof bad_dcid) == 1,
           "порча DCID повлияла на распознавание заголовка — не должна была");
-    CHECK(d2k_quic_sni(bad_dcid, sizeof bad_dcid, out, sizeof out) == -1,
+    CHECK(d2s_quic_sni(bad_dcid, sizeof bad_dcid, out, sizeof out) == -1,
           "имя извлечено при подменённом DCID");
 }
 
 static void check_reordered(void) {
-    CHECK(d2k_quic_is_initial(v1_reordered, sizeof v1_reordered) == 1,
+    CHECK(d2s_quic_is_initial(v1_reordered, sizeof v1_reordered) == 1,
           "пакет с переставленными кадрами CRYPTO не узнан как Initial");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    int rc = d2k_quic_sni(v1_reordered, sizeof v1_reordered, out, sizeof out);
+    int rc = d2s_quic_sni(v1_reordered, sizeof v1_reordered, out, sizeof out);
     CHECK(rc == 0, "имя не собралось из кадров CRYPTO, переданных не по порядку смещений");
     if (rc == 0) {
         CHECK(strcmp(out, "example.com") == 0, "имя из переставленных кадров CRYPTO собралось неверно");
@@ -544,21 +544,21 @@ static void check_reordered(void) {
 }
 
 static void check_gap(void) {
-    CHECK(d2k_quic_is_initial(v1_gap, sizeof v1_gap) == 1,
+    CHECK(d2s_quic_is_initial(v1_gap, sizeof v1_gap) == 1,
           "пакет с пропуском в кадрах CRYPTO не узнан как Initial (заголовок-то валиден)");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    CHECK(d2k_quic_sni(v1_gap, sizeof v1_gap, out, sizeof out) == -1,
+    CHECK(d2s_quic_sni(v1_gap, sizeof v1_gap, out, sizeof out) == -1,
           "имя добыто, хотя начало ClientHello (offset 0) в пакете вообще не передавалось");
     CHECK((unsigned char)out[0] == 0xAA, "out тронут при отказе на пропуске в кадрах CRYPTO");
 }
 
 static void check_unknown_frame_stops_but_keeps_crypto(void) {
-    CHECK(d2k_quic_is_initial(v1_unknown_tail, sizeof v1_unknown_tail) == 1,
+    CHECK(d2s_quic_is_initial(v1_unknown_tail, sizeof v1_unknown_tail) == 1,
           "пакет с хвостовым кадром запрещённого типа не узнан как Initial");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    int rc = d2k_quic_sni(v1_unknown_tail, sizeof v1_unknown_tail, out, sizeof out);
+    int rc = d2s_quic_sni(v1_unknown_tail, sizeof v1_unknown_tail, out, sizeof out);
     CHECK(rc == 0, "имя не извлечено, хотя оно собрано целиком ДО кадра запрещённого типа");
     if (rc == 0) {
         CHECK(strcmp(out, "example.com") == 0,
@@ -567,11 +567,11 @@ static void check_unknown_frame_stops_but_keeps_crypto(void) {
 }
 
 static void check_ack_zero_ranges(void) {
-    CHECK(d2k_quic_is_initial(v1_ack_zero_ranges, sizeof v1_ack_zero_ranges) == 1,
+    CHECK(d2s_quic_is_initial(v1_ack_zero_ranges, sizeof v1_ack_zero_ranges) == 1,
           "пакет с кадром ACK (нуль диапазонов) не узнан как Initial");
     char out[64];
     memset(out, 0xAA, sizeof out);
-    int rc = d2k_quic_sni(v1_ack_zero_ranges, sizeof v1_ack_zero_ranges, out, sizeof out);
+    int rc = d2s_quic_sni(v1_ack_zero_ranges, sizeof v1_ack_zero_ranges, out, sizeof out);
     CHECK(rc == 0, "имя не найдено за кадром ACK с нулём диапазонов — разбор ACK съел лишнее или недостаточно");
     if (rc == 0) {
         CHECK(strcmp(out, "example.com") == 0, "имя за кадром ACK с нулём диапазонов собралось неверно");
@@ -581,44 +581,44 @@ static void check_ack_zero_ranges(void) {
 static void check_ack_huge_range_count(void) {
     /* Заголовок Initial здесь совершенно валиден — is_initial обязан
      * остаться 1, это свойство ТОЛЬКО заголовка, а не payload. */
-    CHECK(d2k_quic_is_initial(v1_ack_huge_range_count, sizeof v1_ack_huge_range_count) == 1,
+    CHECK(d2s_quic_is_initial(v1_ack_huge_range_count, sizeof v1_ack_huge_range_count) == 1,
           "пакет с ACK на пределе range_count не узнан как Initial");
     char out[64];
     memset(out, 0xAA, sizeof out);
     /* Имени здесь и не должно быть найдено: единственный кадр в payload —
      * этот самый ACK, никакого CRYPTO в пакете нет вовсе. Проверка в том,
-     * что d2k_quic_sni ЗАВЕРШАЕТСЯ (не виснет) и отказывает чисто — под ASan
+     * что d2s_quic_sni ЗАВЕРШАЕТСЯ (не виснет) и отказывает чисто — под ASan
      * это же означает "не прочитал за границей payload", гоняясь за
      * заявленными 2^62-1 диапазонами. */
-    CHECK(d2k_quic_sni(v1_ack_huge_range_count, sizeof v1_ack_huge_range_count, out, sizeof out) == -1,
+    CHECK(d2s_quic_sni(v1_ack_huge_range_count, sizeof v1_ack_huge_range_count, out, sizeof out) == -1,
           "имя добыто из пакета, где ACK заявляет диапазоны без данных под них");
     CHECK((unsigned char)out[0] == 0xAA, "out тронут при отказе на предельном range_count");
 }
 
 static void check_cap(void) {
     /* "example.com" — 11 байт плюс завершающий ноль = 12. Проверяем границу
-     * с обеих сторон, тем же приёмом, что и D2K_HKDF_LABEL_MAX в задаче 1:
+     * с обеих сторон, тем же приёмом, что и D2S_HKDF_LABEL_MAX в задаче 1:
      * ровно впритык — отказ, ровно достаточно — успех. */
     char out[64];
 
     memset(out, 0xAA, sizeof out);
-    CHECK(d2k_quic_sni(v1_initial, sizeof v1_initial, out, 11) == -1,
+    CHECK(d2s_quic_sni(v1_initial, sizeof v1_initial, out, 11) == -1,
           "имя длиной 11 влезло в cap=11 без места под завершающий ноль");
     CHECK((unsigned char)out[0] == 0xAA, "out тронут при отказе из-за нехватки cap");
 
     memset(out, 0xAA, sizeof out);
-    CHECK(d2k_quic_sni(v1_initial, sizeof v1_initial, out, 12) == 0,
+    CHECK(d2s_quic_sni(v1_initial, sizeof v1_initial, out, 12) == 0,
           "имя не влезло в cap=12, хотя обязано было (11 байт + ноль)");
     CHECK(strcmp(out, "example.com") == 0, "имя при cap=12 собралось неверно");
 
-    CHECK(d2k_quic_sni(v1_initial, sizeof v1_initial, out, 0) == -1, "cap=0 не отклонён");
+    CHECK(d2s_quic_sni(v1_initial, sizeof v1_initial, out, 0) == -1, "cap=0 не отклонён");
 }
 
 static void check_null(void) {
-    CHECK(d2k_quic_is_initial(NULL, 100) == 0, "NULL-указатель принят за Initial");
+    CHECK(d2s_quic_is_initial(NULL, 100) == 0, "NULL-указатель принят за Initial");
     char out[64];
-    CHECK(d2k_quic_sni(NULL, 100, out, sizeof out) == -1, "NULL-указатель не отклонён d2k_quic_sni");
-    CHECK(d2k_quic_sni(v1_initial, sizeof v1_initial, NULL, 64) == -1, "NULL-выход не отклонён d2k_quic_sni");
+    CHECK(d2s_quic_sni(NULL, 100, out, sizeof out) == -1, "NULL-указатель не отклонён d2s_quic_sni");
+    CHECK(d2s_quic_sni(v1_initial, sizeof v1_initial, NULL, 64) == -1, "NULL-выход не отклонён d2s_quic_sni");
 }
 
 /* Разбиваем RFC ClientHello на >8 CRYPTO-кадров; шифрование/заголовок
@@ -627,18 +627,18 @@ static void check_null(void) {
 static void check_many_crypto_frames(void) {
     uint8_t hello[1500];
     size_t hello_len = 0;
-    CHECK(d2k_quic_client_hello(v1_initial, sizeof v1_initial,
+    CHECK(d2s_quic_client_hello(v1_initial, sizeof v1_initial,
                                 hello, sizeof hello, &hello_len) == 0,
           "исходный RFC ClientHello не прочитан");
     if (!hello_len) { return; }
     const uint8_t dcid[] = {0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08};
-    const uint32_t versions[] = {D2K_QW_V1, D2K_QW_V2};
+    const uint32_t versions[] = {D2S_QW_V1, D2S_QW_V2};
     for (size_t v = 0; v < 2; v++) {
         uint8_t secret[32];
-        d2k_qw_keys keys;
-        CHECK(d2k_qw_initial_secret(versions[v], dcid, sizeof dcid,
-                                    D2K_QW_CLIENT, secret) == 0 &&
-              d2k_qw_keys_from_secret(versions[v], secret, &keys) == 0,
+        d2s_qw_keys keys;
+        CHECK(d2s_qw_initial_secret(versions[v], dcid, sizeof dcid,
+                                    D2S_QW_CLIENT, secret) == 0 &&
+              d2s_qw_keys_from_secret(versions[v], secret, &keys) == 0,
               "ключи тестового Initial не выведены");
         for (int reverse = 0; reverse < 2; reverse++) {
             uint8_t plain[1400] = {0}, hdr[64], packet[1500], restored[1500];
@@ -649,27 +649,27 @@ static void check_many_crypto_frames(void) {
                 CHECK(used + 5 <= sizeof plain, "кадры не поместились в фикстуру");
                 if (used + 5 > sizeof plain) { return; }
                 plain[used++] = 0x06;
-                used += d2k_qw_varint_write(plain + used, sizeof plain - used, off);
+                used += d2s_qw_varint_write(plain + used, sizeof plain - used, off);
                 plain[used++] = 1;
                 plain[used++] = hello[off];
             }
             if (used < 1200) { used = 1200; } /* PADDING */
-            size_t hn = d2k_qw_long_hdr(hdr, sizeof hdr, versions[v], D2K_QW_LT_INITIAL,
+            size_t hn = d2s_qw_long_hdr(hdr, sizeof hdr, versions[v], D2S_QW_LT_INITIAL,
                                        dcid, sizeof dcid, NULL, 0, 2, used);
-            size_t n = d2k_qw_seal(&keys, 1, hdr, hn, 1, 2, plain, used,
+            size_t n = d2s_qw_seal(&keys, 1, hdr, hn, 1, 2, plain, used,
                                     packet, sizeof packet);
-            CHECK(n > 0 && d2k_quic_is_initial(packet, n), "многокадровый Initial не собрался");
+            CHECK(n > 0 && d2s_quic_is_initial(packet, n), "многокадровый Initial не собрался");
             if (!n) { continue; }
             char name[256] = {0};
-            CHECK(d2k_quic_sni(packet, n, name, sizeof name) == 0 &&
+            CHECK(d2s_quic_sni(packet, n, name, sizeof name) == 0 &&
                   strcmp(name, "example.com") == 0,
                   "имя потеряно после восьмого CRYPTO-кадра");
             size_t got = 0;
-            CHECK(d2k_quic_client_hello(packet, n, restored, sizeof restored, &got) == 0 &&
+            CHECK(d2s_quic_client_hello(packet, n, restored, sizeof restored, &got) == 0 &&
                   got == hello_len && memcmp(restored, hello, hello_len) == 0,
                   "ClientHello из множества CRYPTO-кадров не собран побайтно");
             packet[n - 1] ^= 1;
-            CHECK(d2k_quic_sni(packet, n, name, sizeof name) == -1,
+            CHECK(d2s_quic_sni(packet, n, name, sizeof name) == -1,
                   "битый тег многокадрового Initial принят");
         }
     }

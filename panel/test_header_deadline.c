@@ -31,7 +31,7 @@ int main(void) {
     pid = fork(); assert(pid >= 0);
     if (!pid) {
         close(sv[0]);
-        int rc = d2k_panel_handle_fd(sv[1], NULL);
+        int rc = d2s_panel_handle_fd(sv[1], NULL);
         close(sv[1]); _exit(rc == 0 ? 0 : 1);
     }
     close(sv[1]);

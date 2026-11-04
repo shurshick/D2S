@@ -12,17 +12,17 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "d2k_raw.h"
-#include "d2k_ipfrag.h"
-#include "d2k_wire.h"
-#include "d2k_session.h"
-#include "d2k_nat.h"
+#include "d2s_raw.h"
+#include "d2s_ipfrag.h"
+#include "d2s_wire.h"
+#include "d2s_session.h"
+#include "d2s_nat.h"
 
 int fragment_fixture(int shape,int fake,uint8_t *,size_t,size_t *);
 int fragment_input(uint8_t *,size_t,size_t *);
 int fragment_nfq_main(int,char **);
 static int fail_option;
-int d2k_test_setsockopt(int fd,int level,int option,const void *value,socklen_t len) {
+int d2s_test_setsockopt(int fd,int level,int option,const void *value,socklen_t len) {
     if((fail_option==1 && level==IPPROTO_IP && option==IP_NODEFRAG) ||
        (fail_option==2 && level==SOL_SOCKET && option==SO_MARK)) {
         errno=EPERM;return -1;
@@ -54,9 +54,9 @@ int main(int argc,char **argv) {
     if(argc>=2 && (!strcmp(argv[1],"nfq") || !strcmp(argv[1],"plan")))return fragment_nfq_main(argc,argv);
     int cap=socket(AF_PACKET,SOCK_DGRAM|SOCK_NONBLOCK,htons(ETH_P_ALL));
     struct sockaddr_ll sa={0};sa.sll_family=AF_PACKET;
-    sa.sll_protocol=htons(ETH_P_ALL);sa.sll_ifindex=(int)if_nametoindex("d2k-out");
+    sa.sll_protocol=htons(ETH_P_ALL);sa.sll_ifindex=(int)if_nametoindex("d2s-out");
     if(cap<0 || bind(cap,(struct sockaddr *)&sa,sizeof sa)) {perror("capture");return 1;}
-    char err[256];d2k_raw *raw=d2k_raw_open(0,"d2k-out",err,sizeof err);
+    char err[256];d2s_raw *raw=d2s_raw_open(0,"d2s-out",err,sizeof err);
     if(!raw){fprintf(stderr,"raw: %s\n",err);return 1;}
     /* Establish a REAL SNAT mapping, then derive the fragment context from
        what the server actually observed. This is not a mocked NAT result. */
@@ -75,59 +75,59 @@ int main(int argc,char **argv) {
     uint8_t src[]={10,77,0,1},dst[]={10,77,0,2},payload[1500];size_t payload_len=0;
     if(fragment_input(payload,sizeof payload,&payload_len))return 1;
     {
-        d2k_ipfrag_plan p;d2k_ipfrag_span spans[3];uint8_t wire[1600];
-        d2k_ipfrag_shape(1,&p);
-        if(!d2k_udpfrag_build(src,dst,55000,54321,payload,payload_len,&p,0x1234,wire,sizeof wire,spans))return 1;
-        d2k_raw *fault=d2k_raw_open(42,"d2k-out",err,sizeof err);
+        d2s_ipfrag_plan p;d2s_ipfrag_span spans[3];uint8_t wire[1600];
+        d2s_ipfrag_shape(1,&p);
+        if(!d2s_udpfrag_build(src,dst,55000,54321,payload,payload_len,&p,0x1234,wire,sizeof wire,spans))return 1;
+        d2s_raw *fault=d2s_raw_open(42,"d2s-out",err,sizeof err);
         if(!fault)return 1;
         for(fail_option=1;fail_option<=2;fail_option++) {
-            if(d2k_raw_prepare(fault,wire,spans[0].len,err,sizeof err)==0 ||
-               d2k_raw_send(fault,wire,spans[0].len,err,sizeof err)==0 || d2k_raw_sent(fault)) {
+            if(d2s_raw_prepare(fault,wire,spans[0].len,err,sizeof err)==0 ||
+               d2s_raw_send(fault,wire,spans[0].len,err,sizeof err)==0 || d2s_raw_sent(fault)) {
                 fprintf(stderr,"fragment socket setup failure was ignored\n");return 1;
             }
         }
         fail_option=0;
-        if(d2k_raw_prepare(fault,wire,spans[0].len,err,sizeof err))return 1;
-        d2k_raw_close(fault);
+        if(d2s_raw_prepare(fault,wire,spans[0].len,err,sizeof err))return 1;
+        d2s_raw_close(fault);
         puts("NODEFRAG/mark setup failures: no send, no ordinary-socket fallback");
     }
     int fails=0;
     for(int fake=0;fake<2;fake++)for(int shape=1;shape<=4;shape++) {
         uint8_t tlv[2048],input[1600],wire[8192];size_t tn=0;
         if(fragment_fixture(shape,fake,tlv,sizeof tlv,&tn))return 1;
-        d2k_plan *plan=NULL;
-        if(d2k_plan_load(tlv,tn,&plan,err,sizeof err)){fprintf(stderr,"plan: %s\n",err);return 1;}
-        d2k_session *session=d2k_session_new(64,64);
-        d2k_session_set_hook(session,D2K_HOOK_POSTROUTING);
-        d2k_session_set_plan(session,plan);
-        d2k_conn conn={0};conn.src_ip=local.sin_addr.s_addr;conn.dst_ip=server.sin_addr.s_addr;
+        d2s_plan *plan=NULL;
+        if(d2s_plan_load(tlv,tn,&plan,err,sizeof err)){fprintf(stderr,"plan: %s\n",err);return 1;}
+        d2s_session *session=d2s_session_new(64,64);
+        d2s_session_set_hook(session,D2S_HOOK_POSTROUTING);
+        d2s_session_set_plan(session,plan);
+        d2s_conn conn={0};conn.src_ip=local.sin_addr.s_addr;conn.dst_ip=server.sin_addr.s_addr;
         conn.src_port=local.sin_port;conn.dst_port=server.sin_port;conn.ttl=64;conn.ip_id=0x1234;
-        d2k_emit truth={.bytes=payload,.len=payload_len};
-        size_t inlen=d2k_wire_build_udp(&conn,&truth,input,sizeof input);
-        d2k_result result;
-        d2k_session_packet(session,input,inlen,1000,wire,sizeof wire,&result);
+        d2s_emit truth={.bytes=payload,.len=payload_len};
+        size_t inlen=d2s_wire_build_udp(&conn,&truth,input,sizeof input);
+        d2s_result result;
+        d2s_session_packet(session,input,inlen,1000,wire,sizeof wire,&result);
         size_t start=fake?2:0,want=start+(shape<=2?2:3);
         if(!result.applied || result.n_out!=want || result.first_payload!=start ||
-           result.verdict!=D2K_VERDICT_DROP){fprintf(stderr,"Plan/session mismatch: %s n=%zu\n",
+           result.verdict!=D2S_VERDICT_DROP){fprintf(stderr,"Plan/session mismatch: %s n=%zu\n",
                 result.skipped?result.skipped:"no reason",result.n_out);return 1;}
         uint8_t *head=wire+result.out[start].off;
         unsigned id=(unsigned)head[4]*256+head[5];
-        uint8_t expected[1600];d2k_ipfrag_plan p;d2k_ipfrag_span spans[3];
-        d2k_ipfrag_shape(shape,&p);
-        size_t n=d2k_udpfrag_build(src,dst,55000,54321,payload,payload_len,&p,
+        uint8_t expected[1600];d2s_ipfrag_plan p;d2s_ipfrag_span spans[3];
+        d2s_ipfrag_shape(shape,&p);
+        size_t n=d2s_udpfrag_build(src,dst,55000,54321,payload,payload_len,&p,
                                   (uint16_t)id,expected,sizeof expected,spans);
-        for(size_t i=0;i<result.n_out;i++)if(d2k_raw_prepare(raw,wire+result.out[i].off,result.out[i].len,err,sizeof err)) {
+        for(size_t i=0;i<result.n_out;i++)if(d2s_raw_prepare(raw,wire+result.out[i].off,result.out[i].len,err,sizeof err)) {
             fprintf(stderr,"preflight: %s\n",err);return 1;
         }
         for(size_t i=0;i<result.n_out;i++) {
-            if(result.out[i].delay_us || d2k_raw_send(raw,wire+result.out[i].off,result.out[i].len,err,sizeof err)) {
+            if(result.out[i].delay_us || d2s_raw_send(raw,wire+result.out[i].off,result.out[i].len,err,sizeof err)) {
                 fprintf(stderr,"send: %s\n",err);return 1;
             }
-            d2k_session_sent(session,1100+i,&result.key,result.execution_id);
+            d2s_session_sent(session,1100+i,&result.key,result.execution_id);
         }
-        if(d2k_session_done(session))return 1;
-        d2k_session_sent(session,1200,&result.key,result.execution_id);
-        if(d2k_session_done(session)!=1)return 1;
+        if(d2s_session_done(session))return 1;
+        d2s_session_sent(session,1200,&result.key,result.execution_id);
+        if(d2s_session_done(session)!=1)return 1;
         size_t got=0,got_fake=0;int mismatch=0;
         for(int round=0;round<20;round++) {
             struct pollfd fd={cap,POLLIN,0};if(poll(&fd,1,10)<=0)continue;
@@ -157,7 +157,7 @@ int main(int argc,char **argv) {
         int delivered=receive_echo(client,payload,payload_len);
         if(shape<=2 && !delivered){fprintf(stderr,"non-overlap UDP not delivered\n");fails++;}
         printf("fake %d shape %d: real NAT reply=%d\n",fake,shape,delivered);
-        d2k_session_free(session);
+        d2s_session_free(session);
     }
-    d2k_raw_close(raw);close(cap);close(client);return fails?1:0;
+    d2s_raw_close(raw);close(cap);close(client);return fails?1:0;
 }

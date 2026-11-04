@@ -13,9 +13,9 @@ mkdir -p "$OUT"
 "$BUILD_ZIG" cc -target "$TARGET" $TARGET_FLAGS -static -Os -std=c11 \
     -Wall -Wextra -Werror -pedantic -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-S \
     -I"$ROOT/telegram/include" -I"$PREFIX/include" -L"$LIBDIR" \
-    -o "$OUT/d2o-resolver-linux-$ARCH" "$ROOT/resolver-local/local-resolver.c" \
+    -o "$OUT/d2s-resolver-linux-$ARCH" "$ROOT/resolver-local/local-resolver.c" \
     "$ROOT/telegram/src/identity.c" "$ROOT/telegram/src/net.c" -lssl -lcrypto -ldl -pthread
 # shellcheck disable=SC2086
 "$BUILD_ZIG" cc -target "$TARGET" $TARGET_FLAGS -static -Os -std=c11 \
     -Wall -Wextra -Werror -pedantic -Wl,-S \
-    -o "$OUT/d2o-dns-watch-linux-$ARCH" "$ROOT/resolver-local/dns-media-watch.c"
+    -o "$OUT/d2s-dns-watch-linux-$ARCH" "$ROOT/resolver-local/dns-media-watch.c"

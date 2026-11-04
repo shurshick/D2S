@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <string.h>
-#include "d2k_capture.h"
+#include "d2s_capture.h"
 
 static int fails;
 #define CHECK(x) do { if (!(x)) { \
     printf("capture: line %d: %s\n", __LINE__, #x); fails++; } } while (0)
-static d2k_capture c;
-static d2k_key key = {.proto = 6, .low_port = 1234, .high_port = 443};
+static d2s_capture c;
+static d2s_key key = {.proto = 6, .low_port = 1234, .high_port = 443};
 static const uint8_t *result;
 static size_t result_len;
 static uint32_t result_seq;
@@ -15,7 +15,7 @@ static int feed(uint64_t gen, uint64_t now, uint32_t seq, const uint8_t *b, size
        привязку к потоку: ноль во втором аргументе значит «не знаем», и слот
        заводится по прежнему правилу (кусок, начинающий запись). Привязка к
        потоку проверяется там, где поток есть, — test_session.c. */
-    return d2k_capture_feed(&c, &key, gen, now, seq, 0, 0, b, n,
+    return d2s_capture_feed(&c, &key, gen, now, seq, 0, 0, b, n,
                             &result, &result_len, &result_seq);
 }
 /* Only framing is this module's job. Full TLS parsing is tested at session. */
@@ -30,20 +30,20 @@ static void frame(uint8_t *b, size_t n) {
 int main(void) {
     {
         uint8_t b[32]; frame(b, sizeof b);
-        d2k_key a = {.family=6, .proto=6, .low_port=1, .high_port=2};
+        d2s_key a = {.family=6, .proto=6, .low_port=1, .high_port=2};
         a.low_ip6[0] = a.high_ip6[0] = 0x20;
         a.low_ip6[15] = 1; a.high_ip6[15] = 2;
-        d2k_key other = a; other.low_ip6[4] = 1;
+        d2s_key other = a; other.low_ip6[4] = 1;
         memset(&c, 0, sizeof c);
-        CHECK(d2k_capture_feed(&c, &a, 1, 1, 100, 100, 1, b, 16,
+        CHECK(d2s_capture_feed(&c, &a, 1, 1, 100, 100, 1, b, 16,
                                &result, &result_len, &result_seq) == 0);
-        CHECK(d2k_capture_feed(&c, &other, 1, 2, 116, 100, 1, b + 16, 16,
+        CHECK(d2s_capture_feed(&c, &other, 1, 2, 116, 100, 1, b + 16, 16,
                                &result, &result_len, &result_seq) == 0);
-        CHECK(d2k_capture_feed(&c, &a, 1, 3, 116, 100, 1, b + 16, 16,
+        CHECK(d2s_capture_feed(&c, &a, 1, 3, 116, 100, 1, b + 16, 16,
                                &result, &result_len, &result_seq) == 1);
         memset(&c, 0, sizeof c);
     }
-    uint8_t b[D2K_CAPTURE_BYTES + 1], bad[D2K_CAPTURE_BYTES + 1];
+    uint8_t b[D2S_CAPTURE_BYTES + 1], bad[D2S_CAPTURE_BYTES + 1];
     size_t n = 1544;
     frame(b, n);
     CHECK(feed(1, 1, 1000, b, n) == 1);
@@ -73,7 +73,7 @@ int main(void) {
     CHECK(feed(1, 3, 1000, b, n) == 0); /* poisoned capture cannot restart */
     CHECK(c.rejected == 1);
     CHECK(feed(2, 4, 1000, b, n) == 1); /* new flow generation */
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     CHECK(feed(2, 5, 1000, b, n) == 1); /* explicit SYN/reset */
 
     memset(&c, 0, sizeof c);
@@ -81,17 +81,17 @@ int main(void) {
     CHECK(feed(1, 2, 999, b, 100) == -1); /* before known head */
     memset(&c, 0, sizeof c);
     CHECK(feed(1, 1, 1000, b, 100) == 0);
-    CHECK(feed(1, D2K_CAPTURE_TTL_NS + 1, 1100, b + 100, n - 100) == 0);
+    CHECK(feed(1, D2S_CAPTURE_TTL_NS + 1, 1100, b + 100, n - 100) == 0);
     CHECK(c.expired == 1 && c.completed == 0);
     /* A retransmit does not extend the absolute memory lease. */
     memset(&c, 0, sizeof c);
     CHECK(feed(1, 1, 1000, b, 100) == 0);
-    CHECK(feed(1, D2K_CAPTURE_TTL_NS, 1000, b, 100) == 0);
-    CHECK(feed(1, D2K_CAPTURE_TTL_NS + 1, 1100, b + 100, n - 100) == 0);
+    CHECK(feed(1, D2S_CAPTURE_TTL_NS, 1000, b, 100) == 0);
+    CHECK(feed(1, D2S_CAPTURE_TTL_NS + 1, 1100, b + 100, n - 100) == 0);
     CHECK(c.expired == 1);
 
     memset(&c, 0, sizeof c);
-    for (size_t i = 0; i < D2K_CAPTURE_SLOTS; i++) {
+    for (size_t i = 0; i < D2S_CAPTURE_SLOTS; i++) {
         key.low_port = (uint16_t)(1000 + i);
         CHECK(feed(1, 1, 1000, b, 100) == 0);
     }
@@ -101,29 +101,29 @@ int main(void) {
     key.low_port = 1000;
     CHECK(feed(1, 3, 1100, b + 100, n - 100) == 1); /* no eviction */
     key.low_port = 2000;
-    CHECK(feed(1, D2K_CAPTURE_TTL_NS + 1, 1000, b, n) == 1);
+    CHECK(feed(1, D2S_CAPTURE_TTL_NS + 1, 1000, b, n) == 1);
 
     memset(&c, 0, sizeof c);
-    frame(b, D2K_CAPTURE_BYTES);
-    CHECK(feed(1, 1, 1000, b, D2K_CAPTURE_BYTES) == 1);
-    d2k_capture_forget(&c, &key);
+    frame(b, D2S_CAPTURE_BYTES);
+    CHECK(feed(1, 1, 1000, b, D2S_CAPTURE_BYTES) == 1);
+    d2s_capture_forget(&c, &key);
     frame(b, sizeof b);
     CHECK(feed(1, 1, 1000, b, sizeof b) == -1);
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     CHECK(feed(1, 1, 1000, b, 5) == -1); /* declared oversized record */
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     frame(b, n); b[8] ^= 1;
     CHECK(feed(1, 1, 1000, b, n) == -1); /* multi-record/mismatched hello */
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     frame(b, n);
     CHECK(feed(1, 1, 1000, b, n + 1) == -1); /* trailing data not a snapshot */
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     b[1] = 2;
     CHECK(feed(1, 1, 1000, b, n) == -1);
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     frame(b, n); b[5] = 2;
     CHECK(feed(1, 1, 1000, b, n) == -1);
-    d2k_capture_forget(&c, &key);
+    d2s_capture_forget(&c, &key);
     CHECK(feed(1, 1, 1000, b, 0) == 0);
     b[0] = 23;
     CHECK(feed(1, 1, 1000, b, n) == 0);

@@ -5,7 +5,7 @@
 #include <assert.h>
 
 static int parse_with_unknown(const char *text, size_t *unknown_count) {
-    char path[] = "/tmp/d2k-config-XXXXXX";
+    char path[] = "/tmp/d2s-config-XXXXXX";
     int fd = mkstemp(path); assert(fd >= 0);
     assert(write(fd, text, strlen(text)) == (ssize_t)strlen(text)); close(fd);
     char mode[32] = "observe", listen[128] = "", state[128] = "";
@@ -27,8 +27,8 @@ int main(void) {
     assert(parse_with_unknown("TG_DIAGNOSTIC_DIRECT_TCP=1\n",
                               &unknown_count) == 0);
     assert(unknown_count == 0);
-    assert(parse("SCHEMA='1'\nMODE='apply'\nSTATE_DIR='/opt/d2k/state'\nQUEUE_NUM=\"2000\"\nPANEL_LISTEN='0.0.0.0:8080'\n") == 0);
-    assert(parse("SCHEMA=1\nMODE=apply\nSTATE_DIR=/opt/d2k/state\nQUEUE_NUM=2000\n") == 0);
+    assert(parse("SCHEMA='1'\nMODE='apply'\nSTATE_DIR='/opt/d2s/state'\nQUEUE_NUM=\"2000\"\nPANEL_LISTEN='0.0.0.0:8080'\n") == 0);
+    assert(parse("SCHEMA=1\nMODE=apply\nSTATE_DIR=/opt/d2s/state\nQUEUE_NUM=2000\n") == 0);
     assert(parse("QUEUE_NUM=\n") == -1);
     assert(parse("SCHEMA=\n") == -1);
     assert(parse("QUEUE_NUM='2000\n") == -1);
@@ -42,14 +42,14 @@ int main(void) {
     assert(parse("QUEUE_NUM=' 2000'\n") == -1);
     assert(parse("QUEUE_NUM=-0\n") == -1);
     assert(parse("MODE=apply # active mode\nQUEUE_NUM=2000\t# queue\nSCHEMA='1' # schema\n") == 0);
-    assert(parse("MODE=\"apply\" # active mode\nSTATE_DIR='/opt/d2k/#state' # keep literal hash\n") == 0);
-    assert(parse("STATE_DIR=/opt/d2k/state#backup\n") == 0);
+    assert(parse("MODE=\"apply\" # active mode\nSTATE_DIR='/opt/d2s/#state' # keep literal hash\n") == 0);
+    assert(parse("STATE_DIR=/opt/d2s/state#backup\n") == 0);
     assert(parse("QUEUE_NUM=2000#not-a-comment\n") == -1);
     assert(parse("MODE='apply'#not-a-comment\n") == -1);
     assert(parse("QUEUE_NUM= # missing number\n") == -1);
     assert(parse("MODE='apply # unterminated quote\n") == -1);
-    char value[] = "'/opt/d2k/#state' # comment";
+    char value[] = "'/opt/d2s/#state' # comment";
     assert(normalize_shell_value(value) == 0);
-    assert(strcmp(value, "/opt/d2k/#state") == 0);
+    assert(strcmp(value, "/opt/d2s/#state") == 0);
     puts("panel config: quoted values and strict numbers PASS"); return 0;
 }

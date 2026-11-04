@@ -22,7 +22,7 @@ static void test_remote_list_is_decoded_normalized_and_bounded(void) {
 }
 
 static void test_pool_keeps_last_known_good_and_merges_manual_domains(void) {
-    char directory[] = "/tmp/d2k-tg-cf-pool-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-cf-pool-XXXXXX";
     char cache[512];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cache, sizeof(cache), "%s/domains.cache", directory) > 0);

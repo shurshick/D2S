@@ -6,17 +6,17 @@ const { spawn, spawnSync } = require('node:child_process');
 const path = require('node:path');
 
 async function main() {
-  const exe = path.resolve('d2kpanel');
+  const exe = path.resolve('d2spanel');
   const version = spawnSync(exe, ['--version'], { encoding: 'utf8' });
   assert.equal(version.status, 0, version.stderr);
-  assert.match(version.stdout, /^d2kpanel\b/);
+  assert.match(version.stdout, /^d2spanel\b/);
   assert.match(version.stdout, /features=.*telegram-control/,
     'the installed ARM64 bundle must advertise Telegram control CLI support');
 
   const bad = spawnSync(exe, ['--unknown-option'], { encoding: 'utf8' });
   assert.notEqual(bad.status, 0, 'unknown options must not silently start a default service');
 
-  const invalidConfig = path.join(os.tmpdir(), `d2k-panel-invalid-${process.pid}`);
+  const invalidConfig = path.join(os.tmpdir(), `d2s-panel-invalid-${process.pid}`);
   fs.writeFileSync(invalidConfig, 'MODE=not-a-mode\n');
   const invalid = spawnSync(exe, ['serve', '--config', invalidConfig, '--listen', ''], { encoding: 'utf8' });
   fs.rmSync(invalidConfig, { force: true });
@@ -24,7 +24,7 @@ async function main() {
   fs.writeFileSync(invalidConfig, 'MODE=not-a-mode\n');
   const invalidWithOverrides = spawnSync(exe, [
     'serve', '--config', invalidConfig, '--listen', '', '--mode', 'observe',
-    '--state-dir', '/tmp/d2k-panel-invalid-state', '--queue', '2000',
+    '--state-dir', '/tmp/d2s-panel-invalid-state', '--queue', '2000',
   ], { encoding: 'utf8' });
   fs.rmSync(invalidConfig, { force: true });
   assert.notEqual(invalidWithOverrides.status, 0,
@@ -32,7 +32,7 @@ async function main() {
   const invalidOverride = spawnSync(exe, ['serve', '--mode', 'not-a-mode', '--listen', ''], { encoding: 'utf8' });
   assert.notEqual(invalidOverride.status, 0, 'invalid CLI MODE must not bypass configuration validation');
 
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2k-panel-cli-'));
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2s-panel-cli-'));
   const port = await new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', reject);
@@ -46,14 +46,14 @@ async function main() {
   const servicePath = path.join(temp, 'slow-service');
   fs.writeFileSync(servicePath, '#!/bin/sh\nsleep 1\nexit 7\n', { mode: 0o700 });
   // The shipped config comes first: every key the installer writes must be
-  // known to the panel (field 04.10: D2K_PPE_DEOFFLOAD showed up as
+  // known to the panel (field 04.10: D2S_PPE_DEOFFLOAD showed up as
   // «Непонятные ключи — эта сборка их не читает» for every user).
   const shipped = fs.readFileSync(path.join(__dirname, '../files/config'), 'utf8');
   fs.writeFileSync(configPath, shipped +
     `MODE=apply\nPANEL_LISTEN=0.0.0.0:${port}\nSTATE_DIR=${stateDir}\nQUEUE_NUM=4321\nFUTURE_OPTION=preserve-me\n`);
   const child = spawn(exe, [
     'serve', '--config', configPath,
-    '--live', '/tmp/d2k-panel-no-live-file',
+    '--live', '/tmp/d2s-panel-no-live-file',
     '--assets', '../internal/web/assets',
     '--service', servicePath,
   ], { stdio: ['ignore', 'pipe', 'pipe'] });

@@ -8,7 +8,7 @@
 
 ## A. Что установлено по имеющемуся полевому журналу
 
-Источник: `/tmp/d2k-field-run-e.log`, временный локальный файл.
+Источник: `/tmp/d2s-field-run-e.log`, временный локальный файл.
 У katzauction.com и spzh.eu Initial проходит 3/3. Первый HTTP/3 запрос
 получает HTTP 302, а **второй request stream той же связи** останавливается:
 16 из требуемых 50 датаграмм. Через примерно десять минут наблюдение
@@ -29,7 +29,7 @@
    budget каждого нового вопроса означал успех уже по одному полному ответу.
    Теперь контекст переносит тот же budget через `props.c:wire_measure`,
    `quicarms.c:ask_q`, вопросы стратегии и скопированный контекст резервных
-   arms до `quic_arm_data` → `d2k_quic_data_stage`.
+   arms до `quic_arm_data` → `d2s_quic_data_stage`.
    Тест `test_quic_run_order` проверяет значения 25 и 17, затем оракул
    «короткий первый ответ завершён, второй зависает»: ни стратегия, ни
    резервный поиск не выбирают воздействие. До правки тест реально падал.
@@ -37,7 +37,7 @@
    он не выдаётся за единый сквозной arm→wire опыт.
 
 2. **Кредит первого потока ошибочно действовал на второй.**
-   `d2k_qc_stream_send` сбрасывал буфер и диапазоны ответа, но оставлял
+   `d2s_qc_stream_send` сбрасывал буфер и диапазоны ответа, но оставлял
    `fc_stream_limit` и `rx_want_high`. MAX_STREAM_DATA первого потока не
    разрешает серверу столько же на следующем. На UDP loopback сервер,
    соблюдающий кредит, отдавал первый 1 МиБ, но второй упирался в начальные
@@ -88,7 +88,7 @@
   в этом цикле нет (первичный прикладной результат хранится отдельно).
   Это прежние различия, не исправленные передачей budget; единый критерий
   всех отрицательных HTTP-ответов здесь не заявляется.
-- `h3.c:d2k_h3_request` не хранит состояние потока; каждый запрос кодирует
+- `h3.c:d2s_h3_request` не хранит состояние потока; каждый запрос кодирует
   GET/https/:authority/:path со статическим QPACK, Required Insert Count=0.
   Повторный управляющий поток не открывается. Request id 0,4,8 корректен
   для клиентских двунаправленных потоков; новое тело отправляется с offset0.
@@ -171,7 +171,7 @@ TCP nnmclub отдельно дважды подтвердил HTTP 200 с `plan
    STREAM sid/offset/length/FIN, RESET_STREAM/STOP_SENDING/CONNECTION_CLOSE,
    принятые MAX_STREAMS/MAX_DATA/MAX_STREAM_DATA, HTTP-статус **каждого**
    потока и PING/ACK с временем. Секреты TLS и ключи в журнал не писать.
-   `D2K_QC_TRACE=1` уже показывает полученные типы кадров и STREAM
+   `D2S_QC_TRACE=1` уже показывает полученные типы кадров и STREAM
    sid/offset/length/FIN; численные peer limits и коды RESET он пока не
    показывает — для них понадобится ограниченная диагностическая сборка.
 3. Сопоставить с независимым H3-клиентом на том же IP/SNI/path: два запроса
@@ -210,7 +210,7 @@ TCP nnmclub отдельно дважды подтвердил HTTP 200 с `plan
 - `395b7d9` — отдельный receive credit каждого request stream;
 - `b639a02` — отдельные HEADERS/status и остановка на 451 каждого запроса.
 
-Перед фиксацией документации код чистый; dirty только `D2K_HANDOFF.md`,
+Перед фиксацией документации код чистый; dirty только `D2S_HANDOFF.md`,
 уточнение отчёта e и этот новый handoff. Все изменения принадлежат данной
 работе. Локальные code-коммиты не пушились.
 
@@ -222,9 +222,9 @@ TCP nnmclub отдельно дважды подтвердил HTTP 200 с `plan
 | `make -C core cross` | exit 0; aarch64/mipsel компиляция и линковка |
 | `git diff --check`, `git diff --cached --check` | exit 0 |
 
-Логи полных итоговых наборов: `/tmp/d2k-quic-core-check-final.log`,
-`/tmp/d2k-quic-detect-check-final.log`, `/tmp/d2k-quic-datapath-check-final.log`;
-переносимость: `/tmp/d2k-quic-core-cross.log`. Полный core check включает
+Логи полных итоговых наборов: `/tmp/d2s-quic-core-check-final.log`,
+`/tmp/d2s-quic-detect-check-final.log`, `/tmp/d2s-quic-datapath-check-final.log`;
+переносимость: `/tmp/d2s-quic-core-cross.log`. Полный core check включает
 все дополнительные режимы scheduler и новые loopback-регрессии.
 Первый core check запускался до последней правки: его собственный test_sched
 точечно остановлен, make вернул exit 2; этот незавершённый прогон **не**
@@ -244,13 +244,13 @@ RED повторно проверен в отдельном свежем `git ar
 - второй DATA-only ответ наследует HTTP 200, а второй 451 не останавливает
   опыт на втором запросе.
 
-Логи: `/tmp/d2k-quic-baseline-build.log`,
-`/tmp/d2k-quic-baseline-test_quic_run_order.log`,
-`/tmp/d2k-quic-baseline-test_quicconn_fc.log`,
-`/tmp/d2k-quic-baseline-test_quic_repro_budget.log`;
+Логи: `/tmp/d2s-quic-baseline-build.log`,
+`/tmp/d2s-quic-baseline-test_quic_run_order.log`,
+`/tmp/d2s-quic-baseline-test_quicconn_fc.log`,
+`/tmp/d2s-quic-baseline-test_quic_repro_budget.log`;
 последняя пересборка расширенного HTTP-теста —
-`/tmp/d2k-quic-baseline-repro-final-build.log`. Путь архива записан в
-`/tmp/d2k-quic-baseline-path`. Это временные файлы машины, не артефакты git.
+`/tmp/d2s-quic-baseline-repro-final-build.log`. Путь архива записан в
+`/tmp/d2s-quic-baseline-path`. Это временные файлы машины, не артефакты git.
 CHECK здесь накопительный: приняты конечные exit codes, а не отдельные
 строки `ok` среди ошибок. GREEN подтверждён целевыми запусками и затем
 полным итоговым core check. Независимое read-only ревью не нашло блокеров;

@@ -1,4 +1,4 @@
-# Инструменты разработки D2K
+# Инструменты разработки D2S
 
 Настройка этой машины проверена 2026-09-19. Это статус инструментов, **не**
 приёмка продукта или утверждение, что ошибки текущего MVP исправлены.
@@ -8,13 +8,13 @@
 | Инструмент | Версия/источник | Проверено |
 | --- | --- | --- |
 | Superpowers, весь плагин | `superpowers@openai-curated`, snapshot `11c74d6b`, manifest `5.1.3` | установлен, включён; все 14 SKILL.md прошли quick_validate |
-| GitHub | `github@openai-curated`, snapshot `11c74d6b`, manifest `0.1.6` | установлен, включён; отдельно `gh api repos/necronicle/d2k` успешно читает репозиторий |
+| GitHub | `github@openai-curated`, snapshot `11c74d6b`, manifest `0.1.6` | установлен, включён; отдельно `gh api repos/necronicle/d2s` успешно читает репозиторий |
 | Codex Security | `codex-security@openai-curated`, snapshot `11c74d6b`, manifest `0.1.11` | установлен, включён; сканирование и авторизация сервиса не запускались |
 | Serena MCP | `serena-agent 2.0.0.dev0`, oraios/serena `c6fbd1c5932df2494ffa0020af5a9fbe80b82143` | индексация 153 файлов C/заголовков, health-check и настоящий MCP-запрос символа/ссылки |
-| clangd Serena | `19.1.2`, управляется Serena | найден `on_suspect` в `core/sched.c` и ссылка из `d2k_sched_event` |
+| clangd Serena | `19.1.2`, управляется Serena | найден `on_suspect` в `core/sched.c` и ссылка из `d2s_sched_event` |
 | compiledb | `0.10.7`, изолированная установка uv | генерация host compile database, повторный запуск успешен |
 | libfuzzer skill | trailofbits/skills `123037ec8aed26f0d86327cc39137ee5043e5deb` | установлен, quick_validate; fuzz-кампания не запускалась |
-| d2k-development skill | локальный, `~/.codex/skills/d2k-development` | quick_validate; проектные ограничения также в `AGENTS.md` |
+| d2s-development skill | локальный, `~/.codex/skills/d2s-development` | quick_validate; проектные ограничения также в `AGENTS.md` |
 
 Superpowers — набор навыков/методик, не MCP-сервер. Установлен целиком из
 официального каталога Codex по [инструкции автора](https://github.com/obra/superpowers#codex-app).
@@ -31,11 +31,11 @@ Superpowers — набор навыков/методик, не MCP-сервер.
 ## Serena и обновление индекса
 
 MCP `serena` запускается локально через `/Users/mark/.local/bin/serena`,
-с контекстом `codex` и явным проектом `/Library/Zapret2/d2k`, без dashboard/GUI.
+с контекстом `codex` и явным проектом `/Library/Zapret2/d2s`, без dashboard/GUI.
 Это пользовательская настройка Codex: для другого проекта нужно явно
-активировать его или изменить запуск, а не считать D2K текущим автоматически.
+активировать его или изменить запуск, а не считать D2S текущим автоматически.
 
-Из корня D2K:
+Из корня D2S:
 
 ```sh
 sh scripts/refresh-code-index.sh

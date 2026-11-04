@@ -1,4 +1,4 @@
-# D2K enrollment on the relay VPS
+# D2S enrollment on the relay VPS
 
 Both the router runtime and this separate VPS enrollment service are C. The
 service enables public self-service installation without
@@ -6,7 +6,7 @@ shipping the fleet bootstrap credential in source, artifacts or router config.
 
 `POST https://192.0.2.44.nip.io:9443/register` accepts exactly 120 bytes:
 installation ID (16), Ed25519 public key (32), big-endian work nonce (8), and
-Ed25519 signature (64). The signed message is `d2k-enroll-v1\0` followed by the
+Ed25519 signature (64). The signed message is `d2s-enroll-v1\0` followed by the
 first 56 bytes. Its SHA-256 must start with 18 zero bits. Proofs bind work and
 key possession to one identity; replay only repeats the same registration.
 
@@ -20,8 +20,8 @@ revocation still apply. The Telegram router redirect remains Telegram-only.
 
 ## `POST /resolve` (Meta host addresses for the router)
 
-The same service, port 9443 and TLS also answer d2k's own resolver, used by
-`files/d2k-instagram-dns.sh` instead of the z2k relay's `/resolve`. Body (at most
+The same service, port 9443 and TLS also answer d2s's own resolver, used by
+`files/d2s-instagram-dns.sh` instead of the z2k relay's `/resolve`. Body (at most
 2048 bytes, one `Content-Length`, no `Transfer-Encoding`): `{"hosts":["…",…]}`,
 at most 32 names, each exactly one of the fixed list:
 
@@ -64,13 +64,13 @@ while it can finish before the deadline, so a reply is always sent.
 The router still checks Meta ranges and the certificate of every address.
 
 Build with `make` (C11 compiler and OpenSSL development libraries required).
-Copy the binary, `d2k-enroll.service` and `install-server.sh` to a private temporary
+Copy the binary, `d2s-enroll.service` and `install-server.sh` to a private temporary
 directory on the existing VPS, then run `sh install-server.sh DIRECTORY` there.
 This adds port 9443 and a separate service; it does not restart the shared relay.
 Updating an installed service to get `/resolve` is the same command: it replaces
-the binary and restarts only `d2k-enroll`.
+the binary and restarts only `d2s-enroll`.
 The installer copies the bootstrap credential locally from the existing root-only
-server configuration into `/etc/d2k-enroll/bootstrap.key` (0600). Systemd passes
+server configuration into `/etc/d2s-enroll/bootstrap.key` (0600). Systemd passes
 it with `LoadCredential`. Re-run this script after a fleet secret rotation.
 TLS uses the existing ACME PEM and reloads it on handshakes after renewal.
 

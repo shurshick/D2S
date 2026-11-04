@@ -1,4 +1,4 @@
-/* voice.c — контракт и все обоснования в d2k_voice.h. */
+/* voice.c — контракт и все обоснования в d2s_voice.h. */
 #define _POSIX_C_SOURCE 200809L
 #include <arpa/inet.h>
 #include <errno.h>
@@ -14,13 +14,13 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_meas.h"
-#include "d2k_net4.h"
-#include "d2k_stun.h"
-#include "d2k_udpruntime.h"
-#include "d2k_compose.h"
-#include "d2k_voice.h"
-#include "d2k_voice_discovery.h"
+#include "d2s_meas.h"
+#include "d2s_net4.h"
+#include "d2s_stun.h"
+#include "d2s_udpruntime.h"
+#include "d2s_compose.h"
+#include "d2s_voice.h"
+#include "d2s_voice_discovery.h"
 
 /* --- цель из живого разговора ------------------------------------------- */
 
@@ -81,7 +81,7 @@ static const char *field_val(char *line, const char *name, char **next, char *en
     return NULL;
 }
 
-size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
+size_t d2s_voice_targets(const char *path, d2s_voice_target *out, size_t cap) {
     if (!out || cap == 0) { return 0; }
     FILE *f = fopen(path ? path : "/proc/net/nf_conntrack", "r");
     if (!f) { return 0; }
@@ -97,10 +97,10 @@ size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
         char *next = NULL;
         const char *v = field_val(line, "dst", &next, buf);
         uint32_t ip = 0;
-        if (!v || d2k_ip4_parse(v, &ip) != 0) { continue; }
+        if (!v || d2s_ip4_parse(v, &ip) != 0) { continue; }
         /* Голос идёт НАРУЖУ: приватный адрес назначения — это чужой NAT или
            наш же редирект по хостлисту, и коробка провайдера там ни при чём. */
-        if (d2k_ip4_private(ip)) { continue; }
+        if (d2s_ip4_private(ip)) { continue; }
 
         char pbuf[64];
         v = field_val(line, "dport", &next, pbuf);
@@ -113,7 +113,7 @@ size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
         long packets = v ? strtol(v, NULL, 10) : 0;
         /* Пометку ставит ядро, пока ОБРАТНОГО трафика по потоку не было
            (RFC-ничего, это состояние conntrack). Её отсутствие и значит
-           «точка кому-то отвечает» — см. d2k_voice_target.replied про то,
+           «точка кому-то отвечает» — см. d2s_voice_target.replied про то,
            почему признак надёжнее счётчика на этом роутере. */
         int replied = (strstr(line, "[UNREPLIED]") == NULL);
 
@@ -126,7 +126,7 @@ size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
         char *next2 = NULL;
         const char *sv = field_val(line, "src", &next2, sbuf);
         uint32_t src_ip = 0;
-        if (!sv || d2k_ip4_parse(sv, &src_ip) != 0) { continue; }
+        if (!sv || d2s_ip4_parse(sv, &src_ip) != 0) { continue; }
         next2 = NULL;
         sv = field_val(line, "sport", &next2, spbuf);
         unsigned long sport = sv ? strtoul(sv, NULL, 10) : 0;
@@ -155,7 +155,7 @@ size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
     /* По убыванию пакетов: первым обязан идти тот разговор, который человек
        прямо сейчас и ведёт. Вставками — список не длиннее восьми. */
     for (size_t i = 1; i < n; i++) {
-        d2k_voice_target t = out[i];
+        d2s_voice_target t = out[i];
         size_t j = i;
         while (j > 0 && out[j - 1].packets < t.packets) {
             out[j] = out[j - 1];
@@ -171,17 +171,17 @@ size_t d2k_voice_targets(const char *path, d2k_voice_target *out, size_t cap) {
 #define VOICE_WAIT_DEFAULT_MS 3000
 
 static int send_one(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_len,
-                    int copies, uint32_t mark, uint8_t txid[D2K_STUN_TXID_LEN],
+                    int copies, uint32_t mark, uint8_t txid[D2S_STUN_TXID_LEN],
                     int *marked) {
     /* Без запрошенной метки сокет НЕ помечен: зонд идёт через наш же обход
        (донор: Marked = markSupported(), а у нас метка — это mark). */
     *marked = 0;
-    uint8_t req[D2K_STUN_HDR_LEN];
-    if (d2k_stun_request(req, sizeof req, txid) == 0) { return -1; }
+    uint8_t req[D2S_STUN_HDR_LEN];
+    if (d2s_stun_request(req, sizeof req, txid) == 0) { return -1; }
 
     int fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) { return -1; }
-    if (mark != 0 && d2k_mark_hook(fd, mark) == 0) { *marked = 1; }
+    if (mark != 0 && d2s_mark_hook(fd, mark) == 0) { *marked = 1; }
 
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
@@ -196,8 +196,8 @@ static int send_one(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_l
     }
     if (pre && pre_len) {
         char plan[16384];
-        if(d2k_voice_arm_plan(pre,pre_len,copies>0?(unsigned)copies:1,plan,sizeof plan) ||
-           d2k_udp_plan_send(fd,plan,req,sizeof req,mark)) {close(fd);return -1;}
+        if(d2s_voice_arm_plan(pre,pre_len,copies>0?(unsigned)copies:1,plan,sizeof plan) ||
+           d2s_udp_plan_send(fd,plan,req,sizeof req,mark)) {close(fd);return -1;}
     }else if(send(fd,req,sizeof req,0)!=(ssize_t)sizeof req){close(fd);return -1;}
     return fd;
 }
@@ -210,20 +210,20 @@ static long ms_since(const struct timespec *t0) {
 
 /* Серия из repeats ПАРАЛЛЕЛЬНЫХ зондов: сперва все уходят, потом ждём разом.
    Каждый — свой сокет и свой идентификатор транзакции: чужой ответ не должен
-   сойти за наш (см. d2k_stun.h). */
-static d2k_tally voice_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_len,
+   сойти за наш (см. d2s_stun.h). */
+static d2s_tally voice_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_len,
                            int copies, uint32_t wait_ms, uint32_t mark, int repeats,
                            uint32_t *rtt_ms_out) {
-    d2k_tally t;
+    d2s_tally t;
     memset(&t, 0, sizeof t);
     t.marked = 1;
-    if (repeats <= 0 || repeats > D2K_VOICE_MAX_REPEATS) { repeats = D2K_VOICE_REPEATS; }
+    if (repeats <= 0 || repeats > D2S_VOICE_MAX_REPEATS) { repeats = D2S_VOICE_REPEATS; }
     if (wait_ms == 0) { wait_ms = VOICE_WAIT_DEFAULT_MS; }
     if (rtt_ms_out) { *rtt_ms_out = 0; }
 
-    int fds[D2K_VOICE_MAX_REPEATS];
-    uint8_t txid[D2K_VOICE_MAX_REPEATS][D2K_STUN_TXID_LEN];
-    int done[D2K_VOICE_MAX_REPEATS];
+    int fds[D2S_VOICE_MAX_REPEATS];
+    uint8_t txid[D2S_VOICE_MAX_REPEATS][D2S_STUN_TXID_LEN];
+    int done[D2S_VOICE_MAX_REPEATS];
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
@@ -244,8 +244,8 @@ static d2k_tally voice_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_
     while (pending > 0) {
         long left = (long)wait_ms - ms_since(&t0);
         if (left <= 0) { break; }
-        struct pollfd pfd[D2K_VOICE_MAX_REPEATS];
-        int idx[D2K_VOICE_MAX_REPEATS];
+        struct pollfd pfd[D2S_VOICE_MAX_REPEATS];
+        int idx[D2S_VOICE_MAX_REPEATS];
         int np = 0;
         for (int i = 0; i < repeats; i++) {
             if (done[i]) { continue; }
@@ -274,7 +274,7 @@ static d2k_tally voice_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_
             uint8_t seen_ip[16];
             int family = 0;
             uint16_t seen_port = 0;
-            if (d2k_stun_parse_response(buf, (size_t)n, txid[i], seen_ip, &family, &seen_port) == 0) {
+            if (d2s_stun_parse_response(buf, (size_t)n, txid[i], seen_ip, &family, &seen_port) == 0) {
                 done[i] = 1;
                 pending--;
                 t.pass++;
@@ -322,8 +322,8 @@ static int voice_resolve(const char *hostport, uint32_t *ip, uint16_t *port) {
 
 static int voice_blob_load(const char *dir, const char *file,
                            uint8_t *out, size_t cap, size_t *len) {
-    if (!dir || !*dir) { dir = getenv("D2K_FAKE_DIR"); }
-    if (!dir || !*dir) { dir = "/opt/d2k/files/fake"; }
+    if (!dir || !*dir) { dir = getenv("D2S_FAKE_DIR"); }
+    if (!dir || !*dir) { dir = "/opt/d2s/files/fake"; }
     if (!file || !out || !len) { return -1; }
     char path[512];
     int n = snprintf(path, sizeof path, "%s/%s", dir, file);
@@ -340,7 +340,7 @@ static int voice_blob_load(const char *dir, const char *file,
 }
 
 /* ОТВЕЧАЕТ ЛИ ТОЧКА ЭТОМУ ПОТОКУ — по пометке [UNREPLIED] из той же таблицы,
-   откуда берётся цель (контракт и ответы — в d2k_voice.h).
+   откуда берётся цель (контракт и ответы — в d2s_voice.h).
 
    Признак, а не счётчик: голосовой поток уходит в железо ([FASTNAT]), и
    conntrack перестаёт считать (замер 17.09: 5593, 5593, 5593, 5594 за три
@@ -348,45 +348,45 @@ static int voice_blob_load(const char *dir, const char *file,
    «молчат»: первые пакеты ядро считает до того, как поток уйдёт в железо. */
 static int voice_alive(const char *ct_path, uint32_t ip, uint16_t port,
                        uint32_t src_ip, uint16_t sport) {
-    d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-    size_t n = d2k_voice_targets(ct_path, t, D2K_VOICE_MAX_TARGETS);
+    d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+    size_t n = d2s_voice_targets(ct_path, t, D2S_VOICE_MAX_TARGETS);
     for (size_t i = 0; i < n; i++) {
         if (t[i].ip != ip || t[i].port != port) { continue; }
         if (src_ip != 0 && (t[i].src_ip != src_ip || t[i].sport != sport)) { continue; }
-        if (t[i].replied) { return D2K_VOICE_ANSWERS; }
-        return t[i].packets >= D2K_VOICE_SILENT_AFTER ? D2K_VOICE_SILENT : D2K_VOICE_YOUNG;
+        if (t[i].replied) { return D2S_VOICE_ANSWERS; }
+        return t[i].packets >= D2S_VOICE_SILENT_AFTER ? D2S_VOICE_SILENT : D2S_VOICE_YOUNG;
     }
-    return D2K_VOICE_UNSEEN;
+    return D2S_VOICE_UNSEEN;
 }
 
-d2k_voice_ask_fn d2k_voice_ask_hook = voice_ask;
-d2k_voice_alive_fn d2k_voice_alive_hook = voice_alive;
+d2s_voice_ask_fn d2s_voice_ask_hook = voice_ask;
+d2s_voice_alive_fn d2s_voice_alive_hook = voice_alive;
 
-d2k_voice_ask_fn voice_ask_real(void) { return voice_ask; }
-d2k_voice_resolve_fn d2k_voice_resolve_hook = voice_resolve;
-d2k_voice_blob_fn d2k_voice_blob_hook = voice_blob_load;
+d2s_voice_ask_fn voice_ask_real(void) { return voice_ask; }
+d2s_voice_resolve_fn d2s_voice_resolve_hook = voice_resolve;
+d2s_voice_blob_fn d2s_voice_blob_hook = voice_blob_load;
 
 /* Same ordered hypotheses and copy counts as internal/voiceprobe/probe.go.
  * Missing donor assets are skipped, as the Go implementation does. */
-static void voice_ask_arms(const d2k_voice_opt *o, d2k_voice_res *r) {
+static void voice_ask_arms(const d2s_voice_opt *o, d2s_voice_res *r) {
     static const struct { const char *name, *file; } blobs[] = {
         {"active_discord_udp", "active_discord_udp.bin"},
         {"stun", "stun.bin"},
         {"quic_dbankcloud", "quic_initial_dbankcloud_ru.bin"}
     };
     static const int copies[] = {1, 6};
-    uint8_t bytes[D2K_VOICE_ARM_MAX];
+    uint8_t bytes[D2S_VOICE_ARM_MAX];
     for (size_t b = 0; b < sizeof blobs / sizeof blobs[0]; b++) {
         size_t len = 0;
-        if (!d2k_voice_blob_hook ||
-            d2k_voice_blob_hook(o->blob_dir, blobs[b].file, bytes, sizeof bytes, &len) != 0 ||
+        if (!d2s_voice_blob_hook ||
+            d2s_voice_blob_hook(o->blob_dir, blobs[b].file, bytes, sizeof bytes, &len) != 0 ||
             len == 0 || len > sizeof bytes) { continue; }
         for (size_t c = 0; c < sizeof copies / sizeof copies[0]; c++) {
-            d2k_tally q = d2k_voice_ask_hook(r->ip, r->port, bytes, len, copies[c],
-                                             o->wait_ms, o->mark, D2K_VOICE_REPEATS, NULL);
-            r->probes += D2K_VOICE_REPEATS - q.err;
+            d2s_tally q = d2s_voice_ask_hook(r->ip, r->port, bytes, len, copies[c],
+                                             o->wait_ms, o->mark, D2S_VOICE_REPEATS, NULL);
+            r->probes += D2S_VOICE_REPEATS - q.err;
             if (!q.marked) { r->marked = 0; }
-            if (q.pass != D2K_VOICE_REPEATS) { continue; }
+            if (q.pass != D2S_VOICE_REPEATS) { continue; }
             memcpy(r->arm_bytes, bytes, len);
             r->arm_len = len;
             /* Export exactly the measured action; an extra copy is a new question. */
@@ -400,14 +400,14 @@ static void voice_ask_arms(const d2k_voice_opt *o, d2k_voice_res *r) {
 
 /* --- прогон -------------------------------------------------------------- */
 
-static void say_reason(d2k_voice_res *r, const char *fmt, ...) {
+static void say_reason(d2s_voice_res *r, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
     (void)vsnprintf(r->reason, sizeof r->reason, fmt, ap);
     va_end(ap);
 }
 
-static void add_reason(d2k_voice_res *r, const char *fmt, ...) {
+static void add_reason(d2s_voice_res *r, const char *fmt, ...) {
     size_t used = strlen(r->reason);
     if (used + 1 >= sizeof r->reason) { return; }
     va_list ap;
@@ -431,12 +431,12 @@ static void add_reason(d2k_voice_res *r, const char *fmt, ...) {
  * Держать вместо неё лестницу, которая ничего не меряет, хуже, чем не держать
  * ничего: она выглядела бы измерением. */
 
-d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
-    d2k_voice_opt o;
+d2s_voice_res d2s_voice_run(const d2s_voice_opt *opt) {
+    d2s_voice_opt o;
     memset(&o, 0, sizeof o);
     if (opt) { o = *opt; }
 
-    d2k_voice_res r;
+    d2s_voice_res r;
     memset(&r, 0, sizeof r);
     /* Помечен — только если метку просили; дальше её обязан подтвердить
        каждый ушедший зонд. */
@@ -449,18 +449,18 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
        порты профиля. Его поток ложится в таблицу соединений рядом с
        разговором и живёт там до трёх минут, и взять его целью значило бы
        мерить самих себя. */
-    const char *ctl = o.control ? o.control : D2K_VOICE_CONTROL_DEFAULT;
+    const char *ctl = o.control ? o.control : D2S_VOICE_CONTROL_DEFAULT;
     uint32_t cip = 0;
     uint16_t cport = 0;
-    int ctl_resolved = (d2k_voice_resolve_hook(ctl, &cip, &cport) == 0);
+    int ctl_resolved = (d2s_voice_resolve_hook(ctl, &cip, &cport) == 0);
 
     /* ЦЕЛЬ — ПОТОК, А НЕ ТОЧКА. Адрес задан — ищем самый нагруженный поток к
        нему; нет — самый нагруженный разговор вообще. Выдумать голосовой цели
-       домен и померить его нельзя (D2K_SPEC): это померило бы другую цель и
+       домен и померить его нельзя (D2S_SPEC): это померило бы другую цель и
        назвало чужой результат её именем. */
-    d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-    size_t n = d2k_voice_targets(o.ct_path, t, D2K_VOICE_MAX_TARGETS);
-    const d2k_voice_target *flow = NULL;
+    d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+    size_t n = d2s_voice_targets(o.ct_path, t, D2S_VOICE_MAX_TARGETS);
+    const d2s_voice_target *flow = NULL;
     for (size_t i = 0; i < n && !flow; i++) {
         if (ctl_resolved && t[i].ip == cip) { continue; }   /* свой же контроль */
         if (o.ip && o.port && (t[i].ip != o.ip || t[i].port != o.port)) { continue; }
@@ -477,7 +477,7 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
     r.port = o.port;
     if (r.ip == 0 || r.port == 0) {
         if (!flow) {
-            r.verdict = D2K_VOICE_NO_CALL;
+            r.verdict = D2S_VOICE_NO_CALL;
             say_reason(&r, "живого разговора не видно. Начните звонок и повторите замер: "
                            "у голоса нет имени, которое можно вписать, и адрес берётся из "
                            "идущего разговора");
@@ -492,10 +492,10 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
     }
 
     char addr[24];
-    d2k_ip4_text(r.ip, addr, sizeof addr);
+    d2s_ip4_text(r.ip, addr, sizeof addr);
 
     /* conntrack's replied bit records history, not current progress. */
-    if (o.discovery && d2k_voice_discovery_search(&o, &r)) return r;
+    if (o.discovery && d2s_voice_discovery_search(&o, &r)) return r;
 
     /* ===== СЛОЙ 0: ОТВЕЧАЕТ ЛИ ТОЧКА НАСТОЯЩЕМУ КЛИЕНТУ =====
      *
@@ -514,25 +514,25 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
      * 0 — поток идёт, ответов нет: вот это и есть блокировка потока.
      * -1 — наблюдать нечего (задан явный адрес, таблицы нет): тогда и только
      *      тогда работает старый зондовый путь, со своей оговоркой. */
-    int obs = d2k_voice_alive_hook(o.ct_path, r.ip, r.port,
+    int obs = d2s_voice_alive_hook(o.ct_path, r.ip, r.port,
                                    flow ? flow->src_ip : 0, flow ? flow->sport : 0);
-    if (obs == D2K_VOICE_YOUNG) {
+    if (obs == D2S_VOICE_YOUNG) {
         /* РАНО СУДИТЬ. Ответа нет, но и ушло меньше, чем боевой профиль
            требует для признания провала (udp_out=4): ответ мог просто не
            успеть. Это «мало данных», а не блокировка. */
-        r.verdict = D2K_VOICE_UNMEASURED;
+        r.verdict = D2S_VOICE_UNMEASURED;
         say_reason(&r, "поток к %s:%u без ответа, но ушло %d из %d пакетов, после которых "
                        "молчание что-то значит — рано судить, повторите замер через "
                        "несколько секунд разговора",
-                   addr, r.port, flow ? flow->packets : 0, D2K_VOICE_SILENT_AFTER);
+                   addr, r.port, flow ? flow->packets : 0, D2S_VOICE_SILENT_AFTER);
         return r;
     }
-    if (obs == D2K_VOICE_ANSWERS) {
-        r.verdict = D2K_VOICE_CLEAR;
+    if (obs == D2S_VOICE_ANSWERS) {
+        r.verdict = D2S_VOICE_CLEAR;
         say_reason(&r, "разговор с %s:%u идёт, и сервер по нему отвечает", addr, r.port);
         return r;
     }
-    if (obs == D2K_VOICE_SILENT) {
+    if (obs == D2S_VOICE_SILENT) {
         /* Поток без единого ответа. Контроль нужен ровно затем, чтобы
            отделить «режут этот поток» от «UDP не ходит вовсе». */
         const char *ctl0 = ctl;
@@ -541,25 +541,25 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
            отвечает — резать нечего, перебор не запускается. Молчание здесь
            по-прежнему ничего не доказывает (поле 17.09) и ведёт дальше. */
         uint32_t rtt0 = 0;
-        d2k_tally d0 = d2k_voice_ask_hook(r.ip, r.port, NULL, 0, 0, wait_ms, o.mark,
-                                          D2K_VOICE_REPEATS, &rtt0);
-        r.probes += D2K_VOICE_REPEATS - d0.err;
+        d2s_tally d0 = d2s_voice_ask_hook(r.ip, r.port, NULL, 0, 0, wait_ms, o.mark,
+                                          D2S_VOICE_REPEATS, &rtt0);
+        r.probes += D2S_VOICE_REPEATS - d0.err;
         if (!d0.marked) { r.marked = 0; }
-        if (d0.pass == D2K_VOICE_REPEATS) {
-            r.verdict = D2K_VOICE_CLEAR;
+        if (d0.pass == D2S_VOICE_REPEATS) {
+            r.verdict = D2S_VOICE_CLEAR;
             say_reason(&r, "точка %s:%u отвечает на прямой STUN-зонд (%d/%d за %u мс) — "
                            "резать нечего, приманки не перебираю",
-                       addr, r.port, d0.pass, D2K_VOICE_REPEATS, rtt0);
+                       addr, r.port, d0.pass, D2S_VOICE_REPEATS, rtt0);
         } else if (d0.pass > 0) {
-            r.verdict = D2K_VOICE_FLAKY;
+            r.verdict = D2S_VOICE_FLAKY;
             say_reason(&r, "прямой STUN-зонд к %s:%u: ответов %d из %d — не "
                            "воспроизводится, вердикт выносить нельзя",
-                       addr, r.port, d0.pass, D2K_VOICE_REPEATS);
+                       addr, r.port, d0.pass, D2S_VOICE_REPEATS);
         } else if (d0.err > 0) {
-            r.verdict = D2K_VOICE_UNMEASURED;
+            r.verdict = D2S_VOICE_UNMEASURED;
             say_reason(&r, "прямой STUN-зонд к %s:%u не ушёл (%d из %d — местная ошибка "
                            "сокета/отправки): измерение не закончено",
-                       addr, r.port, d0.err, D2K_VOICE_REPEATS);
+                       addr, r.port, d0.err, D2S_VOICE_REPEATS);
         }
         if (d0.pass > 0 || d0.err > 0) {
             if (!r.marked) {
@@ -569,9 +569,9 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
         }
         int ctl_ok = 0, asked0 = 0, ctl_local_err = 0;
         if (ctl_resolved) {
-            d2k_tally c0 = d2k_voice_ask_hook(cip, cport, NULL, 0, 0, wait_ms, o.mark,
-                                              D2K_VOICE_REPEATS, NULL);
-            r.probes += D2K_VOICE_REPEATS - c0.err;
+            d2s_tally c0 = d2s_voice_ask_hook(cip, cport, NULL, 0, 0, wait_ms, o.mark,
+                                              D2S_VOICE_REPEATS, NULL);
+            r.probes += D2S_VOICE_REPEATS - c0.err;
             if (!c0.marked) { r.marked = 0; }
             asked0 = 1;
             ctl_ok = (c0.pass > 0);
@@ -580,7 +580,7 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
             ctl_local_err = (c0.pass == 0 && c0.err > 0);
         }
         if (ctl_local_err) {
-            r.verdict = D2K_VOICE_UNMEASURED;
+            r.verdict = D2S_VOICE_UNMEASURED;
             say_reason(&r, "поток к %s:%u идёт без единого ответа, но контрольный зонд к %s "
                            "не ушёл (местная ошибка сокета/отправки): отделить «режут этот "
                            "поток» от «UDP не ходит вовсе» нечем — измерение не закончено",
@@ -591,17 +591,17 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
                Объявлять первое вердиктом, потому что второе не проверено, —
                вывод из недостачи данных (ревью, P1-3). Приёмы тем более не
                подбираем: подбирать не к чему. */
-            r.verdict = D2K_VOICE_UNMEASURED;
+            r.verdict = D2S_VOICE_UNMEASURED;
             say_reason(&r, "поток к %s:%u идёт без единого ответа, но контроль НЕ СПРОШЕН "
                            "(имя %s не разрешилось): отделить «режут этот поток» от «UDP не "
                            "ходит вовсе» нечем — измерение не закончено", addr, r.port, ctl0);
         } else if (!ctl_ok) {
-            r.verdict = D2K_VOICE_NO_UDP;
+            r.verdict = D2S_VOICE_NO_UDP;
             say_reason(&r, "поток к %s:%u идёт без единого ответа, и публичный STUN %s тоже "
                            "молчит: на этом канале не ходит UDP или его режут целиком — "
                            "обходить голос отдельно бессмысленно", addr, r.port, ctl0);
         } else {
-            r.verdict = D2K_VOICE_BLOCKED;
+            r.verdict = D2S_VOICE_BLOCKED;
             say_reason(&r, "поток к %s:%u идёт, а ответов нет НИ ОДНОГО, при живом "
                            "публичном STUN: режут именно этот поток", addr, r.port);
             /* ПРИЁМЫ ЗДЕСЬ НЕ ИСПЫТЫВАЮТСЯ, И ЭТО НЕ ПРОБЕЛ, А ЧЕСТНОСТЬ.
@@ -641,26 +641,26 @@ d2k_voice_res d2k_voice_run(const d2k_voice_opt *opt) {
      * молчит и на исправной линии (поле 17.09). Выдавать это молчание за
      * блокировку — ровно та ложь, которую поле и вскрыло. */
     uint32_t rtt = 0;
-    d2k_tally direct = d2k_voice_ask_hook(r.ip, r.port, NULL, 0, 0, wait_ms, o.mark,
-                                          D2K_VOICE_REPEATS, &rtt);
-    r.probes += D2K_VOICE_REPEATS - direct.err;
+    d2s_tally direct = d2s_voice_ask_hook(r.ip, r.port, NULL, 0, 0, wait_ms, o.mark,
+                                          D2S_VOICE_REPEATS, &rtt);
+    r.probes += D2S_VOICE_REPEATS - direct.err;
     if (!direct.marked) { r.marked = 0; }
 
-    if (direct.pass == D2K_VOICE_REPEATS) {
-        r.verdict = D2K_VOICE_CLEAR;
+    if (direct.pass == D2S_VOICE_REPEATS) {
+        r.verdict = D2S_VOICE_CLEAR;
         say_reason(&r, "точка %s:%u отвечает на зонд (%d/%d за %u мс) — резать нечего",
-                   addr, r.port, direct.pass, D2K_VOICE_REPEATS, rtt);
+                   addr, r.port, direct.pass, D2S_VOICE_REPEATS, rtt);
     } else if (direct.pass > 0) {
-        r.verdict = D2K_VOICE_FLAKY;
+        r.verdict = D2S_VOICE_FLAKY;
         say_reason(&r, "ответов %d из %d — не воспроизводится, вердикт выносить нельзя",
-                   direct.pass, D2K_VOICE_REPEATS);
+                   direct.pass, D2S_VOICE_REPEATS);
     } else {
-        r.verdict = D2K_VOICE_NO_ORACLE;
+        r.verdict = D2S_VOICE_NO_ORACLE;
         say_reason(&r, "зонд к %s:%u молчит (0/%d), а разговора к этой точке ядро не видит — "
                        "опровергнуть молчание нечем. Голосовая точка не отвечает посторонним "
                        "и на исправной линии, поэтому её молчание блокировкой НЕ является: "
                        "мерить этим способом нечем",
-                   addr, r.port, D2K_VOICE_REPEATS);
+                   addr, r.port, D2S_VOICE_REPEATS);
     }
 
     if (!r.marked) {

@@ -14,11 +14,12 @@ jobs:
             if head -n 1 "$file" | grep -q bash; then bash -n "$file"; else sh -n "$file"; fi
           done < <(find files scripts -type f -name '*.sh')
           sh -n install.sh
-          sh -n files/S99d2k
-          sh -n files/S96d2o-resolver
-          sh -n files/S97d2o-dns-watch
+          sh -n files/S99d2s
+          sh -n files/S96d2s-resolver
+          sh -n files/S97d2s-dns-watch
           node --check internal/web/assets/panel.js
       - run: python3 tests/keenetic/test-upstream-network.py
+      - run: python3 scripts/test-namespace.py
       - run: sh scripts/test-s99-firewall-stub.sh
       - run: sh scripts/test-tg-firewall-nft.sh
       - run: node scripts/test-update.cjs

@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "d2k_sched.h"
+#include "d2s_sched.h"
 
 typedef struct {
     uint64_t due_ns;
@@ -16,8 +16,8 @@ typedef struct {
     size_t   len;
     /* Чья это посылка. Очередь в ключ не заглядывает: он едет с посылкой и
        возвращается вместе с ней, чтобы отказ созревшей отправки было чем
-       приписать плану (см. d2k_sched.h). */
-    d2k_key  key;
+       приписать плану (см. d2s_sched.h). */
+    d2s_key  key;
     uint64_t execution;
     /* NFQUEUE-ID, которым посылка владеет до выдачи (отложенный хвост UDP,
        ревью I-A m-2): ушла — DROP копии, не ушла — ACCEPT. */
@@ -25,7 +25,7 @@ typedef struct {
     uint8_t  owned;
 } entry;
 
-struct d2k_sched {
+struct d2s_sched {
     size_t   cap;
     size_t   slot_size;
     uint8_t *mem;
@@ -40,7 +40,7 @@ struct d2k_sched {
     uint64_t refusals;
 };
 
-d2k_sched *d2k_sched_new(size_t slots, size_t slot_size) {
+d2s_sched *d2s_sched_new(size_t slots, size_t slot_size) {
     if (slots == 0 || slot_size == 0) {
         return NULL;
     }
@@ -50,7 +50,7 @@ d2k_sched *d2k_sched_new(size_t slots, size_t slot_size) {
     if (slots > (size_t)-1 / slot_size) {
         return NULL;
     }
-    d2k_sched *s = calloc(1, sizeof *s);
+    d2s_sched *s = calloc(1, sizeof *s);
     if (!s) {
         return NULL;
     }
@@ -60,7 +60,7 @@ d2k_sched *d2k_sched_new(size_t slots, size_t slot_size) {
     s->heap = calloc(slots, sizeof *s->heap);
     s->freelist = calloc(slots, sizeof *s->freelist);
     if (!s->mem || !s->heap || !s->freelist) {
-        d2k_sched_free(s);
+        d2s_sched_free(s);
         return NULL;
     }
     for (size_t i = 0; i < slots; i++) {
@@ -70,7 +70,7 @@ d2k_sched *d2k_sched_new(size_t slots, size_t slot_size) {
     return s;
 }
 
-int d2k_sched_grow_slot_size(d2k_sched *s, size_t slot_size) {
+int d2s_sched_grow_slot_size(d2s_sched *s, size_t slot_size) {
     if (!s || !slot_size) { return -1; }
     if (slot_size <= s->slot_size) { return 0; }
     if (s->cap > (size_t)-1 / slot_size) { return -1; }
@@ -87,7 +87,7 @@ int d2k_sched_grow_slot_size(d2k_sched *s, size_t slot_size) {
     return 1;
 }
 
-void d2k_sched_free(d2k_sched *s) {
+void d2s_sched_free(d2s_sched *s) {
     if (!s) {
         return;
     }
@@ -106,7 +106,7 @@ static int earlier(const entry *a, const entry *b) {
     return a->seq < b->seq;
 }
 
-static void sift_up(d2k_sched *s, size_t i) {
+static void sift_up(d2s_sched *s, size_t i) {
     while (i > 0) {
         size_t parent = (i - 1) / 2;
         if (!earlier(&s->heap[i], &s->heap[parent])) {
@@ -119,7 +119,7 @@ static void sift_up(d2k_sched *s, size_t i) {
     }
 }
 
-static void sift_down(d2k_sched *s, size_t i) {
+static void sift_down(d2s_sched *s, size_t i) {
     for (;;) {
         size_t l = 2 * i + 1, r = l + 1, best = i;
         if (l < s->n && earlier(&s->heap[l], &s->heap[best])) {
@@ -138,26 +138,26 @@ static void sift_down(d2k_sched *s, size_t i) {
     }
 }
 
-int d2k_sched_push(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
-                   const d2k_key *key) {
-    return d2k_sched_push_serial(s, due_ns, data, len, key, 0);
+int d2s_sched_push(d2s_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
+                   const d2s_key *key) {
+    return d2s_sched_push_serial(s, due_ns, data, len, key, 0);
 }
 
-static int push(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
-                const d2k_key *key, uint64_t execution, int owned, uint32_t id);
+static int push(d2s_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
+                const d2s_key *key, uint64_t execution, int owned, uint32_t id);
 
-int d2k_sched_push_serial(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
-                          const d2k_key *key, uint64_t execution) {
+int d2s_sched_push_serial(d2s_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
+                          const d2s_key *key, uint64_t execution) {
     return push(s, due_ns, data, len, key, execution, 0, 0);
 }
 
-int d2k_sched_push_owned(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
+int d2s_sched_push_owned(d2s_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
                          uint32_t id) {
     return push(s, due_ns, data, len, NULL, 0, 1, id);
 }
 
-static int push(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
-                const d2k_key *key, uint64_t execution, int owned, uint32_t id) {
+static int push(d2s_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
+                const d2s_key *key, uint64_t execution, int owned, uint32_t id) {
     if (!s || !data || len == 0) {
         return -2;
     }
@@ -189,21 +189,21 @@ static int push(d2k_sched *s, uint64_t due_ns, const uint8_t *data, size_t len,
     return 0;
 }
 
-int d2k_sched_pop_due(d2k_sched *s, uint64_t now_ns,
+int d2s_sched_pop_due(d2s_sched *s, uint64_t now_ns,
                       uint8_t *out, size_t outcap, size_t *len,
-                      d2k_key *key) {
-    return d2k_sched_pop_due_serial(s, now_ns, out, outcap, len, key, NULL);
+                      d2s_key *key) {
+    return d2s_sched_pop_due_serial(s, now_ns, out, outcap, len, key, NULL);
 }
 
-int d2k_sched_pop_due_serial(d2k_sched *s, uint64_t now_ns,
+int d2s_sched_pop_due_serial(d2s_sched *s, uint64_t now_ns,
                              uint8_t *out, size_t outcap, size_t *len,
-                             d2k_key *key, uint64_t *execution) {
-    return d2k_sched_pop_due_ex(s, now_ns, out, outcap, len, key, execution, NULL, NULL);
+                             d2s_key *key, uint64_t *execution) {
+    return d2s_sched_pop_due_ex(s, now_ns, out, outcap, len, key, execution, NULL, NULL);
 }
 
-int d2k_sched_pop_due_ex(d2k_sched *s, uint64_t now_ns,
+int d2s_sched_pop_due_ex(d2s_sched *s, uint64_t now_ns,
                          uint8_t *out, size_t outcap, size_t *len,
-                         d2k_key *key, uint64_t *execution,
+                         d2s_key *key, uint64_t *execution,
                          int *owned, uint32_t *owner_id) {
     if (owned) { *owned = 0; }
     if (!s || s->n == 0 || !out) {
@@ -228,7 +228,7 @@ int d2k_sched_pop_due_ex(d2k_sched *s, uint64_t now_ns,
            Правильный исход — выбросить ЭТУ посылку и сказать об этом:
            половина плана останется неисполненной в любом случае, но остальные
            планы продолжат жить. Молчания при этом нет: отказ считается
-           отдельно (d2k_sched_refusals) и разбирается вызывающим. */
+           отдельно (d2s_sched_refusals) и разбирается вызывающим. */
         s->refusals++;
         int was_owned = s->heap[0].owned;
         if (was_owned) {
@@ -266,14 +266,14 @@ int d2k_sched_pop_due_ex(d2k_sched *s, uint64_t now_ns,
     return 1;
 }
 
-uint64_t d2k_sched_next_ns(const d2k_sched *s) {
+uint64_t d2s_sched_next_ns(const d2s_sched *s) {
     return (s && s->n > 0) ? s->heap[0].due_ns : 0;
 }
 
-size_t d2k_sched_count(const d2k_sched *s) {
+size_t d2s_sched_count(const d2s_sched *s) {
     return s ? s->n : 0;
 }
 
-uint64_t d2k_sched_refusals(const d2k_sched *s) {
+uint64_t d2s_sched_refusals(const d2s_sched *s) {
     return s ? s->refusals : 0;
 }

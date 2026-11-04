@@ -1,4 +1,4 @@
-/* tls13.c — минимальный клиент TLS 1.3. См. d2k_tls13.h: зачем он есть и чего
+/* tls13.c — минимальный клиент TLS 1.3. См. d2s_tls13.h: зачем он есть и чего
  * он намеренно не делает.
  *
  * КЛЮЧЕВОЕ РАСПИСАНИЕ (RFC 8446 §7.1) целиком:
@@ -37,10 +37,10 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_crypto.h"
-#include "d2k_tls13.h"
-#include "d2k_tls13core.h"
-#include "d2k_tls12.h"
+#include "d2s_crypto.h"
+#include "d2s_tls13.h"
+#include "d2s_tls13core.h"
+#include "d2s_tls12.h"
 
 #define REC_CCS       20
 #define REC_ALERT     21
@@ -55,7 +55,7 @@
 /* Предел одной записи TLS (RFC 8446 §5.1: 2^14 открытого текста плюс накладные). */
 #define REC_MAX 18432
 
-struct d2k_tls {
+struct d2s_tls {
     int      fd;
     uint64_t rx_wire_bytes;
     uint32_t rx_record_missing;
@@ -76,7 +76,7 @@ struct d2k_tls {
     size_t   plain_len, plain_off;
     /* Сервер выбрал TLS 1.2 на наше приветствие с обеими версиями: сессию
        ведёт клиент 1.2, чтение и запись идут через него. */
-    d2k_tls12 *v12;
+    d2s_tls12 *v12;
 };
 
 static void say(char *err, size_t cap, const char *fmt, ...) {
@@ -94,7 +94,7 @@ static int64_t now_ms(void) {
 }
 
 /* Читает ровно n байт с потолком по времени. 0 — прочитано, -1 — отказ. */
-static int read_exact(d2k_tls *t, uint8_t *buf, size_t n, int body, int64_t deadline,
+static int read_exact(d2s_tls *t, uint8_t *buf, size_t n, int body, int64_t deadline,
                       char *err, size_t errcap) {
     size_t got = 0;
     t->rx_record_missing = body ? (uint32_t)n : 0;
@@ -167,7 +167,7 @@ static void nonce_of(const uint8_t iv[12], uint64_t seq, uint8_t out[12]) {
 /* Читает ОДНУ запись. type/payload/len — наружу. Для зашифрованных записей
    снимает защиту и отдаёт ВНУТРЕННИЙ тип (RFC 8446 §5.2: настоящий тип —
    последний ненулевой байт открытого текста). */
-static int read_record(d2k_tls *t, int encrypted, uint8_t *type,
+static int read_record(d2s_tls *t, int encrypted, uint8_t *type,
                        uint8_t *payload, size_t cap, size_t *len,
                        int64_t deadline, char *err, size_t errcap) {
     uint8_t hdr[5];
@@ -212,7 +212,7 @@ static int read_record(d2k_tls *t, int encrypted, uint8_t *type,
         say(err, errcap, "зашифрованная запись длиной %zu не разбирается", rlen);
         return -1;
     }
-    if (d2k_aes128_gcm_decrypt(t->s_key, nonce, hdr, 5, raw, rlen, payload) != 0) {
+    if (d2s_aes128_gcm_decrypt(t->s_key, nonce, hdr, 5, raw, rlen, payload) != 0) {
         say(err, errcap, "тег записи не сошёлся (номер %llu)", (unsigned long long)t->s_seq);
         return -1;
     }
@@ -228,7 +228,7 @@ static int read_record(d2k_tls *t, int encrypted, uint8_t *type,
     return 0;
 }
 
-static int write_record(d2k_tls *t, uint8_t type, const uint8_t *data, size_t n,
+static int write_record(d2s_tls *t, uint8_t type, const uint8_t *data, size_t n,
                         char *err, size_t errcap) {
     if (n + 1 + 16 > REC_MAX) { say(err, errcap, "запись длиннее предела"); return -1; }
     uint8_t *buf = t->wire;
@@ -243,7 +243,7 @@ static int write_record(d2k_tls *t, uint8_t type, const uint8_t *data, size_t n,
     uint8_t nonce[12];
     nonce_of(t->c_iv, t->c_seq, nonce);
     uint8_t tag[16];
-    if (d2k_aes128_gcm_encrypt(t->c_key, nonce, buf, 5, inner, n + 1, buf + 5, tag) != 0) {
+    if (d2s_aes128_gcm_encrypt(t->c_key, nonce, buf, 5, inner, n + 1, buf + 5, tag) != 0) {
         say(err, errcap, "не зашифровалось");
         return -1;
     }
@@ -253,31 +253,31 @@ static int write_record(d2k_tls *t, uint8_t type, const uint8_t *data, size_t n,
 }
 
 static int traffic_keys(const uint8_t secret[32], uint8_t key[16], uint8_t iv[12]) {
-    if (d2k_hkdf_expand_label(secret, "key", key, 16) != 0) { return -1; }
-    return d2k_hkdf_expand_label(secret, "iv", iv, 12);
+    if (d2s_hkdf_expand_label(secret, "key", key, 16) != 0) { return -1; }
+    return d2s_hkdf_expand_label(secret, "iv", iv, 12);
 }
 
 static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
-    size_t want_wire, const d2k_ech_config *ech,
+    size_t want_wire, const d2s_ech_config *ech,
     int client_alpn, const uint8_t *alpn_list, size_t alpn_len,
-    d2k_tls **out, char *err, size_t errcap) {
+    d2s_tls **out, char *err, size_t errcap) {
     if (err && errcap) { err[0] = '\0'; }
     if (fd < 0 || !out) { say(err, errcap, "нечем поднимать сессию"); return -1; }
     *out = NULL;
     int64_t deadline = now_ms() + (deadline_ms > 0 ? deadline_ms : 8000);
 
     uint8_t priv[32], pub[32], rnd[32];
-    if (d2k_t13_random(priv, 32) != 0 || d2k_t13_random(rnd, 32) != 0) {
+    if (d2s_t13_random(priv, 32) != 0 || d2s_t13_random(rnd, 32) != 0) {
         say(err, errcap, "нет случайности: /dev/urandom недоступен");
         return -1;
     }
-    if (d2k_x25519_base(pub, priv) != 0) {
+    if (d2s_x25519_base(pub, priv) != 0) {
         say(err, errcap, "открытый ключ не посчитался");
         return -1;
     }
 
     /* Транскрипт: сообщения рукопожатия подряд, без заголовков записей. */
-    d2k_tls *t = calloc(1, sizeof *t);
+    d2s_tls *t = calloc(1, sizeof *t);
     if (!t) { say(err, errcap, "не хватило памяти"); return -1; }
     t->fd = fd;
     t->peer_name = -1;   /* пока не смотрели — «сказать нечего», а не «нет» */
@@ -286,10 +286,10 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
 
     /* Две с половиной тысячи, а не тысяча: приветствие теперь добивается до
        длины клиентского, а снимок приветствия с провода бывает до 2048 байт
-       (d2k_ev.shape). */
+       (d2s_ev.shape). */
     uint8_t ch[4096], inner[2048];
     size_t inner_len = 0;
-    d2k_t13_ch_opts cho;
+    d2s_t13_ch_opts cho;
     memset(&cho, 0, sizeof cho);
     cho.sni = sni;
     cho.pub = pub;
@@ -315,13 +315,13 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
     size_t ch_len;
     if (ech) {
         uint8_t hpke_priv[32], outer_random[32];
-        if (d2k_t13_random(hpke_priv, 32) || d2k_t13_random(outer_random, 32)) {
+        if (d2s_t13_random(hpke_priv, 32) || d2s_t13_random(outer_random, 32)) {
             say(err, errcap, "нет случайности для ECH"); free(t); return -1;
         }
-        ch_len = d2k_t13_ech_build(&cho, ech, hpke_priv, outer_random,
+        ch_len = d2s_t13_ech_build(&cho, ech, hpke_priv, outer_random,
             ch, sizeof ch, inner, sizeof inner, &inner_len);
         memset(hpke_priv, 0, sizeof hpke_priv);
-    } else ch_len = d2k_t13_ch_build(&cho, ch, sizeof ch);
+    } else ch_len = d2s_t13_ch_build(&cho, ch, sizeof ch);
     if (ch_len == 0) { say(err, errcap, "приветствие не собралось"); free(t); return -1; }
 
     uint8_t rec[5 + sizeof ch];
@@ -356,22 +356,22 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
         }
         break;
     }
-    if (!ech && d2k_t13_sh_version(sh, sh_len) == 0x0303) {
+    if (!ech && d2s_t13_sh_version(sh, sh_len) == 0x0303) {
         /* Сервер выбрал 1.2: рукопожатие доводит клиент 1.2 с тем же
            приветствием и уже прочитанной записью сервера. */
         int64_t left = deadline - now_ms();
-        d2k_tls12 *v = NULL;
-        if (d2k_tls12_resume(fd, sni, left > 0 ? (int)left : 1, rnd, ch, ch_len,
+        d2s_tls12 *v = NULL;
+        if (d2s_tls12_resume(fd, sni, left > 0 ? (int)left : 1, rnd, ch, ch_len,
                              sh, sh_len, &v, err, errcap) != 0) {
             free(t);
             return -1;
         }
         t->v12 = v;
-        t->peer_name = d2k_tls12_peer_name(v);
+        t->peer_name = d2s_tls12_peer_name(v);
         *out = t;
         return 0;
     }
-    if (ech && !d2k_t13_ech_accepted(inner, inner_len, sh, sh_len)) {
+    if (ech && !d2s_t13_ech_accepted(inner, inner_len, sh, sh_len)) {
         say(err, errcap, "ECH не принят сервером: публичное имя не подтверждает origin");
         free(t); return -1;
     }
@@ -380,20 +380,20 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
     tr_len += sh_len;
 
     const uint8_t *peer = NULL;
-    if (d2k_t13_sh_parse(sh, sh_len, &peer, err, errcap) != 0) {
+    if (d2s_t13_sh_parse(sh, sh_len, &peer, err, errcap) != 0) {
         free(t);
         return -1;
     }
 
     uint8_t shared[32];
-    if (d2k_x25519(shared, priv, peer) != 0) {
+    if (d2s_x25519(shared, priv, peer) != 0) {
         say(err, errcap, "общий секрет не посчитался (точка малого порядка)");
         free(t);
         return -1;
     }
 
     uint8_t hs[32], c_hs[32], s_hs[32];
-    if (d2k_t13_schedule_hs(shared, tr, tr_len, c_hs, s_hs, hs) != 0 ||
+    if (d2s_t13_schedule_hs(shared, tr, tr_len, c_hs, s_hs, hs) != 0 ||
         traffic_keys(c_hs, t->c_key, t->c_iv) != 0 ||
         traffic_keys(s_hs, t->s_key, t->s_iv) != 0) {
         say(err, errcap, "ключи рукопожатия не собрались"); free(t); return -1;
@@ -435,8 +435,8 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
         int done = 0;
         size_t o = 0;
         uint8_t mt = 0;
-        while (d2k_t13_flight_next(msg, mlen, &o, &mt, NULL, NULL)) {
-            if (mt == D2K_T13_FINISHED) { done = 1; }
+        while (d2s_t13_flight_next(msg, mlen, &o, &mt, NULL, NULL)) {
+            if (mt == D2S_T13_FINISHED) { done = 1; }
         }
         if (done) { break; }
     }
@@ -447,9 +447,9 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
         const uint8_t *body = NULL;
         size_t blen = 0;
         int finished_ok = 0;
-        while (d2k_t13_flight_next(tr, tr_len, &at, &mt, &body, &blen)) {
-            if (mt == D2K_T13_FINISHED) {
-                if (blen == 32 && !d2k_t13_finished_mac(s_hs, tr, previous, expected)) {
+        while (d2s_t13_flight_next(tr, tr_len, &at, &mt, &body, &blen)) {
+            if (mt == D2S_T13_FINISHED) {
+                if (blen == 32 && !d2s_t13_finished_mac(s_hs, tr, previous, expected)) {
                     unsigned diff = 0;
                     for (size_t i = 0; i < 32; i++) diff |= body[i] ^ expected[i];
                     finished_ok = diff == 0;
@@ -472,9 +472,9 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
         uint8_t mt = 0;
         const uint8_t *body = NULL;
         size_t blen = 0;
-        while (d2k_t13_flight_next(tr, tr_len, &o, &mt, &body, &blen)) {
-            if (mt == D2K_T13_CERTIFICATE) {
-                t->peer_name = d2k_t13_cert_name_ok(body, blen, sni);
+        while (d2s_t13_flight_next(tr, tr_len, &o, &mt, &body, &blen)) {
+            if (mt == D2S_T13_CERTIFICATE) {
+                t->peer_name = d2s_t13_cert_name_ok(body, blen, sni);
                 break;
             }
         }
@@ -482,17 +482,17 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
 
     /* Прикладные ключи считаются от транскрипта ДО нашего Finished. */
     uint8_t c_ap[32], s_ap[32];
-    if (d2k_t13_schedule_ap(hs, tr, tr_len, c_ap, s_ap) != 0) {
+    if (d2s_t13_schedule_ap(hs, tr, tr_len, c_ap, s_ap) != 0) {
         say(err, errcap, "прикладные ключи не собрались"); free(t); return -1;
     }
 
     /* Наш Finished — под ключами РУКОПОЖАТИЯ, поэтому шлём до смены ключей. */
     uint8_t verify[32];
-    if (d2k_t13_finished_mac(c_hs, tr, tr_len, verify) != 0) {
+    if (d2s_t13_finished_mac(c_hs, tr, tr_len, verify) != 0) {
         say(err, errcap, "ключ подтверждения не собрался"); free(t); return -1;
     }
     uint8_t fin[4 + 32];
-    fin[0] = D2K_T13_FINISHED; fin[1] = 0; fin[2] = 0; fin[3] = 32;
+    fin[0] = D2S_T13_FINISHED; fin[1] = 0; fin[2] = 0; fin[3] = 32;
     memcpy(fin + 4, verify, 32);
 
     /* Пустая смена шифра перед Finished — совместимость со «средними ящиками»
@@ -516,21 +516,21 @@ static int tls_connect_internal(int fd, const char *sni, int deadline_ms,
     return 0;
 }
 
-int d2k_tls_connect(int fd, const char *sni, int deadline_ms, size_t want_wire,
-                    d2k_tls **out, char *err, size_t errcap) {
+int d2s_tls_connect(int fd, const char *sni, int deadline_ms, size_t want_wire,
+                    d2s_tls **out, char *err, size_t errcap) {
     return tls_connect_internal(fd, sni, deadline_ms, want_wire, NULL, 0, NULL, 0,
                                 out, err, errcap);
 }
 
-int d2k_tls_connect_alpn(int fd, const char *sni, int deadline_ms, size_t want_wire,
+int d2s_tls_connect_alpn(int fd, const char *sni, int deadline_ms, size_t want_wire,
                          const uint8_t *alpn_list, size_t alpn_len,
-                         d2k_tls **out, char *err, size_t errcap) {
+                         d2s_tls **out, char *err, size_t errcap) {
     return tls_connect_internal(fd, sni, deadline_ms, want_wire, NULL, 1,
                                 alpn_list, alpn_len, out, err, errcap);
 }
 
-int d2k_tls_connect_ech(int fd, const char *origin, const d2k_ech_config *config,
-    int deadline_ms, size_t want_wire, d2k_tls **out, char *err, size_t errcap) {
+int d2s_tls_connect_ech(int fd, const char *origin, const d2s_ech_config *config,
+    int deadline_ms, size_t want_wire, d2s_tls **out, char *err, size_t errcap) {
     if (!config || !origin || !origin[0]) {
         if (out) *out = NULL;
         say(err, errcap, "ECH требует origin и конфигурацию"); return -1;
@@ -539,11 +539,11 @@ int d2k_tls_connect_ech(int fd, const char *origin, const d2k_ech_config *config
                                 out, err, errcap);
 }
 
-int d2k_tls_ech_accepted(const d2k_tls *t) { return t && t->ech_accepted; }
+int d2s_tls_ech_accepted(const d2s_tls *t) { return t && t->ech_accepted; }
 
-int d2k_tls_write(d2k_tls *t, const uint8_t *buf, size_t n, char *err, size_t errcap) {
+int d2s_tls_write(d2s_tls *t, const uint8_t *buf, size_t n, char *err, size_t errcap) {
     if (!t) { say(err, errcap, "сессии нет"); return -1; }
-    if (t->v12) { return d2k_tls12_write(t->v12, buf, n, err, errcap); }
+    if (t->v12) { return d2s_tls12_write(t->v12, buf, n, err, errcap); }
     while (n > 0) {
         size_t take = n > 16384 ? 16384 : n;
         if (write_record(t, REC_APPDATA, buf, take, err, errcap) != 0) { return -1; }
@@ -553,10 +553,10 @@ int d2k_tls_write(d2k_tls *t, const uint8_t *buf, size_t n, char *err, size_t er
     return 0;
 }
 
-long d2k_tls_read(d2k_tls *t, uint8_t *buf, size_t cap, int wait_ms,
+long d2s_tls_read(d2s_tls *t, uint8_t *buf, size_t cap, int wait_ms,
                   char *err, size_t errcap) {
     if (!t) { say(err, errcap, "сессии нет"); return -1; }
-    if (t->v12) { return d2k_tls12_read(t->v12, buf, cap, wait_ms, err, errcap); }
+    if (t->v12) { return d2s_tls12_read(t->v12, buf, cap, wait_ms, err, errcap); }
     if (t->plain_off < t->plain_len) {
         size_t take = t->plain_len - t->plain_off;
         if (take > cap) { take = cap; }
@@ -594,14 +594,14 @@ long d2k_tls_read(d2k_tls *t, uint8_t *buf, size_t cap, int wait_ms,
     }
 }
 
-int d2k_tls_peer_name(const d2k_tls *t) { return t ? t->peer_name : -1; }
+int d2s_tls_peer_name(const d2s_tls *t) { return t ? t->peer_name : -1; }
 
-void d2k_tls_free(d2k_tls *t) {
-    if (t && t->v12) { d2k_tls12_free(t->v12); }
+void d2s_tls_free(d2s_tls *t) {
+    if (t && t->v12) { d2s_tls12_free(t->v12); }
     free(t);
 }
 
-uint64_t d2k_tls_rx_wire_bytes(const d2k_tls *t) { return t ? t->rx_wire_bytes + (t->v12 ? d2k_tls12_rx_wire_bytes(t->v12) : 0) : 0; }
-uint32_t d2k_tls_rx_record_missing(const d2k_tls *t) { return t ? (t->v12 ? d2k_tls12_rx_record_missing(t->v12) : t->rx_record_missing) : 0; }
+uint64_t d2s_tls_rx_wire_bytes(const d2s_tls *t) { return t ? t->rx_wire_bytes + (t->v12 ? d2s_tls12_rx_wire_bytes(t->v12) : 0) : 0; }
+uint32_t d2s_tls_rx_record_missing(const d2s_tls *t) { return t ? (t->v12 ? d2s_tls12_rx_record_missing(t->v12) : t->rx_record_missing) : 0; }
 
-uint16_t d2k_tls_version(const d2k_tls *t) { return t ? (t->v12 ? 0x0303 : 0x0304) : 0; }
+uint16_t d2s_tls_version(const d2s_tls *t) { return t ? (t->v12 ? 0x0303 : 0x0304) : 0; }

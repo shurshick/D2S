@@ -31,7 +31,7 @@ HTTP-зонд возвращает число отправленных запр�
 доказательством и не подтверждают строгий HTTP-опыт.
 
 Формат control остаётся v18; формат плана и код производства пакетов не
-изменены. При развёртывании нужны обе новые службы: старый d2kd не выдаёт
+изменены. При развёртывании нужны обе новые службы: старый d2sd не выдаёт
 контроллеру необходимую идентичность HTTP-опыта.
 
 ## Регрессы и границы доказательства
@@ -39,7 +39,7 @@ HTTP-зонд возвращает число отправленных запр�
 - `core/test_httpsearch.c`: два ответа при единственном исполнении не
   публикуют план. На исходном httpsearch.c/header b16071d, свежая компиляция
   в отдельном временном каталоге: exit 1, один CHECK. Лог
-  `/tmp/d2k-http-execution-baseline.log`.
+  `/tmp/d2s-http-execution-baseline.log`.
 - Матрица IPv4/IPv6 отвергает чужие trial/plan/адрес/порт/транспорт/семейство,
   неизвестную и другую привязку, дубликат execution, несовпадение фактического
   сокета. Проверяет позднее второе событие и обратную канонизацию endpoints.
@@ -48,7 +48,7 @@ HTTP-зонд возвращает число отправленных запр�
   Два полных ответа без второго события не публикуют план; после всех
   завершений двух опытов публикация разрешена. На свежесобранном старом
   Session b16071d этот тест даёт exit 1 и четыре CHECK: trial потерян.
-  Лог `/tmp/d2k-http-execution-runtime-red.log`. С правкой IPv4/IPv6 проходят.
+  Лог `/tmp/d2s-http-execution-runtime-red.log`. С правкой IPv4/IPv6 проходят.
   Отдельно сохраняется работоспособность legacy-установки с нулевым trial.
 - HTTP-ответы в Session/control тесте — фикстуры; фактический getsockname
   зонда проверяется отдельным loopback-тестом. Физический NFQUEUE/raw send
@@ -90,26 +90,26 @@ conntrack packets. Повторные сегменты не дедуплицир
 ## Локальная проверка
 
 - `make -C core check` — exit 0,
-  `/tmp/d2k-http-execution-core-check.log`; включает release arm64/mipsel
+  `/tmp/d2s-http-execution-core-check.log`; включает release arm64/mipsel
   во временном каталоге, probe-plan, 130 UDP runtime cases и HTTP runtime/live.
 - `git diff --check` — чисто.
 
 - `make -C core test-httpsearch test-http-live` — exit 0, финальный лог
-  `/tmp/d2k-http-execution-final-targeted.log`.
+  `/tmp/d2s-http-execution-final-targeted.log`.
 - `make -C detect check` — exit 0,
-  `/tmp/d2k-http-execution-detect-check.log`.
+  `/tmp/d2s-http-execution-detect-check.log`.
 - `make -C datapath check` — exit 0, повтор после compatibility-правки:
-  `/tmp/d2k-http-execution-datapath-final.log`.
-- `make -C datapath cross` — exit 0, arm64/mipsel, полный d2kd и planlab:
-  `/tmp/d2k-http-execution-datapath-cross.log`.
+  `/tmp/d2s-http-execution-datapath-final.log`.
+- `make -C datapath cross` — exit 0, arm64/mipsel, полный d2sd и planlab:
+  `/tmp/d2s-http-execution-datapath-cross.log`.
 - `core/test_http_live --diverge` — ожидаемый exit 1, два CHECK (IPv4/IPv6):
   изменение одного байта реального packet trace отвергнуто. Лог
-  `/tmp/d2k-http-execution-wire-mutant.log`.
+  `/tmp/d2s-http-execution-wire-mutant.log`.
 - Независимое read-only ревью: найден и исправлен отказ legacy zero-trial
   SET_NAME_PROBE; повторное ревью без blocker/important замечаний.
 
 Два dirty-бинарника владельца не включаются в коммит и не менялись:
-`builds/d2kc-linux-arm64` SHA-256
+`builds/d2sc-linux-arm64` SHA-256
 `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`;
-`builds/d2kd-linux-arm64` SHA-256
+`builds/d2sd-linux-arm64` SHA-256
 `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.

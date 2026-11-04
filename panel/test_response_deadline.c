@@ -26,7 +26,7 @@
 #define SETTABLE_FLAGS (O_APPEND | O_NONBLOCK | O_ASYNC)
 
 int main(void) {
-    assert(d2k_panel_ignore_sigpipe() == 0);
+    assert(d2s_panel_ignore_sigpipe() == 0);
     int fds[2]; assert(pipe(fds) == 0);
     int flags = fcntl(fds[1], F_GETFL); assert(flags >= 0);
     assert(response(fds[1], 200, "OK", "text/plain", "complete\n", 9) == 0);
@@ -57,7 +57,7 @@ int main(void) {
     int saved_errno = errno;
     long long elapsed = monotonic_ms() - start;
     assert(rc == -1 && saved_errno == ETIMEDOUT);
-    assert(elapsed >= D2K_PANEL_RESPONSE_TIMEOUT_MS && elapsed < 400);
+    assert(elapsed >= D2S_PANEL_RESPONSE_TIMEOUT_MS && elapsed < 400);
     /* И на отказе тоже: прерванная по сроку посылка обязана вернуть
        дескриптор в прежний режим, иначе следующий ответ уйдёт неблокирующим
        и оборвётся на первом же EAGAIN. */

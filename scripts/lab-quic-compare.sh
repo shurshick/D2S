@@ -27,7 +27,7 @@ set -eu
 
 HERE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$HERE/.." && pwd)
-REF=${D2K_REF_BIN:-/tmp/z2k-detect-linux-arm64}
+REF=${D2S_REF_BIN:-/tmp/z2k-detect-linux-arm64}
 
 if ! docker info >/dev/null 2>&1; then
     echo "lab-quic-compare.sh: нужен запущенный Docker" >&2
@@ -58,8 +58,8 @@ cd /w
 
 fail() { echo "ПРОВАЛ: $*" >&2; exit 1; }
 
-NAME=${D2K_LAB_QUIC_NAME:-www.google.com}
-BOX=${D2K_LAB_QUIC_BOX:-first}
+NAME=${D2S_LAB_QUIC_NAME:-www.google.com}
+BOX=${D2S_LAB_QUIC_BOX:-first}
 QUEUE=2101
 MARK=0x2d
 PROBE_MARK=0x2e
@@ -80,9 +80,9 @@ cc -std=c99 -O2 -Wall -Wextra -Werror -Idatapath/include -Icore/include \
 cc -std=c99 -O2 -Wall -Wextra -Werror -Icore/include -o /tmp/quicping \
    spike/quicping.c core/quicconn.c core/quicwire.c core/tls13core.c \
    core/h3.c core/crypto.c core/x25519.c core/meas.c
-make -s -C datapath d2kd >/dev/null
-cp datapath/d2kd /tmp/d2kd
-make -s -C core d2kc >/dev/null
+make -s -C datapath d2sd >/dev/null
+cp datapath/d2sd /tmp/d2sd
+make -s -C core d2sc >/dev/null
 
 echo "== линия без цензора: клиент обязан работать =="
 timeout 20 /tmp/quicping "$IP" "$NAME" >/dev/null 2>&1 \
@@ -93,9 +93,9 @@ BOXFLAG=
 [ "$BOX" = "first" ] && BOXFLAG=--first
 /tmp/labdpi "$QUEUE" "$NAME" 62 --quic $BOXFLAG > /tmp/labdpi.log 2>&1 &
 sleep 1
-iptables -t mangle -N D2KQ 2>/dev/null || iptables -t mangle -F D2KQ
-iptables -t mangle -A POSTROUTING -j D2KQ
-iptables -t mangle -A D2KQ -p udp --dport 443 -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
+iptables -t mangle -N D2SQ 2>/dev/null || iptables -t mangle -F D2SQ
+iptables -t mangle -A POSTROUTING -j D2SQ
+iptables -t mangle -A D2SQ -p udp --dport 443 -j NFQUEUE --queue-num "$QUEUE" --queue-bypass
 if timeout 20 /tmp/quicping "$IP" "$NAME" >/dev/null 2>&1; then
     fail "цензор не режет: QUIC прошёл мимо него"
 fi
@@ -104,36 +104,36 @@ echo "цензор на месте"
 echo "== ПОРТ =="
 # Порт работает от ТРАФИКА: снимок приветствия ему приносит датапат. Поэтому
 # поднимается вся вертикаль, а ответы вопросника читаются из журнала — он
-# печатает их построчно (см. d2k_quic_step).
+# печатает их построчно (см. d2s_quic_step).
 CAT=/tmp/labq-catalog.json; rm -f "$CAT"
 SOCK=/tmp/labq.sock; rm -f "$SOCK"
-iptables -t mangle -N D2KD 2>/dev/null || iptables -t mangle -F D2KD
-iptables -t mangle -A OUTPUT -j D2KD
-iptables -t mangle -A D2KD -m mark --mark "$MARK" -j RETURN
-iptables -t mangle -A D2KD -p udp --dport 443 \
+iptables -t mangle -N D2SD 2>/dev/null || iptables -t mangle -F D2SD
+iptables -t mangle -A OUTPUT -j D2SD
+iptables -t mangle -A D2SD -m mark --mark "$MARK" -j RETURN
+iptables -t mangle -A D2SD -p udp --dport 443 \
     -m connbytes --connbytes 0:8 --connbytes-dir original --connbytes-mode packets \
     -j NFQUEUE --queue-num 2102 --queue-bypass
 iptables -t mangle -A INPUT -p udp --sport 443 \
     -m connbytes --connbytes 0:8 --connbytes-dir reply --connbytes-mode packets \
     -j NFQUEUE --queue-num 2102 --queue-bypass
-/tmp/d2kd --mode apply --control "$SOCK" --queue 2102 --mark 45 --probe-mark "$PROBE_MARK" \
-    --journal 400 --duration 300 > /tmp/d2kd.log 2>&1 &
+/tmp/d2sd --mode apply --control "$SOCK" --queue 2102 --mark 45 --probe-mark "$PROBE_MARK" \
+    --journal 400 --duration 300 > /tmp/d2sd.log 2>&1 &
 DPID=$!
 i=0; while [ ! -S "$SOCK" ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
 [ -S "$SOCK" ] || fail "датапат не открыл управляющий сокет"
-./core/d2kc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2kc.log 2>&1 &
+./core/d2sc --control "$SOCK" --catalog "$CAT" --mark "$PROBE_MARK" > /tmp/d2sc.log 2>&1 &
 CPID=$!
 sleep 1
 for n in 1 2 3; do timeout 20 /tmp/quicping "$IP" "$NAME" >/dev/null 2>&1 || true; sleep 3; done
 i=0; while [ $i -lt 120 ]; do
-    grep -q 'вердикт:' /tmp/d2kc.log && break
+    grep -q 'вердикт:' /tmp/d2sc.log && break
     i=$((i+1)); sleep 1
 done
-if ! grep -qa 'вопрос «' /tmp/d2kc.log; then
-    echo "--- d2kc ---"; tail -25 /tmp/d2kc.log || true
-    echo "--- d2kd ---"; tail -15 /tmp/d2kd.log || true
+if ! grep -qa 'вопрос «' /tmp/d2sc.log; then
+    echo "--- d2sc ---"; tail -25 /tmp/d2sc.log || true
+    echo "--- d2sd ---"; tail -15 /tmp/d2sd.log || true
 fi
-grep -a 'вопрос «' /tmp/d2kc.log || true
+grep -a 'вопрос «' /tmp/d2sc.log || true
 
 # ВЕРТИКАЛЬ ГАСИТСЯ ДО ЗАПУСКА ЭТАЛОНА, и это не уборка, а условие сверки.
 # Порт ставит НАЙДЕННЫЙ план по ИМЕНИ, и план применяется к любому потоку на
@@ -142,8 +142,8 @@ grep -a 'вопрос «' /tmp/d2kc.log || true
 # Управление заданиями в неинтерактивном sh выключено, поэтому по PID'ам.
 kill "$CPID" "$DPID" 2>/dev/null || true
 sleep 1
-iptables -t mangle -D OUTPUT -j D2KD 2>/dev/null || true
-iptables -t mangle -F D2KD 2>/dev/null || true
+iptables -t mangle -D OUTPUT -j D2SD 2>/dev/null || true
+iptables -t mangle -F D2SD 2>/dev/null || true
 iptables -t mangle -D INPUT -p udp --sport 443 \
     -m connbytes --connbytes 0:8 --connbytes-dir reply --connbytes-mode packets \
     -j NFQUEUE --queue-num 2102 --queue-bypass 2>/dev/null || true
@@ -192,7 +192,7 @@ except Exception as e:
 
 props = ref.get("props", {})
 port = {}
-for line in open("/tmp/d2kc.log", encoding="utf-8", errors="replace"):
+for line in open("/tmp/d2sc.log", encoding="utf-8", errors="replace"):
     m = re.search(r'вопрос «([^»]+)»: (\d+)/(\d+)', line)
     if m:
         port[m.group(1)] = (int(m.group(2)), int(m.group(3)))
@@ -255,6 +255,6 @@ PY
 DRIVER
 
 docker run --rm --cap-add=NET_ADMIN --cap-add=NET_RAW \
-    -e "D2K_LAB_QUIC_NAME=${D2K_LAB_QUIC_NAME:-www.google.com}" \
-    -e "D2K_LAB_QUIC_BOX=${D2K_LAB_QUIC_BOX:-first}" \
+    -e "D2S_LAB_QUIC_NAME=${D2S_LAB_QUIC_NAME:-www.google.com}" \
+    -e "D2S_LAB_QUIC_BOX=${D2S_LAB_QUIC_BOX:-first}" \
     -v "$WORK:/w" -w /w gcc:14 sh /w/cmp.sh

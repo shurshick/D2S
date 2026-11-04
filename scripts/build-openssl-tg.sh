@@ -61,17 +61,17 @@ fi
 }
 
 cd "$OBJ_DIR"
-# Размер d2ktg важен для роутеров с 8/16 МиБ флеша. Секции функций и данных
+# Размер d2stg важен для роутеров с 8/16 МиБ флеша. Секции функций и данных
 # вместе с --gc-sections позволяют линкеру убрать неиспользуемый код.
 # Локальному runtime нужны TLS-клиент и проверка X.509/hostname, SHA-1,
 # SHA-256, AES-256, RAND и операции OpenSSL BIGNUM для MTProto.
 # Не отключать эти возможности ради размера. UNUSED_FEATURES ниже отключает
 # только неиспользуемые протоколы и алгоритмы; TLS, RSA и EC остаются доступны.
-# Замер 12.10.2026 (предыдущая версия d2ktg), big-endian mips:
+# Замер 12.10.2026 (предыдущая версия d2stg), big-endian mips:
 # 5 953 012 -> 5 187 940 байт (-12,9 %); он не описывает размер текущего runtime.
 # Проверки сборки секций выполняет scripts/check-router-builds.sh под QEMU.
 # openssl-link-smoke отдельно проверяет, что статическая сборка сохраняет
-# доступность ED25519; новый d2ktg этот алгоритм не использует.
+# доступность ED25519; новый d2stg этот алгоритм не использует.
 # C-код не использует раскрутку стека; её отключение оставлено как отдельная
 # оптимизация размера, которую нужно учитывать при изменении toolchain.
 UNUSED_FEATURES='no-dsa no-cms no-ct no-ocsp no-srp no-comp no-engine no-dynamic-engine
@@ -89,7 +89,7 @@ case "$ARCH" in mips|mipsel|x86) ATOMIC_FLAGS=-DBROKEN_CLANG_ATOMICS ;; esac
 CC="$ZIG cc -target $TARGET $TARGET_FLAGS $SIZE_CFLAGS" \
 AR="$ZIG ar" RANLIB="$ZIG ranlib" \
     "$SRC_DIR/Configure" "$SSL_TARGET" no-shared no-tests no-apps no-docs no-legacy $UNUSED_FEATURES $ASM_FLAGS $ATOMIC_FLAGS \
-    --prefix="$PREFIX" --openssldir=/opt/d2k/certs
+    --prefix="$PREFIX" --openssldir=/opt/d2s/certs
 make -j "$JOBS" build_libs
 make install_sw
 
@@ -109,9 +109,9 @@ file "$ROOT/build/telegram/openssl-link-smoke-$ARCH"
 # shellcheck disable=SC2086
 "$ZIG" cc -target "$TARGET" $TARGET_FLAGS -static -O2 -std=c11 \
     -Wall -Wextra -Werror -pedantic -Wl,-S $SIZE_CFLAGS -Wl,--gc-sections \
-    -DD2K_RELEASE_ID="\"${RELEASE_ID:-dev}\"" \
+    -DD2S_RELEASE_ID="\"${RELEASE_ID:-dev}\"" \
     -I"$ROOT/telegram/include" -I"$PREFIX/include" -I"$ZLIB_PREFIX/include" \
-    -o "$OUT/d2ktg-linux-$ARCH" \
+    -o "$OUT/d2stg-linux-$ARCH" \
     "$ROOT/telegram/src/main.c" \
     "$ROOT/telegram/src/config.c" \
     "$ROOT/telegram/src/tls.c" \
@@ -137,4 +137,4 @@ file "$ROOT/build/telegram/openssl-link-smoke-$ARCH"
     "$ROOT/telegram/src/transparent.c" \
     "$ROOT/telegram/src/stats_socket.c" \
     -L"$LIBDIR" -L"$ZLIB_PREFIX/lib" -lssl -lcrypto -lz -ldl -pthread
-file "$OUT/d2ktg-linux-$ARCH"
+file "$OUT/d2stg-linux-$ARCH"

@@ -1,4 +1,4 @@
-/* quicconn.c — одно соединение QUIC. Контракт и границы — в d2k_quicconn.h.
+/* quicconn.c — одно соединение QUIC. Контракт и границы — в d2s_quicconn.h.
  *
  * Байтовый уровень здесь не повторяется ни строкой: пакеты собирает и
  * разбирает core/quicwire.c, рукопожатие ведёт core/tls13core.c. Этот файл
@@ -20,12 +20,12 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_crypto.h"
-#include "d2k_meas.h"
-#include "d2k_verify.h"
-#include "d2k_quicconn.h"
-#include "d2k_quicwire.h"
-#include "d2k_tls13core.h"
+#include "d2s_crypto.h"
+#include "d2s_meas.h"
+#include "d2s_verify.h"
+#include "d2s_quicconn.h"
+#include "d2s_quicwire.h"
+#include "d2s_tls13core.h"
 
 /* Типы кадров, которые этот модуль умеет назвать (RFC 9000 §19). Остальные
  * пропускаются по длине либо честно валят разбор — см. frames_in. */
@@ -61,17 +61,17 @@
 #define CRYPTO_BUF 16384
 /* Сколько байт прикладных данных держим на поток. Зонду нужен только
  * заголовочный кадр ответа; тело он не качает. Равно пределу заголовков
- * проверки (D2K_VERIFY_HEADER_LIMIT): прежние 16 КБ молча обрезали ответ, и
+ * проверки (D2S_VERIFY_HEADER_LIMIT): прежние 16 КБ молча обрезали ответ, и
  * заголовки Meta длиннее них выглядели как «приложение молчит» (задача 44).
- * d2k_qc выделен на куче (calloc), так что буфер не лежит на стеке. */
-#define STREAM_BUF D2K_VERIFY_HEADER_LIMIT
+ * d2s_qc выделен на куче (calloc), так что буфер не лежит на стеке. */
+#define STREAM_BUF D2S_VERIFY_HEADER_LIMIT
 /* Наибольшая датаграмма, которую отправляем и принимаем. 1452 — та же
  * оценка, что у max_udp_payload_size ниже: 1492 (PPPoE) минус заголовки
  * IPv4 и UDP. Принимаем с запасом: сервер вправе слать до 65527. */
 #define DGRAM_OUT 1452
 /* Окна, объявленные в транспортных параметрах (tp_build). */
-#define D2K_QC_STREAM_WIN 262144u
-#define D2K_QC_CONN_WIN   1048576u
+#define D2S_QC_STREAM_WIN 262144u
+#define D2S_QC_CONN_WIN   1048576u
 #define DGRAM_IN  2048
 
 typedef struct {
@@ -82,7 +82,7 @@ typedef struct {
 } crypto_rx;
 
 typedef struct {
-    d2k_qw_keys tx, rx;
+    d2s_qw_keys tx, rx;
     uint64_t    next_pn;    /* следующий свой номер */
     uint64_t    largest_rx; /* наибольший принятый (для восстановления номера) */
     int         have_rx;    /* принимали ли хоть один пакет этого уровня */
@@ -98,7 +98,7 @@ typedef struct {
     crypto_rx   crypto;
 } level;
 
-struct d2k_qc {
+struct d2s_qc {
     int      fd;
     uint32_t version;
     uint8_t  dcid[20], scid[20];
@@ -107,12 +107,12 @@ struct d2k_qc {
     size_t   odcid_len;
     uint8_t  initial_scid[20]; /* SCID первого Initial для transport parameters */
     size_t   initial_scid_len;
-    uint8_t  retry_token[D2K_QW_MAX_DGRAM];
+    uint8_t  retry_token[D2S_QW_MAX_DGRAM];
     size_t   retry_token_len;
     unsigned retry_count;
     int      retry_pending;
 
-    level    lv[D2K_QW_LEVEL_COUNT];
+    level    lv[D2S_QW_LEVEL_COUNT];
     int      handshake_done;
     int      peer_cid_fixed;   /* SCID сервера принят как адрес ответа */
     int      peer_name;
@@ -141,7 +141,7 @@ struct d2k_qc {
        Коробка рвёт поток через несколько килобайт после рукопожатия, и
        «пришли заголовки» этого не видит; «ответ целиком» — это FIN и все
        байты до него без дыр, а не наибольшее смещение. */
-    d2k_qw_ranges app_rx;
+    d2s_qw_ranges app_rx;
 
     /* Последняя прикладная посылка — для повтора по таймеру. Обнаружения
        потерь у нас нет и не нужно (см. шапку), но ОДИН повтор обязателен:
@@ -153,7 +153,7 @@ struct d2k_qc {
     uint8_t  last_app[DGRAM_OUT];
     size_t   last_app_len;
     /* Срок и счёт повтора last_app — состояние СОЕДИНЕНИЯ, а не одного
-       вызова d2k_qc_stream_recv. Проверка читает ответ кусками по 200 мс, и
+       вызова d2s_qc_stream_recv. Проверка читает ответ кусками по 200 мс, и
        таймер в 300 мс, заводимый заново в каждом куске, не срабатывал
        никогда: запрос HTTP/3 ни разу не переотправлялся (задача 33, трасса).
        Заводится отправкой посылки. */
@@ -170,7 +170,7 @@ struct d2k_qc {
        потока ответа и соединения. Расширяется, когда принята половина окна
        (RFC 9000 §4.2); без этого сервер вставал на 256 КБ, и ответ больше
        окна не завершался никогда. Ноль — начальные значения из
-       транспортных параметров (D2K_QC_STREAM_WIN / D2K_QC_CONN_WIN). */
+       транспортных параметров (D2S_QC_STREAM_WIN / D2S_QC_CONN_WIN). */
     uint64_t fc_stream_limit, fc_conn_limit;
     uint64_t rx_want_high;   /* наибольший конец данных потока ответа */
     uint64_t rx_other;       /* байты прочих потоков (счёт сверху) */
@@ -261,10 +261,10 @@ static size_t build_ack(uint8_t *out, size_t cap, uint64_t largest) {
     if (cap < 8) { return 0; }
     size_t o = 0;
     out[o++] = FR_ACK;
-    o += d2k_qw_varint_write(out + o, cap - o, largest);
-    o += d2k_qw_varint_write(out + o, cap - o, 0);   /* задержка */
-    o += d2k_qw_varint_write(out + o, cap - o, 0);   /* диапазонов сверх первого нет */
-    o += d2k_qw_varint_write(out + o, cap - o, 0);   /* первый диапазон: один пакет */
+    o += d2s_qw_varint_write(out + o, cap - o, largest);
+    o += d2s_qw_varint_write(out + o, cap - o, 0);   /* задержка */
+    o += d2s_qw_varint_write(out + o, cap - o, 0);   /* диапазонов сверх первого нет */
+    o += d2s_qw_varint_write(out + o, cap - o, 0);   /* первый диапазон: один пакет */
     return o;
 }
 
@@ -272,8 +272,8 @@ static size_t build_ack(uint8_t *out, size_t cap, uint64_t largest) {
  * датаграмму до этой длины PADDING'ом (для Initial обязательно 1200). */
 /* Запечатывает пакет уровня lvl в pkt (не короче DGRAM_OUT) и сдвигает номер.
    Отдельно от отправки: первый Initial нужен и БАЙТАМИ — приманкой голоса
-   (d2k_qc_first_initial), без всякого соединения. */
-static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
+   (d2s_qc_first_initial), без всякого соединения. */
+static size_t seal_level(d2s_qc *c, d2s_qw_level lvl, const uint8_t *payload,
                          size_t payload_len, size_t pad_to, uint8_t *pkt, size_t pkt_cap,
                          char *err, size_t errcap) {
     level *L = &c->lv[lvl];
@@ -284,9 +284,9 @@ static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
     memcpy(body, payload, payload_len);
     size_t blen = payload_len;
 
-    size_t pn_len = d2k_qw_pn_len(L->next_pn, -1);
+    size_t pn_len = d2s_qw_pn_len(L->next_pn, -1);
     size_t hlen;
-    if (lvl == D2K_QW_LEVEL_APP) {
+    if (lvl == D2S_QW_LEVEL_APP) {
         /* RFC 9001 §5.4.2: образец защиты заголовка берётся через 4 байта
            после начала номера — номер и тело вместе не короче 4 байт. Пакет
            из одного PING (тело 1 байт, номер 1 байт) иначе не запечатывался
@@ -302,8 +302,8 @@ static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
         memcpy(pkt + o, c->dcid, c->dcid_len); o += c->dcid_len;
         hlen = o;
     } else {
-        uint8_t type = (lvl == D2K_QW_LEVEL_INITIAL) ? D2K_QW_LT_INITIAL
-                                                     : D2K_QW_LT_HANDSHAKE;
+        uint8_t type = (lvl == D2S_QW_LEVEL_INITIAL) ? D2S_QW_LT_INITIAL
+                                                     : D2S_QW_LT_HANDSHAKE;
         /* Добивка должна попасть ВНУТРЬ пакета, иначе поле Length соврёт. */
         if (pad_to) {
             /* Заголовок считаем предварительно, чтобы узнать, сколько
@@ -311,11 +311,11 @@ static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
                от поля Length, то есть от длины тела. Два прохода дешевле, чем
                гадание. */
             uint8_t probe[64];
-            size_t h0 = d2k_qw_long_hdr_token(probe, sizeof probe, c->version, type,
+            size_t h0 = d2s_qw_long_hdr_token(probe, sizeof probe, c->version, type,
                                               c->dcid, c->dcid_len,
                                               c->scid, c->scid_len,
-                                              lvl == D2K_QW_LEVEL_INITIAL ? c->retry_token : NULL,
-                                              lvl == D2K_QW_LEVEL_INITIAL ? c->retry_token_len : 0,
+                                              lvl == D2S_QW_LEVEL_INITIAL ? c->retry_token : NULL,
+                                              lvl == D2S_QW_LEVEL_INITIAL ? c->retry_token_len : 0,
                                               pn_len, blen);
             if (h0 == 0) { say(err, errcap, "заголовок не собрался"); return 0; }
             size_t total = h0 + pn_len + blen + 16;
@@ -325,18 +325,18 @@ static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
                 blen += add;
             }
         }
-        hlen = d2k_qw_long_hdr_token(pkt, pkt_cap, c->version, type,
+        hlen = d2s_qw_long_hdr_token(pkt, pkt_cap, c->version, type,
                                      c->dcid, c->dcid_len,
                                      c->scid, c->scid_len,
-                                     lvl == D2K_QW_LEVEL_INITIAL ? c->retry_token : NULL,
-                                     lvl == D2K_QW_LEVEL_INITIAL ? c->retry_token_len : 0,
+                                     lvl == D2S_QW_LEVEL_INITIAL ? c->retry_token : NULL,
+                                     lvl == D2S_QW_LEVEL_INITIAL ? c->retry_token_len : 0,
                                      pn_len, blen);
     }
 
-    size_t n = d2k_qw_seal(&L->tx, lvl != D2K_QW_LEVEL_APP, pkt, hlen,
+    size_t n = d2s_qw_seal(&L->tx, lvl != D2S_QW_LEVEL_APP, pkt, hlen,
                            L->next_pn, pn_len, body, blen, pkt, pkt_cap);
     if (n == 0) { say(err, errcap, "пакет не собрался"); return 0; }
-    if (getenv("D2K_QC_TRACE")) {
+    if (getenv("D2S_QC_TRACE")) {
         fprintf(stderr, "[шлём] уровень %d номер %llu байт %zu тело %zu\n",
                 (int)lvl, (unsigned long long)L->next_pn, n, blen);
     }
@@ -344,7 +344,7 @@ static size_t seal_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
     return n;
 }
 
-static int send_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
+static int send_level(d2s_qc *c, d2s_qw_level lvl, const uint8_t *payload,
                       size_t payload_len, size_t pad_to, char *err, size_t errcap) {
     uint8_t pkt[DGRAM_OUT];
     size_t n = seal_level(c, lvl, payload, payload_len, pad_to, pkt, sizeof pkt, err, errcap);
@@ -361,10 +361,10 @@ static int send_level(d2k_qc *c, d2k_qw_level lvl, const uint8_t *payload,
 
 static size_t tp_put_int(uint8_t *p, size_t cap, uint64_t id, uint64_t v) {
     size_t o = 0;
-    size_t vlen = d2k_qw_varint_len(v);
-    o += d2k_qw_varint_write(p + o, cap - o, id);
-    o += d2k_qw_varint_write(p + o, cap - o, vlen);
-    o += d2k_qw_varint_write(p + o, cap - o, v);
+    size_t vlen = d2s_qw_varint_len(v);
+    o += d2s_qw_varint_write(p + o, cap - o, id);
+    o += d2s_qw_varint_write(p + o, cap - o, vlen);
+    o += d2s_qw_varint_write(p + o, cap - o, v);
     return o;
 }
 
@@ -372,22 +372,22 @@ static size_t tp_put_int(uint8_t *p, size_t cap, uint64_t id, uint64_t v) {
  * ClientHello. Набор — минимальный обязательный плюс пределы, при которых
  * сервер согласится что-то прислать: без initial_max_stream_data_* он вправе
  * не отдать ни байта, и «сервер молчит» стало бы нашей же настройкой. */
-static size_t tp_build(const d2k_qc *c, uint8_t *out, size_t cap) {
+static size_t tp_build(const d2s_qc *c, uint8_t *out, size_t cap) {
     uint8_t v[256];
     size_t o = 0;
     o += tp_put_int(v + o, sizeof v - o, 0x01, 30000);     /* max_idle_timeout */
     o += tp_put_int(v + o, sizeof v - o, 0x03, 1452);      /* max_udp_payload_size */
-    o += tp_put_int(v + o, sizeof v - o, 0x04, D2K_QC_CONN_WIN);   /* initial_max_data */
-    o += tp_put_int(v + o, sizeof v - o, 0x05, D2K_QC_STREAM_WIN); /* bidi_local */
-    o += tp_put_int(v + o, sizeof v - o, 0x06, D2K_QC_STREAM_WIN); /* bidi_remote */
-    o += tp_put_int(v + o, sizeof v - o, 0x07, D2K_QC_STREAM_WIN); /* uni */
+    o += tp_put_int(v + o, sizeof v - o, 0x04, D2S_QC_CONN_WIN);   /* initial_max_data */
+    o += tp_put_int(v + o, sizeof v - o, 0x05, D2S_QC_STREAM_WIN); /* bidi_local */
+    o += tp_put_int(v + o, sizeof v - o, 0x06, D2S_QC_STREAM_WIN); /* bidi_remote */
+    o += tp_put_int(v + o, sizeof v - o, 0x07, D2S_QC_STREAM_WIN); /* uni */
     o += tp_put_int(v + o, sizeof v - o, 0x08, 16);        /* max_streams_bidi */
     o += tp_put_int(v + o, sizeof v - o, 0x09, 16);        /* max_streams_uni */
     o += tp_put_int(v + o, sizeof v - o, 0x0e, 2);         /* active_connection_id_limit */
     /* initial_source_connection_id ОБЯЗАТЕЛЕН (RFC 9000 §7.3): им сервер
        сверяет, что SCID наших пакетов не подменили по дороге. */
-    o += d2k_qw_varint_write(v + o, sizeof v - o, 0x0f);
-    o += d2k_qw_varint_write(v + o, sizeof v - o, c->initial_scid_len);
+    o += d2s_qw_varint_write(v + o, sizeof v - o, 0x0f);
+    o += d2s_qw_varint_write(v + o, sizeof v - o, c->initial_scid_len);
     memcpy(v + o, c->initial_scid, c->initial_scid_len); o += c->initial_scid_len;
 
     if (cap < o + 4) { return 0; }
@@ -410,14 +410,14 @@ static size_t tp_build(const d2k_qc *c, uint8_t *out, size_t cap) {
  *
  * Параметр, которого НЕТ, нулём здесь не становится: предел остаётся
  * неизвестным, ограничивать нечем, и число за сервер не выдумывается. */
-static void tp_server_parse(d2k_qc *c, const uint8_t *p, size_t n) {
+static void tp_server_parse(d2s_qc *c, const uint8_t *p, size_t n) {
     size_t i = 0;
     while (i < n) {
         uint64_t id = 0, len = 0;
         size_t w = 0;
-        if (d2k_qw_varint_read(p + i, n - i, &id, &w) != 0) { return; }
+        if (d2s_qw_varint_read(p + i, n - i, &id, &w) != 0) { return; }
         i += w;
-        if (d2k_qw_varint_read(p + i, n - i, &len, &w) != 0) { return; }
+        if (d2s_qw_varint_read(p + i, n - i, &len, &w) != 0) { return; }
         i += w;
         if (len > n - i) { return; }
         /* Целочисленный параметр — ровно varint длиной в своё поле. Значение
@@ -425,7 +425,7 @@ static void tp_server_parse(d2k_qc *c, const uint8_t *p, size_t n) {
            считаем. */
         uint64_t v = 0;
         size_t vw = 0;
-        int num = d2k_qw_varint_read(p + i, (size_t)len, &v, &vw) == 0 &&
+        int num = d2s_qw_varint_read(p + i, (size_t)len, &v, &vw) == 0 &&
                   vw == (size_t)len;
         switch (id) {
         case 0x04: if (num) { c->peer_max_data = v; c->peer_max_data_set = 1; } break;
@@ -437,7 +437,7 @@ static void tp_server_parse(d2k_qc *c, const uint8_t *p, size_t n) {
         }
         i += (size_t)len;
     }
-    if (getenv("D2K_QC_TRACE")) {
+    if (getenv("D2S_QC_TRACE")) {
         fprintf(stderr, "[параметры сервера] потоки дву %llu/%d одно %llu/%d "
                         "данные связи %llu/%d потока %llu/%d\n",
                 (unsigned long long)c->peer_streams[0], c->peer_streams_set[0],
@@ -449,10 +449,10 @@ static void tp_server_parse(d2k_qc *c, const uint8_t *p, size_t n) {
 
 /* Расширения EncryptedExtensions сервера: ищет среди них
  * quic_transport_parameters (0x0039). Второго разбора TLS тут нет — само
- * сообщение выделено из флайта общим ядром (d2k_t13_flight_next), и остаётся
+ * сообщение выделено из флайта общим ядром (d2s_t13_flight_next), и остаётся
  * только список расширений: два байта общей длины, затем тип и длина по два
  * байта у каждого. */
-static void tp_server_ee(d2k_qc *c, const uint8_t *body, size_t blen) {
+static void tp_server_ee(d2s_qc *c, const uint8_t *body, size_t blen) {
     if (blen < 2) { return; }
     size_t total = (size_t)body[0] << 8 | body[1];
     if (total > blen - 2) { return; }
@@ -471,14 +471,14 @@ static void tp_server_ee(d2k_qc *c, const uint8_t *body, size_t blen) {
 
 /* Разбирает кадры расшифрованного пакета уровня lvl.
  * 0 — разобрано, -1 — встречен кадр, о котором мы не можем рассуждать. */
-static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
+static int frames_in(d2s_qc *c, d2s_qw_level lvl, const uint8_t *p, size_t n,
                      char *err, size_t errcap) {
     size_t i = 0;
     while (i < n) {
         uint64_t t = 0; size_t w = 0;
-        if (d2k_qw_varint_read(p + i, n - i, &t, &w) != 0) { return -1; }
+        if (d2s_qw_varint_read(p + i, n - i, &t, &w) != 0) { return -1; }
         i += w;
-        if (getenv("D2K_QC_TRACE")) {
+        if (getenv("D2S_QC_TRACE")) {
             fprintf(stderr, "[кадр] уровень %d тип 0x%llx\n", (int)lvl,
                     (unsigned long long)t);
         }
@@ -489,19 +489,19 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         case FR_ACK:
         case FR_ACK_ECN: {
             uint64_t largest = 0, delay = 0, cnt = 0, first = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &largest, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &delay, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &cnt, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &first, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &largest, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &delay, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &cnt, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &first, &w) != 0) { return -1; } i += w;
             for (uint64_t r = 0; r < cnt; r++) {
                 uint64_t gap = 0, len = 0;
-                if (d2k_qw_varint_read(p + i, n - i, &gap, &w) != 0) { return -1; } i += w;
-                if (d2k_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
+                if (d2s_qw_varint_read(p + i, n - i, &gap, &w) != 0) { return -1; } i += w;
+                if (d2s_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
             }
             if (t == FR_ACK_ECN) {
                 for (int e = 0; e < 3; e++) {
                     uint64_t x = 0;
-                    if (d2k_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
+                    if (d2s_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
                 }
             }
             {
@@ -515,8 +515,8 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         }
         case FR_CRYPTO: {
             uint64_t off = 0, len = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &off, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &off, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
             if (len > n - i) { return -1; }
             crypto_put(&c->lv[lvl].crypto, off, p + i, (size_t)len);
             i += (size_t)len;
@@ -524,7 +524,7 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         }
         case FR_NEW_TOKEN: {
             uint64_t len = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
             if (len > n - i) { return -1; }
             i += (size_t)len;
             break;
@@ -537,8 +537,8 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
                сброса, и пропуск без них сдвигает разбор всего пакета — на
                замере это выглядит как «сервер прислал мусор». */
             uint64_t seq = 0, ret = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &seq, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &ret, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &seq, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &ret, &w) != 0) { return -1; } i += w;
             if (i >= n) { return -1; }
             size_t cl = p[i++];
             if (cl > n - i) { return -1; }
@@ -549,7 +549,7 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
                рукопожатие сходится, а прикладные пакеты уходят в никуда:
                измерено на живых серверах — одни продолжали узнавать старый
                идентификатор, другие молча не отвечали. */
-            if (ret > 0 && cl > 0 && cl <= D2K_QW_CID_MAX) {
+            if (ret > 0 && cl > 0 && cl <= D2S_QW_CID_MAX) {
                 memcpy(c->dcid, p + i, cl);
                 c->dcid_len = cl;
                 c->peer_cid_fixed = 1;
@@ -563,7 +563,7 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         case FR_MAX_STREAMS_BIDI:
         case FR_MAX_STREAMS_UNI: {
             uint64_t x = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
             /* ПРЕДЕЛ, КОТОРЫЙ СЕРВЕР РАСШИРЯЕТ ПО ХОДУ СВЯЗИ: потоки он
                разрешает по мере закрытия прежних. Прежде эти кадры просто
                пропускались по длине — объявленное число не доходило до нас
@@ -587,22 +587,22 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         case FR_STREAMS_BLOCKED_BIDI:
         case FR_STREAMS_BLOCKED_UNI: {
             uint64_t x = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &x, &w) != 0) { return -1; } i += w;
             break;
         }
         case FR_MAX_STREAM_DATA:
         case FR_STREAM_DATA_BLOCKED:
         case FR_STOP_SENDING: {
             uint64_t a = 0, b = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &a, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &b, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &a, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &b, &w) != 0) { return -1; } i += w;
             break;
         }
         case FR_RESET_STREAM: {
             uint64_t a = 0, b = 0, d = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &a, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &b, &w) != 0) { return -1; } i += w;
-            if (d2k_qw_varint_read(p + i, n - i, &d, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &a, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &b, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &d, &w) != 0) { return -1; } i += w;
             break;
         }
         case FR_PATH_CHALLENGE:
@@ -613,11 +613,11 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         case FR_CONN_CLOSE_Q:
         case FR_CONN_CLOSE_A: {
             uint64_t code = 0, ftype = 0, rlen = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &code, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &code, &w) != 0) { return -1; } i += w;
             if (t == FR_CONN_CLOSE_Q) {
-                if (d2k_qw_varint_read(p + i, n - i, &ftype, &w) != 0) { return -1; } i += w;
+                if (d2s_qw_varint_read(p + i, n - i, &ftype, &w) != 0) { return -1; } i += w;
             }
-            if (d2k_qw_varint_read(p + i, n - i, &rlen, &w) != 0) { return -1; } i += w;
+            if (d2s_qw_varint_read(p + i, n - i, &rlen, &w) != 0) { return -1; } i += w;
             if (rlen > n - i) { return -1; }
             i += (size_t)rlen;
             c->closed = 1;
@@ -628,17 +628,17 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
         default:
             if (t >= FR_STREAM_LO && t <= FR_STREAM_HI) {
                 uint64_t sid = 0, off = 0, len = 0;
-                if (d2k_qw_varint_read(p + i, n - i, &sid, &w) != 0) { return -1; } i += w;
+                if (d2s_qw_varint_read(p + i, n - i, &sid, &w) != 0) { return -1; } i += w;
                 if (t & 0x04) {
-                    if (d2k_qw_varint_read(p + i, n - i, &off, &w) != 0) { return -1; } i += w;
+                    if (d2s_qw_varint_read(p + i, n - i, &off, &w) != 0) { return -1; } i += w;
                 }
                 if (t & 0x02) {
-                    if (d2k_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
+                    if (d2s_qw_varint_read(p + i, n - i, &len, &w) != 0) { return -1; } i += w;
                 } else {
                     len = n - i;   /* без поля длины кадр тянется до конца пакета */
                 }
                 if (len > n - i) { return -1; }
-                if (getenv("D2K_QC_TRACE")) {
+                if (getenv("D2S_QC_TRACE")) {
                     fprintf(stderr, "[поток] %llu смещение %llu байт %llu fin %d\n",
                             (unsigned long long)sid, (unsigned long long)off,
                             (unsigned long long)len, (int)(t & 1));
@@ -648,22 +648,22 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
                    зонду незачем, а притворяться, что разобрали, нельзя. */
                 int mine = c->have_want ? (sid == c->want_stream)
                                         : (c->rx_len == 0 || c->rx_stream == sid);
-                if (lvl == D2K_QW_LEVEL_APP) {
+                if (lvl == D2S_QW_LEVEL_APP) {
                     /* Кредит: половина окна принята — расширить. */
                     if (mine && c->have_want) {
                         if (off + len > c->rx_want_high) c->rx_want_high = off + len;
-                        uint64_t lim = c->fc_stream_limit ? c->fc_stream_limit : D2K_QC_STREAM_WIN;
-                        if (c->rx_want_high + D2K_QC_STREAM_WIN / 2 > lim) {
-                            c->fc_stream_limit = c->rx_want_high + D2K_QC_STREAM_WIN;
+                        uint64_t lim = c->fc_stream_limit ? c->fc_stream_limit : D2S_QC_STREAM_WIN;
+                        if (c->rx_want_high + D2S_QC_STREAM_WIN / 2 > lim) {
+                            c->fc_stream_limit = c->rx_want_high + D2S_QC_STREAM_WIN;
                             c->credit_due |= 1;
                         }
                     } else {
                         c->rx_other += len;
                     }
                     uint64_t used = c->rx_want_high + c->rx_other;
-                    uint64_t clim = c->fc_conn_limit ? c->fc_conn_limit : D2K_QC_CONN_WIN;
-                    if (used + D2K_QC_CONN_WIN / 2 > clim) {
-                        c->fc_conn_limit = used + D2K_QC_CONN_WIN;
+                    uint64_t clim = c->fc_conn_limit ? c->fc_conn_limit : D2S_QC_CONN_WIN;
+                    if (used + D2S_QC_CONN_WIN / 2 > clim) {
+                        c->fc_conn_limit = used + D2S_QC_CONN_WIN;
                         c->credit_due |= 2;
                     }
                 }
@@ -676,8 +676,8 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
                         if (off + take > c->rx_len) { c->rx_len = (size_t)off + take; }
                     }
                     if (t & 0x01) { c->rx_fin = 1; }
-                    if (lvl == D2K_QW_LEVEL_APP && c->have_want) {
-                        d2k_qw_ranges_add(&c->app_rx, off, len, (int)(t & 0x01));
+                    if (lvl == D2S_QW_LEVEL_APP && c->have_want) {
+                        d2s_qw_ranges_add(&c->app_rx, off, len, (int)(t & 0x01));
                     }
                 }
                 i += (size_t)len;
@@ -694,7 +694,7 @@ static int frames_in(d2k_qc *c, d2k_qw_level lvl, const uint8_t *p, size_t n,
 
 /* Читает одну датаграмму (не дольше wait_ms) и разбирает ВСЕ пакеты в ней.
  * 1 — что-то разобрали, 0 — за это время ничего не пришло, -1 — отказ. */
-static int recv_dgram(d2k_qc *c, int wait_ms, char *err, size_t errcap) {
+static int recv_dgram(d2s_qc *c, int wait_ms, char *err, size_t errcap) {
     struct pollfd pfd;
     pfd.fd = c->fd; pfd.events = POLLIN; pfd.revents = 0;
     int pr = poll(&pfd, 1, wait_ms);
@@ -721,18 +721,18 @@ static int recv_dgram(d2k_qc *c, int wait_ms, char *err, size_t errcap) {
     size_t off = 0;
     int any = 0;
     while (off < (size_t)n) {
-        d2k_qw_hdr h;
-        if (d2k_qw_hdr_parse(buf + off, (size_t)n - off, c->scid_len, &h) != 0) {
+        d2s_qw_hdr h;
+        if (d2s_qw_hdr_parse(buf + off, (size_t)n - off, c->scid_len, &h) != 0) {
             break;   /* хвост датаграммы не разбирается — по контракту молча бросаем */
         }
-        d2k_qw_level lvl;
+        d2s_qw_level lvl;
         if (!h.long_hdr) {
-            lvl = D2K_QW_LEVEL_APP;
-        } else if (h.type == D2K_QW_LT_INITIAL) {
-            lvl = D2K_QW_LEVEL_INITIAL;
-        } else if (h.type == D2K_QW_LT_HANDSHAKE) {
-            lvl = D2K_QW_LEVEL_HANDSHAKE;
-        } else if (h.type == D2K_QW_LT_RETRY) {
+            lvl = D2S_QW_LEVEL_APP;
+        } else if (h.type == D2S_QW_LT_INITIAL) {
+            lvl = D2S_QW_LEVEL_INITIAL;
+        } else if (h.type == D2S_QW_LT_HANDSHAKE) {
+            lvl = D2S_QW_LEVEL_HANDSHAKE;
+        } else if (h.type == D2S_QW_LT_RETRY) {
             /* RFC 9000 §17.2.5.2: второй Retry, Retry после любого пакета
                сервера и Retry с неверным тегом клиент ОТБРАСЫВАЕТ, а не рвёт
                соединение (финальное ревью core, M7): наш DCID виден на пути,
@@ -748,7 +748,7 @@ static int recv_dgram(d2k_qc *c, int wait_ms, char *err, size_t errcap) {
                 (h.scid_len == c->odcid_len &&
                  memcmp(buf + off + h.scid_off, c->odcid, c->odcid_len) == 0) ||
                 h.token_len > sizeof c->retry_token ||
-                d2k_qw_retry_verify(c->version, c->odcid, c->odcid_len,
+                d2s_qw_retry_verify(c->version, c->odcid, c->odcid_len,
                                     buf + off, h.packet_len) != 0) {
                 break;
             }
@@ -770,7 +770,7 @@ static int recv_dgram(d2k_qc *c, int wait_ms, char *err, size_t errcap) {
         uint8_t plain[DGRAM_IN];
         size_t plen = 0;
         uint64_t pn = 0;
-        if (d2k_qw_open(&L->rx, &h, buf + off, L->have_rx ? L->largest_rx : 0,
+        if (d2s_qw_open(&L->rx, &h, buf + off, L->have_rx ? L->largest_rx : 0,
                         plain, &plen, &pn) != 0) {
             off += h.packet_len;
             continue;   /* не открылось — не наш пакет, а не повод падать */
@@ -786,7 +786,7 @@ static int recv_dgram(d2k_qc *c, int wait_ms, char *err, size_t errcap) {
            свой: рукопожатие сходилось, а прикладные пакеты сервер не принимал
            и повторял свой флайт до истечения времени. */
         if (h.long_hdr && !c->peer_cid_fixed && h.scid_len > 0 &&
-            h.scid_len <= D2K_QW_CID_MAX) {
+            h.scid_len <= D2S_QW_CID_MAX) {
             memcpy(c->dcid, buf + off + h.scid_off, h.scid_len);
             c->dcid_len = h.scid_len;
             c->peer_cid_fixed = 1;
@@ -816,8 +816,8 @@ static size_t crypto_frame(uint8_t *out, size_t cap, uint64_t off,
                            const uint8_t *msg, size_t n) {
     size_t o = 0;
     out[o++] = FR_CRYPTO;
-    o += d2k_qw_varint_write(out + o, cap - o, off);
-    o += d2k_qw_varint_write(out + o, cap - o, n);
+    o += d2s_qw_varint_write(out + o, cap - o, off);
+    o += d2s_qw_varint_write(out + o, cap - o, n);
     if (o + n > cap) { return 0; }
     memcpy(out + o, msg, n); o += n;
     return o;
@@ -826,16 +826,16 @@ static size_t crypto_frame(uint8_t *out, size_t cap, uint64_t off,
 /* ПЕРВЫЙ ПОЛЁТ КЛИЕНТА — без сокета: идентификаторы соединения, ключи уровня
    Initial и ClientHello с транспортными параметрами в кадре CRYPTO. priv —
    закрытый ключ обмена, он нужен соединению дальше. Вынесено из
-   d2k_qc_connect, чтобы тот же первый Initial можно было получить БАЙТАМИ
-   (d2k_qc_first_initial) — не второй сборкой рядом, а этой же. */
-static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad_to,
+   d2s_qc_connect, чтобы тот же первый Initial можно было получить БАЙТАМИ
+   (d2s_qc_first_initial) — не второй сборкой рядом, а этой же. */
+static int first_flight(d2s_qc *c, const char *sni, const char *alpn, size_t pad_to,
                         uint8_t priv[32], uint8_t *frame, size_t cap, size_t *flen,
                         char *err, size_t errcap) {
     c->dcid_len = c->scid_len = 8;
     uint8_t pub[32], rnd[32];
-    if (d2k_t13_random(c->dcid, c->dcid_len) != 0 ||
-        d2k_t13_random(c->scid, c->scid_len) != 0 ||
-        d2k_t13_random(priv, 32) != 0 || d2k_t13_random(rnd, 32) != 0) {
+    if (d2s_t13_random(c->dcid, c->dcid_len) != 0 ||
+        d2s_t13_random(c->scid, c->scid_len) != 0 ||
+        d2s_t13_random(priv, 32) != 0 || d2s_t13_random(rnd, 32) != 0) {
         say(err, errcap, "нет случайности: /dev/urandom недоступен");
         return -1;
     }
@@ -843,7 +843,7 @@ static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad
     c->initial_scid_len = c->scid_len;
     memcpy(c->odcid, c->dcid, c->dcid_len);
     c->odcid_len = c->dcid_len;
-    if (d2k_x25519_base(pub, priv) != 0) {
+    if (d2s_x25519_base(pub, priv) != 0) {
         say(err, errcap, "открытый ключ не посчитался"); return -1;
     }
 
@@ -851,10 +851,10 @@ static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad
     /* Ключи уровня Initial: обе стороны выводятся из DCID нашего первого
        пакета (RFC 9001 §5.2). */
     uint8_t sec[32];
-    if (d2k_qw_initial_secret(c->version, c->dcid, c->dcid_len, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(c->version, sec, &c->lv[D2K_QW_LEVEL_INITIAL].tx) != 0 ||
-        d2k_qw_initial_secret(c->version, c->dcid, c->dcid_len, D2K_QW_SERVER, sec) != 0 ||
-        d2k_qw_keys_from_secret(c->version, sec, &c->lv[D2K_QW_LEVEL_INITIAL].rx) != 0) {
+    if (d2s_qw_initial_secret(c->version, c->dcid, c->dcid_len, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(c->version, sec, &c->lv[D2S_QW_LEVEL_INITIAL].tx) != 0 ||
+        d2s_qw_initial_secret(c->version, c->dcid, c->dcid_len, D2S_QW_SERVER, sec) != 0 ||
+        d2s_qw_keys_from_secret(c->version, sec, &c->lv[D2S_QW_LEVEL_INITIAL].rx) != 0) {
         say(err, errcap, "начальные ключи не вывелись"); return -1;
     }
 
@@ -864,7 +864,7 @@ static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad
     if (tp_len == 0) { say(err, errcap, "транспортные параметры не собрались"); return -1; }
 
     uint8_t ch[2560];
-    d2k_t13_ch_opts cho;
+    d2s_t13_ch_opts cho;
     memset(&cho, 0, sizeof cho);
     uint8_t ip_target[16];
     cho.sni = (sni && (inet_pton(AF_INET, sni, ip_target) == 1 ||
@@ -876,7 +876,7 @@ static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad
     cho.extra = tp;
     cho.extra_len = tp_len;
     cho.pad_to = pad_to;
-    size_t ch_len = d2k_t13_ch_build(&cho, ch, sizeof ch);
+    size_t ch_len = d2s_t13_ch_build(&cho, ch, sizeof ch);
     if (ch_len == 0) { say(err, errcap, "приветствие не собралось"); return -1; }
     memcpy(c->transcript, ch, ch_len);
     c->tr_len = ch_len;
@@ -890,27 +890,27 @@ static int first_flight(d2k_qc *c, const char *sni, const char *alpn, size_t pad
  * но с новым Destination CID сервера, новым своим SCID и token. Начальные
  * ключи выводятся заново из CID Retry, тогда как initial_source_connection_id
  * в уже собранном ClientHello остаётся SCID самого первого Initial. */
-static int prepare_retry(d2k_qc *c, char *err, size_t errcap) {
+static int prepare_retry(d2s_qc *c, char *err, size_t errcap) {
     if (!c || !c->retry_pending || c->retry_count != 0 ||
-        c->dcid_len == 0 || c->dcid_len > D2K_QW_CID_MAX) {
+        c->dcid_len == 0 || c->dcid_len > D2S_QW_CID_MAX) {
         say(err, errcap, "Retry нельзя применить к этому состоянию");
         return -1;
     }
     c->scid_len = 8;
-    if (d2k_t13_random(c->scid, c->scid_len) != 0) {
+    if (d2s_t13_random(c->scid, c->scid_len) != 0) {
         say(err, errcap, "новый SCID Retry не собрался");
         return -1;
     }
     memset(c->lv, 0, sizeof c->lv);
     uint8_t sec[32];
-    if (d2k_qw_initial_secret(c->version, c->dcid, c->dcid_len,
-                              D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(c->version, sec,
-                                &c->lv[D2K_QW_LEVEL_INITIAL].tx) != 0 ||
-        d2k_qw_initial_secret(c->version, c->dcid, c->dcid_len,
-                              D2K_QW_SERVER, sec) != 0 ||
-        d2k_qw_keys_from_secret(c->version, sec,
-                                &c->lv[D2K_QW_LEVEL_INITIAL].rx) != 0) {
+    if (d2s_qw_initial_secret(c->version, c->dcid, c->dcid_len,
+                              D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(c->version, sec,
+                                &c->lv[D2S_QW_LEVEL_INITIAL].tx) != 0 ||
+        d2s_qw_initial_secret(c->version, c->dcid, c->dcid_len,
+                              D2S_QW_SERVER, sec) != 0 ||
+        d2s_qw_keys_from_secret(c->version, sec,
+                                &c->lv[D2S_QW_LEVEL_INITIAL].rx) != 0) {
         say(err, errcap, "начальные ключи Retry не вывелись");
         return -1;
     }
@@ -920,13 +920,13 @@ static int prepare_retry(d2k_qc *c, char *err, size_t errcap) {
     return 0;
 }
 
-int d2k_qc_first_initial(const char *sni, uint8_t *out, size_t cap, size_t *out_len) {
+int d2s_qc_first_initial(const char *sni, uint8_t *out, size_t cap, size_t *out_len) {
     if (!sni || !out || !out_len) { return -1; }
     *out_len = 0;
-    d2k_qc *c = calloc(1, sizeof *c);
+    d2s_qc *c = calloc(1, sizeof *c);
     if (!c) { return -1; }
     c->fd = -1;
-    c->version = D2K_QW_V1;
+    c->version = D2S_QW_V1;
     uint8_t priv[32];
     uint8_t frame[2600];
     size_t flen = 0;
@@ -934,7 +934,7 @@ int d2k_qc_first_initial(const char *sni, uint8_t *out, size_t cap, size_t *out_
     int rc = -1;
     if (first_flight(c, sni, NULL, 0, priv, frame, sizeof frame, &flen, err, sizeof err) == 0) {
         uint8_t pkt[DGRAM_OUT];
-        size_t n = seal_level(c, D2K_QW_LEVEL_INITIAL, frame, flen, 1200,
+        size_t n = seal_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200,
                               pkt, sizeof pkt, err, sizeof err);
         if (n > 0 && n <= cap) {
             memcpy(out, pkt, n);
@@ -957,16 +957,16 @@ static int qc_no_sigpipe(int fd) {
 #endif
 }
 
-int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap) {
+int d2s_qc_connect(const d2s_qc_opts *o, d2s_qc **out, char *err, size_t errcap) {
     if (err && errcap) { err[0] = '\0'; }
     if (!o || !o->ip || !out) { say(err, errcap, "нечем поднимать соединение"); return -1; }
     *out = NULL;
 
-    d2k_qc *c = calloc(1, sizeof *c);
+    d2s_qc *c = calloc(1, sizeof *c);
     if (!c) { say(err, errcap, "не хватило памяти"); return -1; }
     c->fd = -1;
     c->peer_name = -1;
-    c->version = D2K_QW_V1;
+    c->version = D2S_QW_V1;
 
     uint8_t priv[32];
     uint8_t frame[2600];
@@ -975,7 +975,7 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
     size_t want_ch = (o->form && o->form->ch_len) ? (size_t)o->form->ch_len : o->pad_to;
     if (first_flight(c, o->sni, o->alpn, want_ch, priv, frame, sizeof frame, &flen,
                      err, errcap) != 0) {
-        d2k_qc_close(c); return -1;
+        d2s_qc_close(c); return -1;
     }
 
     int af = strchr(o->ip, ':') ? AF_INET6 : AF_INET;
@@ -1000,21 +1000,21 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
     if (strchr(o->ip, '%') || inet_pton(af, o->ip, dst) != 1) {
         say(err, errcap, "адрес не разбирается");
         if (c->fd < 0) { free(c); return -1; }
-        d2k_qc_close(c); return -1;
+        d2s_qc_close(c); return -1;
     }
     if (c->fd >= 0) {
         if (qc_no_sigpipe(c->fd) != 0) {
             say(err, errcap, "SO_NOSIGPIPE: %s", strerror(errno));
-            d2k_qc_close(c); return -2;
+            d2s_qc_close(c); return -2;
         }
-        if (o->mark && d2k_mark_hook(c->fd, o->mark) != 0) {
+        if (o->mark && d2s_mark_hook(c->fd, o->mark) != 0) {
             say(err, errcap, "метка измерительного сокета не поставилась");
-            d2k_qc_close(c); return -2;
+            d2s_qc_close(c); return -2;
         }
         /* connect на UDP не шлёт ни байта: он привязывает сокет к направлению,
            чтобы приходили ошибки ICMP и чтобы recv не принимал чужое. */
         if (connect(c->fd, (struct sockaddr *)&to, tolen) != 0) {
-            say(err, errcap, "connect: %s", strerror(errno)); d2k_qc_close(c); return -1;
+            say(err, errcap, "connect: %s", strerror(errno)); d2s_qc_close(c); return -1;
         }
     } else {
         /* СВОЙ СОКЕТ — СО СВЕЖЕЙ ЧЕТВЁРКОЙ (задача 39): местный порт, бывший
@@ -1022,7 +1022,7 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
            ним открыт, пока ищется следующий, и закрывается при выходе из
            поиска. Занятый вызывающим
            сокет (use_fd) проверен там, где его заняли. */
-        int held[D2K_UDP_FRESH_TRIES];
+        int held[D2S_UDP_FRESH_TRIES];
         int n_held = 0;
         int local_failed = 0;
         for (;;) {
@@ -1032,15 +1032,15 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
                 say(err, errcap, "SO_NOSIGPIPE: %s", strerror(errno));
                 local_failed = 1; close(fd); break;
             }
-            if (o->mark && d2k_mark_hook(fd, o->mark) != 0) {
+            if (o->mark && d2s_mark_hook(fd, o->mark) != 0) {
                 say(err, errcap, "метка измерительного сокета не поставилась");
                 local_failed = 1; close(fd); break;
             }
             if (connect(fd, (struct sockaddr *)&to, tolen) != 0) {
                 say(err, errcap, "connect: %s", strerror(errno)); close(fd); break;
             }
-            if (d2k_udp_port_claim(fd) <= 0) { c->fd = fd; break; }
-            if (n_held == D2K_UDP_FRESH_TRIES) {
+            if (d2s_udp_port_claim(fd) <= 0) { c->fd = fd; break; }
+            if (n_held == D2S_UDP_FRESH_TRIES) {
                 say(err, errcap, "свежего местного порта нет"); close(fd); break;
             }
             held[n_held++] = fd;
@@ -1070,8 +1070,8 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
            номерами 0..n-1 под общим DCID — ровно так его шлёт клиент, чьё
            приветствие в одну датаграмму не влезло. Размер каждой датаграммы —
            из формы: он тоже свойство клиента, по которому коробка решает. */
-        size_t parts = o->form->n > D2K_QSNAP_MAX_DGRAMS
-                       ? D2K_QSNAP_MAX_DGRAMS : o->form->n;
+        size_t parts = o->form->n > D2S_QSNAP_MAX_DGRAMS
+                       ? D2S_QSNAP_MAX_DGRAMS : o->form->n;
         size_t chunk = (c->tr_len + parts - 1) / parts;
         size_t pad = o->form->dgram_len ? o->form->dgram_len : 1200;
         for (size_t i = 0; i < parts; i++) {
@@ -1081,30 +1081,30 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
             uint8_t part[2600];
             size_t plen = crypto_frame(part, sizeof part, off, c->transcript + off, take);
             if (plen == 0 ||
-                send_level(c, D2K_QW_LEVEL_INITIAL, part, plen, pad, err, errcap) != 0) {
-                d2k_qc_close(c); return -1;
+                send_level(c, D2S_QW_LEVEL_INITIAL, part, plen, pad, err, errcap) != 0) {
+                d2s_qc_close(c); return -1;
             }
         }
     } else if (!o->first_send) {
-        if (send_level(c, D2K_QW_LEVEL_INITIAL, frame, flen, 1200, err, errcap) != 0) {
-            d2k_qc_close(c); return -1;
+        if (send_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200, err, errcap) != 0) {
+            d2s_qc_close(c); return -1;
         }
     } else {
         /* Замер плеча (задача 39): воздействие плеча идёт ПЕРЕД первым
            Initial на той же четвёрке, ровно как в вопросе-фильтре. Повторы
            по таймеру уходят как есть — так же их пропускает датапат. */
         uint8_t pkt[DGRAM_OUT];
-        size_t n = seal_level(c, D2K_QW_LEVEL_INITIAL, frame, flen, 1200,
+        size_t n = seal_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200,
                               pkt, sizeof pkt, err, errcap);
-        if (n == 0) { d2k_qc_close(c); return -1; }
+        if (n == 0) { d2s_qc_close(c); return -1; }
         int sent = o->first_send(c->fd, pkt, n, o->first_send_user);
         if (sent < 0) {
             say(err, errcap, "воздействие перед первым Initial не ушло");
-            d2k_qc_close(c); return -1;
+            d2s_qc_close(c); return -1;
         }
         if (sent == 0 && send(c->fd, pkt, n, 0) != (ssize_t)n) {
             say(err, errcap, "датаграмма не ушла: %s", strerror(errno));
-            d2k_qc_close(c); return -1;
+            d2s_qc_close(c); return -1;
         }
         c->tx_dgrams++;
     }
@@ -1119,12 +1119,12 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
         int left = (int)(deadline - now_ms());
         int wait = left > 50 ? 50 : left;
         int r = recv_dgram(c, wait, err, errcap);
-        if (r < 0) { d2k_qc_close(c); return -1; }
+        if (r < 0) { d2s_qc_close(c); return -1; }
         if (r == 2) {
             if (prepare_retry(c, err, errcap) != 0 ||
-                send_level(c, D2K_QW_LEVEL_INITIAL, frame, flen, 1200,
+                send_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200,
                            err, errcap) != 0) {
-                d2k_qc_close(c); return -1;
+                d2s_qc_close(c); return -1;
             }
             pto = now_ms() + 333;
             tries = 0;
@@ -1133,34 +1133,34 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
 
         /* Разбираем то, что собралось на уровне Initial: ServerHello. */
         if (!sh_done) {
-            crypto_rx *cr = &c->lv[D2K_QW_LEVEL_INITIAL].crypto;
+            crypto_rx *cr = &c->lv[D2S_QW_LEVEL_INITIAL].crypto;
             size_t ready = crypto_ready(cr);
             size_t off = cr->taken;
             uint8_t mt = 0; const uint8_t *body = NULL; size_t blen = 0;
-            while (d2k_t13_flight_next(cr->buf, ready, &off, &mt, &body, &blen)) {
+            while (d2s_t13_flight_next(cr->buf, ready, &off, &mt, &body, &blen)) {
                 size_t msg_len = blen + 4;
                 if (c->tr_len + msg_len > sizeof c->transcript) { break; }
                 memcpy(c->transcript + c->tr_len, body - 4, msg_len);
                 c->tr_len += msg_len;
                 cr->taken = off;
-                if (mt == D2K_T13_SERVER_HELLO) {
+                if (mt == D2S_T13_SERVER_HELLO) {
                     const uint8_t *peer = NULL;
-                    if (d2k_t13_sh_parse(body - 4, msg_len, &peer, err, errcap) != 0) {
-                        d2k_qc_close(c); return -1;
+                    if (d2s_t13_sh_parse(body - 4, msg_len, &peer, err, errcap) != 0) {
+                        d2s_qc_close(c); return -1;
                     }
                     uint8_t shared[32], c_hs[32], s_hs[32];
-                    if (d2k_x25519(shared, priv, peer) != 0) {
+                    if (d2s_x25519(shared, priv, peer) != 0) {
                         say(err, errcap, "общий секрет не посчитался");
-                        d2k_qc_close(c); return -1;
+                        d2s_qc_close(c); return -1;
                     }
-                    if (d2k_t13_schedule_hs(shared, c->transcript, c->tr_len,
+                    if (d2s_t13_schedule_hs(shared, c->transcript, c->tr_len,
                                             c_hs, s_hs, c->hs_secret) != 0 ||
-                        d2k_qw_keys_from_secret(c->version, c_hs,
-                                                &c->lv[D2K_QW_LEVEL_HANDSHAKE].tx) != 0 ||
-                        d2k_qw_keys_from_secret(c->version, s_hs,
-                                                &c->lv[D2K_QW_LEVEL_HANDSHAKE].rx) != 0) {
+                        d2s_qw_keys_from_secret(c->version, c_hs,
+                                                &c->lv[D2S_QW_LEVEL_HANDSHAKE].tx) != 0 ||
+                        d2s_qw_keys_from_secret(c->version, s_hs,
+                                                &c->lv[D2S_QW_LEVEL_HANDSHAKE].rx) != 0) {
                         say(err, errcap, "ключи рукопожатия не собрались");
-                        d2k_qc_close(c); return -1;
+                        d2s_qc_close(c); return -1;
                     }
                     memcpy(c->c_hs_secret, c_hs, 32);
                     sh_done = 1; hs_keys = 1;
@@ -1171,11 +1171,11 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
         /* Флайт сервера на уровне Handshake: EE, Certificate, CV, Finished. */
         int fin_seen = 0;
         if (hs_keys) {
-            crypto_rx *cr = &c->lv[D2K_QW_LEVEL_HANDSHAKE].crypto;
+            crypto_rx *cr = &c->lv[D2S_QW_LEVEL_HANDSHAKE].crypto;
             size_t ready = crypto_ready(cr);
             size_t off = cr->taken;
             uint8_t mt = 0; const uint8_t *body = NULL; size_t blen = 0;
-            while (d2k_t13_flight_next(cr->buf, ready, &off, &mt, &body, &blen)) {
+            while (d2s_t13_flight_next(cr->buf, ready, &off, &mt, &body, &blen)) {
                 size_t msg_len = blen + 4;
                 if (c->tr_len + msg_len > sizeof c->transcript) { break; }
                 memcpy(c->transcript + c->tr_len, body - 4, msg_len);
@@ -1184,23 +1184,23 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
                 /* Пределы сервера приезжают ЗДЕСЬ, в его EncryptedExtensions,
                    и больше нигде: дальше о них говорят только кадры
                    MAX_STREAMS / MAX_DATA (задача 29). */
-                if (mt == D2K_T13_ENCRYPTED_EXT) { tp_server_ee(c, body, blen); }
-                if (mt == D2K_T13_CERTIFICATE && o->sni && o->sni[0]) {
-                    c->peer_name = d2k_t13_cert_name_ok(body, blen, o->sni);
+                if (mt == D2S_T13_ENCRYPTED_EXT) { tp_server_ee(c, body, blen); }
+                if (mt == D2S_T13_CERTIFICATE && o->sni && o->sni[0]) {
+                    c->peer_name = d2s_t13_cert_name_ok(body, blen, o->sni);
                 }
-                if (mt == D2K_T13_FINISHED) { fin_seen = 1; }
+                if (mt == D2S_T13_FINISHED) { fin_seen = 1; }
             }
         }
 
         /* Подтверждения. Их нельзя откладывать: пока сервер не увидит ACK
            уровня Handshake, он упирается в предел троекратного усиления и
            замолкает — на замере это неотличимо от блокировки. */
-        for (int l = 0; l < D2K_QW_LEVEL_COUNT; l++) {
+        for (int l = 0; l < D2S_QW_LEVEL_COUNT; l++) {
             level *L = &c->lv[l];
             if (!L->ack_due || !L->tx.have) { continue; }
             uint8_t ab[32];
             size_t an = build_ack(ab, sizeof ab, L->largest_rx);
-            if (an && send_level(c, (d2k_qw_level)l, ab, an, 0, err, errcap) == 0) {
+            if (an && send_level(c, (d2s_qw_level)l, ab, an, 0, err, errcap) == 0) {
                 L->ack_due = 0;
             }
         }
@@ -1208,25 +1208,25 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
         if (fin_seen) {
             /* Прикладные ключи считаются от транскрипта ДО нашего Finished. */
             uint8_t c_ap[32], s_ap[32];
-            if (d2k_t13_schedule_ap(c->hs_secret, c->transcript, c->tr_len,
+            if (d2s_t13_schedule_ap(c->hs_secret, c->transcript, c->tr_len,
                                     c_ap, s_ap) != 0 ||
-                d2k_qw_keys_from_secret(c->version, c_ap, &c->lv[D2K_QW_LEVEL_APP].tx) != 0 ||
-                d2k_qw_keys_from_secret(c->version, s_ap, &c->lv[D2K_QW_LEVEL_APP].rx) != 0) {
+                d2s_qw_keys_from_secret(c->version, c_ap, &c->lv[D2S_QW_LEVEL_APP].tx) != 0 ||
+                d2s_qw_keys_from_secret(c->version, s_ap, &c->lv[D2S_QW_LEVEL_APP].rx) != 0) {
                 say(err, errcap, "прикладные ключи не собрались");
-                d2k_qc_close(c); return -1;
+                d2s_qc_close(c); return -1;
             }
             uint8_t verify[32];
-            if (d2k_t13_finished_mac(c->c_hs_secret, c->transcript, c->tr_len, verify) != 0) {
+            if (d2s_t13_finished_mac(c->c_hs_secret, c->transcript, c->tr_len, verify) != 0) {
                 say(err, errcap, "подтверждение не собралось");
-                d2k_qc_close(c); return -1;
+                d2s_qc_close(c); return -1;
             }
             uint8_t fin[4 + 32];
-            fin[0] = D2K_T13_FINISHED; fin[1] = 0; fin[2] = 0; fin[3] = 32;
+            fin[0] = D2S_T13_FINISHED; fin[1] = 0; fin[2] = 0; fin[3] = 32;
             memcpy(fin + 4, verify, 32);
             uint8_t fr[64];
             size_t fn = crypto_frame(fr, sizeof fr, 0, fin, sizeof fin);
-            if (fn == 0 || send_level(c, D2K_QW_LEVEL_HANDSHAKE, fr, fn, 0, err, errcap) != 0) {
-                d2k_qc_close(c); return -1;
+            if (fn == 0 || send_level(c, D2S_QW_LEVEL_HANDSHAKE, fr, fn, 0, err, errcap) != 0) {
+                d2s_qc_close(c); return -1;
             }
             *out = c;
             return 0;
@@ -1238,7 +1238,7 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
             if (++tries > 3) { break; }
             pto = now_ms() + (333 << tries);
             if (!sh_done) {
-                (void)send_level(c, D2K_QW_LEVEL_INITIAL, frame, flen, 1200, err, errcap);
+                (void)send_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200, err, errcap);
             }
         }
     }
@@ -1260,9 +1260,9 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
      * Текст короткий и цифры в конце: вызывающий печатает его через «%.120s»,
      * кириллица идёт по два байта. */
     if (!c->closed) {
-        uint64_t ini = c->lv[D2K_QW_LEVEL_INITIAL].rx_pkts;
-        uint64_t hs = c->lv[D2K_QW_LEVEL_HANDSHAKE].rx_pkts;
-        size_t hs_crypto = c->lv[D2K_QW_LEVEL_HANDSHAKE].crypto.high;
+        uint64_t ini = c->lv[D2S_QW_LEVEL_INITIAL].rx_pkts;
+        uint64_t hs = c->lv[D2S_QW_LEVEL_HANDSHAKE].rx_pkts;
+        size_t hs_crypto = c->lv[D2S_QW_LEVEL_HANDSHAKE].crypto.high;
         if (hs == 0 && ini >= 2) {
             say(err, errcap, "наши пакеты до сервера не доходят: он повторяет Initial ×%llu, "
                              "Handshake не пришёл", (unsigned long long)ini);
@@ -1274,13 +1274,13 @@ int d2k_qc_connect(const d2k_qc_opts *o, d2k_qc **out, char *err, size_t errcap)
                              "Finished не собрался", (unsigned long long)hs, hs_crypto);
         }
     }
-    d2k_qc_close(c);
+    d2s_qc_close(c);
     return -1;
 }
 
-int d2k_qc_stream_send(d2k_qc *c, uint64_t stream_id, const uint8_t *data, size_t n,
+int d2s_qc_stream_send(d2s_qc *c, uint64_t stream_id, const uint8_t *data, size_t n,
                        int fin, char *err, size_t errcap) {
-    if (!c || !c->lv[D2K_QW_LEVEL_APP].tx.have) {
+    if (!c || !c->lv[D2S_QW_LEVEL_APP].tx.have) {
         say(err, errcap, "прикладных ключей нет"); return -1;
     }
     /* ПРЕДЕЛ, ОБЪЯВЛЕННЫЙ СЕРВЕРОМ (задача 29). Поток с номером выше
@@ -1344,13 +1344,13 @@ int d2k_qc_stream_send(d2k_qc *c, uint64_t stream_id, const uint8_t *data, size_
            байты двух разных потоков как один. */
         c->rx_len = c->rx_taken = 0;
         c->rx_fin = 0;
-        d2k_qw_ranges_reset(&c->app_rx);
+        d2s_qw_ranges_reset(&c->app_rx);
     }
     uint8_t fr[DGRAM_OUT];
     size_t o = 0;
     fr[o++] = (uint8_t)(FR_STREAM_LO | 0x02 | (fin ? 0x01 : 0x00)); /* с длиной */
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, stream_id);
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, n);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, stream_id);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, n);
     if (o + n > sizeof fr) { say(err, errcap, "данные не помещаются в датаграмму"); return -1; }
     memcpy(fr + o, data, n); o += n;
     /* Повторяем ПОСЛЕДНЮЮ посылку — ту, ответа на которую ждём. Накопление
@@ -1364,10 +1364,10 @@ int d2k_qc_stream_send(d2k_qc *c, uint64_t stream_id, const uint8_t *data, size_
         c->app_pto_ms = now_ms() + 300;
         c->app_tries = 0;
     }
-    return send_level(c, D2K_QW_LEVEL_APP, fr, o, 0, err, errcap);
+    return send_level(c, D2S_QW_LEVEL_APP, fr, o, 0, err, errcap);
 }
 
-long d2k_qc_stream_recv(d2k_qc *c, uint64_t *stream_out, uint8_t *buf, size_t cap,
+long d2s_qc_stream_recv(d2s_qc *c, uint64_t *stream_out, uint8_t *buf, size_t cap,
                         int wait_ms, char *err, size_t errcap) {
     if (!c || !buf) { return -1; }
     int64_t until = now_ms() + (wait_ms > 0 ? wait_ms : 0);
@@ -1389,25 +1389,25 @@ long d2k_qc_stream_recv(d2k_qc *c, uint64_t *stream_out, uint8_t *buf, size_t ca
             c->app_tries < 3) {
             c->app_tries++;
             c->app_pto_ms = now_ms() + (300 << c->app_tries);
-            (void)send_level(c, D2K_QW_LEVEL_APP, c->last_app, c->last_app_len,
+            (void)send_level(c, D2S_QW_LEVEL_APP, c->last_app, c->last_app_len,
                              0, err, errcap);
         }
         /* Подтверждаем принятое: сервер не станет досылать, пока молчим.
            Вместе с ACK — расширение кредита, если половина окна принята. */
-        level *L = &c->lv[D2K_QW_LEVEL_APP];
+        level *L = &c->lv[D2S_QW_LEVEL_APP];
         if ((L->ack_due || c->credit_due) && L->tx.have) {
             uint8_t ab[64];
             size_t an = L->ack_due ? build_ack(ab, sizeof ab, L->largest_rx) : 0;
             if (c->credit_due & 2) {
                 ab[an++] = FR_MAX_DATA;
-                an += d2k_qw_varint_write(ab + an, sizeof ab - an, c->fc_conn_limit);
+                an += d2s_qw_varint_write(ab + an, sizeof ab - an, c->fc_conn_limit);
             }
             if ((c->credit_due & 1) && c->have_want) {
                 ab[an++] = FR_MAX_STREAM_DATA;
-                an += d2k_qw_varint_write(ab + an, sizeof ab - an, c->want_stream);
-                an += d2k_qw_varint_write(ab + an, sizeof ab - an, c->fc_stream_limit);
+                an += d2s_qw_varint_write(ab + an, sizeof ab - an, c->want_stream);
+                an += d2s_qw_varint_write(ab + an, sizeof ab - an, c->fc_stream_limit);
             }
-            if (an && send_level(c, D2K_QW_LEVEL_APP, ab, an, 0, err, errcap) == 0) {
+            if (an && send_level(c, D2S_QW_LEVEL_APP, ab, an, 0, err, errcap) == 0) {
                 L->ack_due = 0;
                 c->credit_due = 0;
             }
@@ -1415,27 +1415,27 @@ long d2k_qc_stream_recv(d2k_qc *c, uint64_t *stream_out, uint8_t *buf, size_t ca
     }
 }
 
-void d2k_qc_app_progress(const d2k_qc *c, uint64_t *bytes, int *complete) {
-    if (bytes) { *bytes = c ? d2k_qw_ranges_bytes(&c->app_rx) : 0; }
-    if (complete) { *complete = c ? d2k_qw_ranges_complete(&c->app_rx) : 0; }
+void d2s_qc_app_progress(const d2s_qc *c, uint64_t *bytes, int *complete) {
+    if (bytes) { *bytes = c ? d2s_qw_ranges_bytes(&c->app_rx) : 0; }
+    if (complete) { *complete = c ? d2s_qw_ranges_complete(&c->app_rx) : 0; }
 }
 
-int d2k_qc_peer_name(const d2k_qc *c) { return c ? c->peer_name : -1; }
-uint64_t d2k_qc_rx_wire_bytes(const d2k_qc *c) { return c ? c->rx_wire_bytes : 0; }
-void d2k_qc_datagrams(const d2k_qc *c, uint64_t *tx, uint64_t *rx) {
+int d2s_qc_peer_name(const d2s_qc *c) { return c ? c->peer_name : -1; }
+uint64_t d2s_qc_rx_wire_bytes(const d2s_qc *c) { return c ? c->rx_wire_bytes : 0; }
+void d2s_qc_datagrams(const d2s_qc *c, uint64_t *tx, uint64_t *rx) {
     if (tx) { *tx = c ? c->tx_dgrams : 0; }
     if (rx) { *rx = c ? c->rx_dgrams : 0; }
 }
-int d2k_qc_handshake_done(const d2k_qc *c) { return c ? c->handshake_done : 0; }
-int64_t d2k_qc_rtt_ms(const d2k_qc *c) { return c ? c->rtt_ms : 0; }
-void d2k_qc_dgrams(const d2k_qc *c, uint64_t *tx, uint64_t *rx) {
+int d2s_qc_handshake_done(const d2s_qc *c) { return c ? c->handshake_done : 0; }
+int64_t d2s_qc_rtt_ms(const d2s_qc *c) { return c ? c->rtt_ms : 0; }
+void d2s_qc_dgrams(const d2s_qc *c, uint64_t *tx, uint64_t *rx) {
     if (tx) *tx = c ? c->tx_dgrams : 0;
     if (rx) *rx = c ? c->rx_dgrams : 0;
 }
 
-int d2k_qc_outbound(const d2k_qc *c, uint64_t *sent_pn, uint64_t *acked_pn) {
+int d2s_qc_outbound(const d2s_qc *c, uint64_t *sent_pn, uint64_t *acked_pn) {
     if (!c) { return 0; }
-    const level *L = &c->lv[D2K_QW_LEVEL_APP];
+    const level *L = &c->lv[D2S_QW_LEVEL_APP];
     /* next_pn — СЛЕДУЮЩИЙ свой номер, поэтому последний отправленный на один
        меньше; до первой отправки его нет вовсе. */
     if (sent_pn) { *sent_pn = L->next_pn ? L->next_pn - 1 : 0; }
@@ -1444,14 +1444,14 @@ int d2k_qc_outbound(const d2k_qc *c, uint64_t *sent_pn, uint64_t *acked_pn) {
     return 1;
 }
 
-int d2k_qc_ping(d2k_qc *c, char *err, size_t errcap) {
+int d2s_qc_ping(d2s_qc *c, char *err, size_t errcap) {
     if (!c) return -1;
     uint8_t fr[1] = { FR_PING };
-    return send_level(c, D2K_QW_LEVEL_APP, fr, sizeof fr, 0, err, errcap);
+    return send_level(c, D2S_QW_LEVEL_APP, fr, sizeof fr, 0, err, errcap);
 }
-int d2k_qc_fd(const d2k_qc *c) { return c ? c->fd : -1; }
+int d2s_qc_fd(const d2s_qc *c) { return c ? c->fd : -1; }
 
-void d2k_qc_local(const d2k_qc *c, uint8_t ip4[4], uint16_t *port) {
+void d2s_qc_local(const d2s_qc *c, uint8_t ip4[4], uint16_t *port) {
     if (!c) { return; }
     if (ip4) {
         memset(ip4, 0, 4);
@@ -1460,7 +1460,7 @@ void d2k_qc_local(const d2k_qc *c, uint8_t ip4[4], uint16_t *port) {
     if (port) { *port = c->local_port; }
 }
 
-void d2k_qc_local_addr(const d2k_qc *c, uint8_t addr[16], uint8_t *family,
+void d2s_qc_local_addr(const d2s_qc *c, uint8_t addr[16], uint8_t *family,
                       uint16_t *port) {
     if (!c) return;
     if (addr) memcpy(addr, c->local_addr, 16);
@@ -1468,7 +1468,7 @@ void d2k_qc_local_addr(const d2k_qc *c, uint8_t addr[16], uint8_t *family,
     if (port) *port = c->local_port;
 }
 
-int d2k_qc_release(d2k_qc *c) {
+int d2s_qc_release(d2s_qc *c) {
     if (!c) { return -1; }
     int fd = c->fd;
     c->fd = -1;      /* чтобы close не тронул чужой теперь дескриптор */
@@ -1476,7 +1476,7 @@ int d2k_qc_release(d2k_qc *c) {
     return fd;
 }
 
-void d2k_qc_close(d2k_qc *c) {
+void d2s_qc_close(d2s_qc *c) {
     if (!c) { return; }
     if (c->fd >= 0) { close(c->fd); }
     free(c);

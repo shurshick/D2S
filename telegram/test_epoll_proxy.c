@@ -1078,7 +1078,7 @@ static void test_pending_tcp_connect_expires_before_idle_timeout(void) {
 }
 
 static void test_read_only_stats_socket(void) {
-    char directory[] = "/tmp/d2k-tg-stats-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-stats-XXXXXX";
     assert(mkdtemp(directory) != NULL);
     char path[108];
     int path_length = snprintf(path, sizeof(path), "%s/stats.sock", directory);
@@ -1426,7 +1426,7 @@ static void test_self_dial_target_is_rejected(void) {
 }
 
 static void test_epoll_wss_forwards_unrecognized_binary_response(void) {
-    char directory[] = "/tmp/d2k-tg-wss-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -1550,7 +1550,7 @@ static void test_epoll_wss_forwards_unrecognized_binary_response(void) {
 }
 
 static void test_epoll_wss_transport_ack_keeps_route_selected(void) {
-    char directory[] = "/tmp/d2k-tg-wss-ack-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-ack-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -1655,7 +1655,7 @@ static void test_epoll_wss_transport_ack_keeps_route_selected(void) {
 
 static void test_epoll_hedged_wss_commits_one_route_before_payload(
     tg_mtproto_proto proto) {
-    char directory[] = "/tmp/d2k-tg-wss-hedge-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-hedge-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -1825,7 +1825,7 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
 }
 
 static void test_epoll_wss_partial_request_is_not_replayed(void) {
-    char directory[] = "/tmp/d2k-tg-wss-recovery-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-recovery-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -1929,7 +1929,7 @@ static void test_epoll_wss_partial_request_is_not_replayed(void) {
 }
 
 static void test_epoll_wss_partial_response_does_not_replay_request(void) {
-    char directory[] = "/tmp/d2k-tg-wss-partial-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-partial-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2022,7 +2022,7 @@ static void test_epoll_wss_partial_response_does_not_replay_request(void) {
 }
 
 static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
-    char directory[] = "/tmp/d2k-tg-worker-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-worker-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2138,7 +2138,7 @@ static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
 }
 
 static void test_async_route_dns_waits_before_worker(void) {
-    char directory[] = "/tmp/d2k-tg-worker-dns-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-worker-dns-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2260,7 +2260,7 @@ static void test_async_route_dns_waits_before_worker(void) {
 }
 
 static void test_epoll_cf_proxy_preserves_media_dc_hostname_and_framing(void) {
-    char directory[] = "/tmp/d2k-tg-cf-proxy-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-cf-proxy-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2378,7 +2378,7 @@ static void test_epoll_cf_proxy_preserves_media_dc_hostname_and_framing(void) {
 }
 
 static void test_epoll_reuses_confirmed_media_route_across_ips(void) {
-    char directory[] = "/tmp/d2k-tg-route-reuse-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-route-reuse-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2560,7 +2560,7 @@ static void exchange_wss_test_fixture(uint16_t proxy_port,
 }
 
 static void test_epoll_cools_down_cf_proxy_after_dns_failure(void) {
-    char directory[] = "/tmp/d2k-tg-route-dns-health-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-route-dns-health-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2702,7 +2702,7 @@ static void test_epoll_cools_down_cf_proxy_after_dns_failure(void) {
 }
 
 static void test_wss_partial_frame_before_response_advances_route(void) {
-    char directory[] = "/tmp/d2k-tg-wss-response-timeout-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-response-timeout-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2806,7 +2806,7 @@ static void test_wss_partial_frame_before_response_advances_route(void) {
 }
 
 static void test_epoll_direct_tcp_is_available_for_diagnostics(void) {
-    char directory[] = "/tmp/d2k-tg-wss-fallback-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-fallback-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
@@ -2907,7 +2907,7 @@ static void test_epoll_direct_tcp_is_available_for_diagnostics(void) {
 }
 
 static void test_epoll_certificate_failure_keeps_diagnostic_tcp(void) {
-    char directory[] = "/tmp/d2k-tg-wss-bad-cert-XXXXXX";
+    char directory[] = "/tmp/d2s-tg-wss-bad-cert-XXXXXX";
     char cert_path[256], key_path[256], trust_path[256];
     assert(mkdtemp(directory) != NULL);
     assert(snprintf(cert_path, sizeof(cert_path), "%s/server.pem", directory) > 0);

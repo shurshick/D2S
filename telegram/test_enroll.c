@@ -11,12 +11,12 @@
 #include <stdlib.h>
 
 int main(void) {
-    char dir[]="/tmp/d2k-enroll-test-XXXXXX",path[256];assert(mkdtemp(dir));
+    char dir[]="/tmp/d2s-enroll-test-XXXXXX",path[256];assert(mkdtemp(dir));
     snprintf(path,sizeof(path),"%s/identity",dir);
     tg_identity id={0};assert(tg_identity_load_or_mint(path,&id)==0);
     uint8_t body[TG_ENROLL_SIZE],message[70],hash[32];
     assert(tg_enroll_proof(&id,body)==0);
-    memcpy(message,"d2k-enroll-v1",14);memcpy(message+14,body,56);
+    memcpy(message,"d2s-enroll-v1",14);memcpy(message+14,body,56);
     assert(SHA256(message,sizeof(message),hash));
     assert(hash[0]==0&&hash[1]==0&&(hash[2]&0xc0)==0);
     assert(tg_identity_verify(body+16,message,sizeof(message),body+56)==0);

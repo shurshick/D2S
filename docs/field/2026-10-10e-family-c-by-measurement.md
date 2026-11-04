@@ -1,11 +1,11 @@
 # Полевой прогон 10.10.2026 (e): семейство C берётся замером, RST ушёл
 
 Сборка main `935d117` (единый движок исполнения: замер исполняет свой Plan
-через `d2k_plan_apply`/`d2k_wire_build` датапата, см.
+через `d2s_plan_apply`/`d2s_wire_build` датапата, см.
 [2026-10-10-measure-plan-runtime.md](2026-10-10-measure-plan-runtime.md)).
-Роутер Keenetic aarch64, пустой каталог, дир `/opt/d2k/field-1010e-935d117`,
+Роутер Keenetic aarch64, пустой каталог, дир `/opt/d2s/field-1010e-935d117`,
 откат по образцу. Safari, 19 сайтов из `sites.txt`, один проход + повторное
-открытие rutracker.org. Журнал — `run-e-d2kc.log` (локально, scratchpad).
+открытие rutracker.org. Журнал — `run-e-d2sc.log` (локально, scratchpad).
 
 ## Итог: цель достигнута
 

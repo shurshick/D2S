@@ -1,10 +1,10 @@
-/* net4.c — контракт и обоснования в d2k_net4.h. */
+/* net4.c — контракт и обоснования в d2s_net4.h. */
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_net4.h"
+#include "d2s_net4.h"
 
-int d2k_ip4_parse(const char *s, uint32_t *out) {
+int d2s_ip4_parse(const char *s, uint32_t *out) {
     if (!s || !out) { return -1; }
     uint32_t v = 0;
     for (int i = 0; i < 4; i++) {
@@ -29,7 +29,7 @@ int d2k_ip4_parse(const char *s, uint32_t *out) {
     return 0;
 }
 
-size_t d2k_ip4_text(uint32_t ip_net, char *out, size_t cap) {
+size_t d2s_ip4_text(uint32_t ip_net, char *out, size_t cap) {
     uint8_t b[4];
     memcpy(b, &ip_net, 4);
     int n = snprintf(out, cap, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
@@ -37,7 +37,7 @@ size_t d2k_ip4_text(uint32_t ip_net, char *out, size_t cap) {
     return (size_t)n;
 }
 
-int d2k_ip4_private(uint32_t ip_net) {
+int d2s_ip4_private(uint32_t ip_net) {
     uint8_t b[4];
     memcpy(b, &ip_net, 4);
     uint32_t v = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
@@ -50,7 +50,7 @@ int d2k_ip4_private(uint32_t ip_net) {
            v == 0;
 }
 
-int d2k_ip6_private(const uint8_t ip[16]) {
+int d2s_ip6_private(const uint8_t ip[16]) {
     static const uint8_t zero[16] = {0};
     if (!ip) return 1;
     if (memcmp(ip, zero, 15) == 0 && ip[15] <= 1) return 1;
@@ -58,7 +58,7 @@ int d2k_ip6_private(const uint8_t ip[16]) {
         (ip[0] == 0xfe && (ip[1] & 0xc0) == 0x80) || ip[0] == 0xff) return 1;
     if (memcmp(ip, zero, 10) == 0 && ip[10] == 0xff && ip[11] == 0xff) {
         uint32_t v4; memcpy(&v4, ip + 12, 4);
-        return d2k_ip4_private(v4);
+        return d2s_ip4_private(v4);
     }
     return 0;
 }

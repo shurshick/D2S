@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "d2k_sched.h"
+#include "d2s_sched.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -34,8 +34,8 @@ static uint32_t idof(const uint8_t *b) {
 /* Метка посылки — ключ потока, к которому она относится. Для проверок
    порядка и сроков она безразлична, поэтому почти везде идёт одна и та же:
    отдельный блок ниже проверяет именно её доставку. */
-static d2k_key any_key(uint8_t proto, uint16_t lowp) {
-    d2k_key k;
+static d2s_key any_key(uint8_t proto, uint16_t lowp) {
+    d2s_key k;
     memset(&k, 0, sizeof k);
     k.proto = proto;
     k.low_port = lowp;
@@ -45,74 +45,74 @@ static d2k_key any_key(uint8_t proto, uint16_t lowp) {
 int main(void) {
     uint8_t pkt[64], pkt2[64], got[64];
     size_t len = 0;
-    d2k_key tag = any_key(6, 1);
-    d2k_key back;
+    d2s_key tag = any_key(6, 1);
+    d2s_key back;
 
     /* --- пустая очередь ---------------------------------------------------- */
     {
-        d2k_sched *s = d2k_sched_new(4, 64);
+        d2s_sched *s = d2s_sched_new(4, 64);
         CHECK(s != NULL, "очередь не создалась");
-        CHECK(d2k_sched_count(s) == 0, "новая очередь не пуста");
-        CHECK(d2k_sched_next_ns(s) == 0, "у пустой очереди есть срок");
-        CHECK(d2k_sched_pop_due(s, 1000, got, sizeof got, &len, &back) == 0,
+        CHECK(d2s_sched_count(s) == 0, "новая очередь не пуста");
+        CHECK(d2s_sched_next_ns(s) == 0, "у пустой очереди есть срок");
+        CHECK(d2s_sched_pop_due(s, 1000, got, sizeof got, &len, &back) == 0,
               "из пустой очереди что-то забралось");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- очередь растёт вместе с уточнённым MTU выхода -------------------- */
     {
-        d2k_sched *s = d2k_sched_new(2, 8);
+        d2s_sched *s = d2s_sched_new(2, 8);
         uint8_t small[8], big[16], out[16];
         size_t outlen = 0;
         mark(small, sizeof small, 1);
         mark(big, sizeof big, 2);
-        CHECK(d2k_sched_push(s, 10, small, sizeof small, &tag) == 0,
+        CHECK(d2s_sched_push(s, 10, small, sizeof small, &tag) == 0,
               "маленькая посылка не попала в очередь до роста");
-        CHECK(d2k_sched_grow_slot_size(s, sizeof big) == 1,
+        CHECK(d2s_sched_grow_slot_size(s, sizeof big) == 1,
               "очередь не расширила слот");
-        CHECK(d2k_sched_grow_slot_size(s, sizeof big) == 0,
+        CHECK(d2s_sched_grow_slot_size(s, sizeof big) == 0,
               "повторное расширение изменило размер");
-        CHECK(d2k_sched_grow_slot_size(s, 4) == 0,
+        CHECK(d2s_sched_grow_slot_size(s, 4) == 0,
               "запрос меньшего слота изменил очередь");
-        CHECK(d2k_sched_grow_slot_size(s, (size_t)-1) == -1,
+        CHECK(d2s_sched_grow_slot_size(s, (size_t)-1) == -1,
               "переполнение размера слота принято");
-        CHECK(d2k_sched_push(s, 11, big, sizeof big, &tag) == 0,
+        CHECK(d2s_sched_push(s, 11, big, sizeof big, &tag) == 0,
               "посылка нового размера не попала в расширенную очередь");
-        CHECK(d2k_sched_pop_due(s, 10, out, sizeof out, &outlen, &back) == 1 &&
+        CHECK(d2s_sched_pop_due(s, 10, out, sizeof out, &outlen, &back) == 1 &&
               outlen == sizeof small && memcmp(out, small, sizeof small) == 0,
               "рост очереди повредил уже ожидавшую посылку");
-        CHECK(d2k_sched_pop_due(s, 11, out, sizeof out, &outlen, &back) == 1 &&
+        CHECK(d2s_sched_pop_due(s, 11, out, sizeof out, &outlen, &back) == 1 &&
               outlen == sizeof big && memcmp(out, big, sizeof big) == 0,
               "расширенная очередь повредила новую посылку");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- срок соблюдается -------------------------------------------------- */
     {
-        d2k_sched *s = d2k_sched_new(4, 64);
+        d2s_sched *s = d2s_sched_new(4, 64);
         mark(pkt, 10, 1);
-        CHECK(d2k_sched_push(s, 5000, pkt, 10, &tag) == 0, "пакет не принят");
-        CHECK(d2k_sched_next_ns(s) == 5000, "ближайший срок не тот");
-        CHECK(d2k_sched_pop_due(s, 4999, got, sizeof got, &len, &back) == 0,
+        CHECK(d2s_sched_push(s, 5000, pkt, 10, &tag) == 0, "пакет не принят");
+        CHECK(d2s_sched_next_ns(s) == 5000, "ближайший срок не тот");
+        CHECK(d2s_sched_pop_due(s, 4999, got, sizeof got, &len, &back) == 0,
               "пакет выдан раньше срока");
-        CHECK(d2k_sched_pop_due(s, 5000, got, sizeof got, &len, &back) == 1,
+        CHECK(d2s_sched_pop_due(s, 5000, got, sizeof got, &len, &back) == 1,
               "пакет не выдан в свой срок");
         CHECK(len == 10 && idof(got) == 1, "выдался не тот пакет");
-        CHECK(d2k_sched_count(s) == 0, "счётчик после выдачи не обнулился");
-        d2k_sched_free(s);
+        CHECK(d2s_sched_count(s) == 0, "счётчик после выдачи не обнулился");
+        d2s_sched_free(s);
     }
 
     /* --- порядок по сроку, а не по постановке ------------------------------ */
     {
-        d2k_sched *s = d2k_sched_new(8, 64);
+        d2s_sched *s = d2s_sched_new(8, 64);
         uint64_t due[5] = {900, 100, 500, 50, 700};
         for (uint32_t i = 0; i < 5; i++) {
             mark(pkt, 8, i);
-            d2k_sched_push(s, due[i], pkt, 8, &tag);
+            d2s_sched_push(s, due[i], pkt, 8, &tag);
         }
         uint32_t want[5] = {3, 1, 2, 4, 0};
         for (int i = 0; i < 5; i++) {
-            CHECK(d2k_sched_pop_due(s, 100000, got, sizeof got, &len, &back) == 1,
+            CHECK(d2s_sched_pop_due(s, 100000, got, sizeof got, &len, &back) == 1,
                   "пакет не выдался");
             if (idof(got) != want[i]) {
                 printf("ПРОВАЛ: на позиции %d ожидался пакет %u, пришёл %u\n",
@@ -120,18 +120,18 @@ int main(void) {
                 fails++;
             }
         }
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- равные сроки: порядок постановки ---------------------------------- */
     {
-        d2k_sched *s = d2k_sched_new(16, 64);
+        d2s_sched *s = d2s_sched_new(16, 64);
         for (uint32_t i = 0; i < 10; i++) {
             mark(pkt, 8, i);
-            CHECK(d2k_sched_push(s, 1000, pkt, 8, &tag) == 0, "равные сроки: не принят");
+            CHECK(d2s_sched_push(s, 1000, pkt, 8, &tag) == 0, "равные сроки: не принят");
         }
         for (uint32_t i = 0; i < 10; i++) {
-            CHECK(d2k_sched_pop_due(s, 1000, got, sizeof got, &len, &back) == 1,
+            CHECK(d2s_sched_pop_due(s, 1000, got, sizeof got, &len, &back) == 1,
                   "равные сроки: не выдался");
             if (idof(got) != i) {
                 printf("ПРОВАЛ: равные сроки переставлены: ждали %u, пришёл %u\n",
@@ -139,51 +139,51 @@ int main(void) {
                 fails++;
             }
         }
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- переполнение: отказ, а не вытеснение ------------------------------- */
     {
-        d2k_sched *s = d2k_sched_new(3, 64);
+        d2s_sched *s = d2s_sched_new(3, 64);
         for (uint32_t i = 0; i < 3; i++) {
             mark(pkt, 8, i);
-            CHECK(d2k_sched_push(s, 1000 + i, pkt, 8, &tag) == 0, "не принят до предела");
+            CHECK(d2s_sched_push(s, 1000 + i, pkt, 8, &tag) == 0, "не принят до предела");
         }
         mark(pkt, 8, 99);
-        CHECK(d2k_sched_push(s, 1, pkt, 8, &tag) == -1, "переполнение не отказало");
-        CHECK(d2k_sched_refusals(s) == 1, "отказ не посчитан");
-        CHECK(d2k_sched_count(s) == 3, "отказ изменил содержимое очереди");
+        CHECK(d2s_sched_push(s, 1, pkt, 8, &tag) == -1, "переполнение не отказало");
+        CHECK(d2s_sched_refusals(s) == 1, "отказ не посчитан");
+        CHECK(d2s_sched_count(s) == 3, "отказ изменил содержимое очереди");
         /* Ранее принятые обязаны остаться нетронутыми. */
         for (uint32_t i = 0; i < 3; i++) {
-            d2k_sched_pop_due(s, 100000, got, sizeof got, &len, &back);
+            d2s_sched_pop_due(s, 100000, got, sizeof got, &len, &back);
             CHECK(idof(got) == i, "отказ вытеснил уже принятый пакет");
         }
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- слоты переиспользуются -------------------------------------------- */
     {
-        d2k_sched *s = d2k_sched_new(2, 64);
+        d2s_sched *s = d2s_sched_new(2, 64);
         for (uint32_t round = 0; round < 100; round++) {
             mark(pkt, 16, round);
-            CHECK(d2k_sched_push(s, round, pkt, 16, &tag) == 0, "слот не освободился");
-            CHECK(d2k_sched_pop_due(s, round, got, sizeof got, &len, &back) == 1,
+            CHECK(d2s_sched_push(s, round, pkt, 16, &tag) == 0, "слот не освободился");
+            CHECK(d2s_sched_pop_due(s, round, got, sizeof got, &len, &back) == 1,
                   "пакет не выдался в цикле переиспользования");
             CHECK(idof(got) == round && len == 16, "содержимое слота испортилось");
         }
-        CHECK(d2k_sched_refusals(s) == 0, "в цикле переиспользования были отказы");
-        d2k_sched_free(s);
+        CHECK(d2s_sched_refusals(s) == 0, "в цикле переиспользования были отказы");
+        d2s_sched_free(s);
     }
 
     /* --- пакет длиннее слота ------------------------------------------------ */
     {
-        d2k_sched *s = d2k_sched_new(4, 16);
+        d2s_sched *s = d2s_sched_new(4, 16);
         uint8_t big[64];
         mark(big, sizeof big, 7);
-        CHECK(d2k_sched_push(s, 1, big, sizeof big, &tag) == -2, "великан принят в слот");
-        CHECK(d2k_sched_refusals(s) == 1, "отказ по размеру не посчитан");
-        CHECK(d2k_sched_count(s) == 0, "великан всё-таки лёг в очередь");
-        d2k_sched_free(s);
+        CHECK(d2s_sched_push(s, 1, big, sizeof big, &tag) == -2, "великан принят в слот");
+        CHECK(d2s_sched_refusals(s) == 1, "отказ по размеру не посчитан");
+        CHECK(d2s_sched_count(s) == 0, "великан всё-таки лёг в очередь");
+        d2s_sched_free(s);
     }
 
     /* --- тесный буфер вызывающего: посылка ВЫБРАСЫВАЕТСЯ, очередь живёт -----
@@ -202,24 +202,24 @@ int main(void) {
      * останется неисполненной в любом случае — но остальные планы живут, а
      * факт не потерян: он в счётчике отказов, и вызывающий его разбирает. */
     {
-        d2k_sched *s = d2k_sched_new(4, 64);
+        d2s_sched *s = d2s_sched_new(4, 64);
         mark(pkt, 40, 5);
-        d2k_sched_push(s, 100, pkt, 40, &tag);
+        d2s_sched_push(s, 100, pkt, 40, &tag);
         mark(pkt2, 24, 6);
-        d2k_sched_push(s, 101, pkt2, 24, &tag);
-        uint64_t refus_before = d2k_sched_refusals(s);
+        d2s_sched_push(s, 101, pkt2, 24, &tag);
+        uint64_t refus_before = d2s_sched_refusals(s);
         uint8_t small[8];
-        CHECK(d2k_sched_pop_due(s, 100, small, sizeof small, &len, &back) == 0,
+        CHECK(d2s_sched_pop_due(s, 100, small, sizeof small, &len, &back) == 0,
               "пакет выдался в тесный буфер");
-        CHECK(d2k_sched_count(s) == 1,
+        CHECK(d2s_sched_count(s) == 1,
               "непоместившаяся посылка осталась в голове очереди — она заперла бы её целиком");
-        CHECK(d2k_sched_refusals(s) == refus_before + 1,
+        CHECK(d2s_sched_refusals(s) == refus_before + 1,
               "посылка выброшена молча: факт потерян");
         /* И ГЛАВНОЕ: очередь продолжает работать. */
-        CHECK(d2k_sched_pop_due(s, 101, got, sizeof got, &len, &back) == 1,
+        CHECK(d2s_sched_pop_due(s, 101, got, sizeof got, &len, &back) == 1,
               "после непоместившейся посылки очередь заперта");
         CHECK(idof(got) == 6 && len == 24, "следующая посылка испорчена");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- случайный стресс со сверкой против эталона -------------------------
@@ -231,7 +231,7 @@ int main(void) {
         enum { N = 500 };
         static uint64_t due[N];
         static uint32_t order[N];
-        d2k_sched *s = d2k_sched_new(N, 32);
+        d2s_sched *s = d2s_sched_new(N, 32);
         uint32_t rnd = 20260905u;
 
         for (uint32_t i = 0; i < N; i++) {
@@ -239,7 +239,7 @@ int main(void) {
             /* Диапазон сроков намеренно узкий: нужны совпадения. */
             due[i] = (rnd >> 20) % 25;
             mark(pkt, 32, i);
-            CHECK(d2k_sched_push(s, due[i], pkt, 32, &tag) == 0, "стресс: пакет не принят");
+            CHECK(d2s_sched_push(s, due[i], pkt, 32, &tag) == 0, "стресс: пакет не принят");
             order[i] = i;
         }
 
@@ -255,7 +255,7 @@ int main(void) {
         }
 
         for (uint32_t i = 0; i < N; i++) {
-            if (d2k_sched_pop_due(s, (uint64_t)-1, got, sizeof got, &len, &back) != 1) {
+            if (d2s_sched_pop_due(s, (uint64_t)-1, got, sizeof got, &len, &back) != 1) {
                 printf("ПРОВАЛ: стресс: очередь опустела на %u из %u\n", i, (uint32_t)N);
                 fails++;
                 break;
@@ -270,21 +270,21 @@ int main(void) {
                 break;
             }
         }
-        CHECK(d2k_sched_count(s) == 0, "стресс: очередь не опустела");
-        d2k_sched_free(s);
+        CHECK(d2s_sched_count(s) == 0, "стресс: очередь не опустела");
+        d2s_sched_free(s);
     }
 
     /* --- вырожденные аргументы ---------------------------------------------- */
     {
-        CHECK(d2k_sched_new(0, 64) == NULL, "очередь на ноль слотов создалась");
-        CHECK(d2k_sched_new(4, 0) == NULL, "очередь с нулевым слотом создалась");
-        d2k_sched_free(NULL);
-        CHECK(d2k_sched_count(NULL) == 0, "счётчик нулевой очереди не ноль");
-        CHECK(d2k_sched_next_ns(NULL) == 0, "срок нулевой очереди не ноль");
-        d2k_sched *s = d2k_sched_new(2, 64);
-        CHECK(d2k_sched_push(s, 1, NULL, 10, &tag) == -2, "принят нулевой указатель");
-        CHECK(d2k_sched_push(s, 1, pkt, 0, &tag) == -2, "принят пакет нулевой длины");
-        d2k_sched_free(s);
+        CHECK(d2s_sched_new(0, 64) == NULL, "очередь на ноль слотов создалась");
+        CHECK(d2s_sched_new(4, 0) == NULL, "очередь с нулевым слотом создалась");
+        d2s_sched_free(NULL);
+        CHECK(d2s_sched_count(NULL) == 0, "счётчик нулевой очереди не ноль");
+        CHECK(d2s_sched_next_ns(NULL) == 0, "срок нулевой очереди не ноль");
+        d2s_sched *s = d2s_sched_new(2, 64);
+        CHECK(d2s_sched_push(s, 1, NULL, 10, &tag) == -2, "принят нулевой указатель");
+        CHECK(d2s_sched_push(s, 1, pkt, 0, &tag) == -2, "принят пакет нулевой длины");
+        d2s_sched_free(s);
     }
 
     /* --- метка потока доезжает вместе с посылкой ---------------------------
@@ -301,16 +301,16 @@ int main(void) {
      * одна метка на всех прошла бы и при очереди, которая просто помнит
      * последнюю. */
     {
-        d2k_sched *s = d2k_sched_new(4, 64);
-        d2k_key ka = any_key(6, 4001), kb = any_key(17, 4002);
+        d2s_sched *s = d2s_sched_new(4, 64);
+        d2s_key ka = any_key(6, 4001), kb = any_key(17, 4002);
         mark(pkt, 8, 77);
-        CHECK(d2k_sched_push_serial(s, 200, pkt, 8, &ka, 123) == 0, "посылка с меткой A не принята");
+        CHECK(d2s_sched_push_serial(s, 200, pkt, 8, &ka, 123) == 0, "посылка с меткой A не принята");
         mark(pkt, 8, 88);
-        CHECK(d2k_sched_push_serial(s, 100, pkt, 8, &kb, 456) == 0, "посылка с меткой B не принята");
+        CHECK(d2s_sched_push_serial(s, 100, pkt, 8, &kb, 456) == 0, "посылка с меткой B не принята");
 
         memset(&back, 0xFF, sizeof back);
         uint64_t execution = 0;
-        CHECK(d2k_sched_pop_due_serial(s, 1000, got, sizeof got, &len, &back, &execution) == 1,
+        CHECK(d2s_sched_pop_due_serial(s, 1000, got, sizeof got, &len, &back, &execution) == 1,
               "первая посылка не выдалась");
         CHECK(execution == 456, "ранний пакет потерял поколение исполнения");
         CHECK(idof(got) == 88, "порядок по сроку нарушился");
@@ -318,7 +318,7 @@ int main(void) {
               "с ранней посылкой приехала чужая метка потока");
 
         memset(&back, 0xFF, sizeof back);
-        CHECK(d2k_sched_pop_due_serial(s, 1000, got, sizeof got, &len, &back, &execution) == 1,
+        CHECK(d2s_sched_pop_due_serial(s, 1000, got, sizeof got, &len, &back, &execution) == 1,
               "вторая посылка не выдалась");
         CHECK(execution == 123, "поздний пакет наследовал чужое поколение");
         CHECK(idof(got) == 77, "порядок по сроку нарушился на второй");
@@ -328,11 +328,11 @@ int main(void) {
         /* Метку можно и не спрашивать: вызывающему, которому она не нужна,
            не должно приходиться заводить переменную ради NULL-а. */
         mark(pkt, 8, 99);
-        CHECK(d2k_sched_push(s, 300, pkt, 8, &ka) == 0, "посылка без спроса метки не принята");
-        CHECK(d2k_sched_pop_due(s, 1000, got, sizeof got, &len, NULL) == 1,
+        CHECK(d2s_sched_push(s, 300, pkt, 8, &ka) == 0, "посылка без спроса метки не принята");
+        CHECK(d2s_sched_pop_due(s, 1000, got, sizeof got, &len, NULL) == 1,
               "выдача без запроса метки не сработала");
 
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     /* --- посылка, владеющая ID очереди (ревью I-A, m-2) -------------------
@@ -340,25 +340,25 @@ int main(void) {
      * не ушла — ACCEPT копии. Очередь возвращает ID вместе с посылкой, и
      * даже не влезшая в буфер посылка не теряет его. */
     {
-        d2k_sched *s = d2k_sched_new(4, 64);
+        d2s_sched *s = d2s_sched_new(4, 64);
         mark(pkt, 20, 7);
         mark(pkt2, 20, 8);
-        CHECK(d2k_sched_push_owned(s, 100, pkt, 20, 4242) == 0, "владеющая посылка не встала");
-        CHECK(d2k_sched_push(s, 100, pkt2, 20, &tag) == 0, "обычная посылка не встала");
+        CHECK(d2s_sched_push_owned(s, 100, pkt, 20, 4242) == 0, "владеющая посылка не встала");
+        CHECK(d2s_sched_push(s, 100, pkt2, 20, &tag) == 0, "обычная посылка не встала");
         int owned = -1;
         uint32_t qid = 0;
         uint64_t ex = 9;
-        CHECK(d2k_sched_pop_due_ex(s, 100, got, sizeof got, &len, &back, &ex, &owned, &qid) == 1 &&
+        CHECK(d2s_sched_pop_due_ex(s, 100, got, sizeof got, &len, &back, &ex, &owned, &qid) == 1 &&
               owned == 1 && qid == 4242 && idof(got) == 7 && back.proto == 0 && ex == 0,
               "владеющая посылка вернулась со своим ID");
-        CHECK(d2k_sched_pop_due_ex(s, 100, got, sizeof got, &len, &back, &ex, &owned, &qid) == 1 &&
+        CHECK(d2s_sched_pop_due_ex(s, 100, got, sizeof got, &len, &back, &ex, &owned, &qid) == 1 &&
               owned == 0 && idof(got) == 8, "обычная посылка — без ID");
-        CHECK(d2k_sched_push_owned(s, 200, pkt, 20, 77) == 0, "вторая владеющая не встала");
+        CHECK(d2s_sched_push_owned(s, 200, pkt, 20, 77) == 0, "вторая владеющая не встала");
         owned = -1;
-        CHECK(d2k_sched_pop_due_ex(s, 200, got, 8, &len, &back, &ex, &owned, &qid) == -1 &&
-              owned == 1 && qid == 77 && len == 0 && d2k_sched_count(s) == 0,
+        CHECK(d2s_sched_pop_due_ex(s, 200, got, 8, &len, &back, &ex, &owned, &qid) == -1 &&
+              owned == 1 && qid == 77 && len == 0 && d2s_sched_count(s) == 0,
               "не влезшая владеющая посылка отдаёт ID, а не теряет его");
-        d2k_sched_free(s);
+        d2s_sched_free(s);
     }
 
     if (fails) {

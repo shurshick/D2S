@@ -13,7 +13,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
-#include "d2k_meas.h"
+#include "d2s_meas.h"
 #include "test_stand.h"
 
 static int fails;
@@ -25,7 +25,7 @@ static int fails;
         }                                                  \
     } while (0)
 
-/* Подставные реализации d2k_mark_hook для проверки И-семантики метки без
+/* Подставные реализации d2s_mark_hook для проверки И-семантики метки без
  * зависимости от CAP_NET_ADMIN на машине проверки (см. блок теста в main). */
 static int mark_always_ok(int fd, uint32_t mark) {
     (void)fd;
@@ -44,28 +44,28 @@ static int mark_fail_on_second(int fd, uint32_t mark) {
 int main(void) {
     uint8_t hello[64];
     memset(hello, 0xAA, sizeof hello);
-    memcpy(hello, d2k_test_sig, sizeof d2k_test_sig);
-    d2k_hello h = {hello, sizeof hello, NULL, 0, 0, 0};
+    memcpy(hello, d2s_test_sig, sizeof d2s_test_sig);
+    d2s_hello h = {hello, sizeof hello, NULL, 0, 0, 0};
 
     {
         struct stand s = {0};
         uint16_t p = stand_start_family(&s, 0, AF_INET6);
         CHECK(p != 0, "IPv6 loopback fixture must start");
-        d2k_tally t = d2k_meas("::1", p, h, NULL, 0, 0, 700, 0,
-                              d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("::1", p, h, NULL, 0, 0, 700, 0,
+                              d2s_accept_serverhello, 3);
         CHECK(t.pass == 3 && t.err == 0, "native IPv6 measurement receives answers");
     }
     {
         struct stand s = {0};
         uint16_t p = stand_start_family(&s, 1, AF_INET6);
         CHECK(p != 0, "IPv6 blocking fixture must start");
-        d2k_tally t = d2k_meas("::1", p, h, NULL, 0, 0, 700, 0,
-                              d2k_accept_serverhello, 1);
+        d2s_tally t = d2s_meas("::1", p, h, NULL, 0, 0, 700, 0,
+                              d2s_accept_serverhello, 1);
         CHECK(t.pass == 0 && t.fail == 1 && t.err == 0,
               "IPv6 silence after send is measured, not a socket error");
         size_t cut = 1;
-        t = d2k_meas("::1", p, h, &cut, 1, 5000, 700, 0,
-                     d2k_accept_serverhello, 1);
+        t = d2s_meas("::1", p, h, &cut, 1, 5000, 700, 0,
+                     d2s_accept_serverhello, 1);
         CHECK(t.pass == 1 && t.err == 0, "IPv6 measurement preserves split experiment");
     }
 
@@ -73,8 +73,8 @@ int main(void) {
     {
         struct stand s;
         uint16_t p = stand_start(&s, 0);
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_serverhello, 3);
         CHECK(t.pass == 3, "на чистой мишени прошли не все три повтора");
         CHECK(t.fail == 0, "на чистой мишени есть промахи");
     }
@@ -83,8 +83,8 @@ int main(void) {
     {
         struct stand s;
         uint16_t p = stand_start(&s, 1);
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_serverhello, 3);
         CHECK(t.pass == 0, "на блокирующей мишени что-то прошло");
     }
 
@@ -95,8 +95,8 @@ int main(void) {
         size_t cuts[1] = { 1 };
         /* Пауза обязательна: на петле два send подряд попадают в один recv, и
            опыт про разрез перестаёт быть опытом про разрез. */
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, cuts, 1, 5000, 700, 0,
-                               d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, cuts, 1, 5000, 700, 0,
+                               d2s_accept_serverhello, 3);
         CHECK(t.pass == 3, "разрез не прошёл на префиксном матчере");
     }
 
@@ -104,8 +104,8 @@ int main(void) {
     {
         struct stand s;
         uint16_t p = stand_start(&s, 0);
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_serverhello, 1);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_serverhello, 1);
         CHECK(t.marked == 1, "без запроса метки серия объявлена непомеченной");
     }
 
@@ -114,28 +114,28 @@ int main(void) {
      * проваливается, и проверка «marked==1 при mark!=0» зеленела бы только
      * под root, а под обычным пользователем краснела бы, ничего не доказывая
      * про саму И-логику. Подменяем механизм постановки метки целиком
-     * (d2k_mark_hook), проверяя ПОЛИТИКУ отдельно от привилегии на машине
+     * (d2s_mark_hook), проверяя ПОЛИТИКУ отдельно от привилегии на машине
      * проверки — тот же приём, что markFunc в internal/classify/measure.go,
      * и по той же причине. */
     {
         struct stand s;
         uint16_t p = stand_start(&s, 0);
-        d2k_mark_fn real_mark = d2k_mark_hook; /* вернуть после подмены */
+        d2s_mark_fn real_mark = d2s_mark_hook; /* вернуть после подмены */
 
-        d2k_mark_hook = mark_always_ok;
-        d2k_tally t_ok = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0x2d,
-                                  d2k_accept_serverhello, 3);
+        d2s_mark_hook = mark_always_ok;
+        d2s_tally t_ok = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0x2d,
+                                  d2s_accept_serverhello, 3);
         CHECK(t_ok.marked == 1,
               "успешная метка на всех трёх дозвонах не признана серией помеченной");
 
         mark_fail_calls = 0;
-        d2k_mark_hook = mark_fail_on_second;
-        d2k_tally t_bad = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0x2d,
-                                   d2k_accept_serverhello, 3);
+        d2s_mark_hook = mark_fail_on_second;
+        d2s_tally t_bad = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0x2d,
+                                   d2s_accept_serverhello, 3);
         CHECK(t_bad.marked == 0,
               "один непомеченный дозвон из трёх не погасил метку всей серии");
 
-        d2k_mark_hook = real_mark;
+        d2s_mark_hook = real_mark;
     }
 
     /* --- АЛЕРТ — ОТВЕТ, НО НЕ ДОКАЗАТЕЛЬСТВО ПРОХОДА -----------------------
@@ -149,8 +149,8 @@ int main(void) {
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 7);
 
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_serverhello, 3);
         CHECK(t.pass == 0, "алерт засчитан за проход");
         CHECK(t.unproven == 3, "алерт не отмечен как непризнанный ответ");
         CHECK(t.err == 0, "ответ алертом принят за несостоявшийся опыт");
@@ -158,8 +158,8 @@ int main(void) {
 
         /* Приёмка КОНТРОЛЯ шире и намеренно: сервер, отвечающий отказом на
            незнакомое имя, — это всё равно сервер, до которого дошли. */
-        d2k_tally c = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_tls_record, 3);
+        d2s_tally c = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_tls_record, 3);
         CHECK(c.pass == 3, "контроль не засчитал алерт — а это ответ сервера, и линия им доказана");
         CHECK(c.unproven == 0, "признанный контролем ответ отмечен непризнанным");
     }
@@ -173,15 +173,15 @@ int main(void) {
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 8);
 
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_tls_record, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_tls_record, 3);
         CHECK(t.pass == 0, "блок-страница засчитана за запись TLS");
         CHECK(t.unproven == 3, "блок-страница не отмечена как непризнанный ответ");
 
         /* Чужой протокол: там разбирать нечего, и ответ есть ответ
            (RawTrigger донора — «важно лишь, ответил сервер или промолчал»). */
-        d2k_tally a = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_any, 3);
+        d2s_tally a = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_any, 3);
         CHECK(a.pass == 3, "приёмка «любой непустой ответ» не засчитала ответ");
     }
 
@@ -193,8 +193,8 @@ int main(void) {
         struct stand s;
         memset(&s, 0, sizeof s);
         uint16_t p = stand_start(&s, 1);
-        d2k_tally t = d2k_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
-                               d2k_accept_serverhello, 3);
+        d2s_tally t = d2s_meas("127.0.0.1", p, h, NULL, 0, 0, 700, 0,
+                               d2s_accept_serverhello, 3);
         CHECK(t.fail == 3, "молчание не засчитано в промахи");
         CHECK(t.unproven == 0, "молчание записано как непризнанный ответ");
         CHECK(t.err == 0, "молчание записано как несостоявшийся опыт");
@@ -212,18 +212,18 @@ int main(void) {
         int marked;
 
         size_t unordered[3] = { 12, 4, 8 };
-        int r1 = d2k_meas_once("127.0.0.1", p, h, unordered, 3, 0, 700, 0,
-                               d2k_accept_serverhello, &marked);
+        int r1 = d2s_meas_once("127.0.0.1", p, h, unordered, 3, 0, 700, 0,
+                               d2s_accept_serverhello, &marked);
         CHECK(r1 == -1, "немонотонные точки разреза приняты вместо отказа");
 
         size_t out_of_range[2] = { 1000, 8 };
-        int r2 = d2k_meas_once("127.0.0.1", p, h, out_of_range, 2, 0, 700, 0,
-                               d2k_accept_serverhello, &marked);
+        int r2 = d2s_meas_once("127.0.0.1", p, h, out_of_range, 2, 0, 700, 0,
+                               d2s_accept_serverhello, &marked);
         CHECK(r2 == -1, "точка разреза за пределами длины принята вместо отказа");
 
         size_t valid[1] = { 1 };
-        int r3 = d2k_meas_once("127.0.0.1", p, h, valid, 1, 0, 700, 0,
-                               d2k_accept_serverhello, &marked);
+        int r3 = d2s_meas_once("127.0.0.1", p, h, valid, 1, 0, 700, 0,
+                               d2s_accept_serverhello, &marked);
         CHECK(r3 == 1, "валидный разрез отклонён заодно с невалидными");
     }
 
@@ -237,7 +237,7 @@ int main(void) {
      * коробки (once/measure, internal/classify/classify.go).
      *
      * Попутно этот же тест держит второе: запись в сокет, получивший RST,
-     * валит процесс сигналом SIGPIPE, если его не подавить. d2kc ставит
+     * валит процесс сигналом SIGPIPE, если его не подавить. d2sc ставит
      * SIG_IGN сам, но тесты — отдельные процессы (ровно та же оговорка, что
      * у props_ask_contact в compose.c), и до подавления этот блок убивал
      * прогон целиком. */
@@ -247,9 +247,9 @@ int main(void) {
         uint16_t p = stand_start(&s, 10);
         size_t cuts[1] = { 1 };
         int marked;
-        int r = d2k_meas_once("127.0.0.1", p, h, cuts, 1, 5000, 700, 0,
-                              d2k_accept_serverhello, &marked);
-        CHECK(r == D2K_MEAS_ERR,
+        int r = d2s_meas_once("127.0.0.1", p, h, cuts, 1, 5000, 700, 0,
+                              d2s_accept_serverhello, &marked);
+        CHECK(r == D2S_MEAS_ERR,
               "неудавшаяся отправка выдана за молчание мишени — своя неудача "
               "записана коробке в свойства");
     }
@@ -278,8 +278,8 @@ int main(void) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
         int marked;
-        int r = d2k_meas_once("127.0.0.1", closed_port, h, NULL, 0, 0, 700, 0,
-                              d2k_accept_serverhello, &marked);
+        int r = d2s_meas_once("127.0.0.1", closed_port, h, NULL, 0, 0, 700, 0,
+                              d2s_accept_serverhello, &marked);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         double secs = (double)(t1.tv_sec - t0.tv_sec) +
                       (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
@@ -304,8 +304,8 @@ int main(void) {
     {
         static uint8_t big[16 * 1024 * 1024];
         memset(big, 0xBB, sizeof big);
-        memcpy(big, d2k_test_sig, sizeof d2k_test_sig);
-        d2k_hello bh = {big, sizeof big, NULL, 0, 0, 0};
+        memcpy(big, d2s_test_sig, sizeof d2s_test_sig);
+        d2s_hello bh = {big, sizeof big, NULL, 0, 0, 0};
 
         struct stand s;
         memset(&s, 0, sizeof s);
@@ -320,11 +320,11 @@ int main(void) {
            приёмнике (см. комментарий у mode==2 в stand_run), а ждать
            боевые 8 секунд ради одной проверки в каждом прогоне make check
            незачем. Обязаны вернуть значение обратно — оно глобальное. */
-        d2k_send_timeout_s = 1;
+        d2s_send_timeout_s = 1;
         int marked;
-        int r = d2k_meas_once("127.0.0.1", p, bh, NULL, 0, 0, 3000, 0,
-                              d2k_accept_serverhello, &marked);
-        d2k_send_timeout_s = 8;
+        int r = d2s_meas_once("127.0.0.1", p, bh, NULL, 0, 0, 3000, 0,
+                              d2s_accept_serverhello, &marked);
+        d2s_send_timeout_s = 8;
         CHECK(r == 1, "короткая запись потеряла часть большого приветствия");
     }
 

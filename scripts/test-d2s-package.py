@@ -14,15 +14,15 @@ assert isinstance(metadata.get('notes'), str) and metadata['notes'].strip(), 're
 stage_limit = int(re.search(r'^TMP_NEED_KB=(\d+)$', installer, re.M)[1]) * 1024
 release_limit = int(re.search(r'^TMP_RELEASE_NEED_KB=(\d+)$', installer, re.M)[1]) * 1024
 for arch, asset in metadata['assets'].items():
-    archive = out / f'd2k-{arch}.tar.gz'
+    archive = out / f'd2s-{arch}.tar.gz'
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == asset['sha256']
     with tarfile.open(archive) as tar:
         files = {m.name.removeprefix('./'): m for m in tar.getmembers() if m.isfile()}
-        for bin in ('d2kd', 'd2kc', 'd2kfetch', 'd2kpanel', 'd2ktg', 'd2o-resolver', 'd2o-dns-watch'):
+        for bin in ('d2sd', 'd2sc', 'd2sfetch', 'd2spanel', 'd2stg', 'd2s-resolver', 'd2s-dns-watch'):
             assert files[f'builds/{bin}-linux-{arch}'].size > 0
-        for path in ('scripts/install.sh', 'files/S99d2k', 'files/S96d2o-resolver', 'files/S97d2o-dns-watch',
-                     'files/d2k-lan.sh', 'files/d2k-meta-dns-core.sh', 'files/d2k-meta-dns-library.sh',
-                     'files/d2k-meta-dns-scheduler-core.sh', 'files/d2k-whatsapp-media.sh',
+        for path in ('scripts/install.sh', 'files/S99d2s', 'files/S96d2s-resolver', 'files/S97d2s-dns-watch',
+                     'files/d2s-lan.sh', 'files/d2s-meta-dns-core.sh', 'files/d2s-meta-dns-library.sh',
+                     'files/d2s-meta-dns-scheduler-core.sh', 'files/d2s-whatsapp-media.sh',
                      'internal/web/assets/panel.css', 'internal/web/assets/panel.js', 'internal/web/assets/index.html'):
             assert path in files, path
         tree = sum((m.size + 4095) // 4096 * 4096 for m in files.values())

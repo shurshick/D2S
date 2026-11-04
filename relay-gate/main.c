@@ -1,4 +1,4 @@
-/* d2k-gate — проводник сетевой установки D2K через VPS.
+/* d2s-gate — проводник сетевой установки D2S через VPS.
  *
  * ЗАЧЕМ. С части линий в России не доходят GitHub (raw, релизы), пакетный
  * сервер Entware и сервер пакетов OpenWrt. Установщик, ночное обновление и
@@ -20,7 +20,7 @@
  * Пределы — соединений, частоты с одного адреса и всего, срок на заголовок,
  * на подключение и на простой — чтобы сервис нельзя было занять целиком.
  *
- *   d2k-gate [--port 9444]
+ *   d2s-gate [--port 9444]
  */
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
@@ -430,7 +430,7 @@ static void *serve(void *vp) {
             close(u);
         }
     }
-    fprintf(stderr, "d2k-gate: %s %s %s:%u — %s, к серверу %llu, к клиенту %llu, %lld мс\n",
+    fprintf(stderr, "d2s-gate: %s %s %s:%u — %s, к серверу %llu, к клиенту %llu, %lld мс\n",
             peer, pr == 0 ? r.method : "-", pr == 0 ? r.host : "-", pr == 0 ? r.port : 0,
             result, up, down, now_ms() - t0);
     close(fd);
@@ -442,7 +442,7 @@ int main(int argc, char **argv) {
     unsigned port = GATE_PORT;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--port") && i + 1 < argc) port = (unsigned)atoi(argv[++i]);
-        else { fprintf(stderr, "usage: d2k-gate [--port N]\n"); return 2; }
+        else { fprintf(stderr, "usage: d2s-gate [--port N]\n"); return 2; }
     }
     signal(SIGPIPE, SIG_IGN);
     int lfd = socket(AF_INET, SOCK_STREAM, 0), one = 1;
@@ -450,9 +450,9 @@ int main(int argc, char **argv) {
     a.sin_family = AF_INET; a.sin_port = htons((uint16_t)port); a.sin_addr.s_addr = htonl(INADDR_ANY);
     if (lfd < 0 || setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one) != 0 ||
         bind(lfd, (struct sockaddr *)&a, sizeof a) != 0 || listen(lfd, 128) != 0) {
-        perror("d2k-gate: listen"); return 1;
+        perror("d2s-gate: listen"); return 1;
     }
-    fprintf(stderr, "d2k-gate: порт %u, имён в списке %zu\n", port,
+    fprintf(stderr, "d2s-gate: порт %u, имён в списке %zu\n", port,
             sizeof allowed_hosts / sizeof allowed_hosts[0] - 1);
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -461,7 +461,7 @@ int main(int argc, char **argv) {
     for (;;) {
         struct sockaddr_in peer; socklen_t pl = sizeof peer;
         int fd = accept(lfd, (struct sockaddr *)&peer, &pl);
-        if (fd < 0) { if (errno == EINTR || errno == ECONNABORTED) continue; perror("d2k-gate: accept"); sleep(1); continue; }
+        if (fd < 0) { if (errno == EINTR || errno == ECONNABORTED) continue; perror("d2s-gate: accept"); sleep(1); continue; }
         if (atomic_load(&active) >= CONN_MAX ||
             !rate_allow(&limiter, ntohl(peer.sin_addr.s_addr), time(NULL))) {
             reply(fd, "503 Service Unavailable");

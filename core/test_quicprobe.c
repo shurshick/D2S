@@ -4,12 +4,12 @@
  * 1. ДИСЦИПЛИНА ДЕРЕВА (порядок вопросов, УСЛОВНАЯ ротация адреса — только
  *    после обнаружения остаточной блокировки, бюджет, учёт метки и приём
  *    "N из K" на каждом шаге, "незаданный, а не проваленный") — через
- *    подмену d2k_quic_ask_hook. Причина не лень: чтобы честно проверить
+ *    подмену d2s_quic_ask_hook. Причина не лень: чтобы честно проверить
  *    ротацию, нужно НЕСКОЛЬКО РАЗЛИЧИМЫХ адресов назначения, а bind() на
  *    127.0.0.x при x≠1 без явного алиаса интерфейса на macOS падает с "Can't
  *    assign requested address" (проверено эмпирически) — настоящий
  *    многоадресный стенд здесь непереносим. Мок ДОПОЛНИТЕЛЬНО умеет
- *    форсировать ЛЮБОЙ d2k_tally (частичный результат, ошибку транспорта,
+ *    форсировать ЛЮБОЙ d2s_tally (частичный результат, ошибку транспорта,
  *    непровтверждённую метку) на конкретный вызов через очередь — без этого
  *    учёт метки и приём "2 из 3" на шагах 2-4 не доказаны ничем, кроме
  *    честного слова (см. находку 4 ревью 2026-09-06, круг 2: шесть мутаций
@@ -20,7 +20,7 @@
  *    реальный ICMP при закрытом порте, согласование версии, реальные часы
  *    бюджета) — НАСТОЯЩИМИ сокетами на единственном настоящем адресе
  *    127.0.0.1. Стенд честно шифрует ответ (AES-128-GCM, "server in") —
- *    d2k_ghash_for_test здесь уместен ПО ПРЯМОМУ НАЗНАЧЕНИЮ (см. d2k_crypto.h:
+ *    d2s_ghash_for_test здесь уместен ПО ПРЯМОМУ НАЗНАЧЕНИЮ (см. d2s_crypto.h:
  *    "не для общего пользования" — про продакшен-код, не про тестовый стенд).
  *
  * Так дисциплина дерева проверяется без сетевых допущений, а оракул — без
@@ -39,15 +39,15 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_crypto.h"
-#include "d2k_meas.h"
-#include "d2k_quic.h"
-#include "d2k_quic_arms.h"
-#include "d2k_quicprobe.h"
+#include "d2s_crypto.h"
+#include "d2s_meas.h"
+#include "d2s_quic.h"
+#include "d2s_quic_arms.h"
+#include "d2s_quicprobe.h"
 #include "test_quic_pq.h"
-#include "d2k_quicsnap.h"
-#include "d2k_quichello.h"
-#include "d2k_quicwire.h"
+#include "d2s_quicsnap.h"
+#include "d2s_quichello.h"
+#include "d2s_quicwire.h"
 #include "test_quic_vector.h"
 
 static int g_progress_sum, g_progress_calls;
@@ -109,9 +109,9 @@ static size_t build_plain_initial(uint8_t dcid_byte, uint8_t *out, size_t cap) {
  * на pad байт, запечатанный обычными ключами Initial. Датаграмма — ровно по
  * содержимому, без добивки. 0 — не собралось. */
 static size_t build_large_snapshot(size_t pad, uint8_t *out, size_t cap) {
-    uint8_t ch[D2K_QW_MAX_DGRAM];
+    uint8_t ch[D2S_QW_MAX_DGRAM];
     size_t ch_len = 0;
-    if (d2k_quic_client_hello(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+    if (d2s_quic_client_hello(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                               ch, sizeof ch, &ch_len) != 0 || ch_len < 4 + 2 + 32 + 1) {
         return 0;
     }
@@ -133,26 +133,26 @@ static size_t build_large_snapshot(size_t pad, uint8_t *out, size_t cap) {
     size_t hs = ch_len - 4;
     ch[1] = (uint8_t)(hs >> 16); ch[2] = (uint8_t)(hs >> 8); ch[3] = (uint8_t)hs;
 
-    uint8_t body[D2K_QW_MAX_DGRAM];
+    uint8_t body[D2S_QW_MAX_DGRAM];
     size_t b = 0;
     body[b++] = 0x06;                              /* CRYPTO */
     body[b++] = 0x00;                              /* offset 0 */
-    b += d2k_qw_varint_write(body + b, sizeof body - b, ch_len);
+    b += d2s_qw_varint_write(body + b, sizeof body - b, ch_len);
     if (b + ch_len > sizeof body) { return 0; }
     memcpy(body + b, ch, ch_len);
     b += ch_len;
     static const uint8_t dcid[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     uint8_t sec[32];
-    d2k_qw_keys k;
-    if (d2k_qw_initial_secret(D2K_QW_V1, dcid, sizeof dcid, D2K_QW_CLIENT, sec) != 0 ||
-        d2k_qw_keys_from_secret(D2K_QW_V1, sec, &k) != 0) {
+    d2s_qw_keys k;
+    if (d2s_qw_initial_secret(D2S_QW_V1, dcid, sizeof dcid, D2S_QW_CLIENT, sec) != 0 ||
+        d2s_qw_keys_from_secret(D2S_QW_V1, sec, &k) != 0) {
         return 0;
     }
     uint8_t hdr[64];
-    size_t hlen = d2k_qw_long_hdr(hdr, sizeof hdr, D2K_QW_V1, D2K_QW_LT_INITIAL,
+    size_t hlen = d2s_qw_long_hdr(hdr, sizeof hdr, D2S_QW_V1, D2S_QW_LT_INITIAL,
                                   dcid, sizeof dcid, NULL, 0, 4, b);
     if (hlen == 0) { return 0; }
-    return d2k_qw_seal(&k, 1, hdr, hlen, 0, 4, body, b, out, cap);
+    return d2s_qw_seal(&k, 1, hdr, hlen, 0, 4, body, b, out, cap);
 }
 
 #define QP_DCID_OFF 6
@@ -167,7 +167,7 @@ static const uint8_t *g_trig_bytes, *g_ctl_bytes;
  * --------------------------------------------------------------------- */
 
 struct mock_addr_state {
-    char addr[D2K_QUIC_ADDR_LEN];
+    char addr[D2S_QUIC_ADDR_LEN];
     int poisoned;
 };
 static struct mock_addr_state g_mock_states[16];
@@ -185,22 +185,22 @@ static int g_mock_len_1300;
  * g_mock_ctl_dead (молчит контроль ВЕЗДЕ) — с появлением базовой живости
  * (шаг 0, тоже контроль на pool[0]) это стало ломать её без причины;
  * per-адресный флаг нацеливает "мёртвый сервер" ровно на нужный шаг. */
-static char g_mock_dead_addr[D2K_QUIC_ADDR_LEN];
+static char g_mock_dead_addr[D2S_QUIC_ADDR_LEN];
 static int g_expect_no_sni, g_no_sni_failures, g_arm_calls;
 
 /* Очередь принудительных исходов — см. шапку файла и находку 4 ревью (круг 2).
- * g_mock_force_refused — ПАРАЛЛЕЛЬНЫЙ массив (не поле d2k_tally: refused —
+ * g_mock_force_refused — ПАРАЛЛЕЛЬНЫЙ массив (не поле d2s_tally: refused —
  * отдельный out-параметр хука, находка 5 ревью, круг 4), нужен находке 2
  * ревью круга 5: без него мок не мог отдать pass>0 ОДНОВРЕМЕННО с refused>0
  * — смешанный исход (цель ответила, но не на все три попытки, часть отказана
  * сетью), которым проверяется вложенность порога refused>0 внутрь pass==0. */
 #define MOCK_FORCE_MAX 8
-static d2k_tally g_mock_force[MOCK_FORCE_MAX];
+static d2s_tally g_mock_force[MOCK_FORCE_MAX];
 static int g_mock_force_refused[MOCK_FORCE_MAX];
 static size_t g_mock_force_n, g_mock_force_i;
 
 static void mock_force_push_refused(int pass, int fail, int err, int marked, int refused) {
-    d2k_tally t;
+    d2s_tally t;
     t.pass = pass;
     t.fail = fail;
     t.err = err;
@@ -241,9 +241,9 @@ static struct mock_addr_state *mock_state_for(const char *addr) {
  * поведение остаточной блокировки, которое описывает донор (USENIX Sec'25 по
  * GFW). Контроль проходит на непоражённом адресе, кроме g_mock_dead_addr
  * (сервер, который сам недоступен). */
-static d2k_tally mock_ask(const char *addr, uint16_t port,
+static d2s_tally mock_ask(const char *addr, uint16_t port,
                            const uint8_t *prefix, size_t prefix_len,
-                           d2k_hello msg, uint32_t wait_ms, uint32_t mark,
+                           d2s_hello msg, uint32_t wait_ms, uint32_t mark,
                            int repeats, uint32_t *rtt_ms_out, int *refused_out, int *sent_out,
                            uint8_t *ttl_in_out) {
     (void)port;
@@ -268,7 +268,7 @@ static d2k_tally mock_ask(const char *addr, uint16_t port,
     if (msg.len == 1300) {
         g_mock_len_1300++;
     }
-    d2k_tally t;
+    d2s_tally t;
     if (g_mock_force_i < g_mock_force_n) {
         size_t idx = g_mock_force_i;
         t = g_mock_force[g_mock_force_i++];
@@ -286,7 +286,7 @@ static d2k_tally mock_ask(const char *addr, uint16_t port,
         int is_ctl = (msg.bytes == g_ctl_bytes && msg.len == g_ctl_len);
         if (g_expect_no_sni && !is_ctl && msg.bytes && msg.len) {
             char seen_sni[256];
-            if (d2k_quic_sni(msg.bytes, msg.len, seen_sni, sizeof seen_sni) == 0) {
+            if (d2s_quic_sni(msg.bytes, msg.len, seen_sni, sizeof seen_sni) == 0) {
                 g_no_sni_failures++;
             }
         }
@@ -322,7 +322,7 @@ static d2k_tally mock_ask(const char *addr, uint16_t port,
     return t;
 }
 
-static d2k_tally mock_arm(const d2k_quic_arm_question *q, const char *sni,
+static d2s_tally mock_arm(const d2s_quic_arm_question *q, const char *sni,
                           uint16_t port, uint32_t wait_ms, uint32_t mark,
                           int *sent_out) {
     (void)q; (void)port; (void)wait_ms; (void)mark;
@@ -336,71 +336,71 @@ static d2k_tally mock_arm(const d2k_quic_arm_question *q, const char *sni,
             g_no_sni_failures++;
         }
     } else {
-        int built = sni && d2k_quic_probe_initial(sni, initial, sizeof initial,
+        int built = sni && d2s_quic_probe_initial(sni, initial, sizeof initial,
                                                    &initial_len) == 0;
         int has_sni = built &&
-            d2k_quic_sni(initial, initial_len, seen_sni, sizeof seen_sni) == 0;
+            d2s_quic_sni(initial, initial_len, seen_sni, sizeof seen_sni) == 0;
         if (!built || has_sni) {
             g_no_sni_failures++;
         }
     }
-    if (sent_out) { *sent_out = D2K_QUIC_REPEATS; }
-    d2k_tally t = {0};
-    t.fail = D2K_QUIC_REPEATS;
+    if (sent_out) { *sent_out = D2S_QUIC_REPEATS; }
+    d2s_tally t = {0};
+    t.fail = D2S_QUIC_REPEATS;
     t.marked = 1;
     return t;
 }
 
 /* Вопросы 4 и 7 ходят своими хуками (пара датаграмм и низкий исходный порт —
- * см. d2k_quicprobe.h, почему не расширением d2k_quic_ask_fn). Подменять надо
+ * см. d2s_quicprobe.h, почему не расширением d2s_quic_ask_fn). Подменять надо
  * и их: неподменённый хук — это НАСТОЯЩИЕ сокеты в наружную сеть прямо из
  * теста, то есть минуты ожидания и вердикт, зависящий от чужой линии. Обе
  * заглушки сводятся к тому же mock_ask — вопросник проверяется по дисциплине
  * (что задано, что записано), а не по транспорту. */
-static d2k_tally mock_ask_srcport(const char *addr, uint16_t port, int src_port,
-                                   d2k_hello msg, uint32_t wait_ms, uint32_t mark,
+static d2s_tally mock_ask_srcport(const char *addr, uint16_t port, int src_port,
+                                   d2s_hello msg, uint32_t wait_ms, uint32_t mark,
                                    int repeats, int *sent_out) {
     (void)src_port;
     return mock_ask(addr, port, NULL, 0, msg, wait_ms, mark, repeats, NULL, NULL, sent_out, NULL);
 }
 
-static d2k_tally mock_ask_split(const char *addr, uint16_t port, d2k_hello snap,
+static d2s_tally mock_ask_split(const char *addr, uint16_t port, d2s_hello snap,
                                  const char *sni, uint32_t wait_ms, uint32_t mark,
                                  int repeats, int *sent_out) {
     (void)sni;
     return mock_ask(addr, port, NULL, 0, snap, wait_ms, mark, repeats, NULL, NULL, sent_out, NULL);
 }
 
-static char g_extra_pool[8][D2K_QUIC_ADDR_LEN];
+static char g_extra_pool[8][D2S_QUIC_ADDR_LEN];
 static size_t g_extra_n;
 
-/* trigger/control — параметры d2k_quic_classify (правка ревью 2026-09-06,
+/* trigger/control — параметры d2s_quic_classify (правка ревью 2026-09-06,
  * круг 1), не снимаются через крючок. no_hello() воспроизводит "снимка нет"
  * явно, тем же bytes==NULL, каким его увидел бы настоящий вызывающий. */
-static d2k_hello trig_hello(void) {
-    d2k_hello h = {0};
+static d2s_hello trig_hello(void) {
+    d2s_hello h = {0};
     h.bytes = g_trig_bytes;
     h.len = g_trig_len;
     return h;
 }
-static d2k_hello ctl_hello(void) {
-    d2k_hello h = {0};
+static d2s_hello ctl_hello(void) {
+    d2s_hello h = {0};
     h.bytes = g_ctl_bytes;
     h.len = g_ctl_len;
     return h;
 }
-static d2k_hello no_hello(void) {
-    d2k_hello h = {0};
+static d2s_hello no_hello(void) {
+    d2s_hello h = {0};
     h.bytes = NULL;
     h.len = 0;
     return h;
 }
 
-static size_t test_resolve(const char *sni, char out[][D2K_QUIC_ADDR_LEN], size_t cap) {
+static size_t test_resolve(const char *sni, char out[][D2S_QUIC_ADDR_LEN], size_t cap) {
     (void)sni;
     size_t n = g_extra_n < cap ? g_extra_n : cap;
     for (size_t i = 0; i < n; i++) {
-        memcpy(out[i], g_extra_pool[i], D2K_QUIC_ADDR_LEN);
+        memcpy(out[i], g_extra_pool[i], D2S_QUIC_ADDR_LEN);
     }
     return n;
 }
@@ -408,21 +408,21 @@ static size_t test_resolve(const char *sni, char out[][D2K_QUIC_ADDR_LEN], size_
 /* Хук, который ВРЁТ про число адресов — заполняет ровно cap строк (честно, в
  * пределах своего буфера out), но СООБЩАЕТ, что их вдесятеро больше. Нужен
  * ровно одному тесту (находка 9 ревью, круг 2): без явного зажима n_extra в
- * d2k_quic_classify цикл дедупликации читал бы extra[i] ЗА ГРАНИЦЕЙ локального
+ * d2s_quic_classify цикл дедупликации читал бы extra[i] ЗА ГРАНИЦЕЙ локального
  * массива вызывающего — порча памяти, ловится санитайзером (`make -C core
  * san`), а не только этим тестом на голой логике.
  *
  * ВСЕ строки — ОДИН И ТОТ ЖЕ адрес (10.9.9.9): если бы они были различны,
- * дедупликация в d2k_quic_classify заполнила бы пул (n_pool) первыми же
+ * дедупликация в d2s_quic_classify заполнила бы пул (n_pool) первыми же
  * cap записями и остановила цикл СВОИМ ЖЕ условием (n_pool < MAX_ADDRS)
  * раньше, чем i дошло бы до границы массива extra[] — маскируя ровно ту
  * порчу памяти, которую тест обязан проверить (обнаружено при разработке
  * этого теста: с уникальными адресами санитайзер молчал). Одинаковый адрес
  * держит n_pool на единице и даёт i честно добежать до extra[cap]. */
-static size_t misbehaving_resolve(const char *sni, char out[][D2K_QUIC_ADDR_LEN], size_t cap) {
+static size_t misbehaving_resolve(const char *sni, char out[][D2S_QUIC_ADDR_LEN], size_t cap) {
     (void)sni;
     for (size_t i = 0; i < cap; i++) {
-        snprintf(out[i], D2K_QUIC_ADDR_LEN, "10.9.9.9");
+        snprintf(out[i], D2S_QUIC_ADDR_LEN, "10.9.9.9");
     }
     return cap * 10; /* заведомая ложь сверх cap */
 }
@@ -453,7 +453,7 @@ static void qp_ctr_xor(const uint8_t key[16], const uint8_t icb[16],
     size_t i = 0;
     while (i < n) {
         uint8_t ks[16];
-        d2k_aes128_ecb(key, cb, ks);
+        d2s_aes128_ecb(key, cb, ks);
         size_t take = n - i;
         if (take > 16) {
             take = 16;
@@ -524,17 +524,17 @@ static size_t build_authentic_v1(const uint8_t *dcid, size_t dcid_len,
     off += 1;
 
     uint8_t initial_secret[32], secret[32], key[16], iv[12], hp[16];
-    d2k_hkdf_extract(v1_salt, sizeof v1_salt, dcid, dcid_len, initial_secret);
-    if (d2k_hkdf_expand_label(initial_secret, "server in", secret, sizeof secret) != 0) {
+    d2s_hkdf_extract(v1_salt, sizeof v1_salt, dcid, dcid_len, initial_secret);
+    if (d2s_hkdf_expand_label(initial_secret, "server in", secret, sizeof secret) != 0) {
         return 0;
     }
-    if (d2k_hkdf_expand_label(secret, "quic key", key, sizeof key) != 0) {
+    if (d2s_hkdf_expand_label(secret, "quic key", key, sizeof key) != 0) {
         return 0;
     }
-    if (d2k_hkdf_expand_label(secret, "quic iv", iv, sizeof iv) != 0) {
+    if (d2s_hkdf_expand_label(secret, "quic iv", iv, sizeof iv) != 0) {
         return 0;
     }
-    if (d2k_hkdf_expand_label(secret, "quic hp", hp, sizeof hp) != 0) {
+    if (d2s_hkdf_expand_label(secret, "quic hp", hp, sizeof hp) != 0) {
         return 0;
     }
 
@@ -554,11 +554,11 @@ static size_t build_authentic_v1(const uint8_t *dcid, size_t dcid_len,
     uint8_t zero[16];
     memset(zero, 0, 16);
     uint8_t h[16];
-    d2k_aes128_ecb(key, zero, h);
+    d2s_aes128_ecb(key, zero, h);
     uint8_t s[16];
-    d2k_ghash_for_test(h, out, pn_offset + 1, ct, pt_len, s);
+    d2s_ghash_for_test(h, out, pn_offset + 1, ct, pt_len, s);
     uint8_t j0ks[16];
-    d2k_aes128_ecb(key, j0, j0ks);
+    d2s_aes128_ecb(key, j0, j0ks);
     uint8_t tag[16];
     for (int i = 0; i < 16; i++) {
         tag[i] = (uint8_t)(s[i] ^ j0ks[i]);
@@ -572,7 +572,7 @@ static size_t build_authentic_v1(const uint8_t *dcid, size_t dcid_len,
 
     size_t sample_off = pn_offset + 4;
     uint8_t mask[16];
-    d2k_aes128_ecb(hp, out + sample_off, mask);
+    d2s_aes128_ecb(hp, out + sample_off, mask);
     out[0] = (uint8_t)(out[0] ^ (mask[0] & 0x0f));
     out[pn_offset] = (uint8_t)(out[pn_offset] ^ mask[1]);
 
@@ -589,7 +589,7 @@ static pthread_t g_rs_thread;
 
 static int is_neutral_control_packet(const uint8_t *packet, size_t packet_len) {
     char sni[256];
-    if (d2k_quic_sni(packet, packet_len, sni, sizeof sni) != 0 ||
+    if (d2s_quic_sni(packet, packet_len, sni, sizeof sni) != 0 ||
         strlen(sni) != 23 || sni[0] != 'z' || strcmp(sni + 11, ".example.com") != 0) {
         return 0;
     }
@@ -689,8 +689,8 @@ static void *rs_run(void *arg) {
             /* РЕЖИМ 10: как настоящий сервер — отвечает на любой Initial его
                же DCID. Нужен замеру пачкой: пачка перезапечатана свежим DCID
                и ни с одним заранее известным триггером не совпадает. */
-            d2k_qw_hdr hdr;
-            if (d2k_qw_hdr_parse(buf, (size_t)n, 0, &hdr) == 0) {
+            d2s_qw_hdr hdr;
+            if (d2s_qw_hdr_parse(buf, (size_t)n, 0, &hdr) == 0) {
                 dcid = buf + hdr.dcid_off;
                 dcid_len = hdr.dcid_len;
             }
@@ -700,8 +700,8 @@ static void *rs_run(void *arg) {
             if ((size_t)n == g_ctl_len && memcmp(buf, g_ctl_bytes, (size_t)n) == 0) {
                 dcid = g_ctl_bytes + QP_DCID_OFF;
             } else {
-                d2k_qw_hdr hdr;
-                if (d2k_qw_hdr_parse(buf, (size_t)n, 0, &hdr) == 0) {
+                d2s_qw_hdr hdr;
+                if (d2s_qw_hdr_parse(buf, (size_t)n, 0, &hdr) == 0) {
                     dcid = buf + hdr.dcid_off;
                     dcid_len = hdr.dcid_len;
                 }
@@ -731,11 +731,11 @@ static void *rs_run(void *arg) {
             if (rl > 0) {
                 (void)sendto(g_rs_fd, resp, rl, 0, (struct sockaddr *)&from, fl);
             }
-            /* РЕЖИМ 9: ответив на D2K_QUIC_REPEATS контролей базовой
+            /* РЕЖИМ 9: ответив на D2S_QUIC_REPEATS контролей базовой
                живости, стенд закрывает порт — всё дальнейшее (прямой зонд,
                остаточная проверка) получает настоящий ICMP «порт
                недоступен». */
-            if (g_rs_respond == 9 && is_ctl && ++ctl_answered >= D2K_QUIC_REPEATS) {
+            if (g_rs_respond == 9 && is_ctl && ++ctl_answered >= D2S_QUIC_REPEATS) {
                 /* g_rs_fd не трогаем: тест режима 9 ждёт этот поток
                    pthread_join'ом и сам сокет больше не закрывает. */
                 close(g_rs_fd);
@@ -877,7 +877,7 @@ static int mark_never_ok(int fd, uint32_t mark) {
 
 /* Успевает подтвердить метку на первых g_mark_fail_from-1 вызовах, дальше
  * всегда проваливает. Нужен ИМЕННО находке A: базовая живость (шаг 0) и
- * зонд согласования версии идут через ОДИН И ТОТ ЖЕ d2k_mark_hook, значит
+ * зонд согласования версии идут через ОДИН И ТОТ ЖЕ d2s_mark_hook, значит
  * mark_never_ok заваливает метку СРАЗУ на базе — all_marked падает там, и
  * тест не отличает "VN не учитывает свою метку" от "база не учла свою". Этот
  * хук пропускает базовые три вызова и валит только зонд согласования версии,
@@ -895,18 +895,18 @@ static int mark_fail_from_nth(int fd, uint32_t mark) {
 }
 
 int main(int argc, char **argv) {
-    /* Цель стенда живёт на петле по построению — см. d2k_quic_allow_local.
+    /* Цель стенда живёт на петле по построению — см. d2s_quic_allow_local.
        Без этого весь вопросник отвечает «имя разрешается в приватный адрес»,
        и проверять становится нечего. */
-    d2k_quic_allow_local = 1;
+    d2s_quic_allow_local = 1;
 
-    uint32_t saved_wait_ms = d2k_quic_wait_ms; /* контракт: тест ужимает и ОБЯЗАН вернуть (находка 9, круг 2) */
-    d2k_quic_resolve_hook = test_resolve;
-    d2k_quic_wait_ms = 150; /* тест не обязан ждать боевые 3 с тишины на каждый опыт */
+    uint32_t saved_wait_ms = d2s_quic_wait_ms; /* контракт: тест ужимает и ОБЯЗАН вернуть (находка 9, круг 2) */
+    d2s_quic_resolve_hook = test_resolve;
+    d2s_quic_wait_ms = 150; /* тест не обязан ждать боевые 3 с тишины на каждый опыт */
 
     g_trig_len = build_plain_initial(0x11, g_trig_buf, sizeof g_trig_buf);
     g_ctl_len = 0;
-    CHECK(d2k_quic_hello_rename(d2k_test_v1_initial, sizeof d2k_test_v1_initial,
+    CHECK(d2s_quic_hello_rename(d2s_test_v1_initial, sizeof d2s_test_v1_initial,
                                 "c0000000000.example.com", g_ctl_buf,
                                 sizeof g_ctl_buf, &g_ctl_len) == 0,
           "не собрался валидный QUIC-профиль контроля для wire-переименования");
@@ -915,93 +915,93 @@ int main(int argc, char **argv) {
     g_ctl_bytes = g_ctl_buf;
 
     {
-        char pool[4][D2K_QUIC_ADDR_LEN];
+        char pool[4][D2S_QUIC_ADDR_LEN];
         g_extra_n = 2;
-        snprintf(g_extra_pool[0], D2K_QUIC_ADDR_LEN, "192.0.2.1");
-        snprintf(g_extra_pool[1], D2K_QUIC_ADDR_LEN, "2001:db8::2");
-        size_t n = d2k_quic_build_pool("2001:db8:1234:5678::1", "x.example", pool, 4);
+        snprintf(g_extra_pool[0], D2S_QUIC_ADDR_LEN, "192.0.2.1");
+        snprintf(g_extra_pool[1], D2S_QUIC_ADDR_LEN, "2001:db8::2");
+        size_t n = d2s_quic_build_pool("2001:db8:1234:5678::1", "x.example", pool, 4);
         CHECK(n == 2 && strcmp(pool[0], "2001:db8:1234:5678::1") == 0 &&
               strcmp(pool[1], "2001:db8::2") == 0,
               "IPv6 pool preserves target and excludes IPv4 answers");
-        n = d2k_quic_build_pool("192.0.2.2", "x.example", pool, 4);
+        n = d2s_quic_build_pool("192.0.2.2", "x.example", pool, 4);
         CHECK(n == 2 && strcmp(pool[1], "192.0.2.1") == 0,
               "IPv4 pool excludes IPv6 answers");
         g_extra_n = 0;
         g_rs_respond = 1;
         uint16_t port = rs_start_family(AF_INET6);
         CHECK(port != 0, "IPv6 QUIC measurement fixture starts");
-        d2k_vres r = d2k_quic_classify("::1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR, "native IPv6 QUIC measurement accepts authenticated response");
+        d2s_vres r = d2s_quic_classify("::1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR, "native IPv6 QUIC measurement accepts authenticated response");
         CHECK(r.qprops.server_ttl_in > 0, "IPv6 reply hop limit is measured");
         if (argc == 2 && strcmp(argv[1], "--ipv6-fragments") == 0) {
             for (int shape = 1; shape <= 2; shape++) {
                 int sent = 0;
-                d2k_quic_arm_question q = {.addr="::1", .frag=shape};
-                d2k_tally t = d2k_quic_ask_arm_hook(&q, "z0123456789.example.com",
+                d2s_quic_arm_question q = {.addr="::1", .frag=shape};
+                d2s_tally t = d2s_quic_ask_arm_hook(&q, "z0123456789.example.com",
                                                    port, 500, 0xd200, &sent);
-                if (sent != D2K_QUIC_REPEATS || t.pass != D2K_QUIC_REPEATS || t.err != 0)
+                if (sent != D2S_QUIC_REPEATS || t.pass != D2S_QUIC_REPEATS || t.err != 0)
                     fprintf(stderr, "IPv6 fragment shape=%d sent=%d pass=%d fail=%d err=%d\n",
                             shape, sent, t.pass, t.fail, t.err);
-                CHECK(sent == D2K_QUIC_REPEATS && t.pass == D2K_QUIC_REPEATS && t.err == 0,
+                CHECK(sent == D2S_QUIC_REPEATS && t.pass == D2S_QUIC_REPEATS && t.err == 0,
                       "native IPv6 fragmented QUIC probe receives authenticated answer");
             }
         }
-        d2k_quic_allow_local = 0;
-        r = d2k_quic_classify("::1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_LOCAL_ADDRESS, "IPv6 loopback is not an ISP measurement");
-        d2k_quic_allow_local = 1;
+        d2s_quic_allow_local = 0;
+        r = d2s_quic_classify("::1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_LOCAL_ADDRESS, "IPv6 loopback is not an ISP measurement");
+        d2s_quic_allow_local = 1;
         close(g_rs_fd);
     }
     if (argc == 2 && (strcmp(argv[1], "--ipv6") == 0 ||
                       strcmp(argv[1], "--ipv6-fragments") == 0)) return fails ? 1 : 0;
 
     /* --- БЮДЖЕТ ПОКРЫВАЕТ ХУДШИЙ ПУТЬ RUN. Худший путь: база на
-     * d2k_quic_wait_ms (3 с донора), затем 31 опрос по dyn_wait = 3×RTT в
+     * d2s_quic_wait_ms (3 с донора), затем 31 опрос по dyn_wait = 3×RTT в
      * [1,5; 6] с: прямой зонд, повторный контроль, до 4 опросов стратегии
      * (задача 40: два вопроса с одним повтором), 18 вопросов askArms
      * (5 фальшивок + 2×2 копии + 4 TTL + выживаемость + 4 формы фрагментов),
      * 7 вопросов questions.go. Прежние (1+2+20+3)×3000 мс = 78 с обрывали его
      * уже при RTT 1 с (3 + 27×3 = 84 с). */
     {
-        uint32_t saved_wait = d2k_quic_wait_ms;
-        d2k_quic_wait_ms = D2K_QUIC_WAIT_MS_DEFAULT;
-        CHECK(d2k_quic_budget_ms(1000) >= 3000u + 31u * 3000u,
+        uint32_t saved_wait = d2s_quic_wait_ms;
+        d2s_quic_wait_ms = D2S_QUIC_WAIT_MS_DEFAULT;
+        CHECK(d2s_quic_budget_ms(1000) >= 3000u + 31u * 3000u,
               "бюджет при RTT 1 с меньше худшего пути 3000 + 31×3000 мс");
-        CHECK(d2k_quic_budget_ms(10000) >= 3000u + 31u * D2K_QUIC_RTT_WAIT_CEIL_MS,
+        CHECK(d2s_quic_budget_ms(10000) >= 3000u + 31u * D2S_QUIC_RTT_WAIT_CEIL_MS,
               "бюджет при потолке ожидания меньше худшего пути");
-        CHECK(d2k_quic_budget_ms(0) >= 3000u + 31u * D2K_QUIC_RTT_WAIT_FLOOR_MS,
+        CHECK(d2s_quic_budget_ms(0) >= 3000u + 31u * D2S_QUIC_RTT_WAIT_FLOOR_MS,
               "бюджет при полу ожидания меньше худшего пути");
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 2;
-        CHECK(d2k_quic_budget_ms(1000) == 2000u, "явный тестовый бюджет не соблюдён");
-        d2k_quic_budget_s = saved_budget;
-        d2k_quic_wait_ms = saved_wait;
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 2;
+        CHECK(d2s_quic_budget_ms(1000) == 2000u, "явный тестовый бюджет не соблюдён");
+        d2s_quic_budget_s = saved_budget;
+        d2s_quic_wait_ms = saved_wait;
     }
 
     /* ===================================================================
-     * Часть 1: дисциплина дерева (подмена d2k_quic_ask_hook).
+     * Часть 1: дисциплина дерева (подмена d2s_quic_ask_hook).
      * =================================================================== */
 
-    d2k_quic_ask_fn real_ask = d2k_quic_ask_hook;
-    d2k_quic_ask_fn real_longer = d2k_quic_ask_longer_hook;
-    d2k_quic_ask_fn real_frames = d2k_quic_ask_frames_hook;
-    d2k_quic_ask_fn real_control = d2k_quic_ask_control_hook;
-    d2k_quic_ask_hook = mock_ask;
-    d2k_quic_ask_longer_hook = mock_ask;
-    d2k_quic_ask_frames_hook = mock_ask;
-    d2k_quic_ask_control_hook = mock_ask;
-    d2k_quic_ask_srcport_hook = mock_ask_srcport;
-    d2k_quic_ask_split_hook = mock_ask_split;
+    d2s_quic_ask_fn real_ask = d2s_quic_ask_hook;
+    d2s_quic_ask_fn real_longer = d2s_quic_ask_longer_hook;
+    d2s_quic_ask_fn real_frames = d2s_quic_ask_frames_hook;
+    d2s_quic_ask_fn real_control = d2s_quic_ask_control_hook;
+    d2s_quic_ask_hook = mock_ask;
+    d2s_quic_ask_longer_hook = mock_ask;
+    d2s_quic_ask_frames_hook = mock_ask;
+    d2s_quic_ask_control_hook = mock_ask;
+    d2s_quic_ask_srcport_hook = mock_ask_srcport;
+    d2s_quic_ask_split_hook = mock_ask_split;
 
     /* Полный донорский Run для буквального IP: все сетевые границы здесь
        подменены детерминированными hooks, но Initial/question builders,
        no-SNI преобразования, Run-порядок и arm ladder настоящие. */
     {
         uint8_t ip_trigger[1500]; size_t ip_trigger_len = 0;
-        d2k_quic_ask_arm_fn saved_arm_hook = d2k_quic_ask_arm_hook;
+        d2s_quic_ask_arm_fn saved_arm_hook = d2s_quic_ask_arm_hook;
         const uint8_t *saved_trig_bytes = g_trig_bytes;
         size_t saved_trig_len = g_trig_len;
-        CHECK(d2k_quic_probe_initial("203.0.113.7", ip_trigger,
+        CHECK(d2s_quic_probe_initial("203.0.113.7", ip_trigger,
                                      sizeof ip_trigger, &ip_trigger_len) == 0,
               "не собрался no-SNI вход адресного Run");
         g_trig_bytes = ip_trigger;
@@ -1009,22 +1009,22 @@ int main(int argc, char **argv) {
         g_expect_no_sni = 1;
         g_no_sni_failures = g_arm_calls = 0;
         g_mock_poison_on_trigger = 0;
-        d2k_quic_ask_arm_hook = mock_arm;
-        d2k_quic_arm ip_arm;
+        d2s_quic_ask_arm_hook = mock_arm;
+        d2s_quic_arm ip_arm;
         g_progress_sum = 0; g_progress_calls = 0;
-        d2k_quic_progress_hook = record_progress;
-        d2k_vres r = d2k_quic_run("203.0.113.7", 443, "203.0.113.7",
+        d2s_quic_progress_hook = record_progress;
+        d2s_vres r = d2s_quic_run("203.0.113.7", 443, "203.0.113.7",
                                   trig_hello(), ctl_hello(), 0x2d, &ip_arm);
-        d2k_quic_progress_hook = NULL;
+        d2s_quic_progress_hook = NULL;
         CHECK(g_progress_sum == r.probes,
               "QUIC: ход полного Run с приёмами (askArms) не сходится с итогом зондов");
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "полный Run не сохранил verdict для блокируемой IP-цели");
         CHECK(g_arm_calls > 0,
               "полный Run пропустил исходную QUIC arm ladder для IP-цели");
         CHECK(g_no_sni_failures == 0,
               "полный Run добавил SNI при target IP в control/questions/arms");
-        d2k_quic_ask_arm_hook = saved_arm_hook;
+        d2s_quic_ask_arm_hook = saved_arm_hook;
         g_trig_bytes = saved_trig_bytes;
         g_trig_len = saved_trig_len;
         g_expect_no_sni = 0;
@@ -1036,22 +1036,22 @@ int main(int argc, char **argv) {
      * опрашиваются второй раз. ------------------------------------------- */
     {
         mock_reset();
-        d2k_vres base = d2k_quic_base("203.0.113.7", 443, "203.0.113.7",
+        d2s_vres base = d2s_quic_base("203.0.113.7", 443, "203.0.113.7",
                                       trig_hello(), ctl_hello(), 0x2d);
         CHECK(base.base_blocked && base.base.valid && base.base.direct_asked &&
-              base.base.ctl_pass == D2K_QUIC_REPEATS && base.base.pass == 0,
+              base.base.ctl_pass == D2S_QUIC_REPEATS && base.base.pass == 0,
               "QUIC base: контроль отвечает, Initial молчит — блокировка не подтверждена");
-        CHECK(base.probes == 2 * D2K_QUIC_REPEATS, "QUIC base: лишние зонды сверх шагов 0–1");
-        d2k_vres seeded = d2k_quic_run_seeded("203.0.113.7", 443, "203.0.113.7",
+        CHECK(base.probes == 2 * D2S_QUIC_REPEATS, "QUIC base: лишние зонды сверх шагов 0–1");
+        d2s_vres seeded = d2s_quic_run_seeded("203.0.113.7", 443, "203.0.113.7",
                                               trig_hello(), ctl_hello(), 0x2d, NULL, &base.base);
         mock_reset();
         /* Задача 49: ход QUIC-прогона доходит до планировщика вопрос за
            вопросом, и сумма зондов хода равна итогу прогона. */
         g_progress_sum = 0; g_progress_calls = 0; g_progress_last[0] = '\0';
-        d2k_quic_progress_hook = record_progress;
-        d2k_vres plain = d2k_quic_classify("203.0.113.7", 443, "203.0.113.7",
+        d2s_quic_progress_hook = record_progress;
+        d2s_vres plain = d2s_quic_classify("203.0.113.7", 443, "203.0.113.7",
                                            trig_hello(), ctl_hello(), 0x2d);
-        d2k_quic_progress_hook = NULL;
+        d2s_quic_progress_hook = NULL;
         CHECK(g_progress_calls >= 3 && g_progress_sum == plain.probes && g_progress_last[0],
               "QUIC: ход прогона не дошёл до планировщика или сумма зондов не равна итогу");
         CHECK(seeded.verdict == plain.verdict &&
@@ -1061,32 +1061,32 @@ int main(int argc, char **argv) {
               "QUIC seed: шаги 0–1 опрошены второй раз");
         mock_reset();
         g_mock_dead_addr[0] = '\0';
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);
-        base = d2k_quic_base("203.0.113.7", 443, "203.0.113.7", trig_hello(), ctl_hello(), 0x2d);
-        CHECK(!base.base_blocked && base.base.valid && base.base.pass == D2K_QUIC_REPEATS,
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);
+        base = d2s_quic_base("203.0.113.7", 443, "203.0.113.7", trig_hello(), ctl_hello(), 0x2d);
+        CHECK(!base.base_blocked && base.base.valid && base.base.pass == D2S_QUIC_REPEATS,
               "QUIC base: проходящий Initial объявлен блокировкой");
         mock_reset();
     }
 
-    /* --- НАХОДКА 2 РЕВЬЮ (круг 4): d2k_quic_ask_hook — ЧАСТЬ ПУБЛИЧНОГО
-     * КОНТРАКТА (extern в d2k_quicprobe.h), не только внутренность дерева.
-     * Прежняя редакция называла repeats > D2K_QUIC_MAX_ADDRS "недостижимым",
-     * проверив только вызовы ИЗНУТРИ d2k_quic_classify (которые всегда
-     * просят D2K_QUIC_REPEATS=3) — но
-     * хук extern, и любой код, включивший ТОЛЬКО d2k_quicprobe.h, может
+    /* --- НАХОДКА 2 РЕВЬЮ (круг 4): d2s_quic_ask_hook — ЧАСТЬ ПУБЛИЧНОГО
+     * КОНТРАКТА (extern в d2s_quicprobe.h), не только внутренность дерева.
+     * Прежняя редакция называла repeats > D2S_QUIC_MAX_ADDRS "недостижимым",
+     * проверив только вызовы ИЗНУТРИ d2s_quic_classify (которые всегда
+     * просят D2S_QUIC_REPEATS=3) — но
+     * хук extern, и любой код, включивший ТОЛЬКО d2s_quicprobe.h, может
      * вызвать его напрямую с любым repeats. Тот же прогон, которым ревьюер
-     * это доказал: repeats=99, в обход d2k_quic_classify целиком; отказ до
+     * это доказал: repeats=99, в обход d2s_quic_classify целиком; отказ до
      * единого send() — сети не касается, поэтому 127.0.0.1 здесь условность,
      * а не требование стенда. --------------------------------------------- */
     {
         uint32_t rtt_ms = 999;
         int refused = -1;
         int sent = -1;
-        d2k_tally t =
+        d2s_tally t =
             real_ask("127.0.0.1", 443, NULL, 0, trig_hello(), 150, 0, 99, &rtt_ms, &refused, &sent, NULL);
-        CHECK(t.err == 99, "repeats > D2K_QUIC_MAX_ADDRS обязан отказать всей серии, err == repeats");
-        CHECK(t.fail == 99, "отказ — это fail тоже (d2k_tally: err — подмножество fail)");
+        CHECK(t.err == 99, "repeats > D2S_QUIC_MAX_ADDRS обязан отказать всей серии, err == repeats");
+        CHECK(t.fail == 99, "отказ — это fail тоже (d2s_tally: err — подмножество fail)");
         CHECK(t.pass == 0, "отказанная серия не может дать ни одного pass");
         CHECK(rtt_ms == 0, "отказ обязан обнулить rtt_ms_out, а не оставить мусор вызывающего");
         CHECK(refused == 0, "отказ до единой отправки — отказывать нечему, refused_out обязан быть 0");
@@ -1096,14 +1096,14 @@ int main(int argc, char **argv) {
     /* --- структурно непригодный вход: ни одного опыта (FLAKY, единый класс,
      * находка 9 ревью круг 2 — раньше !trigger.bytes давал INCONCLUSIVE) --- */
     {
-        d2k_vres r = d2k_quic_classify(NULL, 443, "x.example", no_hello(), no_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "пустой ip не распознан как структурно непригодный вход");
+        d2s_vres r = d2s_quic_classify(NULL, 443, "x.example", no_hello(), no_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "пустой ip не распознан как структурно непригодный вход");
         CHECK(r.probes == 0, "на структурно непригодном входе не должно быть ни одного опыта");
         CHECK(r.reason[0] != 0, "вердикт без причины нечитаем");
     }
     {
-        d2k_vres r = d2k_quic_classify("10.0.0.1", 443, "x.example", no_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "нет снимка триггера — тот же класс FLAKY, что и !ip/!sni");
+        d2s_vres r = d2s_quic_classify("10.0.0.1", 443, "x.example", no_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "нет снимка триггера — тот же класс FLAKY, что и !ip/!sni");
         CHECK(r.probes == 0, "без снимка не должно быть отправлено ни одного опыта");
     }
     {
@@ -1112,8 +1112,8 @@ int main(int argc, char **argv) {
         char toolong[64];
         memset(toolong, '1', sizeof toolong - 1);
         toolong[sizeof toolong - 1] = '\0';
-        d2k_vres r = d2k_quic_classify(toolong, 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "адрес длиннее буфера пула обязан быть структурно непригодным");
+        d2s_vres r = d2s_quic_classify(toolong, 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "адрес длиннее буфера пула обязан быть структурно непригодным");
         CHECK(r.probes == 0, "слишком длинный адрес не должен провоцировать ни одного опыта");
     }
     {
@@ -1121,9 +1121,9 @@ int main(int argc, char **argv) {
            не разбирается как IPv4 — раньше проходил guard по длине и утекал
            в оракул, где давал UNREACHABLE (сетевое утверждение из
            непригодного ввода вместо честного "вход непригоден"). */
-        d2k_vres r =
-            d2k_quic_classify("999.999.999.999", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY,
+        d2s_vres r =
+            d2s_quic_classify("999.999.999.999", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY,
               "нечитаемый как IPv4 адрес обязан быть структурно непригодным входом, не сетевым "
               "молчанием");
         CHECK(r.probes == 0, "непригодный адрес не должен провоцировать ни одного сетевого опыта");
@@ -1134,12 +1134,12 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         g_extra_n = 2;
-        strncpy(g_extra_pool[0], "10.0.0.2", D2K_QUIC_ADDR_LEN);
-        strncpy(g_extra_pool[1], "10.0.0.3", D2K_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[0], "10.0.0.2", D2S_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[1], "10.0.0.3", D2S_QUIC_ADDR_LEN);
 
-        d2k_vres r = d2k_quic_classify("10.0.0.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.0.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "коробка блокирует триггер, но пропускает контроль на чистом адресе — должен быть OPAQUE");
         CHECK(mock_state_for("10.0.0.1")->poisoned == 1, "адрес A обязан быть отмечен поражённым");
         CHECK(strstr(r.reason, "ост.блокировка") != NULL,
@@ -1157,12 +1157,12 @@ int main(int argc, char **argv) {
         g_mock_poison_on_trigger = 0; /* триггер молчит, но НЕ поражает адрес — коробка просто не отвечает */
         g_extra_n = 0;                /* адресов для ротации нет вовсе */
 
-        d2k_vres r = d2k_quic_classify("10.0.1.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.1.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "один адрес: контроль до и после триггера прошёл на нём же — доказательство есть без "
               "ротации, находка 1 ревью");
-        CHECK(r.qprops.residual_blocking == D2K_PROP_NO,
+        CHECK(r.qprops.residual_blocking == D2S_PROP_NO,
               "original Run: контроль после триггера ответил — остаточной блокировки нет");
         /* НАХОДКА B РЕВЬЮ (круг 3): правило "адрес закреплён, пока нет
            остаточной блокировки" — ОДНО на все вопросы, включая плечо. Раньше
@@ -1173,16 +1173,16 @@ int main(int argc, char **argv) {
         CHECK(strstr(r.reason, "не задано 1 (адреса)") == NULL &&
               strstr(r.reason, "не задано 2 (адреса)") == NULL,
               "спросить было чем (адрес живой) — вопросы не имеют права остаться незаданными по адресам");
-        CHECK(r.qprops.junk_ahead == D2K_PROP_NO,
+        CHECK(r.qprops.junk_ahead == D2S_PROP_NO,
               "вопрос про мусор обязан реально измериться на закреплённом адресе, а не быть пропущен");
-        CHECK(r.qprops.low_source_port == D2K_PROP_NO,
+        CHECK(r.qprops.low_source_port == D2S_PROP_NO,
               "вопрос про низкий исходный порт обязан измериться: снимок ему не нужен");
         /* Снимок у этого мока — не настоящий Initial, поэтому три вопроса
            с пересборкой («кадры», «бит», «длина»; «версия2» снята задачей 57)
            и пара датаграмм честно НЕ СОБИРАЮТСЯ и остаются неизмеренными:
            несобравшийся зонд не измерение. */
-        CHECK(r.qprops.split_crypto == D2K_PROP_UNKNOWN &&
-              r.qprops.split_datagrams == D2K_PROP_UNKNOWN,
+        CHECK(r.qprops.split_crypto == D2S_PROP_UNKNOWN &&
+              r.qprops.split_datagrams == D2S_PROP_UNKNOWN,
               "несобравшийся зонд обязан оставить свойство неизмеренным, а не «не помогает»");
         CHECK(strstr(r.reason, "не задано 4 (не собралось)") != NULL,
               "несобранные вопросы обязаны быть названы прямо");
@@ -1190,15 +1190,15 @@ int main(int argc, char **argv) {
     }
 
     /* Original Run: residual consumes spare addresses, NOT the diagnosis.
-       Independent real-socket coverage: TestD2KResidualParity/blocked. */
+       Independent real-socket coverage: TestD2SResidualParity/blocked. */
     {
         mock_reset();
         g_extra_n = 0;
 
-        d2k_vres r = d2k_quic_classify("10.0.2.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.2.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE, "content diagnosis survives exhausted spare pool");
-        CHECK(r.qprops.residual_blocking == D2K_PROP_YES, "residual observation retained");
+        CHECK(r.verdict == D2S_V_OPAQUE, "content diagnosis survives exhausted spare pool");
+        CHECK(r.qprops.residual_blocking == D2S_PROP_YES, "residual observation retained");
         CHECK(strstr(r.reason, "не задано 2 (адреса)") != NULL, "questions remain unasked");
         CHECK(strstr(r.reason, "недоступен") == NULL,
               "нельзя подменять «не смогли спросить» выводом «сервер недоступен»");
@@ -1210,11 +1210,11 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         g_extra_n = 1;
-        strncpy(g_extra_pool[0], "10.0.3.2", D2K_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[0], "10.0.3.2", D2S_QUIC_ADDR_LEN);
 
-        d2k_vres r = d2k_quic_classify("10.0.3.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.3.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE, "устройство измерено — должен быть OPAQUE несмотря на "
+        CHECK(r.verdict == D2S_V_OPAQUE, "устройство измерено — должен быть OPAQUE несмотря на "
                                           "нехватку адреса для плеча");
         CHECK(strstr(r.reason, "не задано 1 (адреса)") != NULL,
               "нехватка адресов на вопросник обязана быть названа прямо, а не проглочена");
@@ -1224,8 +1224,8 @@ int main(int argc, char **argv) {
     /* --- нет контрольного имени: даже базовая живость не проверяется ------- */
     {
         mock_reset();
-        d2k_vres r = d2k_quic_classify("10.0.4.1", 443, "x.example", trig_hello(), no_hello(), 0);
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE, "без контроля даже базовая живость не проверяется");
+        d2s_vres r = d2s_quic_classify("10.0.4.1", 443, "x.example", trig_hello(), no_hello(), 0);
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE, "без контроля даже базовая живость не проверяется");
         CHECK(strstr(r.reason, "контрольного имени") != NULL,
               "причина обязана прямо назвать нехватку контрольного имени");
         CHECK(r.probes == 0, "без контроля НИ ОДНОГО опыта: базовая живость на нём и стоит");
@@ -1235,14 +1235,14 @@ int main(int argc, char **argv) {
        is used for the next question, whose failure does not erase content. */
     {
         mock_reset();
-        strncpy(g_mock_dead_addr, "10.0.5.2", D2K_QUIC_ADDR_LEN);
+        strncpy(g_mock_dead_addr, "10.0.5.2", D2S_QUIC_ADDR_LEN);
         g_extra_n = 1;
-        strncpy(g_extra_pool[0], "10.0.5.2", D2K_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[0], "10.0.5.2", D2S_QUIC_ADDR_LEN);
 
-        d2k_vres r = d2k_quic_classify("10.0.5.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.5.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE, "no invented clean-address control branch");
-        CHECK(r.qprops.junk_ahead == D2K_PROP_NO, "spare was used by junk question");
+        CHECK(r.verdict == D2S_V_OPAQUE, "no invented clean-address control branch");
+        CHECK(r.qprops.junk_ahead == D2S_PROP_NO, "spare was used by junk question");
     }
 
     /* --- плечо "мусор перед Initial" уже помогает --------------------------- */
@@ -1250,41 +1250,41 @@ int main(int argc, char **argv) {
         mock_reset();
         g_mock_garbage_defeats = 1;
         g_extra_n = 2;
-        strncpy(g_extra_pool[0], "10.0.6.2", D2K_QUIC_ADDR_LEN);
-        strncpy(g_extra_pool[1], "10.0.6.3", D2K_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[0], "10.0.6.2", D2S_QUIC_ADDR_LEN);
+        strncpy(g_extra_pool[1], "10.0.6.3", D2S_QUIC_ADDR_LEN);
 
-        d2k_vres r = d2k_quic_classify("10.0.6.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("10.0.6.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE, "плечо не отменяет вердикт по содержимому — остаётся OPAQUE");
+        CHECK(r.verdict == D2S_V_OPAQUE, "плечо не отменяет вердикт по содержимому — остаётся OPAQUE");
         CHECK(strstr(r.reason, "взяли мусор") != NULL,
               "reason обязан назвать положительный сигнал по мусору прямо");
-        CHECK(r.qprops.junk_ahead == D2K_PROP_YES,
+        CHECK(r.qprops.junk_ahead == D2S_PROP_YES,
               "свойство обязано быть записано, а не только упомянуто в тексте причины");
     }
 
     /* Runtime udplen preserves the measured large input; no 1300-byte
        substitute profile is introduced by the question. */
     {
-        static uint8_t big[D2K_QW_MAX_DGRAM];
+        static uint8_t big[D2S_QW_MAX_DGRAM];
         size_t big_len = build_large_snapshot(1080, big, sizeof big);
-        uint8_t tmp[D2K_QW_MAX_DGRAM];
+        uint8_t tmp[D2S_QW_MAX_DGRAM];
         size_t tmp_len = 0;
         CHECK(big_len > 1300 &&
-              d2k_quic_hello_ask(big, big_len, D2K_QASK_PLAIN, "www.example.com",
+              d2s_quic_hello_ask(big, big_len, D2S_QASK_PLAIN, "www.example.com",
                                  tmp, sizeof tmp, &tmp_len) == 0 &&
-              d2k_quic_hello_ask(big, big_len, D2K_QASK_LONGER, "www.example.com",
+              d2s_quic_hello_ask(big, big_len, D2S_QASK_LONGER, "www.example.com",
                                  tmp, sizeof tmp, &tmp_len) != 0,
               "стенд: большой снимок обязан быть целым, но не помещаться в 1300");
         mock_reset();
         g_mock_poison_on_trigger = 0;
         g_extra_n = 0;
         g_mock_len_1300 = 0;
-        d2k_hello snap = {big, big_len, NULL, 0, 0, 0};
-        d2k_vres r = d2k_quic_classify("10.0.20.1", 443, "www.example.com", snap, ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_OPAQUE, "большой снимок: контроль жив, решает содержимое");
-        CHECK(r.qprops.longer != D2K_PROP_UNKNOWN,
+        d2s_hello snap = {big, big_len, NULL, 0, 0, 0};
+        d2s_vres r = d2s_quic_classify("10.0.20.1", 443, "www.example.com", snap, ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_OPAQUE, "большой снимок: контроль жив, решает содержимое");
+        CHECK(r.qprops.longer != D2S_PROP_UNKNOWN,
               "большое приветствие потеряло вопрос «длина» — запасной Initial донора не задан");
-        CHECK(strcmp(r.qtrace[5].label, "длина") == 0 && r.qtrace[5].sent == D2K_QUIC_REPEATS,
+        CHECK(strcmp(r.qtrace[5].label, "длина") == 0 && r.qtrace[5].sent == D2S_QUIC_REPEATS,
               "runtime length retains the captured form");
         CHECK(strstr(r.reason, "«длина» задана PROFILE") == NULL,
               "runtime length must not claim a profile substitution");
@@ -1302,7 +1302,7 @@ int main(int argc, char **argv) {
      *
      * Почему это важнее, чем кажется: неизмеренное свойство и «приём не
      * помогает» — разные вещи, и раскладка с нулём в значении «не измерено»
-     * (d2k_quic_props) молчаливо превращает первое во второе при любой
+     * (d2s_quic_props) молчаливо превращает первое во второе при любой
      * ошибке в вопроснике. Утверждение «ни одно свойство не осталось
      * неизмеренным» ловит ровно это. */
     {
@@ -1310,50 +1310,50 @@ int main(int argc, char **argv) {
         g_mock_poison_on_trigger = 0; /* коробка молчит на триггер, но адрес не поражает */
         g_extra_n = 0;
 
-        d2k_hello snap = {0};
-        snap.bytes = d2k_test_v1_initial;
-        snap.len = sizeof d2k_test_v1_initial;
-        d2k_vres r = d2k_quic_classify("10.0.20.1", 443, "www.example.com", snap, ctl_hello(), 0);
+        d2s_hello snap = {0};
+        snap.bytes = d2s_test_v1_initial;
+        snap.len = sizeof d2s_test_v1_initial;
+        d2s_vres r = d2s_quic_classify("10.0.20.1", 443, "www.example.com", snap, ctl_hello(), 0);
 
-        CHECK(r.verdict == D2K_V_OPAQUE, "контроль жив до и после — решает содержимое");
+        CHECK(r.verdict == D2S_V_OPAQUE, "контроль жив до и после — решает содержимое");
         CHECK(strstr(r.reason, "не собралось") == NULL,
               "на настоящем снимке не собраться не может ни один вопрос");
         CHECK(strcmp(r.qtrace[5].label, "длина") == 0 && strstr(r.reason, "PROFILE") == NULL,
               "снимок помещается в 1300 — «длина» задаётся снимком, без PROFILE");
         CHECK(r.qprops.longer_profile == 0, "«длина» снимком помечена PROFILE");
-        CHECK(r.qprops.junk_ahead != D2K_PROP_UNKNOWN &&
-              r.qprops.split_crypto != D2K_PROP_UNKNOWN &&
-              r.qprops.split_datagrams != D2K_PROP_UNKNOWN &&
-              r.qprops.clear_fixed_bit != D2K_PROP_UNKNOWN &&
-              r.qprops.low_source_port != D2K_PROP_UNKNOWN &&
-              r.qprops.longer != D2K_PROP_UNKNOWN,
+        CHECK(r.qprops.junk_ahead != D2S_PROP_UNKNOWN &&
+              r.qprops.split_crypto != D2S_PROP_UNKNOWN &&
+              r.qprops.split_datagrams != D2S_PROP_UNKNOWN &&
+              r.qprops.clear_fixed_bit != D2S_PROP_UNKNOWN &&
+              r.qprops.low_source_port != D2S_PROP_UNKNOWN &&
+              r.qprops.longer != D2S_PROP_UNKNOWN,
               "хоть одно свойство осталось неизмеренным — вопрос не задан, а вывод по нему будет");
         /* Восьмой вопрос оригинала (фальшивка с разрешённым именем) здесь не
            задаётся намеренно: он живёт в задаче 6 вместе с числом копий и
            развёрткой TTL. Незаданное обязано остаться неизмеренным. */
-        CHECK(r.qprops.fake_ahead == D2K_PROP_UNKNOWN,
+        CHECK(r.qprops.fake_ahead == D2S_PROP_UNKNOWN,
               "вопрос, который вопросник не задаёт, не имеет права получить значение");
         /* «ВЕРСИЯ2» НЕ ЗАДАЁТСЯ (задача 57, поле 14.10.2026). Cloudflare
            Initial второй версии молча отбрасывает (на смазочную версию
            отвечает Version Negotiation), коробка линии режет QUIC по имени во
            всех версиях, а движок версию на живом пакете переписать не может —
            ответ ничего не давал и стоил три зонда в каждом проваленном поиске. */
-        CHECK(r.qprops.version2 == D2K_PROP_UNKNOWN,
+        CHECK(r.qprops.version2 == D2S_PROP_UNKNOWN,
               "вопрос «версия2» снова задаётся");
-        for (size_t qi = 0; qi < D2K_QTRACE_MAX; qi++)
+        for (size_t qi = 0; qi < D2S_QTRACE_MAX; qi++)
             CHECK(strcmp(r.qtrace[qi].label, "версия2") != 0,
                   "в трассе вопрос «версия2», которого больше нет");
-        CHECK(r.probes == 9 + 6 * D2K_QUIC_REPEATS,
+        CHECK(r.probes == 9 + 6 * D2S_QUIC_REPEATS,
               "3(база)+3(прямой)+3(шаг2)+шесть вопросов по три");
 
         /* ТРАССА: по строке на КАЖДЫЙ заданный вопрос, с числами. Из одних
            свойств «приём не сработал» неотличимо от «зонд не долетел по
            другой причине» — а на стенде это различие уже понадобилось. */
         int lines = 0;
-        for (size_t qi = 0; qi < D2K_QTRACE_MAX; qi++) {
+        for (size_t qi = 0; qi < D2S_QTRACE_MAX; qi++) {
             if (!r.qtrace[qi].label[0]) { continue; }
             lines++;
-            CHECK(r.qtrace[qi].sent == D2K_QUIC_REPEATS,
+            CHECK(r.qtrace[qi].sent == D2S_QUIC_REPEATS,
                   "в трассе не столько зондов, сколько ушло на провод");
             CHECK(r.qtrace[qi].answered <= r.qtrace[qi].sent,
                   "ответов больше, чем зондов");
@@ -1375,10 +1375,10 @@ int main(int argc, char **argv) {
         mock_reset();
         g_mock_poison_on_trigger = 0;
         g_extra_n = 0;
-        d2k_hello snap = {0};
-        snap.bytes = d2k_test_v1_initial;
-        snap.len = sizeof d2k_test_v1_initial;
-        d2k_vres r = d2k_quic_classify("10.0.22.1", 443, "www.example.com", snap, ctl_hello(), 0);
+        d2s_hello snap = {0};
+        snap.bytes = d2s_test_v1_initial;
+        snap.len = sizeof d2s_test_v1_initial;
+        d2s_vres r = d2s_quic_classify("10.0.22.1", 443, "www.example.com", snap, ctl_hello(), 0);
         /* Мок сокетов не трогает и TTL ниоткуда взять не может — значит
            «не измерено», и никакого выдуманного числа. */
         CHECK(r.qprops.server_ttl_in == 0,
@@ -1392,57 +1392,57 @@ int main(int argc, char **argv) {
      * не формальность: прятать их значит терять самый ценный выход замера, а
      * выдавать за плечо — обещать человеку обход, которого нет. */
     {
-        d2k_quic_props p;
+        d2s_quic_props p;
         memset(&p, 0, sizeof p);
         char out[1024];
 
-        CHECK(d2k_quic_props_findings(&p, out, sizeof out) == 0 && out[0] == '\0',
+        CHECK(d2s_quic_props_findings(&p, out, sizeof out) == 0 && out[0] == '\0',
               "не измерено ничего, а находки нашлись");
 
-        p.split_crypto = D2K_PROP_NO;
-        CHECK(d2k_quic_props_findings(&p, out, sizeof out) == 0,
+        p.split_crypto = D2S_PROP_NO;
+        CHECK(d2s_quic_props_findings(&p, out, sizeof out) == 0,
               "«приём не помогает» — это не находка");
 
-        p.split_crypto = D2K_PROP_YES;
-        CHECK(d2k_quic_props_findings(&p, out, sizeof out) == 1 &&
+        p.split_crypto = D2S_PROP_YES;
+        CHECK(d2s_quic_props_findings(&p, out, sizeof out) == 1 &&
               strstr(out, "кадра CRYPTO") != NULL,
               "взявший приём обязан быть назван человеку");
         /* Задача 40: разрез CRYPTO движок теперь исполняет (quicsplit) —
            находка обязана сказать это, а не «не умеет». */
         CHECK(strstr(out, "quicsplit") != NULL && strstr(out, "не умеет") == NULL,
               "исполнимый разрез CRYPTO назван исполнимым");
-        p.split_crypto = D2K_PROP_UNKNOWN;
-        p.split_datagrams = D2K_PROP_YES;
-        CHECK(d2k_quic_props_findings(&p, out, sizeof out) == 1 &&
+        p.split_crypto = D2S_PROP_UNKNOWN;
+        p.split_datagrams = D2S_PROP_YES;
+        CHECK(d2s_quic_props_findings(&p, out, sizeof out) == 1 &&
               strstr(out, "не умеет") != NULL,
               "находку нельзя выдавать за готовый обход: две датаграммы движок не исполняет");
-        p.split_datagrams = D2K_PROP_UNKNOWN;
-        p.split_crypto = D2K_PROP_YES;
-        (void)d2k_quic_props_findings(&p, out, sizeof out);
+        p.split_datagrams = D2S_PROP_UNKNOWN;
+        p.split_crypto = D2S_PROP_YES;
+        (void)d2s_quic_props_findings(&p, out, sizeof out);
 
-        p.version2 = D2K_PROP_YES;
-        p.low_source_port = D2K_PROP_YES;
-        CHECK(d2k_quic_props_findings(&p, out, sizeof out) == 3,
+        p.version2 = D2S_PROP_YES;
+        p.low_source_port = D2S_PROP_YES;
+        CHECK(d2s_quic_props_findings(&p, out, sizeof out) == 3,
               "три взявших приёма — три находки");
 
         /* Буфер меньше находки: обрезать можно, выйти за него нельзя. */
         char tiny[8];
         memset(tiny, 0x7f, sizeof tiny);
-        (void)d2k_quic_props_findings(&p, tiny, sizeof tiny);
+        (void)d2s_quic_props_findings(&p, tiny, sizeof tiny);
         CHECK(tiny[sizeof tiny - 1] == '\0', "находки вышли за буфер");
     }
 
     /* --- свойства НЕ ЗАПОЛНЯЮТСЯ, когда вопросника не было ----------------
-     * Ноль в d2k_quic_props значит «не измерено», и вердикт, до вопросника
+     * Ноль в d2s_quic_props значит «не измерено», и вердикт, до вопросника
      * не доживший, обязан оставить все свойства нулевыми — иначе он молча
      * утверждает «ни один приём не помогает». */
     {
         mock_reset();
-        d2k_vres r = d2k_quic_classify("10.0.21.1", 443, "x.example", no_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "снимка нет — измерения не было");
-        CHECK(r.qprops.junk_ahead == D2K_PROP_UNKNOWN &&
-              r.qprops.low_source_port == D2K_PROP_UNKNOWN &&
-              r.qprops.longer == D2K_PROP_UNKNOWN,
+        d2s_vres r = d2s_quic_classify("10.0.21.1", 443, "x.example", no_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "снимка нет — измерения не было");
+        CHECK(r.qprops.junk_ahead == D2S_PROP_UNKNOWN &&
+              r.qprops.low_source_port == D2S_PROP_UNKNOWN &&
+              r.qprops.longer == D2S_PROP_UNKNOWN,
               "вердикт без вопросника выдал свойства коробки — это выдумка, а не замер");
     }
 
@@ -1450,12 +1450,12 @@ int main(int argc, char **argv) {
      * детерминированный — см. budget_left в quicprobe.c) ------------------- */
     {
         mock_reset();
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 0;
-        d2k_vres r = d2k_quic_classify("10.0.7.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_budget_s = saved_budget;
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 0;
+        d2s_vres r = d2s_quic_classify("10.0.7.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_budget_s = saved_budget;
 
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE, "нулевой бюджет обязан остановить дерево честно");
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE, "нулевой бюджет обязан остановить дерево честно");
         CHECK(strstr(r.reason, "бюджет") != NULL && strstr(r.reason, "НЕ ЗАДАН") != NULL,
               "причина обязана назвать именно бюджет");
         CHECK(r.probes == 0, "бюджет исчерпан ещё до базовой живости — ни одного опыта");
@@ -1473,11 +1473,11 @@ int main(int argc, char **argv) {
     /* 1/6: учёт метки на шаге 2 (проверка остаточной блокировки). */
     {
         mock_reset();
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);              /* база: живость 3/3, помечено */
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);               /* прямой зонд: молчит 0/3, помечено */
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 0);               /* шаг 2: 3/3, НО не помечено */
-        d2k_vres r = d2k_quic_classify("10.0.8.1", 443, "x.example", trig_hello(), ctl_hello(), 99);
-        CHECK(r.verdict == D2K_V_OPAQUE, "1/6: неучёт метки на шаге 2 не должен менять вердикт");
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);              /* база: живость 3/3, помечено */
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);               /* прямой зонд: молчит 0/3, помечено */
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 0);               /* шаг 2: 3/3, НО не помечено */
+        d2s_vres r = d2s_quic_classify("10.0.8.1", 443, "x.example", trig_hello(), ctl_hello(), 99);
+        CHECK(r.verdict == D2S_V_OPAQUE, "1/6: неучёт метки на шаге 2 не должен менять вердикт");
         CHECK(r.marked == 0, "1/6: r.marked обязан упасть — шаг 2 не был помечен");
     }
 
@@ -1485,13 +1485,13 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         g_extra_n = 1;
-        strncpy(g_extra_pool[0], "10.0.8.9", D2K_QUIC_ADDR_LEN);
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1); /* база: живость */
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);  /* прямой зонд: молчит */
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);  /* шаг 2: молчит — блокировка обнаружена */
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 0);  /* шаг 3: 3/3, НЕ помечено */
-        d2k_vres r = d2k_quic_classify("10.0.8.2", 443, "x.example", trig_hello(), ctl_hello(), 99);
-        CHECK(r.verdict == D2K_V_OPAQUE, "2/6: неучёт метки на шаге 3 не должен менять вердикт");
+        strncpy(g_extra_pool[0], "10.0.8.9", D2S_QUIC_ADDR_LEN);
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1); /* база: живость */
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);  /* прямой зонд: молчит */
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);  /* шаг 2: молчит — блокировка обнаружена */
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 0);  /* шаг 3: 3/3, НЕ помечено */
+        d2s_vres r = d2s_quic_classify("10.0.8.2", 443, "x.example", trig_hello(), ctl_hello(), 99);
+        CHECK(r.verdict == D2S_V_OPAQUE, "2/6: неучёт метки на шаге 3 не должен менять вердикт");
         CHECK(r.marked == 0, "2/6: r.marked обязан упасть — шаг 3 не был помечен");
     }
 
@@ -1499,25 +1499,25 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         g_extra_n = 1;
-        strncpy(g_extra_pool[0], "10.0.8.9", D2K_QUIC_ADDR_LEN);
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1); /* база: живость */
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);  /* прямой зонд: молчит */
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);  /* шаг 2: 3/3 — блокировки НЕТ, сразу OPAQUE+плечо */
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 0);  /* плечо: 0/3, НЕ помечено */
-        d2k_vres r = d2k_quic_classify("10.0.8.3", 443, "x.example", trig_hello(), ctl_hello(), 99);
-        CHECK(r.verdict == D2K_V_OPAQUE, "3/6: неучёт метки на плече не должен менять вердикт");
+        strncpy(g_extra_pool[0], "10.0.8.9", D2S_QUIC_ADDR_LEN);
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1); /* база: живость */
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);  /* прямой зонд: молчит */
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);  /* шаг 2: 3/3 — блокировки НЕТ, сразу OPAQUE+плечо */
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 0);  /* плечо: 0/3, НЕ помечено */
+        d2s_vres r = d2s_quic_classify("10.0.8.3", 443, "x.example", trig_hello(), ctl_hello(), 99);
+        CHECK(r.verdict == D2S_V_OPAQUE, "3/6: неучёт метки на плече не должен менять вердикт");
         CHECK(r.marked == 0, "3/6: r.marked обязан упасть — плечо не было помечено");
     }
 
     /* Original residual criterion is Answered == 0, not unanimous control.
-       Independent coverage: TestD2KResidualParity/partial. */
+       Independent coverage: TestD2SResidualParity/partial. */
     {
         mock_reset();
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);
         mock_force_push(2, 1, 0, 1); /* шаг 2: 2 из 3 — не единогласно */
-        d2k_vres r = d2k_quic_classify("10.0.8.4", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_OPAQUE && r.qprops.residual_blocking == D2K_PROP_NO,
+        d2s_vres r = d2s_quic_classify("10.0.8.4", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_OPAQUE && r.qprops.residual_blocking == D2S_PROP_NO,
               "partial residual control permits pinned search, as in original");
     }
 
@@ -1525,13 +1525,13 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         g_extra_n = 1;
-        strncpy(g_extra_pool[0], "10.0.8.9", D2K_QUIC_ADDR_LEN);
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1); /* шаг 2: молчит — блокировка обнаружена */
+        strncpy(g_extra_pool[0], "10.0.8.9", D2S_QUIC_ADDR_LEN);
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1); /* шаг 2: молчит — блокировка обнаружена */
         mock_force_push(2, 1, 0, 1);                 /* шаг 3: 2 из 3 */
-        d2k_vres r = d2k_quic_classify("10.0.8.5", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_OPAQUE && r.qprops.junk_ahead != D2K_PROP_YES,
+        d2s_vres r = d2s_quic_classify("10.0.8.5", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_OPAQUE && r.qprops.junk_ahead != D2S_PROP_YES,
               "partial property success does not erase diagnosis or pass the arm");
     }
 
@@ -1544,11 +1544,11 @@ int main(int argc, char **argv) {
      * путаницу: единственный guard, которому есть что проверять, — err>0. */
     {
         mock_reset();
-        mock_force_push(D2K_QUIC_REPEATS, 0, 0, 1);
-        mock_force_push(0, D2K_QUIC_REPEATS, 0, 1);
-        mock_force_push(0, D2K_QUIC_REPEATS, 1, 1); /* шаг 2: 0 прошли, 1 из 3 — ошибка транспорта */
-        d2k_vres r = d2k_quic_classify("10.0.8.6", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "6/6: ошибка транспорта на шаге 2 обязана быть FLAKY, не "
+        mock_force_push(D2S_QUIC_REPEATS, 0, 0, 1);
+        mock_force_push(0, D2S_QUIC_REPEATS, 0, 1);
+        mock_force_push(0, D2S_QUIC_REPEATS, 1, 1); /* шаг 2: 0 прошли, 1 из 3 — ошибка транспорта */
+        d2s_vres r = d2s_quic_classify("10.0.8.6", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "6/6: ошибка транспорта на шаге 2 обязана быть FLAKY, не "
                                          "«блокировка обнаружена» по совпадению pass==0");
     }
 
@@ -1558,11 +1558,11 @@ int main(int argc, char **argv) {
      * содержательный, а не мусорный вердикт. -------------------------------- */
     {
         mock_reset();
-        d2k_quic_resolve_fn saved_resolve = d2k_quic_resolve_hook;
-        d2k_quic_resolve_hook = misbehaving_resolve;
-        d2k_vres r = d2k_quic_classify("10.0.9.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_resolve_hook = saved_resolve;
-        CHECK(r.verdict == D2K_V_OPAQUE || r.verdict == D2K_V_INCONCLUSIVE,
+        d2s_quic_resolve_fn saved_resolve = d2s_quic_resolve_hook;
+        d2s_quic_resolve_hook = misbehaving_resolve;
+        d2s_vres r = d2s_quic_classify("10.0.9.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_resolve_hook = saved_resolve;
+        CHECK(r.verdict == D2S_V_OPAQUE || r.verdict == D2S_V_INCONCLUSIVE,
               "лживый резолвер не должен портить память или ронять процесс — вердикт остаётся "
               "содержательным (OPAQUE с ротацией или INCONCLUSIVE, если пул честно исчерпался)");
     }
@@ -1580,10 +1580,10 @@ int main(int argc, char **argv) {
         mock_reset();
         mock_force_push_refused(2, 1, 0, 1, 1); /* база: 2 из 3 прошли, 1 — сетевой отказ (fail, не err — probe.go:573-574) */
         mock_force_push(3, 0, 0, 1); /* прямой зонд: исходные три ответа */
-        d2k_vres r = d2k_quic_classify("10.0.10.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR,
+        d2s_vres r = d2s_quic_classify("10.0.10.1", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR,
               "положительный контроль с частичным отказом не довёл до прямого зонда оригинала");
-        CHECK(r.probes == 2 * D2K_QUIC_REPEATS,
+        CHECK(r.probes == 2 * D2S_QUIC_REPEATS,
               "прямой успех изменил исходное число серий (контроль + прямой)");
     }
     {
@@ -1594,8 +1594,8 @@ int main(int argc, char **argv) {
          * (закрытым для любого входа). */
         mock_reset();
         mock_force_push_refused(0, 3, 0, 1, 1); /* база: 0 из 3, 1 — сетевой отказ, 2 — тишина (отказ — fail, не err) */
-        d2k_vres r = d2k_quic_classify("10.0.10.2", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_NO_QUIC,
+        d2s_vres r = d2s_quic_classify("10.0.10.2", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_NO_QUIC,
               "pass=0,refused=1 — единственный случай тройки ревьюера, где сетевой отказ "
               "действительно должен решать (находка 2)");
     }
@@ -1608,17 +1608,17 @@ int main(int argc, char **argv) {
     {
         mock_reset();
         mock_force_push_refused(0, 3, 1, 1, 0); /* база: 0 из 3, 1 не отправился, 2 — тишина */
-        d2k_vres r = d2k_quic_classify("10.0.10.3", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY, "частичное 'не отправилось' без refused — FLAKY");
+        d2s_vres r = d2s_quic_classify("10.0.10.3", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY, "частичное 'не отправилось' без refused — FLAKY");
         CHECK(strstr(r.reason, "наша сторона") != NULL,
               "err без refused здесь ВЕСЬ целиком 'не отправилось' — причина обязана сказать "
               "честно, как и соседняя ветка (находка 5.1)");
     }
 
-    d2k_quic_ask_hook = real_ask;
-    d2k_quic_ask_longer_hook = real_longer;
-    d2k_quic_ask_frames_hook = real_frames;
-    d2k_quic_ask_control_hook = real_control;
+    d2s_quic_ask_hook = real_ask;
+    d2s_quic_ask_longer_hook = real_longer;
+    d2s_quic_ask_frames_hook = real_frames;
+    d2s_quic_ask_control_hook = real_control;
 
     /* ===================================================================
      * Часть 2: настоящий оракул — реальные сокеты на 127.0.0.1, реальный
@@ -1631,8 +1631,8 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 1;
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR, "настоящий аутентичный ответ с CRYPTO на триггер — должен быть CLEAR");
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR, "настоящий аутентичный ответ с CRYPTO на триггер — должен быть CLEAR");
         close(g_rs_fd);
     }
 
@@ -1646,19 +1646,19 @@ int main(int argc, char **argv) {
     {
         uint8_t d1[1500], d2[1500];
         size_t l1 = 0, l2 = 0;
-        CHECK(d2k_test_pq_initials("x.example", d1, &l1, d2, &l2) == 0, "стенд двух Initial");
+        CHECK(d2s_test_pq_initials("x.example", d1, &l1, d2, &l2) == 0, "стенд двух Initial");
         const uint8_t *dgs[2] = {d1, d2};
         size_t lens[2] = {l1, l2};
-        static uint8_t pack[D2K_SHAPE_MAX];
-        size_t pl = d2k_qsnap_pack(dgs, lens, 2, pack, sizeof pack);
+        static uint8_t pack[D2S_SHAPE_MAX];
+        size_t pl = d2s_qsnap_pack(dgs, lens, 2, pack, sizeof pack);
         CHECK(pl > 0, "пачка не упаковалась");
         g_rs_respond = 10;
         uint16_t port = rs_start();
-        d2k_hello ptrig = {pack, pl, NULL, 0, 0, 0};
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", ptrig, ctl_hello(), 0);
-        if (r.verdict != D2K_V_CLEAR)
+        d2s_hello ptrig = {pack, pl, NULL, 0, 0, 0};
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", ptrig, ctl_hello(), 0);
+        if (r.verdict != D2S_V_CLEAR)
             fprintf(stderr, "пачка: verdict=%d reason=%s\n", (int)r.verdict, r.reason);
-        CHECK(r.verdict == D2K_V_CLEAR, "замер пачкой на отвечающем стенде не дал CLEAR");
+        CHECK(r.verdict == D2S_V_CLEAR, "замер пачкой на отвечающем стенде не дал CLEAR");
         close(g_rs_fd);
     }
 
@@ -1677,8 +1677,8 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 5;
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR,
               "ServerHello пришёл ВТОРОЙ датаграммой, а зонд закрылся на первой — сервер объявлен молчащим");
         close(g_rs_fd);
     }
@@ -1693,7 +1693,7 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 1;
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
         CHECK(r.qprops.server_ttl_in > 0,
               "TTL входящего ответа не снят — сырой факт потерян");
         close(g_rs_fd);
@@ -1703,11 +1703,11 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 1;
         uint16_t port = rs_start();
-        d2k_mark_fn saved = d2k_mark_hook;
-        d2k_mark_hook = mark_never_ok;
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 777);
-        d2k_mark_hook = saved;
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE,
+        d2s_mark_fn saved = d2s_mark_hook;
+        d2s_mark_hook = mark_never_ok;
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 777);
+        d2s_mark_hook = saved;
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE,
               "триггер прошёл, но метка ни разу не подтвердилась — CLEAR принимать нельзя");
         CHECK(r.marked == 0, "r.marked обязан честно сказать, что метка не подтверждена");
         close(g_rs_fd);
@@ -1718,8 +1718,8 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 2; /* мусор вместо настоящего AEAD */
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict != D2K_V_CLEAR,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict != D2S_V_CLEAR,
               "recv()>0 без аутентичности — это НЕ доказательство успеха, CLEAR здесь ошибка");
         close(g_rs_fd);
     }
@@ -1735,8 +1735,8 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 4; /* аутентично, но только CONNECTION_CLOSE, без CRYPTO */
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR,
               "аутентичный CONNECTION_CLOSE — ответ сервера у донора (parse.go:72-74), прямой "
               "зонд 3/3 даёт clear (probe.go:326-327)");
         close(g_rs_fd);
@@ -1748,14 +1748,14 @@ int main(int argc, char **argv) {
     {
         uint8_t pkt[64];
         size_t pl = build_retry_v1(pkt, sizeof pkt);
-        CHECK(d2k_quic_verify_response(pkt, pl, trig_hello()) == 0, "Retry v1 на v1 — ответ (parse.go:118-122)");
+        CHECK(d2s_quic_verify_response(pkt, pl, trig_hello()) == 0, "Retry v1 на v1 — ответ (parse.go:118-122)");
         pkt[4] = 0x02;
-        CHECK(d2k_quic_verify_response(pkt, pl, trig_hello()) != 0, "Retry чужой версии — не ответ (parse.go:123-127)");
+        CHECK(d2s_quic_verify_response(pkt, pl, trig_hello()) != 0, "Retry чужой версии — не ответ (parse.go:123-127)");
         pl = build_vn_reply(pkt, sizeof pkt);
-        CHECK(d2k_quic_verify_response(pkt, pl, trig_hello()) == 0, "VN — ответ (parse.go:110-116)");
-        CHECK(d2k_quic_verify_response(pkt, 14, trig_hello()) != 0, "VN с обрезанным SCID — не ответ (parse.go:96-98)");
+        CHECK(d2s_quic_verify_response(pkt, pl, trig_hello()) == 0, "VN — ответ (parse.go:110-116)");
+        CHECK(d2s_quic_verify_response(pkt, 14, trig_hello()) != 0, "VN с обрезанным SCID — не ответ (parse.go:96-98)");
         pkt[0] = 0x40;
-        CHECK(d2k_quic_verify_response(pkt, pl, trig_hello()) != 0, "короткий заголовок — не ответ (parse.go:81-85)");
+        CHECK(d2s_quic_verify_response(pkt, pl, trig_hello()) != 0, "короткий заголовок — не ответ (parse.go:81-85)");
     }
 
     /* --- Цель получает CONNECTION_CLOSE, контроль — ServerHello: у донора
@@ -1764,8 +1764,8 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 6;
         uint16_t port = rs_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_CLEAR,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_CLEAR,
               "CONNECTION_CLOSE на имя при ответившем контроле — clear донора, не OPAQUE");
         close(g_rs_fd);
     }
@@ -1776,13 +1776,13 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 7;
         uint16_t port = rs_start();
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 2; /* хватает на шаги 1-2; вопросы дальше не нужны тесту */
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_budget_s = saved_budget;
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 2; /* хватает на шаги 1-2; вопросы дальше не нужны тесту */
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_budget_s = saved_budget;
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "Retry на контроль — ответ у донора (parse.go:72-74), замер обязан дойти до content");
-        CHECK(r.qprops.residual_blocking == D2K_PROP_NO,
+        CHECK(r.qprops.residual_blocking == D2S_PROP_NO,
               "Retry на повторный контроль — ответ, остаточной блокировки нет");
         close(g_rs_fd);
     }
@@ -1792,11 +1792,11 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 8;
         uint16_t port = rs_start();
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 2;
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_budget_s = saved_budget;
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 2;
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_budget_s = saved_budget;
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "VN на контроль — ответ у донора (parse.go:72-74), замер обязан дойти до content");
         close(g_rs_fd);
     }
@@ -1810,13 +1810,13 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 9;
         uint16_t port = rs_start();
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 5;
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_budget_s = saved_budget;
-        CHECK(r.verdict == D2K_V_OPAQUE,
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 5;
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_budget_s = saved_budget;
+        CHECK(r.verdict == D2S_V_OPAQUE,
               "ICMP на прямой зонд после ответившего контроля — content донора, не FLAKY");
-        CHECK(r.qprops.residual_blocking == D2K_PROP_YES,
+        CHECK(r.qprops.residual_blocking == D2S_PROP_YES,
               "ICMP на повторный контроль — Answered==0, residual=true (probe.go:355)");
         pthread_join(g_rs_thread, NULL); /* поток сам закрыл свой сокет */
     }
@@ -1828,17 +1828,17 @@ int main(int argc, char **argv) {
     {
         g_rs_respond = 1;
         uint16_t port = rs_start();
-        d2k_quic_recv_fault_hook = recv_fault_hostunreach;
+        d2s_quic_recv_fault_hook = recv_fault_hostunreach;
         uint32_t rtt_ms = 0;
         int refused = -1, sent = -1;
-        d2k_tally t = real_ask("127.0.0.1", port, NULL, 0, trig_hello(), 500, 0,
-                               D2K_QUIC_REPEATS, &rtt_ms, &refused, &sent, NULL);
-        CHECK(sent == D2K_QUIC_REPEATS && refused == 0 && t.err == 0 && t.pass == 0 &&
-                  t.fail == D2K_QUIC_REPEATS,
+        d2s_tally t = real_ask("127.0.0.1", port, NULL, 0, trig_hello(), 500, 0,
+                               D2S_QUIC_REPEATS, &rtt_ms, &refused, &sent, NULL);
+        CHECK(sent == D2S_QUIC_REPEATS && refused == 0 && t.err == 0 && t.pass == 0 &&
+                  t.fail == D2S_QUIC_REPEATS,
               "EHOSTUNREACH при чтении — тишина (fail), не refused и не err");
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_recv_fault_hook = NULL;
-        CHECK(r.verdict == D2K_V_ADDRESS,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_recv_fault_hook = NULL;
+        CHECK(r.verdict == D2S_V_ADDRESS,
               "EHOSTUNREACH на базовом контроле — донор идёт в VN и даёт address, не no_quic");
         close(g_rs_fd);
     }
@@ -1866,10 +1866,10 @@ int main(int argc, char **argv) {
         uint16_t closed_port = ntohs(a.sin_port);
         close(probe); /* порт снова закрыт — гарантированный ICMP port-unreachable на UDP */
 
-        d2k_vres r = d2k_quic_classify("127.0.0.1", closed_port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_NO_QUIC,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", closed_port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_NO_QUIC,
               "исход NO_QUIC оригинала подменён другим вердиктом после ICMP");
-        CHECK(r.probes == D2K_QUIC_REPEATS,
+        CHECK(r.probes == D2S_QUIC_REPEATS,
               "вердикт выносится сразу по базовой живости, дальше дерево не идёт; датаграммы "
               "ушли на провод (refused, не not-sent), значит probes == repeats, не 0");
         CHECK(strstr(r.reason, "сетевым отказом") != NULL,
@@ -1886,11 +1886,11 @@ int main(int argc, char **argv) {
            case r.refused стоит ДО case r.err, отказ не попадает в NotBuilt. */
         uint32_t rtt_ms = 0;
         int refused = -1, sent = -1;
-        d2k_tally t = real_ask("127.0.0.1", closed_port, NULL, 0, trig_hello(), 500, 0,
-                               D2K_QUIC_REPEATS, &rtt_ms, &refused, &sent, NULL);
-        CHECK(sent == D2K_QUIC_REPEATS && refused == D2K_QUIC_REPEATS,
+        d2s_tally t = real_ask("127.0.0.1", closed_port, NULL, 0, trig_hello(), 500, 0,
+                               D2S_QUIC_REPEATS, &rtt_ms, &refused, &sent, NULL);
+        CHECK(sent == D2S_QUIC_REPEATS && refused == D2S_QUIC_REPEATS,
               "ICMP-отказ: все попытки ушли и получили отказ");
-        CHECK(t.err == 0 && t.pass == 0 && t.fail == D2K_QUIC_REPEATS,
+        CHECK(t.err == 0 && t.pass == 0 && t.fail == D2S_QUIC_REPEATS,
               "ICMP-отказ — «нет ответа» (fail), не err: донор probe.go:573-574");
     }
 
@@ -1908,9 +1908,9 @@ int main(int argc, char **argv) {
      * дают ОДИНАКОВЫЙ result[i]=-1, "не отправилось", ДО единого байта на
      * сети на ОБЕИХ платформах — проверено эмпирически на обеих). --------- */
     {
-        d2k_vres r =
-            d2k_quic_classify("255.255.255.255", 443, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_FLAKY,
+        d2s_vres r =
+            d2s_quic_classify("255.255.255.255", 443, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_FLAKY,
               "не отправилось ни разу — наша сторона, сеть не спрошена; НЕ сетевое утверждение "
               "UNREACHABLE (находка 5)");
         CHECK(strstr(r.reason, "не отправилось") != NULL,
@@ -1935,11 +1935,11 @@ int main(int argc, char **argv) {
             "10.171.171.171", "192.168.1.1", "172.16.0.1", "127.0.0.1",
             "169.254.1.1", "100.64.0.1", "0.0.0.0"
         };
-        d2k_quic_allow_local = 0;   /* как в продукте, а не как на стенде */
+        d2s_quic_allow_local = 0;   /* как в продукте, а не как на стенде */
         for (size_t i = 0; i < sizeof locals / sizeof locals[0]; i++) {
-            d2k_vres r = d2k_quic_classify(locals[i], 443, "x.example",
+            d2s_vres r = d2s_quic_classify(locals[i], 443, "x.example",
                                            trig_hello(), ctl_hello(), 0);
-            CHECK(r.verdict == D2K_V_LOCAL_ADDRESS,
+            CHECK(r.verdict == D2S_V_LOCAL_ADDRESS,
                   "приватный адрес обязан давать отдельный вердикт, а не «режут адрес»");
             CHECK(r.probes == 0,
                   "это отказ ДО измерения: ни одна датаграмма не должна уйти на провод");
@@ -1951,23 +1951,23 @@ int main(int argc, char **argv) {
            одной строки ушла бы в настоящую сеть и ждала бы там таймаутов; в
            первой редакции этого теста так и было, и core check вырос на
            минуты. */
-        d2k_quic_ask_fn saved_ask = d2k_quic_ask_hook;
-        d2k_quic_ask_fn saved_longer = d2k_quic_ask_longer_hook;
-        d2k_quic_ask_fn saved_frames = d2k_quic_ask_frames_hook;
-        d2k_quic_ask_fn saved_control = d2k_quic_ask_control_hook;
-        d2k_quic_ask_hook = mock_ask;
-    d2k_quic_ask_longer_hook = mock_ask;
-    d2k_quic_ask_frames_hook = mock_ask;
-        d2k_quic_ask_control_hook = mock_ask;
-        d2k_vres ok = d2k_quic_classify("203.0.113.7", 443, "x.example",
+        d2s_quic_ask_fn saved_ask = d2s_quic_ask_hook;
+        d2s_quic_ask_fn saved_longer = d2s_quic_ask_longer_hook;
+        d2s_quic_ask_fn saved_frames = d2s_quic_ask_frames_hook;
+        d2s_quic_ask_fn saved_control = d2s_quic_ask_control_hook;
+        d2s_quic_ask_hook = mock_ask;
+    d2s_quic_ask_longer_hook = mock_ask;
+    d2s_quic_ask_frames_hook = mock_ask;
+        d2s_quic_ask_control_hook = mock_ask;
+        d2s_vres ok = d2s_quic_classify("203.0.113.7", 443, "x.example",
                                         trig_hello(), ctl_hello(), 0);
-        d2k_quic_ask_hook = saved_ask;
-        d2k_quic_ask_longer_hook = saved_longer;
-        d2k_quic_ask_frames_hook = saved_frames;
-        d2k_quic_ask_control_hook = saved_control;
-        CHECK(ok.verdict != D2K_V_LOCAL_ADDRESS,
+        d2s_quic_ask_hook = saved_ask;
+        d2s_quic_ask_longer_hook = saved_longer;
+        d2s_quic_ask_frames_hook = saved_frames;
+        d2s_quic_ask_control_hook = saved_control;
+        CHECK(ok.verdict != D2S_V_LOCAL_ADDRESS,
               "внешний адрес принят за приватный — проверка закрыла бы весь продукт");
-        d2k_quic_allow_local = 1;   /* остальным проверкам нужна петля */
+        d2s_quic_allow_local = 1;   /* остальным проверкам нужна петля */
     }
 
     /* --- Путь жив через VN: исход NO_QUIC после двух серий, как в Run.
@@ -1978,8 +1978,8 @@ int main(int argc, char **argv) {
         g_vn_should_answer = 1;
         g_vn_seen_n = 0;
         uint16_t port = vn_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_NO_QUIC,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_NO_QUIC,
               "путь жив (VN ответило), контроль молчит — потерян NO_QUIC оригинала");
         /* Донор probe.go:303-306 + hello.go:99-111: на каждую попытку
            randomID(8) для DCID и для SCID, 1200 байт. Шесть идентификаторов
@@ -2007,7 +2007,7 @@ int main(int argc, char **argv) {
             }
             CHECK(distinct, "зонд VN: шесть DCID/SCID трёх попыток обязаны быть разными (probe.go:303-306)");
         }
-        CHECK(r.probes == 2 * D2K_QUIC_REPEATS,
+        CHECK(r.probes == 2 * D2S_QUIC_REPEATS,
               "ветка NO_QUIC добавила третью серию, которой нет в оригинале");
         CHECK(strstr(r.reason, "не спрашивалось") != NULL && strstr(r.reason, "ОБА имени") == NULL,
               "неотправленное имя выдано за проверенное");
@@ -2027,10 +2027,10 @@ int main(int argc, char **argv) {
     {
         g_vn_should_answer = 0;
         uint16_t port = vn_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        CHECK(r.verdict == D2K_V_ADDRESS,
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        CHECK(r.verdict == D2S_V_ADDRESS,
               "исход ADDRESS оригинала после молчащих Initial и VN подменён");
-        CHECK(r.probes == 2 * D2K_QUIC_REPEATS,
+        CHECK(r.probes == 2 * D2S_QUIC_REPEATS,
               "ветка ADDRESS не выполнила ровно две серии оригинала");
         CHECK(strstr(r.reason, "нельзя отличить") != NULL,
               "причина обязана честно признать неразличимость (§2.3), а не утверждать транспорт");
@@ -2041,7 +2041,7 @@ int main(int argc, char **argv) {
 
     /* --- НАХОДКА A РЕВЬЮ (круг 3): зонд согласования версии обязан идти С
      * МЕТКОЙ, и её неудача обязана попасть в r.marked. База (шаг 0) идёт тем
-     * же d2k_mark_hook, поэтому "просто mark_never_ok" не различил бы "VN не
+     * же d2s_mark_hook, поэтому "просто mark_never_ok" не различил бы "VN не
      * учитывает свою метку" от "база не учла свою" — база сама завалила бы
      * all_marked первой. mark_fail_from_nth пропускает первые 3 (база) и
      * валит метку начиная с 4-го вызова (зонд согласования версии) —
@@ -2049,14 +2049,14 @@ int main(int argc, char **argv) {
     {
         g_vn_should_answer = 1;
         uint16_t port = vn_start();
-        d2k_mark_fn saved = d2k_mark_hook;
+        d2s_mark_fn saved = d2s_mark_hook;
         g_mark_call_count = 0;
-        g_mark_fail_from = D2K_QUIC_REPEATS + 1; /* 4-й и далее вызовы — мимо метки */
-        d2k_mark_hook = mark_fail_from_nth;
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 555);
-        d2k_mark_hook = saved;
+        g_mark_fail_from = D2S_QUIC_REPEATS + 1; /* 4-й и далее вызовы — мимо метки */
+        d2s_mark_hook = mark_fail_from_nth;
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 555);
+        d2s_mark_hook = saved;
         g_mark_fail_from = 0;
-        CHECK(r.verdict == D2K_V_NO_QUIC, "вердикт не должен зависеть от того, встала ли метка");
+        CHECK(r.verdict == D2S_V_NO_QUIC, "вердикт не должен зависеть от того, встала ли метка");
         CHECK(r.marked == 0,
               "база помечена честно (первые 3 вызова), но зонд согласования версии — нет (вызовы "
               "4-6): r.marked обязан упасть на этом одном, а не остаться истинным (находка A)");
@@ -2080,11 +2080,11 @@ int main(int argc, char **argv) {
         g_vn_should_answer = 1;
         g_vn_drop_first_n = 1; /* стенд теряет РОВНО одну из трёх датаграмм: 2/3 отвечают */
         uint16_t port = vn_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
         g_vn_drop_first_n = 0;
-        CHECK(r.verdict == D2K_V_NO_QUIC,
+        CHECK(r.verdict == D2S_V_NO_QUIC,
               "2 из 3 отвечают — присутствие уже доказано, не единогласие; НЕ FLAKY (находка 1)");
-        CHECK(strstr(r.reason, "no_quic") != NULL && r.probes == 2 * D2K_QUIC_REPEATS,
+        CHECK(strstr(r.reason, "no_quic") != NULL && r.probes == 2 * D2S_QUIC_REPEATS,
               "тот же вывод, что и при 3/3: порог VN — присутствие, а не единогласие");
         close(g_vn_fd);
     }
@@ -2092,9 +2092,9 @@ int main(int argc, char **argv) {
         g_vn_should_answer = 1;
         g_vn_drop_first_n = 2; /* стенд теряет ДВЕ из трёх датаграмм: 1/3 отвечает — граница */
         uint16_t port = vn_start();
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
         g_vn_drop_first_n = 0;
-        CHECK(r.verdict == D2K_V_NO_QUIC,
+        CHECK(r.verdict == D2S_V_NO_QUIC,
               "1 из 3 отвечает — присутствие уже доказано на самой границе (находка 1)");
         CHECK(strstr(r.reason, "версии 1/3") != NULL,
               "причина обязана назвать измеренное число ответивших, не округлить его");
@@ -2105,24 +2105,24 @@ int main(int argc, char **argv) {
      * budget_s==0 — единственный шов, который не подменяется, часы, должен
      * быть прогнан хотя бы одним тестом (замечание ревьюера, круг 2). Контроль
      * отвечает (живость есть), триггер молчит нарочно (g_rs_respond=3) —
-     * пол ожидания 1500 мс (D2K_QUIC_RTT_WAIT_FLOOR_MS) на шаге 1 сам по себе
+     * пол ожидания 1500 мс (D2S_QUIC_RTT_WAIT_FLOOR_MS) на шаге 1 сам по себе
      * съедает больше секундного бюджета. ------------------------------------ */
     {
         g_rs_respond = 3; /* отвечает только на контроль */
         uint16_t port = rs_start();
-        uint32_t saved_budget = d2k_quic_budget_s;
-        d2k_quic_budget_s = 1; /* 1 настоящая секунда, не 0 — проверяем часы, не спецслучай */
-        d2k_vres r = d2k_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
-        d2k_quic_budget_s = saved_budget;
+        uint32_t saved_budget = d2s_quic_budget_s;
+        d2s_quic_budget_s = 1; /* 1 настоящая секунда, не 0 — проверяем часы, не спецслучай */
+        d2s_vres r = d2s_quic_classify("127.0.0.1", port, "x.example", trig_hello(), ctl_hello(), 0);
+        d2s_quic_budget_s = saved_budget;
         close(g_rs_fd);
 
-        CHECK(r.verdict == D2K_V_INCONCLUSIVE,
+        CHECK(r.verdict == D2S_V_INCONCLUSIVE,
               "реальный бюджет в 1 с обязан истечь до шага 2 (пол ожидания 1,5 с на шаге 1 один "
               "съедает больше) — проверка настоящих часов, не спецслучая budget_s==0");
         CHECK(strstr(r.reason, "бюджет") != NULL, "причина обязана назвать именно бюджет");
     }
 
-    d2k_quic_wait_ms = saved_wait_ms; /* контракт: вернуть, как и положено (находка 9, круг 2) */
+    d2s_quic_wait_ms = saved_wait_ms; /* контракт: вернуть, как и положено (находка 9, круг 2) */
 
     if (fails) {
         printf("ПРОВАЛОВ: %d\n", fails);

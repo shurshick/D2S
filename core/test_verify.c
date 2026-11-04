@@ -1,4 +1,4 @@
-/* test_verify.c — уровни доказательства работоспособности (d2k_verify.h).
+/* test_verify.c — уровни доказательства работоспособности (d2s_verify.h).
  *
  * ЧТО ИМЕННО ЗДЕСЬ ДОКАЗЫВАЕТСЯ. Не «зонд что-то вернул», а что четыре
  * уровня РАЗЛИЧАЮТСЯ и не сливаются: обращение не состоялось / встал
@@ -20,7 +20,7 @@
  *
  * СТЕНД НЕ ДОКАЗЫВАЕТ ПРАВИЛЬНОСТЬ core/tls13.c и написан не для этого.
  * Правильность клиента доказана живыми серверами (Google, Cloudflare,
- * Microsoft, instagram, youtube, rutracker — см. шапку d2k_tls13.h); здесь он
+ * Microsoft, instagram, youtube, rutracker — см. шапку d2s_tls13.h); здесь он
  * просто вторая сторона того же протокола, площадка, на которой уровни
  * различимы БЕЗ ИНТЕРНЕТА. Тест, зависящий от чужого сервера, был бы тестом
  * сегодняшней погоды в сети, а не нашего кода: вердикт менялся бы от того,
@@ -43,11 +43,11 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_crypto.h" /* то же расписание ключей, что у клиента, с другой стороны */
-#include "d2k_meas.h"   /* d2k_mark_hook — им проверяется «обращение непомеченное» */
-#include "d2k_tls13core.h"
-#include "d2k_verify.h"
-#include "d2k_hello.h"
+#include "d2s_crypto.h" /* то же расписание ключей, что у клиента, с другой стороны */
+#include "d2s_meas.h"   /* d2s_mark_hook — им проверяется «обращение непомеченное» */
+#include "d2s_tls13core.h"
+#include "d2s_verify.h"
+#include "d2s_hello.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -129,7 +129,7 @@ struct stand {
 };
 
 /* Потолок ожидания на стороне стенда. Больше любого потолка, который тест
-   даёт зонду (см. вызовы d2k_verify_probe ниже), чтобы стенд никогда не
+   даёт зонду (см. вызовы d2s_verify_probe ниже), чтобы стенд никогда не
    становился причиной отказа: он мишень, а не участник измерения. */
 #define STAND_IO_MS 5000
 
@@ -213,7 +213,7 @@ static int rec_read(int fd, struct dir *d, int enc, uint8_t *type,
     if (rlen < 17 || rlen - 16 > cap) { return -1; }
     uint8_t nonce[12];
     nonce_of(d->iv, d->seq, nonce);
-    if (d2k_aes128_gcm_decrypt(d->key, nonce, hdr, 5, raw, rlen, buf) != 0) { return -1; }
+    if (d2s_aes128_gcm_decrypt(d->key, nonce, hdr, 5, raw, rlen, buf) != 0) { return -1; }
     d->seq++;
     size_t n = rlen - 16;
     while (n > 0 && buf[n - 1] == 0) { n--; }
@@ -236,7 +236,7 @@ static int rec_write_mode(int fd, struct dir *d, uint8_t type,
     put16(out + 3, (uint16_t)(n + 1 + 16));
     uint8_t nonce[12], tag[16];
     nonce_of(d->iv, d->seq, nonce);
-    if (d2k_aes128_gcm_encrypt(d->key, nonce, out, 5, inner, n + 1, out + 5, tag) != 0) {
+    if (d2s_aes128_gcm_encrypt(d->key, nonce, out, 5, inner, n + 1, out + 5, tag) != 0) {
         return -1;
     }
     memcpy(out + 5 + n + 1, tag, 16);
@@ -252,13 +252,13 @@ static int rec_write(int fd, struct dir *d, uint8_t type, const uint8_t *data, s
 static int derive_secret(const uint8_t secret[32], const char *label,
                          const uint8_t *msgs, size_t msgs_len, uint8_t out[32]) {
     uint8_t th[32];
-    d2k_sha256(msgs, msgs_len, th);
-    return d2k_hkdf_expand_label_ctx(secret, label, th, sizeof th, out, 32);
+    d2s_sha256(msgs, msgs_len, th);
+    return d2s_hkdf_expand_label_ctx(secret, label, th, sizeof th, out, 32);
 }
 
 static int traffic_keys(const uint8_t secret[32], struct dir *d) {
-    if (d2k_hkdf_expand_label(secret, "key", d->key, 16) != 0) { return -1; }
-    if (d2k_hkdf_expand_label(secret, "iv", d->iv, 12) != 0) { return -1; }
+    if (d2s_hkdf_expand_label(secret, "key", d->key, 16) != 0) { return -1; }
+    if (d2s_hkdf_expand_label(secret, "iv", d->iv, 12) != 0) { return -1; }
     d->seq = 0;
     return 0;
 }
@@ -318,7 +318,7 @@ static int parse_client_hello(const uint8_t *ch, size_t len,
 /* Рукопожатие TLS 1.3 со стороны сервера: ServerHello открытым текстом,
    EncryptedExtensions и Finished под ключами рукопожатия, потом смена на
    прикладные ключи в обе стороны. Сертификата стенд не шлёт вовсе — клиент
-   его не проверяет и не будет (шапка d2k_tls13.h называет это прямо), а
+   его не проверяет и не будет (шапка d2s_tls13.h называет это прямо), а
    лишний сертификат означал бы держать в тесте ещё и X.509. */
 /* Длина последнего приветствия, ДОШЕДШЕГО до мишени. Пишется из потока
    стенда, читается тестом после join — гонки нет. */
@@ -330,7 +330,7 @@ static size_t stand_ch_wire;
 
    Сертификат ненастоящий и настоящим быть не обязан: зонд ищет в нём ровно
    расширение subjectAltName и ровно его dNSName, а цепочку не строит и
-   строить не будет (см. d2k_tls_peer_name). Стенд кладёт эти байты и ничего
+   строить не будет (см. d2s_tls_peer_name). Стенд кладёт эти байты и ничего
    больше — так проверяется РАЗБОР, а не чужая библиотека X.509. */
 static const char *stand_cert_name;
 static char stand_request[REC_MAX + 1];
@@ -413,7 +413,7 @@ static int stand_handshake(int c, struct dir *rd, struct dir *wr) {
     tr_len = ch_len;
 
     uint8_t pub[32];
-    if (d2k_x25519_base(pub, stand_priv) != 0) { return -1; }
+    if (d2s_x25519_base(pub, stand_priv) != 0) { return -1; }
 
     uint8_t sh[256];
     size_t p = 0;
@@ -447,13 +447,13 @@ static int stand_handshake(int c, struct dir *rd, struct dir *wr) {
     tr_len += p;
 
     uint8_t shared[32];
-    if (d2k_x25519(shared, stand_priv, peer_pub) != 0) { return -1; }
+    if (d2s_x25519(shared, stand_priv, peer_pub) != 0) { return -1; }
 
     uint8_t zero[32], early[32], derived[32], hs[32], c_hs[32], s_hs[32];
     memset(zero, 0, sizeof zero);
-    d2k_hkdf_extract(zero, 32, zero, 32, early);
+    d2s_hkdf_extract(zero, 32, zero, 32, early);
     if (derive_secret(early, "derived", NULL, 0, derived) != 0) { return -1; }
-    d2k_hkdf_extract(derived, 32, shared, 32, hs);
+    d2s_hkdf_extract(derived, 32, shared, 32, hs);
     if (derive_secret(hs, "c hs traffic", tr, tr_len, c_hs) != 0 ||
         derive_secret(hs, "s hs traffic", tr, tr_len, s_hs) != 0 ||
         traffic_keys(c_hs, rd) != 0 || traffic_keys(s_hs, wr) != 0) {
@@ -503,9 +503,9 @@ static int stand_handshake(int c, struct dir *rd, struct dir *wr) {
     tr_len += f;
 
     uint8_t fin_key[32], th[32], verify[32];
-    if (d2k_hkdf_expand_label(s_hs, "finished", fin_key, 32) != 0) { return -1; }
-    d2k_sha256(tr, tr_len, th);
-    d2k_hmac_sha256(fin_key, 32, th, 32, verify);
+    if (d2s_hkdf_expand_label(s_hs, "finished", fin_key, 32) != 0) { return -1; }
+    d2s_sha256(tr, tr_len, th);
+    d2s_hmac_sha256(fin_key, 32, th, 32, verify);
     size_t fin_at = f;
     flight[f++] = 20; flight[f++] = 0; flight[f++] = 0; flight[f++] = 32;
     memcpy(flight + f, verify, 32); f += 32;
@@ -516,7 +516,7 @@ static int stand_handshake(int c, struct dir *rd, struct dir *wr) {
     /* Прикладные ключи — от транскрипта ДО клиентского Finished (§7.1). */
     uint8_t derived2[32], master[32], c_ap[32], s_ap[32];
     if (derive_secret(hs, "derived", NULL, 0, derived2) != 0) { return -1; }
-    d2k_hkdf_extract(derived2, 32, zero, 32, master);
+    d2s_hkdf_extract(derived2, 32, zero, 32, master);
     if (derive_secret(master, "c ap traffic", tr, tr_len, c_ap) != 0 ||
         derive_secret(master, "s ap traffic", tr, tr_len, s_ap) != 0) {
         return -1;
@@ -736,19 +736,19 @@ static void stand_stop(struct stand *s) {
     close(s->fd);
 }
 
-struct probe_job { uint16_t port; d2k_ver_result result; };
+struct probe_job { uint16_t port; d2s_ver_result result; };
 static void *parallel_probe(void *arg) {
     struct probe_job *j = arg;
-    j->result = d2k_verify_probe("127.0.0.1", j->port, "parallel.example", 3000, 0);
-    d2k_verify_close(&j->result);
+    j->result = d2s_verify_probe("127.0.0.1", j->port, "parallel.example", 3000, 0);
+    d2s_verify_close(&j->result);
     return NULL;
 }
 
 /* --- проверка «обращение непомеченное» ----------------------------------- */
 
-/* Метку ставит d2k_mark_hook и только он (см. d2k_meas.h). Зонд обязан идти
+/* Метку ставит d2s_mark_hook и только он (см. d2s_meas.h). Зонд обязан идти
    НЕПОМЕЧЕННЫМ: помеченный пакет уходит мимо NFQUEUE первым правилом цепочки
-   (files/S99d2k), поставленный план к нему не применится, и зонд мерил бы
+   (files/S99d2s), поставленный план к нему не применится, и зонд мерил бы
    линию БЕЗ обхода, считая, что мерит с обходом. Счётчик ловит ровно это. */
 static int mark_calls;
 static uint32_t last_mark;
@@ -783,13 +783,13 @@ static uint16_t closed_port(void) {
 static void test_rx_wire_progress(void) {
     for(int bad=0;bad<2;bad++) {
         struct stand s;uint16_t port=stand_start(&s,bad?ROLE_BAD_TAG_TLS:ROLE_PARTIAL_TLS);
-        d2k_ver_result r=d2k_verify_probe_identity_on(-1,"127.0.0.1",port,"wire.example",800,0,0);
+        d2s_ver_result r=d2s_verify_probe_identity_on(-1,"127.0.0.1",port,"wire.example",800,0,0);
         CHECK(r.negotiated_tls==0x0304,"wire progress retains negotiated TLS version");
-        CHECK(r.level==D2K_VER_HANDSHAKE&&!r.status&&!r.body_bytes&&!r.body_complete,
+        CHECK(r.level==D2S_VER_HANDSHAKE&&!r.status&&!r.body_bytes&&!r.body_complete,
               "partial/bad-tag ciphertext must never become HTTP plaintext");
         CHECK(r.rx_tls_wire_bytes==(bad?16389u:14005u),"actual consumed TLS wire bytes missing or handshake counted");
         CHECK(r.rx_tls_record_missing==(bad?0u:2384u),"full bad-tag record is not a truncated record");
-        d2k_verify_close(&r);stand_stop(&s);
+        d2s_verify_close(&r);stand_stop(&s);
     }
 }
 int main(int argc,char **argv) {
@@ -802,11 +802,11 @@ int main(int argc,char **argv) {
         "<link href='//third.example/c.css' rel='stylesheet'></head><body>"
         "<link href='//bad.test/d.css' rel='stylesheet'>";
     for (size_t chunk = 1; chunk < 40; chunk++) {
-        d2k_resource_scan scan = {0};
+        d2s_resource_scan scan = {0};
         for (size_t i = 0; i < strlen(html); i += chunk) {
             size_t take = strlen(html) - i;
             if (take > chunk) take = chunk;
-            d2k_resource_feed(&scan, (const uint8_t *)html + i, take);
+            d2s_resource_feed(&scan, (const uint8_t *)html + i, take);
         }
         CHECK(scan.count == 2 && !strcmp(scan.refs[0].host, "assets.example") &&
               !strcmp(scan.refs[0].path, "/a.min.css") &&
@@ -826,11 +826,11 @@ int main(int argc,char **argv) {
             ".b{src:url(https://second.example/late.css)}\n"
             ".c{src:url(\"https://third.example/q.css?token=secret\")}\n";
         for (size_t chunk = 1; chunk < 40; chunk++) {
-            d2k_resource_scan scan = {0};
+            d2s_resource_scan scan = {0};
             for (size_t i = 0; i < strlen(css); i += chunk) {
                 size_t take = strlen(css) - i;
                 if (take > chunk) take = chunk;
-                d2k_resource_feed(&scan, (const uint8_t *)css + i, take);
+                d2s_resource_feed(&scan, (const uint8_t *)css + i, take);
             }
             CHECK(scan.count == 2 &&
                   !strcmp(scan.refs[0].host, "fonts.example") &&
@@ -840,89 +840,89 @@ int main(int argc,char **argv) {
                   "CSS body hints are missed, chunk-dependent or include unsafe context");
         }
     }
-    CHECK(!d2k_resource_path_ok("//evil/a.css") &&
-          !d2k_resource_path_ok("/a.css?token=secret") &&
-          !d2k_resource_path_ok("/a/../b.css") &&
-          !d2k_resource_path_ok("/a.css\r\nX: yes"), "unsafe witness path accepted");
-    d2k_mark_hook = counting_mark;
+    CHECK(!d2s_resource_path_ok("//evil/a.css") &&
+          !d2s_resource_path_ok("/a.css?token=secret") &&
+          !d2s_resource_path_ok("/a/../b.css") &&
+          !d2s_resource_path_ok("/a.css\r\nX: yes"), "unsafe witness path accepted");
+    d2s_mark_hook = counting_mark;
     {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_PUBLIC_HTML);
-        d2k_ver_result r = d2k_verify_probe_identity_on(-1, "127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe_identity_on(-1, "127.0.0.1", port,
             "public.example", 3000, 0, 0);
         CHECK(r.body_complete && r.n_resources == 1 &&
               !strcmp(r.resources[0].host, "assets.example") &&
               !strcmp(r.resources[0].path, "/main.css"),
               "native HTTP-body reader lost CSS hint across TLS records");
-        d2k_verify_close(&r); stand_stop(&s);
+        d2s_verify_close(&r); stand_stop(&s);
     }
     {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_APP);
-        d2k_ver_result r = d2k_verify_probe_path_on(-1, "127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe_path_on(-1, "127.0.0.1", port,
             "public.example", 3000, 0, 0, 0, 0, "/assets/app.min.css");
         CHECK(r.body_complete && r.status == 200, "stylesheet verifier lost existing HTTP proof");
         CHECK(strstr(stand_request, "GET /assets/app.min.css HTTP/1.1\r\n") != NULL &&
               strstr(stand_request, "Accept-Encoding: identity") != NULL,
               "stylesheet witness silently replaced with root or compressed request");
-        d2k_verify_close(&r); stand_stop(&s);
-        r = d2k_verify_probe_path_on(-1, "127.0.0.1", 1, "public.example",
+        d2s_verify_close(&r); stand_stop(&s);
+        r = d2s_verify_probe_path_on(-1, "127.0.0.1", 1, "public.example",
             100, 0, 0, 0, 0, "/app.css?private=yes");
-        CHECK(r.fd == -1 && r.level == D2K_VER_NOT_MEASURED,
+        CHECK(r.fd == -1 && r.level == D2S_VER_NOT_MEASURED,
               "invalid witness opened a socket");
     }
     {
         /* QUIC-зонд должен передать запрошенную метку сокету и остановиться,
            если локальная установка SO_MARK не удалась. */
         mark_calls = 0; last_mark = 0;
-        d2k_ver_result r = d2k_verify_probe_quic_path_on(-1, "127.0.0.1", 1,
+        d2s_ver_result r = d2s_verify_probe_quic_path_on(-1, "127.0.0.1", 1,
                                                          "stand.example", 1, 0, "/");
         CHECK(mark_calls == 0, "непомеченный QUIC-зонд вызвал установку метки");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
 
         mark_calls = 0; last_mark = 0;
-        r = d2k_verify_probe_quic_path_mark_on(-1, "127.0.0.1", 1,
+        r = d2s_verify_probe_quic_path_mark_on(-1, "127.0.0.1", 1,
                                                "stand.example", 1, 0, 0x1234, "/");
         CHECK(mark_calls > 0 && last_mark == 0x1234,
               "QUIC-зонд не передал правильную метку");
         CHECK(r.negotiated_tls == 0,
               "неуспешный QUIC-зонд сообщил TLS до рукопожатия");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
 
-        d2k_mark_hook = failing_mark;
+        d2s_mark_hook = failing_mark;
         mark_calls = 0; last_mark = 0;
-        r = d2k_verify_probe_quic_path_mark_on(-1, "127.0.0.1", 1,
+        r = d2s_verify_probe_quic_path_mark_on(-1, "127.0.0.1", 1,
                                                "stand.example", 1, 0, 0x1234, "/");
         CHECK(mark_calls > 0 && last_mark == 0x1234,
               "ошибка метки QUIC не проверила запрошенное значение");
-        CHECK(r.level == D2K_VER_NOT_MEASURED && r.fd == -1 &&
+        CHECK(r.level == D2S_VER_NOT_MEASURED && r.fd == -1 &&
               r.local_refusal && r.negotiated_tls == 0,
               "ошибка метки QUIC была принята за сетевой отказ");
         CHECK(strstr(r.reason, "метка измерительного сокета не поставилась") != NULL,
               "причина отказа метки QUIC потеряна");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
 
-        d2k_mark_hook = failing_mark;
+        d2s_mark_hook = failing_mark;
         mark_calls = 0; last_mark = 0;
-        r = d2k_verify_probe_path_on(-1, "127.0.0.1", 1, "stand.example",
+        r = d2s_verify_probe_path_on(-1, "127.0.0.1", 1, "stand.example",
                                      100, 0, 0, 0, 0x1234, NULL);
         CHECK(mark_calls > 0 && last_mark == 0x1234 && r.local_refusal &&
-              r.level == D2K_VER_NOT_MEASURED,
+              r.level == D2S_VER_NOT_MEASURED,
               "ошибка TCP-метки не обозначена локальным отказом");
-        d2k_verify_close(&r);
-        d2k_mark_hook = counting_mark;
+        d2s_verify_close(&r);
+        d2s_mark_hook = counting_mark;
     }
     {
         struct stand s;
         uint16_t port = stand_start_family(&s, ROLE_APP, AF_INET6);
         CHECK(port != 0, "IPv6 TLS fixture starts");
-        d2k_ver_result r = d2k_verify_probe("::1", port, "ipv6.example", 3000, 0);
-        CHECK(r.level == D2K_VER_APPLICATION && r.status == 200,
+        d2s_ver_result r = d2s_verify_probe("::1", port, "ipv6.example", 3000, 0);
+        CHECK(r.level == D2S_VER_APPLICATION && r.status == 200,
               "IPv6 TLS verifier completes handshake and receives HTTP");
         if (r.fd < 0) return 1;
         CHECK(r.family == 6 && memcmp(r.local_addr, &in6addr_loopback, 16) == 0,
               "IPv6 verifier retains full native source address");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(r.local_port == s.peer_port && r.local_port != 0,
               "IPv6 verifier reports actual trial port");
@@ -932,13 +932,13 @@ int main(int argc,char **argv) {
     {
         uint16_t port = closed_port();
         CHECK(port != 0, "свободный порт не нашёлся");
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 2000, 0);
-        CHECK(r.level == D2K_VER_NOT_MEASURED,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 2000, 0);
+        CHECK(r.level == D2S_VER_NOT_MEASURED,
               "отказ транспорта засчитан выше уровня «не измерено»");
         CHECK(r.status == 0, "кода состояния взяться неоткуда, а он не ноль");
         CHECK(r.fd < 0, "обращение не состоялось, а сокет остался");
         CHECK(r.reason[0] != '\0', "отказ без причины — диагностировать нечем");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
     }
 
     /* --- сервер ответил успехом, но не по-нашему: только транспорт -------- */
@@ -948,8 +948,8 @@ int main(int argc,char **argv) {
         CHECK(port != 0, "стенд ROLE_PLAIN не поднялся");
 
         mark_calls = 0;
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 2000, 0);
-        CHECK(r.level == D2K_VER_TRANSPORT,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 2000, 0);
+        CHECK(r.level == D2S_VER_TRANSPORT,
               "не-TLS ответ засчитан выше уровня транспорта");
         CHECK(r.status == 0, "кода состояния взяться неоткуда, а он не ноль");
         CHECK(strstr(r.reason, "48 54 54 50 2f") != NULL &&
@@ -957,17 +957,17 @@ int main(int argc,char **argv) {
               strstr(r.reason, "20527") == NULL,
               "verifier принял открытый HTTP-ответ Cloudflare за поле длины TLS");
         CHECK(mark_calls == 0, "зонд пометил обращение — план к нему не применится");
-        CHECK(r.fd >= 0, "сокет закрыт до явного d2k_verify_close");
+        CHECK(r.fd >= 0, "сокет закрыт до явного d2s_verify_close");
 
         /* Сокет обязан быть ЖИВЫМ: датапат по FIN удаляет ячейку потока, и
            ответ сервера станет не с чем связать (docs/field/2026-09-11). */
         CHECK(fcntl(r.fd, F_GETFD) >= 0, "сокет отдан числом, но уже закрыт");
 
         int saved = r.fd;
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         CHECK(r.fd < 0, "после закрытия дескриптор остался в результате");
         CHECK(fcntl(saved, F_GETFD) < 0 && errno == EBADF,
-              "d2k_verify_close не закрыл сокет");
+              "d2s_verify_close не закрыл сокет");
 
         /* Местный порт — ключ потока, по которому событие датапата
            привязывается к ЭТОМУ обращению. Сверяем с тем, что увидела
@@ -985,15 +985,15 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_PLAIN);
         CHECK(port != 0, "стенд ROLE_PLAIN для TLS 1.2 не поднялся");
-        d2k_ver_result r = d2k_verify_probe12_on(-1, "127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe12_on(-1, "127.0.0.1", port,
                                                   "стенд.пример", 2000, 0);
-        CHECK(r.level == D2K_VER_TRANSPORT,
+        CHECK(r.level == D2S_VER_TRANSPORT,
               "TLS 1.2 verifier принял открытый HTTP за TLS");
         CHECK(strstr(r.reason, "48 54 54 50 2f") != NULL &&
               strstr(r.reason, "открытый HTTP") != NULL &&
               strstr(r.reason, "20527") == NULL,
               "TLS 1.2 verifier принял открытый HTTP-ответ за поле длины TLS");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
     }
 
@@ -1003,11 +1003,11 @@ int main(int argc,char **argv) {
         uint16_t port = stand_start(&s, ROLE_SILENT);
         CHECK(port != 0, "стенд ROLE_SILENT не поднялся");
 
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 1200, 0);
-        CHECK(r.level == D2K_VER_HANDSHAKE,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 1200, 0);
+        CHECK(r.level == D2S_VER_HANDSHAKE,
               "молчание после рукопожатия засчитано за ответ приложения");
         CHECK(r.status == 0, "приложение молчало, а код состояния появился");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
     }
 
@@ -1018,42 +1018,42 @@ int main(int argc,char **argv) {
        не приложения. */
     {
         uint8_t ch[2048]; size_t chl = 0, ll = 0; uint8_t list[256];
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "alpn.example", ch, sizeof ch, &chl) == 0 &&
-              d2k_hello_alpn(ch, chl, list, sizeof list, &ll) == 1 && d2k_alpn_is_http(list, ll),
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "alpn.example", ch, sizeof ch, &chl) == 0 &&
+              d2s_hello_alpn(ch, chl, list, sizeof list, &ll) == 1 && d2s_alpn_is_http(list, ll),
               "ALPN профиля браузера не прочитан как HTTP");
-        CHECK(d2k_hello_alpn(ch, chl - 1, list, sizeof list, &ll) == -1,
+        CHECK(d2s_hello_alpn(ch, chl - 1, list, sizeof list, &ll) == -1,
               "обрезанное приветствие выдало ALPN вместо «не измерено»");
         static const uint8_t mqtt[] = { 4, 'm', 'q', 't', 't' };
-        CHECK(!d2k_alpn_is_http(mqtt, sizeof mqtt), "mqtt принят за HTTP");
+        CHECK(!d2s_alpn_is_http(mqtt, sizeof mqtt), "mqtt принят за HTTP");
 
         struct stand s;
         stand_alpn_need = "mqtt";
         uint16_t port = stand_start(&s, ROLE_SILENT);
-        d2k_ver_result r = d2k_verify_probe_on(-1, "127.0.0.1", port, "mqtt.example", 1500, 0);
-        CHECK(r.level == D2K_VER_TRANSPORT && strstr(r.reason, "120") != NULL &&
+        d2s_ver_result r = d2s_verify_probe_on(-1, "127.0.0.1", port, "mqtt.example", 1500, 0);
+        CHECK(r.level == D2S_VER_TRANSPORT && strstr(r.reason, "120") != NULL &&
               stand_alpn_offered("http/1.1"),
               "стенд не воспроизводит поле: HTTP-зонд должен получить тревогу 120");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
 
         port = stand_start(&s, ROLE_SILENT);
-        r = d2k_verify_probe_alpn_on(-1, "127.0.0.1", port, "mqtt.example", 1500, 0,
+        r = d2s_verify_probe_alpn_on(-1, "127.0.0.1", port, "mqtt.example", 1500, 0,
                                      mqtt, sizeof mqtt);
         CHECK(stand_alpn_offered("mqtt") && !stand_alpn_offered("http/1.1"),
               "зонд с ALPN клиента предложил не mqtt");
-        CHECK(r.level == D2K_VER_HANDSHAKE && r.handshake_proof && r.status == 0 &&
+        CHECK(r.level == D2S_VER_HANDSHAKE && r.handshake_proof && r.status == 0 &&
               strstr(r.reason, "120") == NULL,
               "рукопожатие с ALPN клиента не завершено или выдано за приложение");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
 
         /* Клиент без ALPN — и зонд без ALPN. */
         stand_alpn_need = NULL;
         port = stand_start(&s, ROLE_SILENT);
-        r = d2k_verify_probe_alpn_on(-1, "127.0.0.1", port, "noalpn.example", 1500, 0, NULL, 0);
-        CHECK(!strcmp(stand_alpn_seen, "-") && r.level == D2K_VER_HANDSHAKE && r.handshake_proof,
+        r = d2s_verify_probe_alpn_on(-1, "127.0.0.1", port, "noalpn.example", 1500, 0, NULL, 0);
+        CHECK(!strcmp(stand_alpn_seen, "-") && r.level == D2S_VER_HANDSHAKE && r.handshake_proof,
               "клиент без ALPN, а зонд его предложил");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
     }
 
@@ -1063,11 +1063,11 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_REDIRECT_COMPLETE);
         CHECK(port != 0, "identity-стенд не поднялся");
-        d2k_ver_result r = d2k_verify_probe_identity_on(-1, "127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe_identity_on(-1, "127.0.0.1", port,
                                                        "http.example", 1800, 0, 0);
-        CHECK(r.level == D2K_VER_APPLICATION && r.status == 200 && r.body_complete,
+        CHECK(r.level == D2S_VER_APPLICATION && r.status == 200 && r.body_complete,
               "identity verifier не получил полное конечное тело");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(s.accepted_identity && !s.accepted_compression,
               "RX-кандидат проверяется сжатием вместо identity");
@@ -1079,12 +1079,12 @@ int main(int argc,char **argv) {
         uint16_t port = stand_start(&s, ROLE_APP);
         CHECK(port != 0, "стенд ROLE_APP не поднялся");
 
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 3000, 0);
-        CHECK(r.level == D2K_VER_APPLICATION,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 3000, 0);
+        CHECK(r.level == D2S_VER_APPLICATION,
               "разобранный ответ приложения не поднял уровень до прикладного");
         CHECK(r.status == 200, "код состояния разобран неверно");
-        CHECK(r.fd >= 0, "сокет закрыт до явного d2k_verify_close");
-        d2k_verify_close(&r);
+        CHECK(r.fd >= 0, "сокет закрыт до явного d2s_verify_close");
+        d2s_verify_close(&r);
         stand_stop(&s);
     }
 
@@ -1094,10 +1094,10 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_REDIRECT_COMPLETE);
         CHECK(port != 0, "стенд редиректа с полным ответом не поднялся");
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "http.example", 1800, 0);
-        CHECK(r.level == D2K_VER_APPLICATION && r.status == 200,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "http.example", 1800, 0);
+        CHECK(r.level == D2S_VER_APPLICATION && r.status == 200,
               "проверка остановилась на 301 вместо конечного ответа по тому же TLS-соединению");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(s.accepted_compression,
               "HTTP verifier не запросил обычное сжатие, из-за чего меняется поведение источника");
@@ -1106,10 +1106,10 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_REDIRECT_TRUNCATED);
         CHECK(port != 0, "стенд оборванного ответа не поднялся");
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "http.example", 1800, 0);
-        CHECK(r.level != D2K_VER_APPLICATION,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "http.example", 1800, 0);
+        CHECK(r.level != D2S_VER_APPLICATION,
               "оборванное тело конечного ответа засчитано как рабочий обход");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
     }
 
@@ -1134,12 +1134,12 @@ int main(int argc,char **argv) {
             stand_cert_name = cn[i].cert;
             uint16_t port = stand_start(&s, ROLE_APP);
             CHECK(port != 0, "стенд для сверки имени не поднялся");
-            d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, cn[i].ask, 3000, 0);
-            CHECK(r.level == D2K_VER_APPLICATION,
+            d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, cn[i].ask, 3000, 0);
+            CHECK(r.level == D2S_VER_APPLICATION,
                   "сверка имени сломала рукопожатие — мишень отвечает, а зонд не дошёл");
             CHECK(r.name_ok == cn[i].want,
                   "сверка имени сервера дала не тот ответ");
-            d2k_verify_close(&r);
+            d2s_verify_close(&r);
             stand_stop(&s);
         }
         stand_cert_name = NULL;
@@ -1156,9 +1156,9 @@ int main(int argc,char **argv) {
             0x04, 0x08, 0x30, 0x06, 0x87, 0x04, 127, 0, 0, 1,
             0x00, 0x00              /* certificate extensions */
         };
-        CHECK(d2k_t13_cert_name_ok(ip_cert, sizeof ip_cert, "127.0.0.1") == 1,
+        CHECK(d2s_t13_cert_name_ok(ip_cert, sizeof ip_cert, "127.0.0.1") == 1,
               "QUIC/IP verification must accept a matching iPAddress SAN");
-        CHECK(d2k_t13_cert_name_ok(ip_cert, sizeof ip_cert, "127.0.0.2") == 0,
+        CHECK(d2s_t13_cert_name_ok(ip_cert, sizeof ip_cert, "127.0.0.2") == 0,
               "QUIC/IP verification must reject a different iPAddress SAN");
     }
 
@@ -1181,10 +1181,10 @@ int main(int argc,char **argv) {
         CHECK(port != 0, "стенд ROLE_APP для добивки не поднялся");
         stand_ch_wire = 0;
 
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 3000, want);
-        CHECK(r.level == D2K_VER_APPLICATION,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 3000, want);
+        CHECK(r.level == D2S_VER_APPLICATION,
               "добитое приветствие не довело зонд до приложения");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(stand_ch_wire == want,
               "до мишени дошло приветствие НЕ той длины — измерение идёт в чужом контексте");
@@ -1197,10 +1197,10 @@ int main(int argc,char **argv) {
         uint16_t port = stand_start(&s, ROLE_APP);
         CHECK(port != 0, "стенд ROLE_APP для короткой просьбы не поднялся");
         stand_ch_wire = 0;
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "стенд.пример", 3000, 50);
-        CHECK(r.level == D2K_VER_APPLICATION,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "стенд.пример", 3000, 50);
+        CHECK(r.level == D2S_VER_APPLICATION,
               "невыполнимая просьба о длине сломала зонд");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(stand_ch_wire > 50,
               "приветствие внезапно укоротилось до невозможного");
@@ -1213,11 +1213,11 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_APP);
         CHECK(port != 0, "стенд для baseline gzip-зонда не поднялся");
-        d2k_ver_result r = d2k_verify_probe_baseline("127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe_baseline("127.0.0.1", port,
             "baseline.example", 3000, 0, 0, 1, 0);
-        CHECK(r.level == D2K_VER_APPLICATION && r.body_complete && r.body_bytes == 2,
+        CHECK(r.level == D2S_VER_APPLICATION && r.body_complete && r.body_bytes == 2,
               "baseline-зонд не прочитал тело ответа полностью");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         CHECK(strstr(stand_request, "Accept-Encoding: gzip\r\n") != NULL,
               "gzip-контроль фактически ушёл как другой запрос");
@@ -1231,12 +1231,12 @@ int main(int argc,char **argv) {
         stand_redirect_followed = 0;
         uint16_t port = stand_start(&s, ROLE_APP);
         CHECK(port != 0, "стенд same-origin redirect не поднялся");
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port,
                                              "redirect.example", 3000, 0);
-        CHECK(r.level == D2K_VER_APPLICATION && r.status == 200 &&
+        CHECK(r.level == D2S_VER_APPLICATION && r.status == 200 &&
               r.body_complete && r.body_bytes == 2,
               "same-origin redirect не довёл проверку до тела страницы");
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         stand_same_origin_redirect = 0;
         CHECK(stand_redirect_followed &&
@@ -1250,7 +1250,7 @@ int main(int argc,char **argv) {
         struct stand s;
         uint16_t port = stand_start(&s, ROLE_APP + (int)i);
         CHECK(port != 0, "HTTP-стенд не поднялся");
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", port, "http.example", 600, 0);
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", port, "http.example", 600, 0);
         if (r.status != replies[i].status) {
             fprintf(stderr, "HTTP case %zu: expected %d, got %d (level %d): %s\n",
                     i, replies[i].status, r.status, (int)r.level, r.reason);
@@ -1272,13 +1272,13 @@ int main(int argc,char **argv) {
         if (block_fixture) expected_application = 0;
         CHECK(!block_fixture || strstr(r.reason, "HTTP отказ:") != NULL,
               "явная заглушка/451 не получили отдельную причину отказа");
-        CHECK((r.level == D2K_VER_APPLICATION) == expected_application,
+        CHECK((r.level == D2S_VER_APPLICATION) == expected_application,
               "полный HTTPS redirect потерян либо неполный/невалидный ответ засчитан");
         CHECK(r.body_complete == replies[i].body_complete,
               "ошибочный вывод о полноте HTTP-тела");
         CHECK(r.cloudflare_challenge == replies[i].cloudflare_challenge,
               "challenge Cloudflare не отличён от обычного ответа приложения");
-        CHECK((r.level == D2K_VER_CHALLENGE) == replies[i].cloudflare_challenge,
+        CHECK((r.level == D2S_VER_CHALLENGE) == replies[i].cloudflare_challenge,
               "антибот challenge потерял отдельный неуспешный уровень");
         if (strstr(replies[i].text, "Transfer-Encoding: chunked\r\n") != NULL &&
             strstr(replies[i].text, "4000\r\nshort") == NULL &&
@@ -1305,23 +1305,23 @@ int main(int argc,char **argv) {
             CHECK(r.body_chunked && !r.body_complete && r.body_bytes == 5,
                   "обрыв chunked-тела не сохранил реально полученный объём");
         }
-        d2k_verify_close(&r);
+        d2s_verify_close(&r);
         stand_stop(&s);
         if (replies[i].status == 302 && expected_application) {
             port = stand_start(&s, ROLE_APP + (int)i);
             CHECK(port != 0, "stylesheet redirect стенд не поднялся");
-            r = d2k_verify_probe_path_on(-1, "127.0.0.1", port,
+            r = d2s_verify_probe_path_on(-1, "127.0.0.1", port,
                 "http.example", 600, 0, 0, 0, 0, "/assets/app.min.css");
             CHECK(r.status == 302 && r.body_complete &&
-                  r.level != D2K_VER_APPLICATION,
+                  r.level != D2S_VER_APPLICATION,
                   "redirect другого origin заменил подтверждение CSS");
-            d2k_verify_close(&r);
+            d2s_verify_close(&r);
             stand_stop(&s);
         }
     }
     {
-        d2k_ver_result r = d2k_verify_probe("127.0.0.1", 1, "a\r\nInjected: yes", 100, 0);
-        CHECK(r.level == D2K_VER_NOT_MEASURED && r.fd < 0,
+        d2s_ver_result r = d2s_verify_probe("127.0.0.1", 1, "a\r\nInjected: yes", 100, 0);
+        CHECK(r.level == D2S_VER_NOT_MEASURED && r.fd < 0,
               "управляющие символы имени дошли до сети");
     }
     /* Общие static-буферы TLS портили транскрипт/записи соседнего зонда. */

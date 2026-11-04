@@ -7,17 +7,17 @@
  * Смысл каждой проверки — тот же, что у её оригинала, и он в комментариях: это
  * не «тесты ради покрытия», а перечень мест, где инструмент уже врал.
  */
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
-int d2k_split_offsets(const int *cuts, int ncuts, int n, void *out, int cap);
-int d2k_parse_stale_rst_rule(const char *line, int *port);
-int d2k_parse_rst_rule(const char *line, int *port, long *pid);
-int d2k_rst_rule_stale(const char *line, int *port, long *pid);
-extern int (*d2k_raw_alive_hook)(long pid);
+int d2s_split_offsets(const int *cuts, int ncuts, int n, void *out, int cap);
+int d2s_parse_stale_rst_rule(const char *line, int *port);
+int d2s_parse_rst_rule(const char *line, int *port, long *pid);
+int d2s_rst_rule_stale(const char *line, int *port, long *pid);
+extern int (*d2s_raw_alive_hook)(long pid);
 
 typedef struct { int from, to; } span;
 
@@ -43,15 +43,15 @@ static void fail(const char *fmt, ...)
  * доехать до строки. */
 static void test_repeats_reach_the_strategy(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i, checked = 0;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         char st[1024], want[32];
-        if (ps[i].repeats <= 1 || !d2k_poison_has_fake(&ps[i])) {
+        if (ps[i].repeats <= 1 || !d2s_poison_has_fake(&ps[i])) {
             continue;
         }
-        d2k_strategy_for_poison(&ps[i], st, sizeof(st));
+        d2s_strategy_for_poison(&ps[i], st, sizeof(st));
         if (st[0] == '\0') {
             fail("%s: пустая строка при repeats=%d", ps[i].name, ps[i].repeats);
             continue;
@@ -71,12 +71,12 @@ static void test_repeats_reach_the_strategy(void)
  * боевых плеч. Без них badsum+ts и badsum+ipid неотличимы от badsum. */
 static void test_fooling_flags_reach_the_strategy(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         char st[1024];
-        d2k_strategy_for_poison(&ps[i], st, sizeof(st));
+        d2s_strategy_for_poison(&ps[i], st, sizeof(st));
         if (st[0] == '\0') {
             continue;
         }
@@ -98,12 +98,12 @@ static void test_fooling_flags_reach_the_strategy(void)
  * по ВСЕМ параметрам, кроме имени; одна копия и «копий не задано» — одно. */
 static void test_no_duplicate_hypotheses(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i, j;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         for (j = i + 1; j < n; j++) {
-            d2k_poison a = ps[i], b = ps[j];
+            d2s_poison a = ps[i], b = ps[j];
             memset(a.name, 0, sizeof a.name);
             memset(b.name, 0, sizeof b.name);
             if (a.repeats <= 1) a.repeats = 1;
@@ -119,7 +119,7 @@ static void test_no_duplicate_hypotheses(void)
  *
  * Перечень полей здесь — это и есть список того, что обязано доезжать до
  * строки; появится новое поле — тест придётся дополнить осознанно. */
-static int differs_on_the_wire(d2k_poison a, d2k_poison b)
+static int differs_on_the_wire(d2s_poison a, d2s_poison b)
 {
     /* Перекрытие «по длине приманки» и перекрытие ровно в 681 байт с образцом
      * целого приветствия — на проводе одно и то же: 681 это и есть длина
@@ -145,18 +145,18 @@ static int differs_on_the_wire(d2k_poison a, d2k_poison b)
  * ТОЛЬКО паузой, схлопываться в одну строку имеют право — и только они. */
 static void test_distinct_poisons_give_distinct_strategies(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i, j;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         char a[1024];
-        d2k_strategy_for_poison(&ps[i], a, sizeof(a));
+        d2s_strategy_for_poison(&ps[i], a, sizeof(a));
         if (a[0] == '\0') {
             continue;
         }
         for (j = i + 1; j < n; j++) {
             char b[1024];
-            d2k_strategy_for_poison(&ps[j], b, sizeof(b));
+            d2s_strategy_for_poison(&ps[j], b, sizeof(b));
             if (b[0] == '\0' || strcmp(a, b) != 0) {
                 continue;
             }
@@ -173,9 +173,9 @@ static void test_distinct_poisons_give_distinct_strategies(void)
  * как вывод о механизме, который ни разу не проверяли. */
 static void test_named_primitives_carry_their_flags(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i, seen_syn = 0, seen_oob = 0;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         if (strcmp(ps[i].name, "syndata") == 0) {
             seen_syn = 1;
@@ -199,9 +199,9 @@ static void test_named_primitives_carry_their_flags(void)
  * measurable and exported without silently changing its split position. */
 static void test_disorder_pos2_candidate_is_measured_and_exported(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, found = 0;
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (int i = 0; i < n; i++) {
         if (strcmp(ps[i].name, "disorder-pos2") != 0) { continue; }
         char st[1024];
@@ -210,7 +210,7 @@ static void test_disorder_pos2_candidate_is_measured_and_exported(void)
             fail("disorder-pos2 несёт неверные параметры: disorder=%d pos=%d",
                  ps[i].disorder, ps[i].disorder_pos);
         }
-        d2k_strategy_for_poison(&ps[i], st, sizeof(st));
+        d2s_strategy_for_poison(&ps[i], st, sizeof(st));
         if (!strstr(st, "--lua-desync=multidisorder:payload=tls_client_hello:dir=out:pos=2") ||
             strstr(st, "midsld")) {
             fail("disorder-pos2 экспортирован как другой разрез: %s", st);
@@ -225,16 +225,16 @@ static void test_disorder_pos2_candidate_is_measured_and_exported(void)
  * различить, а ложное «да» отключало битую сумму у собранных кандидатов. */
 static void test_checksum_verdict_never_inferred_from_silence(void)
 {
-    const d2k_poison *ps;
+    const d2s_poison *ps;
     int n, i;
-    d2k_poison badsum;
-    d2k_dprops pr;
+    d2s_poison badsum;
+    d2s_dprops pr;
 
-    ps = d2k_poisons(&n);
+    ps = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         memset(&pr, 0, sizeof(pr));
-        d2k_note_props_miss(&pr, &ps[i]);
-        if (pr.validates_checksum != D2K_TRI_UNSET) {
+        d2s_note_props_miss(&pr, &ps[i]);
+        if (pr.validates_checksum != D2S_TRI_UNSET) {
             fail("%s: промах выставил «проверяет сумму» — вывод из тишины", ps[i].name);
         }
     }
@@ -243,8 +243,8 @@ static void test_checksum_verdict_never_inferred_from_silence(void)
     memset(&badsum, 0, sizeof(badsum));
     snprintf(badsum.name, sizeof(badsum.name), "badsum");
     badsum.badsum = 1;
-    d2k_note_props_hit(&pr, &badsum);
-    if (pr.validates_checksum != D2K_TRI_FALSE) {
+    d2s_note_props_hit(&pr, &badsum);
+    if (pr.validates_checksum != D2S_TRI_FALSE) {
         fail("проход badsum-зонда не дал «сумму не проверяет»");
     }
 }
@@ -263,20 +263,20 @@ static void test_stale_rule_recognition_is_exact(void)
         ""
     };
     int port = 0, i;
-    if (!d2k_parse_stale_rst_rule(
+    if (!d2s_parse_stale_rst_rule(
             "-A OUTPUT -p tcp -m tcp --sport 39997 --tcp-flags RST RST -j DROP", &port) ||
         port != 39997) {
         fail("своё правило не опознано: port=%d", port);
     }
     for (i = 0; i < (int)(sizeof(foreign) / sizeof(foreign[0])); i++) {
-        if (d2k_parse_stale_rst_rule(foreign[i], &port)) {
+        if (d2s_parse_stale_rst_rule(foreign[i], &port)) {
             fail("чужое правило принято за своё: «%s»", foreign[i]);
         }
     }
 }
 
 /* ЗАДАЧА 49: ПРАВИЛО НЕСЁТ ВЛАДЕЛЬЦА. Уборка при старте снимала ЛЮБОЕ правило
- * нашего диапазона — и правило живого зонда d2kc, если d2k-detect запускали
+ * нашего диапазона — и правило живого зонда d2sc, если d2s-detect запускали
  * рядом (поле 03.10). Теперь правило помечено pid процесса-владельца;
  * снимается только правило мёртвого процесса или старое, без пометки. */
 static int fake_alive_pid;
@@ -288,42 +288,42 @@ static void test_rst_rule_owner_and_staleness(void)
     long pid = -1;
     const char *mine =
         "-A OUTPUT -p tcp -m tcp --sport 40750 --tcp-flags RST RST "
-        "-m comment --comment d2k-rst:4242 -j DROP";
+        "-m comment --comment d2s-rst:4242 -j DROP";
     const char *quoted =
         "-A OUTPUT -p tcp -m tcp --sport 40751 --tcp-flags RST RST "
-        "-m comment --comment \"d2k-rst:4243\" -j DROP";
+        "-m comment --comment \"d2s-rst:4243\" -j DROP";
     const char *legacy = "-A OUTPUT -p tcp -m tcp --sport 39842 --tcp-flags RST RST -j DROP";
     static const char *foreign[] = {
         "-A OUTPUT -p tcp -m tcp --sport 40750 --tcp-flags RST RST "
         "-m comment --comment other:4242 -j DROP",                           /* чужая пометка */
         "-A OUTPUT -p tcp -m tcp --sport 40750 --tcp-flags RST RST "
-        "-m comment --comment d2k-rst:x -j DROP",                            /* не pid */
+        "-m comment --comment d2s-rst:x -j DROP",                            /* не pid */
         "-A OUTPUT -p tcp -m tcp --sport 40750 --tcp-flags RST RST "
-        "-m comment --comment d2k-rst:4242 -j ACCEPT",                       /* чужое действие */
+        "-m comment --comment d2s-rst:4242 -j ACCEPT",                       /* чужое действие */
         "-A OUTPUT -p tcp -m tcp --sport 22 --tcp-flags RST RST "
-        "-m comment --comment d2k-rst:4242 -j DROP",                         /* порт не наш */
+        "-m comment --comment d2s-rst:4242 -j DROP",                         /* порт не наш */
     };
     size_t i;
-    if (!d2k_parse_rst_rule(mine, &port, &pid) || port != 40750 || pid != 4242)
+    if (!d2s_parse_rst_rule(mine, &port, &pid) || port != 40750 || pid != 4242)
         fail("помеченное правило не опознано: port=%d pid=%ld", port, pid);
-    if (!d2k_parse_rst_rule(quoted, &port, &pid) || port != 40751 || pid != 4243)
+    if (!d2s_parse_rst_rule(quoted, &port, &pid) || port != 40751 || pid != 4243)
         fail("помеченное правило в кавычках не опознано: port=%d pid=%ld", port, pid);
-    if (!d2k_parse_rst_rule(legacy, &port, &pid) || port != 39842 || pid != 0)
+    if (!d2s_parse_rst_rule(legacy, &port, &pid) || port != 39842 || pid != 0)
         fail("правило без пометки не опознано: port=%d pid=%ld", port, pid);
     for (i = 0; i < sizeof foreign / sizeof foreign[0]; i++)
-        if (d2k_parse_rst_rule(foreign[i], &port, &pid))
+        if (d2s_parse_rst_rule(foreign[i], &port, &pid))
             fail("чужое правило принято за своё: «%s»", foreign[i]);
 
-    d2k_raw_alive_hook = fake_alive;
+    d2s_raw_alive_hook = fake_alive;
     fake_alive_pid = 4242;
-    if (d2k_rst_rule_stale(mine, &port, &pid))
+    if (d2s_rst_rule_stale(mine, &port, &pid))
         fail("правило ЖИВОГО процесса признано брошенным — уборка сняла бы его у живого зонда");
     fake_alive_pid = 1;
-    if (!d2k_rst_rule_stale(mine, &port, &pid) || port != 40750 || pid != 4242)
+    if (!d2s_rst_rule_stale(mine, &port, &pid) || port != 40750 || pid != 4242)
         fail("правило мёртвого процесса не признано брошенным");
-    if (!d2k_rst_rule_stale(legacy, &port, &pid) || pid != 0)
+    if (!d2s_rst_rule_stale(legacy, &port, &pid) || pid != 0)
         fail("правило старого формата (без владельца) не признано брошенным");
-    d2k_raw_alive_hook = NULL;
+    d2s_raw_alive_hook = NULL;
 }
 
 /* Разрез в нуле и в длине — это не разрез; такие точки обязаны отсеиваться,
@@ -332,7 +332,7 @@ static void test_split_offsets_ignores_out_of_range_cuts(void)
 {
     int cuts[5] = {0, 3, 3, 10, 99};
     span got[8];
-    int n = d2k_split_offsets(cuts, 5, 10, got, 8);
+    int n = d2s_split_offsets(cuts, 5, 10, got, 8);
     if (n != 2) {
         fail("кусков = %d, ждали 2", n);
         return;
@@ -345,19 +345,19 @@ static void test_split_offsets_ignores_out_of_range_cuts(void)
 
 static void test_raw_trigger_parses_and_rejects_garbage(void)
 {
-    d2k_trigger tr;
+    d2s_trigger tr;
     char err[160];
     static const uint8_t want[4] = {0x57, 0x41, 0x06, 0x03};
 
-    if (d2k_trigger_raw_hex("57 41 06 03", &tr, err, sizeof(err)) != 0) {
+    if (d2s_trigger_raw_hex("57 41 06 03", &tr, err, sizeof(err)) != 0) {
         fail("hex с пробелами не разобран: %s", err);
     } else if (tr.len != 4 || memcmp(tr.payload, want, 4) != 0) {
         fail("нагрузка разобрана неверно, длина %d", (int)tr.len);
     }
-    if (d2k_trigger_raw_hex("нехекс", &tr, err, sizeof(err)) == 0) {
+    if (d2s_trigger_raw_hex("нехекс", &tr, err, sizeof(err)) == 0) {
         fail("мусор обязан отвергаться");
     }
-    if (d2k_trigger_raw_hex("57", &tr, err, sizeof(err)) == 0) {
+    if (d2s_trigger_raw_hex("57", &tr, err, sizeof(err)) == 0) {
         fail("триггер в один байт обязан отвергаться");
     }
 }
@@ -366,27 +366,27 @@ static void test_raw_trigger_parses_and_rejects_garbage(void)
  * которого он собран: иначе «собрано из вектора» — пустое слово. */
 static void test_compose_follows_the_vector(void)
 {
-    d2k_dprops pr;
-    d2k_poison out[8];
+    d2s_dprops pr;
+    d2s_poison out[8];
     int n;
 
     memset(&pr, 0, sizeof(pr));
-    pr.tolerates_left_overlap = D2K_TRI_FALSE;
-    n = d2k_compose_from_props(&pr, NULL, 0, out, 8);
+    pr.tolerates_left_overlap = D2S_TRI_FALSE;
+    n = d2s_compose_from_props(&pr, NULL, 0, out, 8);
     if (n < 1 || !out[0].seqovl_exact) {
         fail("«не держит перекрытие слева» не дало кандидата с перекрытием");
     }
 
     memset(&pr, 0, sizeof(pr));
-    pr.tolerates_reorder = D2K_TRI_FALSE;
-    n = d2k_compose_from_props(&pr, NULL, 0, out, 8);
+    pr.tolerates_reorder = D2S_TRI_FALSE;
+    n = d2s_compose_from_props(&pr, NULL, 0, out, 8);
     if (n < 1 || !out[0].disorder) {
         fail("«не держит порядок» не дало кандидата со сбитым порядком");
     }
 
     /* Пустой вектор — последний собранный кандидат перед падением в перебор. */
     memset(&pr, 0, sizeof(pr));
-    n = d2k_compose_from_props(&pr, NULL, 0, out, 8);
+    n = d2s_compose_from_props(&pr, NULL, 0, out, 8);
     if (n != 1 || !out[0].badsum || !out[0].disorder || !out[0].seqovl_exact) {
         fail("пустой вектор не дал кандидата «всё сразу»");
     }
@@ -394,8 +394,8 @@ static void test_compose_follows_the_vector(void)
     /* Битую сумму пробуем и когда свойство НЕ ИЗМЕРЕНО: иначе выключается
      * единственный признак, работающий на коробках, не сверяющих сумму. */
     memset(&pr, 0, sizeof(pr));
-    pr.counts_duplicates = D2K_TRI_TRUE;
-    n = d2k_compose_from_props(&pr, NULL, 0, out, 8);
+    pr.counts_duplicates = D2S_TRI_TRUE;
+    n = d2s_compose_from_props(&pr, NULL, 0, out, 8);
     if (n < 1 || !out[0].badsum) {
         fail("при неизмеренной сумме кандидат остался без битой суммы");
     }
@@ -407,19 +407,19 @@ int main(void)
         /* §0.1 (поле 07.10.2026): вопрос «метка времени» шлёт подделку с одной
            только сдвинутой меткой; без признания её подделкой зонд слал
            обычное приветствие, и «проход» был ложным. */
-        d2k_poison ts;
+        d2s_poison ts;
         memset(&ts, 0, sizeof ts);
         ts.tcp_ts = 1;
-        if (!d2k_poison_has_fake(&ts)) { fail("подделка с одной меткой времени не признана подделкой"); }
+        if (!d2s_poison_has_fake(&ts)) { fail("подделка с одной меткой времени не признана подделкой"); }
     }
 
     {
         int n, applicable6 = 0, ipv4_only = 0;
-        const d2k_poison *poisons = d2k_poisons(&n);
+        const d2s_poison *poisons = d2s_poisons(&n);
         for (int i = 0; i < n; i++) {
-            if (!d2k_poison_supports_family(&poisons[i], 4))
+            if (!d2s_poison_supports_family(&poisons[i], 4))
                 fail("IPv4 lost donor hypothesis %s", poisons[i].name);
-            int supported6 = d2k_poison_supports_family(&poisons[i], 6);
+            int supported6 = d2s_poison_supports_family(&poisons[i], 6);
             if (supported6 == !!poisons[i].ip_id_zero)
                 fail("IPv6 applicability wrong for %s", poisons[i].name);
             applicable6 += supported6;

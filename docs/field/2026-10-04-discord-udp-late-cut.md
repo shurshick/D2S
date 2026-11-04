@@ -12,20 +12,20 @@
 В remote изменения не отправляются.
 
 Изменения этой части: `core/voice_discovery.c`, его заголовок и тест;
-`core/voice.c`, `core/include/d2k_voice.h`, `core/sched.c`, `core/test_sched.c`,
-`core/d2kvoice.c`, `core/Makefile` и этот отчёт.
+`core/voice.c`, `core/include/d2s_voice.h`, `core/sched.c`, `core/test_sched.c`,
+`core/d2svoice.c`, `core/Makefile` и этот отчёт.
 Ранее сделанные `datapath/plan_apply.c` и `core/test_measured.c` относятся
 к совместимости TCP-плана с TLS 1.2 и сохранены отдельно.
 Чужие `.impeccable/*`, `panel/test_router_view.cjs`,
 `docs/field/2026-10-02-vedomost-demo.md`, изменения `update/*` не тронуты.
 
 Контроллер для роутера собран отдельно на `e10a017` с голосовой правкой:
-`/tmp/d2k-voice-release-src`, артефакт `/tmp/d2k-voice-release/d2kc-linux-arm64`.
+`/tmp/d2s-voice-release-src`, артефакт `/tmp/d2s-voice-release/d2sc-linux-arm64`.
 Причина: установленная пара использует управляющий протокол 12;
 параллельная работа update в HEAD уже перевела его на 13. Голосовая выкладка
 не включает эту миграцию. Сборка и голосовые тесты проверены и на этой базе.
 
-Итоговый SHA256 `/opt/sbin/d2kc` и `/proc/17561/exe`:
+Итоговый SHA256 `/opt/sbin/d2sc` и `/proc/17561/exe`:
 `deb6ed43d9ea1f9dc40b0abde2fc2fd2751344e5d6f7347dca9f14e9fd186a7a`.
 Датапат не менялся в этой части, PID 31074, SHA256:
 `1c819496c0072cbe8bc35ee9569cf58a1957d865a5f3090023b58951e4d76a36`.
@@ -45,7 +45,7 @@ TCP-шлюзы `finland*.discord.media` — отдельный путь; HTTP 40
    затем ещё 19 исходящих без ответа за 45 секунд. Правила исключения
    срабатывали, аппаратной привязки цели не было. Временные правила сняты,
    сравнение исходного/итогового списка правил прошло.
-3. 23:20:38–23:23:09: точный UDP-поток пропущен мимо очереди d2k при
+3. 23:20:38–23:23:09: точный UDP-поток пропущен мимо очереди d2s при
    сохранённом исключении из PPE. Обрыв сохранился. Правила восстановлены.
 4. Собственный Discord IP Discovery с независимым SSRC оказался настоящим
    оракулом этой цели: сервер возвращает корректный ответ типа 2, длину 70,
@@ -56,7 +56,7 @@ TCP-шлюзы `finland*.discord.media` — отдельный путь; HTTP 40
    на том же сокете: 40/40, затем 200/200 корректных ответов (~40 КБ IP).
    Префикс из 20 нулей не помог. Это измеренная зависимость от содержимого
    начала потока; по одному WAN-захвату точное место фильтра не установлено.
-6. Штатный d2kd, временный адресный Plan с одним STUN-префиксом:
+6. Штатный d2sd, временный адресный Plan с одним STUN-префиксом:
    поток 51479 с 23:28:26 получил 73 входящих пакета за минуту,
    без прежнего обрыва. План снят в 23:29:36 по окончании опыта.
    Владелец сообщил об улучшении и возврате скачков после снятия;
@@ -64,17 +64,17 @@ TCP-шлюзы `finland*.discord.media` — отдельный путь; HTTP 40
 
 Артефакты на роутере:
 
-- `/opt/d2k-backup-voiceppe-20261004-2301/`: pcap, наблюдения, границы фаз,
+- `/opt/d2s-backup-voiceppe-20261004-2301/`: pcap, наблюдения, границы фаз,
   исходные/итоговые правила, скрипт снятия своих правил.
-- `/opt/d2k-backup-voicebypass-20261004-2320/`: pcap, наблюдения,
+- `/opt/d2s-backup-voicebypass-20261004-2320/`: pcap, наблюдения,
   `probe-zeros.log`, `probe-stun200.log`, диагностический C-зонд.
-- `/opt/d2k-backup-voicestun-20261004-2325/`: pcap и журнал временного Plan.
-- `/opt/d2k-backup-voice-auto-20261004-2340/`: резервные бинарники,
+- `/opt/d2s-backup-voicestun-20261004-2325/`: pcap и журнал временного Plan.
+- `/opt/d2s-backup-voice-auto-20261004-2340/`: резервные бинарники,
   каталог, pcap автоматического цикла, rollback.
 
-Локальные копии ключевых захватов: `/tmp/d2k-voiceppe-ab-final.pcap`,
-`/tmp/d2k-voicebypass-final.pcap`, `/tmp/d2k-voicestun-final.pcap`,
-`/tmp/d2k-voice-auto.pcap`. Анализатор `/tmp/d2k-voiceppe-analyze.py`
+Локальные копии ключевых захватов: `/tmp/d2s-voiceppe-ab-final.pcap`,
+`/tmp/d2s-voicebypass-final.pcap`, `/tmp/d2s-voicestun-final.pcap`,
+`/tmp/d2s-voice-auto.pcap`. Анализатор `/tmp/d2s-voiceppe-analyze.py`
 считает только WAN-интерфейс ppp0 (ifindex 37), без дублирования LAN/WAN.
 
 ## Исправленный механизм
@@ -108,7 +108,7 @@ voice-форма, не как глобальный `@discord-voice` и не ка
 Постоянный каталог имеет адресную, а не портовую гранулярность — отдельный
 порт используется при измерении и временном опыте.
 
-CLI: `d2kvoice --addr IP:PORT --mark 0x2f --discovery`.
+CLI: `d2svoice --addr IP:PORT --mark 0x2f --discovery`.
 Поддержка этой доработки — IPv4; аудио не расшифровывается и не выдаётся
 за доказанное одним Discovery-ответом.
 
@@ -130,9 +130,9 @@ CLI: `d2kvoice --addr IP:PORT --mark 0x2f --discovery`.
 
 ## Проверки и ограничения
 
-- `make -C datapath check` — PASS, `/tmp/d2k-voice-datapath-check.log`.
-- `make -C detect check` — PASS, `/tmp/d2k-voice-detect-check.log`.
-- `make -C core check` — PASS, `/tmp/d2k-voice-core-check.log`.
+- `make -C datapath check` — PASS, `/tmp/d2s-voice-datapath-check.log`.
+- `make -C detect check` — PASS, `/tmp/d2s-voice-detect-check.log`.
+- `make -C core check` — PASS, `/tmp/d2s-voice-core-check.log`.
   Набор выполнялся во время доработки; финальная голосовая дельта отдельно
   проверена focused-набором и санитайзерами ниже.
 - `make -C core test-voice-discovery`, `core/test_sched --voice-only` — PASS.
@@ -161,9 +161,9 @@ CLI: `d2kvoice --addr IP:PORT --mark 0x2f --discovery`.
 
 ## Откат
 
-`/opt/d2k-backup-voice-auto-20261004-2340/rollback.sh`
+`/opt/d2s-backup-voice-auto-20261004-2340/rollback.sh`
 
-Возвращает предыдущий d2kc; датапат, панель, Telegram и каталог автоматически
+Возвращает предыдущий d2sc; датапат, панель, Telegram и каталог автоматически
 не откатывает. Каталог скопирован в backup, но его полное восстановление
 может затереть подтверждения других задач и намеренно не включено в скрипт.
 Рабочий STUN-план поддерживается прежним датапатом и не зависит от нового
@@ -180,13 +180,13 @@ merge-коммитом `4faa482`: наследование MODERN suffix-пла�
 `4faa482`, release ID `voice-4faa482`; незакоммиченные update/panel-правки
 коллег в него не входят. OpenSSL — существующие закреплённые статические
 архивы из `build/telegram/openssl-*`. MIPS64EL собран Zig 0.14.1,
-остальные цели — Zig 0.16.0. Журнал: `/tmp/d2k-voice-update-merged-build.log`.
+остальные цели — Zig 0.16.0. Журнал: `/tmp/d2s-voice-update-merged-build.log`.
 
 Исправлена устаревшая фикстура `scripts/test-controller-handshake.cjs`:
 приветствие протокола 13 содержит release ID; добавлена проверка отказа
 при чужом release ID. Прежняя фикстура воспроизводимо не проходила проверку
 валидного peer. Для проверки именованного комплекта передавать
-`D2K_TEST_RELEASE_ID=voice-4faa482`.
+`D2S_TEST_RELEASE_ID=voice-4faa482`.
 
 Комплект подготовлен локально; рабочая установка на роутере остаётся
 полевой парой протокола 12, описанной выше. Публикация и установка новой
@@ -196,8 +196,8 @@ merge-коммитом `4faa482`: наследование MODERN suffix-пла�
 с QEMU — PASS: ELF без динамических зависимостей, запуск runtime, MIPS
 handshake; дополнительные существующие crypto/wire/plan/OpenSSL/session
 тестовые бинарники из кэша тоже прошли. Журнал:
-`/tmp/d2k-voice-update-smoke.log`. SHA256 всех 36 новых runtime:
-`/tmp/d2k-voice-update-4faa482/SHA256SUMS`.
+`/tmp/d2s-voice-update-smoke.log`. SHA256 всех 36 новых runtime:
+`/tmp/d2s-voice-update-4faa482/SHA256SUMS`.
 
 Пока шла сборка, коллега закоммитил `492f906` (только update). Этот коммит
 не меняет исходники четырёх runtime данного комплекта и не включён в его

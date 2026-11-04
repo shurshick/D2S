@@ -6,7 +6,7 @@ main a614458 с отчётом h. Владелец сообщил 17/19 откр
 полевого подтверждения. Общая goal остаётся активной.
 
 Роутер, браузеры, новые сетевые захваты, развёртывание и push не выполнялись.
-Исходные dirty builds/d2kc-linux-arm64 и builds/d2kd-linux-arm64 принадлежат
+Исходные dirty builds/d2sc-linux-arm64 и builds/d2sd-linux-arm64 принадлежат
 владельцу, не перезаписывались и не входят в коммиты.
 
 ## Что установило поле
@@ -20,7 +20,7 @@ COMPLETE: главная страница с chunked-телом около 24 К
 только первого запроса в коде. `fake-badsum-whole` означает приманку перед
 целым оригиналом; Host-разреза в этом плане нет. Его семантика не изменена.
 
-У mailsuite в локальном журнале run-j/d2kc.log строка 212 показывает
+У mailsuite в локальном журнале run-j/d2sc.log строка 212 показывает
 identity-2 HTTP0. Сам выход на identity-2 доказывает, что identity-1 прошёл
 предыдущий фильтр: 2xx, корректный framing, незавершённое identity-тело
 не менее 12 КиБ. Старый журнал перезаписывал подробности первого результата.
@@ -44,13 +44,13 @@ identity-2 HTTP0. Сам выход на identity-2 доказывает, что
   Cookies/Authorization не копируются; значения URL/query не журналируются.
 - http80 разбирает последующие запросы на известной границе TCP и снова
   проверяет их первый ответ. Предыдущее исполнение не наследуется новым
-  запросом. d2kd привязывает завершённое исполнение к tuple + request SEQ.
+  запросом. d2sd привязывает завершённое исполнение к tuple + request SEQ.
 - HTTP_PORTAL в control v14 несёт execution, plan, trial, monotonic request
-  start и безопасный путь. d2kc отзывает только свой текущий постоянный
+  start и безопасный путь. d2sc отзывает только свой текущий постоянный
   HTTP-план при связанном отказе. Чужой план/trial/family, неподтверждённое
   исполнение и запоздалый запрос предыдущего поколения его не удаляют.
   Новый portal больше не теряется в пятиминутном cooldown.
-- S99d2k добавляет входящие HTTP:80 PSH после первоначального окна пакетов
+- S99d2s добавляет входящие HTTP:80 PSH после первоначального окна пакетов
   в iptables/nft: без этого поздние ответы keep-alive могли не попасть к
   наблюдателю. IPv4/IPv6 и симметричное удаление проверены stub-тестами.
 
@@ -105,7 +105,7 @@ Ciphertext-объём хранится отдельным видом приме�
 Нового сборщика пакетов нет. TCP detect, QUIC/STUN/voice и HTTP сохраняют
 общие PlanApply/wire пути из [аудита](2026-10-11h-runtime-equivalence.md).
 HTTP runtime gate теперь сравнивает полные пакеты обоих запросов одной
-связи, включая второй `/False/`: настоящий d2kc/control/Session trial против
+связи, включая второй `/False/`: настоящий d2sc/control/Session trial против
 восстановленного постоянного плана, IPv4 и IPv6, полный memcmp.
 Это не физический NFQUEUE/NAT/pcap.
 
@@ -152,10 +152,10 @@ QUIC не блокирует открытие сайтов, доступных �
 ## Следующий локальный шаг общей goal
 
 Сохранять общий контекст живого свидетельства от Session до core. Сейчас
-`plan_handed_off` / `d2k_session_sent` знают execution и завершение raw sends
+`plan_handed_off` / `d2s_session_sent` знают execution и завершение raw sends
 и original verdict, но journal→ctlsrv→link теряет execution/generation;
 EXCHANGE сообщает протокольные признаки без полного контекста исполнения.
-Нужны epoch d2kd, поколение потока и установленной привязки (в том числе
+Нужны epoch d2sd, поколение потока и установленной привязки (в том числе
 same-hash reinstall), execution/plan/trial и key type/protocol/shape.
 Контекст снимается при выборе плана, а не восстанавливается по новой таблице.
 
@@ -168,14 +168,14 @@ same-hash reinstall), execution/plan/trial и key type/protocol/shape.
 UNKNOWN без доступного протокольного доказательства.
 
 Первый тестовый набор: переустановка того же hash, reuse пятёрки потока,
-перезапуск d2kd, ответ до DONE, deferred send/original verdict, старый отказ,
+перезапуск d2sd, ответ до DONE, deferred send/original verdict, старый отказ,
 дубли/потеря событий, собственный зонд вместо клиента. Неполная или чужая
 идентичность не должна повышать live outcome либо отзывать новое решение.
 Это следующий этап реализации, не уже реализованная общая приёмка.
 
 ## Следующий полевой опыт владельца
 
-1. Обновлять d2kc и d2kd вместе (control v14), учесть изменённый S99d2k.
+1. Обновлять d2sc и d2sd вместе (control v14), учесть изменённый S99d2s.
    Локальная сборка проверяет release arm64+mipsel в отдельном временном
    каталоге; исходные dirty deploy-бинарники не являются результатом сборки.
 2. fast-torrent: подтвердить главный полный200 и второй запрос на той же
@@ -194,29 +194,29 @@ UNKNOWN без доступного протокольного доказате�
 
 ## Локальные проверки этого продолжения
 
-- `make -C detect check`: exit 0, `/tmp/d2k-live-accept-detect-final.log`.
+- `make -C detect check`: exit 0, `/tmp/d2s-live-accept-detect-final.log`.
   test_raw: C + 84 гипотезы, шесть длин, IPv4/IPv6, полные пакеты и задержки.
 - `make -C datapath check cross`: exit 0,
-  `/tmp/d2k-live-accept-datapath-final2.log`; Linux d2kd arm64/mipsel линкуется.
+  `/tmp/d2s-live-accept-datapath-final2.log`; Linux d2sd arm64/mipsel линкуется.
 - `make -C core test-httpsearch test-http-runtime test-http-live test-link
-  san-httpsearch san-http-live`: exit 0, `/tmp/d2k-live-accept-http-final.log`.
+  san-httpsearch san-http-live`: exit 0, `/tmp/d2s-live-accept-http-final.log`.
 - `test_http_live --diverge` и `test_http_runtime --diverge`: ожидаемый exit 1,
   только memcmp-ошибки при принудительном расхождении; без расхождения exit 0.
-  Логи `/tmp/d2k-live-accept-http{-runtime,}-diverge.log`.
+  Логи `/tmp/d2s-live-accept-http{-runtime,}-diverge.log`.
 - `make -C core test-volume test-volume-context test-match san-volume-context`:
-  exit 0, `/tmp/d2k-volume-wire-targeted.log`.
+  exit 0, `/tmp/d2s-volume-wire-targeted.log`.
   `test_sched --rx-partial-only` и `--rx-volume-only`: exit 0,
-  `/tmp/d2k-wire-sched-green.log`, `/tmp/d2k-volume-wire-sched-rx.log`.
+  `/tmp/d2s-wire-sched-green.log`, `/tmp/d2s-volume-wire-sched-rx.log`.
 - Полный `test_verify`, TLS13 wire-only ASAN/UBSAN, TLS12 record-layer normal,
   ASAN/UBSAN и cross arm64/mipsel: exit 0; сведения в
-  `/tmp/d2k-tls-wire-agent-handoff.txt`.
+  `/tmp/d2s-tls-wire-agent-handoff.txt`.
 - `scripts/test-s99-firewall-stub.sh`, `scripts/test-s99-nft.sh`: exit 0;
   это stub-проверки без установки реальных правил.
 
 Предварительный `core check`, запущенный до стабилизации исходников, дошёл
 до намеренно красного нового volume-теста и завершился exit2. Он не считается
 приёмкой. Итоговый `make -C core check` на стабилизированном коде завершился exit0:
-`/tmp/d2k-live-accept-core-final.log`. Включены настоящие release arm64/mipsel
+`/tmp/d2s-live-accept-core-final.log`. Включены настоящие release arm64/mipsel
 в частном временном BUILDDIR, test_probe_plan и TCP/UDP/HTTP runtime gates.
 `git diff --check` — exit0. Код этого пакета — main 2d26ee7; следующий
 коммит добавляет только этот handoff. После него dirty остаются только
@@ -237,9 +237,9 @@ Session — два (exit1); после реализации оба проход�
 ещё один переход: новый SYN на прежнем 5-tuple сохранял ожидающие отправки,
 но обнулял их binding. Новый Session-регресс без следующего ClientHello
 даёт один CHECK-провал и exit1 на 8608f67; сохранение execution_binding в
-d2k_track_new_connection делает его зелёным. Логи:
-`/tmp/d2k-binding-red.log`, `/tmp/d2k-binding-session-red.log`,
-`/tmp/d2k-binding-syn-red-run.log`, `/tmp/d2k-binding-syn-green.log`.
+d2s_track_new_connection делает его зелёным. Логи:
+`/tmp/d2s-binding-red.log`, `/tmp/d2s-binding-session-red.log`,
+`/tmp/d2s-binding-syn-red-run.log`, `/tmp/d2s-binding-syn-green.log`.
 
 Это только основание для общей живой приёмки. Control остаётся v14:
 общие APPLIED/EXCHANGE ещё не доставляют новый контекст в контроллер.
@@ -260,15 +260,15 @@ d2k_track_new_connection делает его зелёным. Логи:
 
 Итоговые проверки кода 9e5ad11 (последующая правка только этого отчёта):
 
-- `make -C core check`: exit0, `/tmp/d2k-binding-core-check.log`, включая
+- `make -C core check`: exit0, `/tmp/d2s-binding-core-check.log`, включая
   release arm64/mipsel в частном BUILDDIR. Probe-plan: 0 mismatches;
   UDP: 198 full-packet cases, 53 questions, 0 failures; HTTP live и QUIC
   actual first-send sink: 0 failures.
-- `make -C detect check`: exit0, `/tmp/d2k-binding-detect-check.log`.
+- `make -C detect check`: exit0, `/tmp/d2s-binding-detect-check.log`.
 - `make -C datapath check cross`: exit0,
-  `/tmp/d2k-binding-syn-datapath-check.log`.
+  `/tmp/d2s-binding-syn-datapath-check.log`.
 - `git diff --check`: exit0. Dirty — только исходные бинарники владельца
-  builds/d2kc-linux-arm64 и builds/d2kd-linux-arm64. SHA256 сохранились:
+  builds/d2sc-linux-arm64 и builds/d2sd-linux-arm64. SHA256 сохранились:
   `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`
   и `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.
 
@@ -291,8 +291,8 @@ execution_id/execution_binding. Обрезанные хвосты и некор�
 проверены UNSENT, DAMAGED и обычный отказ без исполнения; независимый
 wire-fixture покрывает старшие байты u64, IPv6, exact-flow temporary и все
 19 вариантов усечённого хвоста. На заново собранном link.c из 6c9852e —
-44 CHECK-провала, exit1 (`/tmp/d2k-control-link-red-run.log`); на старом
-ctlsrv.c — шесть, exit1 (`/tmp/d2k-control-fate-red-run.log`). С исправлениями
+44 CHECK-провала, exit1 (`/tmp/d2s-control-link-red-run.log`); на старом
+ctlsrv.c — шесть, exit1 (`/tmp/d2s-control-fate-red-run.log`). С исправлениями
 `make -C core test-link` и `make -C datapath test-ctl` дают exit0.
 Тестовые новые поля заголовка использовались и при сборке старых реализаций;
 их алгоритм сериализации/разбора не менялся. Ошибка поиска include при первом
@@ -315,17 +315,17 @@ process-local, EXCHANGE не связан с ними, epoch службы/пок
 
 Регресс с барьером verifier гарантирует APPLIED до возврата результата.
 На старом sched.c из 57f4a9c: один CHECK-провал, exit1, два кандидата и
-остановка (`/tmp/d2k-oob-final-red.log`). После исправления: exit0,
+остановка (`/tmp/d2s-oob-final-red.log`). После исправления: exit0,
 измеренный OOB испытан после своего сохранённого плана, затем продолжается
 поиск (35 кандидатов в fixture, где ни один не помогает). Без APPLIED и
 при местном пределе — по два; при успешном OOB — два и подтверждение без
-перебора. Лог `/tmp/d2k-oob-fallback-green.log`. Это scheduler-регресс со
+перебора. Лог `/tmp/d2s-oob-fallback-green.log`. Это scheduler-регресс со
 stub verifier; он не доказывает, какой кандидат сработает у fost в поле.
 
 Два остатка 17/19 по-прежнему не закрыты полем. #14 локально исправлен;
 общее live acceptance, #4 и #12 остаются в goal.
 
-Дополнительная граница RX-наблюдения: files/S99d2k задаёт CONNBYTES=0:8.
+Дополнительная граница RX-наблюдения: files/S99d2s задаёт CONNBYTES=0:8.
 Для TLS за этим окном в очередь идут FIN/RST; поздние PSH обеих сторон
 охватываются только HTTP_KEEPALIVE_PORTS=80. ct_tcp_flow оценивает пакетную
 полосу по conntrack и намеренно выдаёт подозрение, не положительный результат.
@@ -355,11 +355,11 @@ stub verifier; он не доказывает, какой кандидат ср�
 Итоговые локальные проверки production-кода 1f3957f (после запуска менялись
 только документы):
 
-- `make -C core check`: exit0, `/tmp/d2k-control-oob-core-check.log`,
+- `make -C core check`: exit0, `/tmp/d2s-control-oob-core-check.log`,
   включая release arm64/mipsel в частном BUILDDIR и все scheduler modes.
-- `make -C detect check`: exit0, `/tmp/d2k-control-oob-detect-check.log`.
+- `make -C detect check`: exit0, `/tmp/d2s-control-oob-detect-check.log`.
 - `make -C datapath check cross`: exit0,
-  `/tmp/d2k-control-oob-datapath-check.log`.
+  `/tmp/d2s-control-oob-datapath-check.log`.
 - `git diff --check`: exit0. Бинарники владельца в builds не изменялись;
   SHA256 совпали с записанными выше.
 - Независимое read-only ревью 57f4a9c/1f3957f не нашло блокирующих дефектов

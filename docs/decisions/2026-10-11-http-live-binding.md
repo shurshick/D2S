@@ -30,9 +30,9 @@ Matched NACK сохраняет последнюю достоверную уст
 ACK завершает отложенный отзыв. Неудачная запись удаления повторяется при resync
 с тем же точным контекстом; новая привязка от этого не страдает.
 
-Изменены `core/httpsearch.c`, `link.c`, `d2kc.c` и их заголовки;
-`datapath/http80.c`, `ctlsrv.c`, `plans.c`, `d2kd.c` и заголовки;
-общая версия `runtime/d2k_protocol.h`. Производство пакетов не менялось:
+Изменены `core/httpsearch.c`, `link.c`, `d2sc.c` и их заголовки;
+`datapath/http80.c`, `ctlsrv.c`, `plans.c`, `d2sd.c` и заголовки;
+общая версия `runtime/d2s_protocol.h`. Производство пакетов не менялось:
 HTTP по-прежнему использует единый Plan/Session/wire engine.
 
 ## Воспроизведение и регрессы
@@ -40,17 +40,17 @@ HTTP по-прежнему использует единый Plan/Session/wire e
 До правки на ff5decd новый CHECK старого API воспроизвёл окно SET до ACK:
 `unacknowledged replacement accepted old live failure`.
 `make -C core test-httpsearch` — exit 2, один CHECK,
-`/tmp/d2k-http-identity-red.log`. После изменения API окончательный файл теста
+`/tmp/d2s-http-identity-red.log`. После изменения API окончательный файл теста
 не заявляется компилируемым без адаптации на старой ревизии.
 
 Во время ревью отдельно воспроизведены и исправлены:
 
-- отзыв до ACK: два CHECK, `/tmp/d2k-http-pending-revoke-red.log`;
+- отзыв до ACK: два CHECK, `/tmp/d2s-http-pending-revoke-red.log`;
 - повтор условного удаления после ошибки записи: десять CHECK в IPv4/IPv6,
-  `/tmp/d2k-http-delete-retry-red.log`;
-- ACK A → SET B → NACK B: два CHECK, `/tmp/d2k-http-nack-owner-red.log`;
+  `/tmp/d2s-http-delete-retry-red.log`;
+- ACK A → SET B → NACK B: два CHECK, `/tmp/d2s-http-nack-owner-red.log`;
 - две неподтверждённые установки → NACK: один CHECK,
-  `/tmp/d2k-http-overlap-red.log`.
+  `/tmp/d2s-http-overlap-red.log`.
 
 `test_httpsearch` проверяет состояния ACK/NACK/перекрытия/отзыва.
 `test_link` проверяет независимый wire fixture ACK, endian, усечения и теги.
@@ -64,14 +64,14 @@ HTTP по-прежнему использует единый Plan/Session/wire e
 Дополнительная проверка чувствительности: свежий отдельный бинарник с заменой
 точного сравнения binding в `plans.c` на проверку лишь известности binding.
 Компиляция exit 0, тест exit 1, 22 накопленных CHECK (первичный — stale delete
-снял замену, остальные следствия). `/tmp/d2k-http-cas-mutation.log`.
+снял замену, остальные следствия). `/tmp/d2s-http-cas-mutation.log`.
 Рабочее дерево и его объектники для мутации не изменялись.
 
 Окончательные целевые тесты проходят:
 `make -C core test-httpsearch test-http-live test-link` и
 `make -C datapath test-http80 test-ctl test-plans` — exit 0.
-Логи `/tmp/d2k-http-identity-final-targeted.log`,
-`/tmp/d2k-http-binding-dp-final-target.log`.
+Логи `/tmp/d2s-http-identity-final-targeted.log`,
+`/tmp/d2s-http-binding-dp-final-target.log`.
 
 ## Граница результата и следующий шаг
 
@@ -90,7 +90,7 @@ LAN/WAN, плюс совпадающий журнал, ревизия и plan ID
 
 Для следующего регресса важны две независимые границы наблюдения:
 `datapath/http80.c` переходит из REQUEST в IDLE уже на первом сегменте ответа;
-`files/S99d2k` после начального окна направляет в NFQUEUE только HTTP PSH.
+`files/S99d2s` после начального окна направляет в NFQUEUE только HTTP PSH.
 Это не покрытие всех байтов тела. Положительный сигнал нельзя строить ни из
 состояния IDLE, ни из отсутствия HTTP_PORTAL: пропуск сегмента/заголовка,
 неизвестное framing или вытеснение состояния должны сохранять unknown.
@@ -106,21 +106,21 @@ mailsuite, порядок измерений QUIC, постоянный тран
 ## Итоговая проверка
 
 - `make -C core check` — exit 0,
-  `/tmp/d2k-http-identity-core-check.log`.
+  `/tmp/d2s-http-identity-core-check.log`.
 - `make -C datapath check cross` — exit 0,
-  `/tmp/d2k-http-identity-datapath-check.log`.
+  `/tmp/d2s-http-identity-datapath-check.log`.
 - `make -C detect check cross` — exit 0,
-  `/tmp/d2k-http-identity-detect-check.log`.
+  `/tmp/d2s-http-identity-detect-check.log`.
 - Core check слинковал release arm64 и mipsel во временном каталоге;
-  `d2kc --self-check` — wire=17. Datapath cross линкует полный d2kd.
+  `d2sc --self-check` — wire=17. Datapath cross линкует полный d2sd.
 - `test_probe_plan`: 0 mismatches; UDP runtime: 198 полных packet cases,
   53 разных actual questions, 0 failures. HTTP trial == permanent IPv4/IPv6,
   HTTP live controller/control/Session и QUIC first-send sink — 0 failures.
 - Detect raw equality: семейство C и 84 гипотезы, 6 длин, IPv4/IPv6,
   полные пакеты и задержки — прошло без сети.
 - `git diff --check` чист. Бинарники владельца остались dirty и не входят
-  в коммит; SHA-256 неизменны: d2kc
-  `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`, d2kd
+  в коммит; SHA-256 неизменны: d2sc
+  `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`, d2sd
   `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.
 
 Проверки локальные, включая cross-линковку. Linux/NFQUEUE на живой сети,

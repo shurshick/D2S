@@ -1,10 +1,10 @@
 #!/bin/sh
 # shellcheck disable=SC2013  # word lists (names, faces), not lines
 # Static check that the install chain carries every file the service needs:
-#   1. every $DIR/... file and /opt/sbin/d2k* binary named by files/S99d2k or
+#   1. every $DIR/... file and /opt/sbin/d2s* binary named by files/S99d2s or
 #      a runtime helper in files/ is installed by scripts/install.sh;
 #   2. every repository path install.sh fetches is staged by
-#      scripts/lab-install.sh (whose D2K_LOCAL install dies on the first
+#      scripts/lab-install.sh (whose D2S_LOCAL install dies on the first
 #      missing file, before it installs anything);
 #   3. every helper install.sh puts in $DIR is removed by scripts/uninstall.sh.
 # Runtime directories and state written by the service itself are excluded.
@@ -17,14 +17,14 @@ UNINSTALL=$ROOT/scripts/uninstall.sh
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 # shellcheck disable=SC2016  # literal $DIR as written in the scripts
-refs=$(grep -oh '\$DIR/[A-Za-z0-9._/-]*' "$ROOT/files/S99d2k" "$ROOT"/files/*.sh | sort -u |
+refs=$(grep -oh '\$DIR/[A-Za-z0-9._/-]*' "$ROOT/files/S99d2s" "$ROOT"/files/*.sh | sort -u |
     grep -vE '^\$DIR/((config|log|run|state|panel|\.update)(/|$)|files$)')
 [ -n "$refs" ] || fail "no runtime file references found (layout changed?)"
 for ref in $refs; do
     name=${ref#\$DIR/}
     grep -qF "\"\$DIR/$name\"" "$INSTALL" || fail "install.sh does not install $ref (named by the runtime)"
 done
-for bin in $(grep -oh '/opt/sbin/d2k[a-z]*' "$ROOT/files/S99d2k" "$ROOT"/files/*.sh | sort -u); do
+for bin in $(grep -oh '/opt/sbin/d2s[a-z]*' "$ROOT/files/S99d2s" "$ROOT"/files/*.sh | sort -u); do
     name=${bin#/opt/sbin/}
     grep -qF "\"\$SBIN/$name\"" "$INSTALL" || fail "install.sh does not install $bin"
 done
@@ -54,9 +54,9 @@ echo "PASS: lab-install.sh stages every file install.sh fetches"
 #    prevent. Both numbers are measured on the real per-architecture set,
 #    which a checkout does not carry: it is in a developer's builds/ or, for
 #    the release of record, in the artifacts of the build matrix (release.yml
-#    runs this script with D2K_BUILDS before it packages anything). Without a
+#    runs this script with D2S_BUILDS before it packages anything). Without a
 #    complete set the measurement says so rather than passing quietly.
-BUILDS=${D2K_BUILDS:-$ROOT/builds}
+BUILDS=${D2S_BUILDS:-$ROOT/builds}
 need_kb=$(sed -n 's/^TMP_NEED_KB=\([0-9]\{1,\}\)$/\1/p' "$INSTALL")
 [ -n "$need_kb" ] || fail "install.sh has no TMP_NEED_KB download preflight"
 release_need_kb=$(sed -n 's/^TMP_RELEASE_NEED_KB=\([0-9]\{1,\}\)$/\1/p' "$INSTALL")
@@ -82,8 +82,8 @@ done
 [ -n "$arch_bins" ] || fail "install.sh fetches no per-architecture binary (layout changed?)"
 worst_kb=0
 worst_arch=
-for probe in "$BUILDS"/d2kc-linux-*; do
-    arch=${probe##*/d2kc-linux-}
+for probe in "$BUILDS"/d2sc-linux-*; do
+    arch=${probe##*/d2sc-linux-}
     bytes=$common_bytes
     for bin in $arch_bins; do
         file=$BUILDS/$bin-linux-$arch
@@ -96,7 +96,7 @@ for probe in "$BUILDS"/d2kc-linux-*; do
 done
 if [ "$worst_kb" -eq 0 ]; then
     echo "SKIP: $BUILDS has no complete per-architecture set — the release measures both"
-    echo "      preflights on the binaries it is about to publish (D2K_BUILDS)"
+    echo "      preflights on the binaries it is about to publish (D2S_BUILDS)"
 else
     [ "$need_kb" -ge "$worst_kb" ] ||
         fail "install.sh TMP_NEED_KB=$need_kb is below the largest download ($worst_arch: $worst_kb KiB)"
@@ -107,15 +107,15 @@ else
     #    unpacked tree, and on top of it the set the archive's own installer
     #    stages — so one number could not answer for both. Measured on the
     #    real archive, built by the same script the release workflow runs.
-    stage=$(mktemp -d "${TMPDIR:-/tmp}/d2k-manifest.XXXXXX") || fail "no temporary directory"
+    stage=$(mktemp -d "${TMPDIR:-/tmp}/d2s-manifest.XXXXXX") || fail "no temporary directory"
     trap 'rm -rf "$stage"' EXIT HUP INT TERM
     RELEASE_ID=d2o-manifest-test ARCHES=$worst_arch \
         sh "$ROOT/scripts/package-release.sh" "$BUILDS" "$stage/out" >/dev/null ||
         fail "package-release.sh cannot package $worst_arch"
     mkdir "$stage/tree" || fail "no room to unpack"
-    tar -xzf "$stage/out/d2k-$worst_arch.tar.gz" -C "$stage/tree" || fail "release archive does not unpack"
+    tar -xzf "$stage/out/d2s-$worst_arch.tar.gz" -C "$stage/tree" || fail "release archive does not unpack"
     tree_kb=$(du -sk "$stage/tree" | awk '{ print $1 }')
-    gz_kb=$(du -k "$stage/out/d2k-$worst_arch.tar.gz" | awk '{ print $1 }')
+    gz_kb=$(du -k "$stage/out/d2s-$worst_arch.tar.gz" | awk '{ print $1 }')
     # Два пика: архив рядом с распакованным деревом, затем дерево рядом с
     # раскладкой (установщик удаляет архив до того, как начнёт раскладывать).
     peak_kb=$((tree_kb + need_kb))

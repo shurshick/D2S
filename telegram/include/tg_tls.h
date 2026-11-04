@@ -1,5 +1,5 @@
-#ifndef D2K_TG_TLS_H
-#define D2K_TG_TLS_H
+#ifndef D2S_TG_TLS_H
+#define D2S_TG_TLS_H
 
 #include <openssl/ssl.h>
 

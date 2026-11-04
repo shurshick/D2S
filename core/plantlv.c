@@ -1,14 +1,14 @@
 /* plantlv.c — человеческий текст плана в байты провода.
  *
- * ЗАЧЕМ. d2k_compose (compose.c) выдаёт план ТЕКСТОМ — тем самым, что лежит в
+ * ЗАЧЕМ. d2s_compose (compose.c) выдаёт план ТЕКСТОМ — тем самым, что лежит в
  * catalog.json и что показывает панель. Датапат принимает план ТОЛЬКО байтами
- * TLV (D2K_CMD_SET_NAME, datapath/plan_parse.c). До этого модуля мост между
+ * TLV (D2S_CMD_SET_NAME, datapath/plan_parse.c). До этого модуля мост между
  * ними был только на Go-стороне (internal/plan: ParseText + MarshalTLV), и
  * планировщик на C физически не мог поставить ни одного собранного плана:
- * d2k_link_set_name отвергала текст как «не hex». Найдено первым же прогоном
+ * d2s_link_set_name отвергала текст как «не hex». Найдено первым же прогоном
  * test_sched — привязки не появлялись, потому что кандидаты не вставали.
  *
- * ПОЧЕМУ ПАРСЕР, А НЕ ВТОРОЙ СБОРЩИК. Соблазн был обратный: научить d2k_compose
+ * ПОЧЕМУ ПАРСЕР, А НЕ ВТОРОЙ СБОРЩИК. Соблазн был обратный: научить d2s_compose
  * выдавать сразу и текст, и TLV. Это завело бы ДВЕ формы одного плана, растущие
  * рядом, — и первое же расхождение между ними означало бы, что в каталоге
  * записано одно, а на провод ушло другое. Здесь текст — единственный источник:
@@ -34,7 +34,7 @@
 #include <string.h>
 #include <errno.h>
 
-#include "d2k_plantlv.h"
+#include "d2s_plantlv.h"
 
 enum {
     REC_ID      = 0x0001,
@@ -308,11 +308,11 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
         size_t nf = (size_t)nfi;
         if (nf == 0) { continue; }
 
-        if (strcmp(f[0], "d2k-plan") == 0) {
-            if (nf != 3) { say(err, errcap, "строка %zu: d2k-plan ждёт два числа", lineno); goto bad; }
+        if (strcmp(f[0], "d2s-plan") == 0) {
+            if (nf != 3) { say(err, errcap, "строка %zu: d2s-plan ждёт два числа", lineno); goto bad; }
             unsigned long sc, mx;
             if (parse_uint(f[1], 65535, &sc) || parse_uint(f[2], 65535, &mx)) {
-                say(err, errcap, "строка %zu: d2k-plan ждёт два числа 0..65535", lineno); goto bad;
+                say(err, errcap, "строка %zu: d2s-plan ждёт два числа 0..65535", lineno); goto bad;
             }
             p->schema = (uint16_t)sc;
             p->minexec = (uint16_t)mx;
@@ -588,7 +588,7 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
             p->udplen = (uint16_t)u;
         } else if (strcmp(f[0], "quicsplit") == 0) {
             /* РАЗРЕЗ CLIENTHELLO НА КАДРЫ CRYPTO внутри того же Initial
-               (задача 40, d2k_quic_initial_split_crypto). Форма одна: 1 —
+               (задача 40, d2s_quic_initial_split_crypto). Форма одна: 1 —
                два кадра, хвост первым; другие формы не мерились. */
             unsigned long u = 0;
             if (nf != 2 || p->qsplit || parse_uint(f[1], 1, &u) != 0 || u != 1) {
@@ -630,7 +630,7 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
     }
 
     if (!seen_header) {
-        say(err, errcap, "нет заголовка d2k-plan");
+        say(err, errcap, "нет заголовка d2s-plan");
         goto bad;
     }
     if (p->input_tls && (p->minexec < 5 || p->transport != 6)) {
@@ -706,7 +706,7 @@ static void put_rec(wbuf *w, uint16_t typ, const uint8_t *v, size_t n) {
     put(w, v, n);
 }
 
-int d2k_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
+int d2s_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
                          size_t *out_len, char *err, size_t errcap) {
     if (err && errcap) { err[0] = '\0'; }
     if (!text || !out || !out_len) {
@@ -844,11 +844,11 @@ int d2k_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
     return 0;
 }
 
-int d2k_plan_text_to_hex(const char *text, char *out, size_t cap,
+int d2s_plan_text_to_hex(const char *text, char *out, size_t cap,
                          char *err, size_t errcap) {
-    uint8_t raw[D2K_PLAN_TLV_MAX];
+    uint8_t raw[D2S_PLAN_TLV_MAX];
     size_t n = 0;
-    if (d2k_plan_text_to_tlv(text, raw, sizeof raw, &n, err, errcap) != 0) { return -1; }
+    if (d2s_plan_text_to_tlv(text, raw, sizeof raw, &n, err, errcap) != 0) { return -1; }
     if (cap < 2 * n + 1) {
         say(err, errcap, "на hex нужно %zu байт, дано %zu", 2 * n + 1, cap);
         return -1;

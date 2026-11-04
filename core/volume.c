@@ -1,4 +1,4 @@
-/* volume.c — направленные измерения объёма. См. d2k_volume.h.
+/* volume.c — направленные измерения объёма. См. d2s_volume.h.
  *
  * ЛЕСТНИЦА ИСХОДЯЩЕГО ОБЪЁМА: десять запросов по одному соединению, со второго
  * — с мусорным заголовком. Мусор в заголовке остаётся единственным способом
@@ -27,12 +27,12 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_meas.h"   /* d2k_mark_hook — метка ставится тем же путём, что везде */
-#include "d2k_catalog.h" /* общий допуск для сопоставления RX-объёмов */
-#include "d2k_tls13.h"
-#include "d2k_tls12.h"
-#include "d2k_volume.h"
-#include "d2k_verify.h"
+#include "d2s_meas.h"   /* d2s_mark_hook — метка ставится тем же путём, что везде */
+#include "d2s_catalog.h" /* общий допуск для сопоставления RX-объёмов */
+#include "d2s_tls13.h"
+#include "d2s_tls12.h"
+#include "d2s_volume.h"
+#include "d2s_verify.h"
 
 /* Восемь секунд на подключение и на рукопожатие — из пробы донора
    (z2k-detect/internal/tcp16), замер на этой линии. */
@@ -55,28 +55,28 @@
 /* A partial encrypted record is visible even before the first HTTP header.
    This is suspicion, not a verdict. Unknown versions, replayed hellos and
    local limits cannot establish the application record context. */
-static int rx_wire_partial(const d2k_ver_result *r) {
-    return r && r->level == D2K_VER_HANDSHAKE && r->name_ok == 1 &&
+static int rx_wire_partial(const d2s_ver_result *r) {
+    return r && r->level == D2S_VER_HANDSHAKE && r->name_ok == 1 &&
         !r->status && !r->replay_proof && !r->local_limit &&
         (r->negotiated_tls == 0x0303 || r->negotiated_tls == 0x0304) &&
         r->rx_tls_record_missing &&
-        r->rx_tls_wire_bytes >= (uint64_t)D2K_VOL_MIN_KB * 1024;
+        r->rx_tls_wire_bytes >= (uint64_t)D2S_VOL_MIN_KB * 1024;
 }
 
-int d2k_volume_rx_partial(const d2k_ver_result *r) {
+int d2s_volume_rx_partial(const d2s_ver_result *r) {
     return rx_wire_partial(r) || (r && r->status >= 200 && r->status < 300 && !r->body_complete &&
         r->body_encoding == 0 && r->body_framing_valid &&
         r->body_has_length != r->body_chunked &&
-        r->body_bytes >= (uint64_t)D2K_VOL_MIN_KB * 1024 &&
+        r->body_bytes >= (uint64_t)D2S_VOL_MIN_KB * 1024 &&
         (!r->body_has_length || r->body_expected > r->body_bytes));
 }
 
 /* ДВА ИЗМЕРЕНИЯ ГОВОРЯТ ОБ ОДНОМ. Оба оборваны, оба в ОДНОМ домене
    (ciphertext либо HTTP-тело), и контекст домена совпал: согласованная версия
    TLS для записи, HTTP framing для тела. Байты здесь не сравниваются — это
-   дело d2k_volume_rx_evidence, которое и держит допуск. */
-int d2k_volume_rx_pair_agrees(const d2k_ver_result *a, const d2k_ver_result *b) {
-    if (!a || !b || !d2k_volume_rx_partial(a) || !d2k_volume_rx_partial(b)) { return 0; }
+   дело d2s_volume_rx_evidence, которое и держит допуск. */
+int d2s_volume_rx_pair_agrees(const d2s_ver_result *a, const d2s_ver_result *b) {
+    if (!a || !b || !d2s_volume_rx_partial(a) || !d2s_volume_rx_partial(b)) { return 0; }
     if (rx_wire_partial(a) != rx_wire_partial(b)) { return 0; }
     if (rx_wire_partial(a)) { return a->negotiated_tls == b->negotiated_tls; }
     return a->body_has_length == b->body_has_length && a->body_chunked == b->body_chunked;
@@ -100,25 +100,25 @@ int d2k_volume_rx_pair_agrees(const d2k_ver_result *a, const d2k_ver_result *b) 
    полосе «прошла». Пустое измерение (нет TCP, нет статуса) не противоречит
    ничему, а завершённый ответ меньше полосы — непроверенный бюджет
    (rx_short), и лишнего прогона ни то, ни другое не заказывает. */
-int d2k_volume_rx_needs_repeat(const d2k_ver_result *a, const d2k_ver_result *b) {
+int d2s_volume_rx_needs_repeat(const d2s_ver_result *a, const d2s_ver_result *b) {
     if (!a || !b) { return 0; }
-    if (!d2k_volume_rx_partial(a) || d2k_volume_rx_partial(b)) { return 0; }
+    if (!d2s_volume_rx_partial(a) || d2s_volume_rx_partial(b)) { return 0; }
     return b->status >= 200 && b->status < 300 && b->body_complete &&
            b->body_framing_valid &&
-           b->body_bytes >= (uint64_t)D2K_VOL_MIN_KB * 1024;
+           b->body_bytes >= (uint64_t)D2S_VOL_MIN_KB * 1024;
 }
 
-int d2k_volume_rx_evidence(const d2k_ver_result *a,
-                           const d2k_ver_result *b,
-                           const d2k_ver_result *gzip,
-                           d2k_vol_result *out) {
-    const uint64_t min_bytes = (uint64_t)D2K_VOL_MIN_KB * 1024;
+int d2s_volume_rx_evidence(const d2s_ver_result *a,
+                           const d2s_ver_result *b,
+                           const d2s_ver_result *gzip,
+                           d2s_vol_result *out) {
+    const uint64_t min_bytes = (uint64_t)D2S_VOL_MIN_KB * 1024;
     if (!a || !b || !gzip || !out) { return 0; }
     if (rx_wire_partial(a) || rx_wire_partial(b)) {
         if (!rx_wire_partial(a) || !rx_wire_partial(b) ||
             a->negotiated_tls != b->negotiated_tls ||
             gzip->negotiated_tls != a->negotiated_tls ||
-            gzip->level != D2K_VER_APPLICATION || gzip->name_ok != 1 ||
+            gzip->level != D2S_VER_APPLICATION || gzip->name_ok != 1 ||
             gzip->local_limit || gzip->status < 200 || gzip->status >= 300 ||
             !gzip->body_complete || !gzip->body_framing_valid ||
             gzip->body_encoding != 1 || !gzip->body_bytes ||
@@ -129,7 +129,7 @@ int d2k_volume_rx_evidence(const d2k_ver_result *a,
             ? a->rx_tls_wire_bytes : b->rx_tls_wire_bytes;
         uint64_t hi = a->rx_tls_wire_bytes > b->rx_tls_wire_bytes
             ? a->rx_tls_wire_bytes : b->rx_tls_wire_bytes;
-        if (hi - lo > (uint64_t)D2K_VOLUME_SLACK * 1024) return 0;
+        if (hi - lo > (uint64_t)D2S_VOLUME_SLACK * 1024) return 0;
         out->rx_cut = 1; out->rx_wire_basis = 1;
         uint64_t kb = (lo + (hi - lo) / 2) / 1024;
         out->rx_at_kb = kb > INT_MAX ? INT_MAX : (int)kb;
@@ -153,7 +153,7 @@ int d2k_volume_rx_evidence(const d2k_ver_result *a,
                                b->body_expected <= b->body_bytes)) { return 0; }
     uint64_t delta = a->body_bytes > b->body_bytes
                    ? a->body_bytes - b->body_bytes : b->body_bytes - a->body_bytes;
-    if (delta > (uint64_t)D2K_VOLUME_SLACK * 1024) { return 0; }
+    if (delta > (uint64_t)D2S_VOLUME_SLACK * 1024) { return 0; }
     if (gzip->status < 200 || gzip->status >= 300 || !gzip->body_framing_valid ||
         gzip->body_encoding != 1 || gzip->body_bytes == 0) { return 0; }
     /* ДВЕ ПРИМЕТЫ ОДНОГО И ТОГО ЖЕ: ОБРЫВ ПО БАЙТАМ И ОБРЫВ ПО ПАКЕТАМ.
@@ -174,7 +174,7 @@ int d2k_volume_rx_evidence(const d2k_ver_result *a,
         if (pb > hi) hi = pb;
         if (pg < lo) lo = pg;
         if (pg > hi) hi = pg;
-        if (hi - lo > D2K_VOLUME_PACKET_SLACK) { return 0; }
+        if (hi - lo > D2S_VOLUME_PACKET_SLACK) { return 0; }
         packet_budget = 1;
     }
 
@@ -212,11 +212,11 @@ int d2k_volume_rx_evidence(const d2k_ver_result *a,
     return 1;
 }
 
-const char *d2k_vol_verdict_name(d2k_vol_verdict v) {
+const char *d2s_vol_verdict_name(d2s_vol_verdict v) {
     switch (v) {
-    case D2K_VOL_CUT:    return "обрыв по объёму";
-    case D2K_VOL_PASSED: return "объём прошёл";
-    case D2K_VOL_SHORT:  return "объём не набран — вердикта нет";
+    case D2S_VOL_CUT:    return "обрыв по объёму";
+    case D2S_VOL_PASSED: return "объём прошёл";
+    case D2S_VOL_SHORT:  return "объём не набран — вердикта нет";
     default:             return "мишень не ответила";
     }
 }
@@ -281,7 +281,7 @@ static int connect_bounded(const char *ip, uint16_t port, uint32_t mark,
 #ifdef SO_NOSIGPIPE
     (void)setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
 #endif
-    if (mark != 0 && d2k_mark_hook(fd, mark) != 0) {
+    if (mark != 0 && d2s_mark_hook(fd, mark) != 0) {
         /* Метка не поставилась — проба пойдёт ПО ОБЩИМ ПРАВИЛАМ, то есть
            через уже поставленный план. Это меряло бы работу плана, а не линию,
            и молча так делать нельзя. */
@@ -322,7 +322,7 @@ static int connect_bounded(const char *ip, uint16_t port, uint32_t mark,
 }
 
 /* Читает заголовки ответа до пустой строки. 0 — прочитано, -1 — обрыв. */
-static int drain_head_tls(d2k_tls *t, d2k_tls12 *t12, int wait_ms, char *reason, size_t cap) {
+static int drain_head_tls(d2s_tls *t, d2s_tls12 *t12, int wait_ms, char *reason, size_t cap) {
     char line[4096];
     size_t n = 0;
     int seen_cr = 0;
@@ -331,8 +331,8 @@ static int drain_head_tls(d2k_tls *t, d2k_tls12 *t12, int wait_ms, char *reason,
         int64_t left = deadline - now_ms();
         if (left <= 0) { snprintf(reason, cap, "ответа нет"); return -1; }
         uint8_t c;
-        long r = t12 ? d2k_tls12_read(t12, &c, 1, (int)left, reason, cap)
-                     : d2k_tls_read(t, &c, 1, (int)left, reason, cap);
+        long r = t12 ? d2s_tls12_read(t12, &c, 1, (int)left, reason, cap)
+                     : d2s_tls_read(t, &c, 1, (int)left, reason, cap);
         if (r <= 0) {
             if (r == 0) { snprintf(reason, cap, "соединение закрыто"); }
             return -1;
@@ -387,16 +387,16 @@ static int drain_head_plain(int fd, int wait_ms, char *reason, size_t cap) {
 
    Имя подсказки обязано совпасть с предъявляемым SNI: адрес и имя у зонда
    свои, и чужой хост мы спросили бы не у того сервера; цель из подсказки не
-   выдумывается. Путь проверяет тот же строгий d2k_resource_path_ok — только
+   выдумывается. Путь проверяет тот же строгий d2s_resource_path_ok — только
    публичный .css, без запросов и токенов. Путь, который только что мерили,
    пропускаем: повторять его нечем. */
-static int resource_retry_path(const d2k_ver_result *a, const char *sni,
+static int resource_retry_path(const d2s_ver_result *a, const char *sni,
                                const char *path, char *out, size_t cap) {
-    size_t n = a->n_resources > D2K_RESOURCE_COUNT ? D2K_RESOURCE_COUNT : a->n_resources;
+    size_t n = a->n_resources > D2S_RESOURCE_COUNT ? D2S_RESOURCE_COUNT : a->n_resources;
     for (size_t i = 0; i < n; i++) {
-        const d2k_resource *r = &a->resources[i];
+        const d2s_resource *r = &a->resources[i];
         if (!r->host[0] || strcasecmp(r->host, sni) != 0) { continue; }
-        if (!d2k_resource_path_ok(r->path)) { continue; }
+        if (!d2s_resource_path_ok(r->path)) { continue; }
         if (path && !strcmp(path, r->path)) { continue; }
         if (strlen(r->path) >= cap) { continue; }
         snprintf(out, cap, "%s", r->path);
@@ -408,19 +408,19 @@ static int resource_retry_path(const d2k_ver_result *a, const char *sni,
 /* Повторяем один и тот же запрос, если TLS согласован, а HTTP-ответ ещё не
    дал измеримых данных. Настоящий частичный ответ не повторяем: его измеряют
    парой ниже. */
-static d2k_ver_result rx_probe(const char *ip, uint16_t port, const char *sni,
+static d2s_ver_result rx_probe(const char *ip, uint16_t port, const char *sni,
                                size_t hello_wire, int tls12, int encoding,
                                uint32_t mark, const char *path) {
-    d2k_ver_result r = d2k_verify_probe_path_on(-1, ip, port, sni, 6000,
+    d2s_ver_result r = d2s_verify_probe_path_on(-1, ip, port, sni, 6000,
                                                 hello_wire, tls12, encoding, mark, path);
     int early = r.status >= 200 && r.status < 300 && !r.body_complete &&
-                r.body_bytes < (uint64_t)D2K_VOL_MIN_KB * 1024;
-    if ((r.status == 0 || early) && r.level == D2K_VER_HANDSHAKE && r.name_ok == 1 &&
+                r.body_bytes < (uint64_t)D2S_VOL_MIN_KB * 1024;
+    if ((r.status == 0 || early) && r.level == D2S_VER_HANDSHAKE && r.name_ok == 1 &&
         (r.negotiated_tls == 0x0303 || r.negotiated_tls == 0x0304) &&
-        !r.local_limit && !d2k_volume_rx_partial(&r)) {
-        d2k_verify_close(&r);
+        !r.local_limit && !d2s_volume_rx_partial(&r)) {
+        d2s_verify_close(&r);
         nap_ms(RESPONSE_PROBE_GAP_MS);
-        r = d2k_verify_probe_path_on(-1, ip, port, sni, 6000,
+        r = d2s_verify_probe_path_on(-1, ip, port, sni, 6000,
                                      hello_wire, tls12, encoding, mark, path);
     }
     return r;
@@ -437,16 +437,16 @@ static d2k_ver_result rx_probe(const char *ip, uint16_t port, const char *sni,
    Возвращает 1, только если мерить было нечем (ответ завершён и меньше
    полосы) И тот же ответ назвал другой публичный путь этого имени: он
    копируется в retry. Повтором распоряжается probe_response_volume. */
-static int measure_response_volume(d2k_vol_result *res, const char *ip,
+static int measure_response_volume(d2s_vol_result *res, const char *ip,
                                    uint16_t port, const char *sni, int tls12,
                                    size_t hello_wire, uint32_t mark, const char *path,
                                    char *retry, size_t retry_cap) {
     if (!res || !ip || !sni || !sni[0] || port == 80) { return 0; }
-    d2k_ver_result a = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
-    res->rx_tls_unavailable = a.level == D2K_VER_TRANSPORT && a.status == 0;
+    d2s_ver_result a = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
+    res->rx_tls_unavailable = a.level == D2S_VER_TRANSPORT && a.status == 0;
     if (a.body_complete && a.status >= 200 && a.status < 300 &&
-        a.http_outcome != D2K_HTTP_BLOCKED && a.http_outcome != D2K_HTTP_LEGAL_DENIAL) {
-        res->rx_direct_complete = a.level == D2K_VER_APPLICATION;
+        a.http_outcome != D2S_HTTP_BLOCKED && a.http_outcome != D2S_HTTP_LEGAL_DENIAL) {
+        res->rx_direct_complete = a.level == D2S_VER_APPLICATION;
         memcpy(res->resources, a.resources, sizeof res->resources);
         res->n_resources = a.n_resources;
     }
@@ -455,34 +455,34 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
              a.status, (unsigned long long)a.body_bytes,
              (unsigned long long)a.body_expected, a.body_complete, a.negotiated_tls,
              (unsigned long long)a.rx_tls_wire_bytes, a.rx_tls_record_missing, a.reason);
-    if (!d2k_volume_rx_partial(&a)) {
-        if ((a.status == 0 || !a.body_complete) && a.level == D2K_VER_HANDSHAKE &&
+    if (!d2s_volume_rx_partial(&a)) {
+        if ((a.status == 0 || !a.body_complete) && a.level == D2S_VER_HANDSHAKE &&
             a.name_ok == 1 && (a.negotiated_tls == 0x0303 || a.negotiated_tls == 0x0304) &&
             !res->rx_direct_complete && !res->rx_tls_unavailable && !a.local_limit) {
             res->rx_unmeasured = 1;
         }
         /* ЗАВЕРШЁННЫЙ ОТВЕТ МЕНЬШЕ ПОЛОСЫ — БЮДЖЕТ НЕ ПРОВЕРЕН. Отличаем
            «обрыв не воспроизвёлся» от «мерить было нечем»: ответ дошёл до
-           конца, но до D2K_VOL_MIN_KB ему не хватило объёма, поэтому про
+           конца, но до D2S_VOL_MIN_KB ему не хватило объёма, поэтому про
            обрыв он не говорит ничего. Страница отказа доступа (401/403) и
            просто короткий документ попадают сюда одинаково. */
         if (a.status > 0 && a.body_complete &&
-            a.body_bytes < (uint64_t)D2K_VOL_MIN_KB * 1024) {
+            a.body_bytes < (uint64_t)D2S_VOL_MIN_KB * 1024) {
             res->rx_short = 1;
             res->rx_short_bytes = a.body_bytes;
             if (retry && retry_cap &&
                 resource_retry_path(&a, sni, path, retry, retry_cap)) {
-                d2k_verify_close(&a);
+                d2s_verify_close(&a);
                 return 1;
             }
         }
-        d2k_verify_close(&a);
+        d2s_verify_close(&a);
         return 0;
     }
     if (rx_wire_partial(&a)) res->rx_partial_wire_bytes = a.rx_tls_wire_bytes;
     else res->rx_partial_bytes = a.body_bytes;
     nap_ms(RESPONSE_PROBE_GAP_MS);
-    d2k_ver_result b = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
+    d2s_ver_result b = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
     snprintf(res->rx_reason, sizeof res->rx_reason,
              "identity-1 partial=%llu/%llu TLS=%04x wire=%llu missing=%u; "
              "identity-2 HTTP %d body=%llu complete=%d TLS=%04x wire=%llu missing=%u: %.40s",
@@ -492,17 +492,17 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
              b.negotiated_tls, (unsigned long long)b.rx_tls_wire_bytes, b.rx_tls_record_missing,
              b.reason);
     const char *settled_by_third = "";
-    if (!d2k_volume_rx_pair_agrees(&a, &b)) {
-        if (!d2k_volume_rx_needs_repeat(&a, &b)) {
-            d2k_verify_close(&a);
-            d2k_verify_close(&b);
+    if (!d2s_volume_rx_pair_agrees(&a, &b)) {
+        if (!d2s_volume_rx_needs_repeat(&a, &b)) {
+            d2s_verify_close(&a);
+            d2s_verify_close(&b);
             return 0;
         }
         /* Повтор дошёл до конца, пройдя полосу: измерения РАСХОДЯТСЯ. Судит
-           третий identity-прогон того же домена — см. d2k_volume_rx_needs_repeat. */
+           третий identity-прогон того же домена — см. d2s_volume_rx_needs_repeat. */
         nap_ms(RESPONSE_PROBE_GAP_MS);
-        d2k_ver_result c = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
-        int agreed = d2k_volume_rx_pair_agrees(&a, &c);
+        d2s_ver_result c = rx_probe(ip, port, sni, hello_wire, tls12, 0, mark, path);
+        int agreed = d2s_volume_rx_pair_agrees(&a, &c);
         snprintf(res->rx_reason, sizeof res->rx_reason,
                  "identity-1 partial=%llu wire=%llu; identity-2 HTTP %d body=%llu "
                  "дошёл до конца; identity-3 HTTP %d body=%llu wire=%llu missing=%u: "
@@ -513,10 +513,10 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
                  (unsigned long long)c.body_bytes,
                  (unsigned long long)c.rx_tls_wire_bytes,
                  c.rx_tls_record_missing, agreed);
-        d2k_verify_close(&b);
+        d2s_verify_close(&b);
         if (!agreed) {
-            d2k_verify_close(&a);
-            d2k_verify_close(&c);
+            d2s_verify_close(&a);
+            d2s_verify_close(&c);
             return 0;
         }
         b = c;
@@ -525,7 +525,7 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
         settled_by_third = "; пару решил identity-3";
     }
     nap_ms(RESPONSE_PROBE_GAP_MS);
-    d2k_ver_result gz = rx_probe(ip, port, sni, hello_wire, tls12, 1, mark, path);
+    d2s_ver_result gz = rx_probe(ip, port, sni, hello_wire, tls12, 1, mark, path);
     snprintf(res->rx_reason, sizeof res->rx_reason,
              "identity %llu/%llu (пакетов %u/%u); gzip HTTP %d, тело %llu, complete=%d, "
              "encoding=%d, пакетов %u; TLS RX wire=%llu/%llu/%llu missing=%u/%u/%u%s",
@@ -536,7 +536,7 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
              (unsigned long long)b.rx_tls_wire_bytes, (unsigned long long)gz.rx_tls_wire_bytes,
              a.rx_tls_record_missing, b.rx_tls_record_missing, gz.rx_tls_record_missing,
              settled_by_third);
-    (void)d2k_volume_rx_evidence(&a, &b, &gz, res);
+    (void)d2s_volume_rx_evidence(&a, &b, &gz, res);
     /* ПУТЬ ИЗМЕРЕНИЯ ИДЁТ НАВЕРХ ПОЛЕМ, А НЕ ТОЛЬКО СТРОКОЙ ЖУРНАЛА. Обрыв
        доказан на том пути, который спрашивал ЭТОТ замер (у повтора он свой —
        из подсказки): кандидата и следующий эпизод надо отправить туда же,
@@ -545,9 +545,9 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
     if (res->rx_cut && path && path[0]) {
         snprintf(res->measured_path, sizeof res->measured_path, "%s", path);
     }
-    d2k_verify_close(&a);
-    d2k_verify_close(&b);
-    d2k_verify_close(&gz);
+    d2s_verify_close(&a);
+    d2s_verify_close(&b);
+    d2s_verify_close(&gz);
     return 0;
 }
 
@@ -555,10 +555,10 @@ static int measure_response_volume(d2k_vol_result *res, const char *ip,
    лестница — повторное измерение само либо входит в полосу, либо честно
    возвращает тот же непроверенный бюджет; третий путь спрашивать не о чем,
    это был бы перебор вместо замера. */
-static void probe_response_volume(d2k_vol_result *res, const char *ip,
+static void probe_response_volume(d2s_vol_result *res, const char *ip,
                                   uint16_t port, const char *sni, int tls12,
                                   size_t hello_wire, uint32_t mark, const char *path) {
-    char retry[sizeof ((d2k_resource *)0)->path];
+    char retry[sizeof ((d2s_resource *)0)->path];
     retry[0] = '\0';
     if (!measure_response_volume(res, ip, port, sni, tls12, hello_wire, mark, path,
                                  retry, sizeof retry)) { return; }
@@ -592,12 +592,12 @@ static void probe_response_volume(d2k_vol_result *res, const char *ip,
     snprintf(res->rx_reason, sizeof res->rx_reason, "%.102s: %.150s", lead, measured);
 }
 
-d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *sni,
+d2s_vol_result d2s_volume_probe_path(const char *ip, uint16_t port, const char *sni,
                                 int plain, int tls12, size_t hello_wire,
                                 uint32_t mark, const char *path) {
-    d2k_vol_result res;
+    d2s_vol_result res;
     memset(&res, 0, sizeof res);
-    res.verdict = D2K_VOL_UNREACHABLE;
+    res.verdict = D2S_VOL_UNREACHABLE;
     snprintf(res.reason, sizeof res.reason, "проба не начиналась");
     if (!ip || !ip[0]) {
         snprintf(res.reason, sizeof res.reason, "адрес цели не задан");
@@ -608,15 +608,15 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
     int fd = connect_bounded(ip, port, mark, res.reason, sizeof res.reason);
     if (fd < 0) { return res; }
 
-    d2k_tls *tls = NULL;
-    d2k_tls12 *tls_legacy = NULL;
+    d2s_tls *tls = NULL;
+    d2s_tls12 *tls_legacy = NULL;
     if (!plain) {
         char err[160];
         const char *name = (sni && sni[0]) ? sni : NULL;
         int handshake = tls12
-            ? d2k_tls12_connect(fd, name, HANDSHAKE_MS, hello_wire,
+            ? d2s_tls12_connect(fd, name, HANDSHAKE_MS, hello_wire,
                                 &tls_legacy, err, sizeof err)
-            : d2k_tls_connect(fd, name, HANDSHAKE_MS, hello_wire,
+            : d2s_tls_connect(fd, name, HANDSHAKE_MS, hello_wire,
                               &tls, err, sizeof err);
         if (handshake != 0) {
             /* Причина обрезается по месту, а не тянет за собой размер буфера:
@@ -633,15 +633,15 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
     res.rtt_ms = (int)(now_ms() - started);
 
     const char *host = (sni && sni[0]) ? sni : ip;
-    char pad[D2K_VOL_CHUNK + 1];
-    fill_pad(pad, D2K_VOL_CHUNK);
-    pad[D2K_VOL_CHUNK] = '\0';
+    char pad[D2S_VOL_CHUNK + 1];
+    fill_pad(pad, D2S_VOL_CHUNK);
+    pad[D2S_VOL_CHUNK] = '\0';
 
     /* Пока RTT не измерен на самом запросе — ждём по потолку. */
     int read_timeout = READ_MAX_MS;
 
-    for (int i = 0; i < D2K_VOL_STEPS; i++) {
-        char req[D2K_VOL_CHUNK + 512];
+    for (int i = 0; i < D2S_VOL_STEPS; i++) {
+        char req[D2S_VOL_CHUNK + 512];
         int n;
         if (i == 0) {
             n = snprintf(req, sizeof req,
@@ -654,8 +654,8 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
         }
         if (n <= 0 || (size_t)n >= sizeof req) {
             snprintf(res.reason, sizeof res.reason, "запрос не поместился");
-            if (tls) { d2k_tls_free(tls); }
-            if (tls_legacy) { d2k_tls12_free(tls_legacy); }
+            if (tls) { d2s_tls_free(tls); }
+            if (tls_legacy) { d2s_tls12_free(tls_legacy); }
             close(fd);
             if (!plain) {
                 probe_response_volume(&res, ip, port, sni, tls12, hello_wire, mark, path);
@@ -663,14 +663,14 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
             return res;
         }
 
-        int sent_kb = i * D2K_VOL_CHUNK / 1024;
+        int sent_kb = i * D2S_VOL_CHUNK / 1024;
         int64_t req_start = now_ms();
         char err[160];
         int bad = 0;
         if (tls || tls_legacy) {
             int written = tls_legacy
-                ? d2k_tls12_write(tls_legacy, (const uint8_t *)req, (size_t)n, err, sizeof err)
-                : d2k_tls_write(tls, (const uint8_t *)req, (size_t)n, err, sizeof err);
+                ? d2s_tls12_write(tls_legacy, (const uint8_t *)req, (size_t)n, err, sizeof err)
+                : d2s_tls_write(tls, (const uint8_t *)req, (size_t)n, err, sizeof err);
             if (written != 0) {
                 snprintf(res.reason, sizeof res.reason, "%s", err);
                 bad = 1;
@@ -692,14 +692,14 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
             res.at_kb = sent_kb;
             if (i == 0) {
                 /* Умерли на первом же запросе — мишень недоступна, а не блок. */
-                res.verdict = D2K_VOL_UNREACHABLE;
-            } else if (sent_kb >= D2K_VOL_MIN_KB) {
-                res.verdict = D2K_VOL_CUT;
+                res.verdict = D2S_VOL_UNREACHABLE;
+            } else if (sent_kb >= D2S_VOL_MIN_KB) {
+                res.verdict = D2S_VOL_CUT;
             } else {
-                res.verdict = D2K_VOL_SHORT;
+                res.verdict = D2S_VOL_SHORT;
             }
-            if (tls) { d2k_tls_free(tls); }
-            if (tls_legacy) { d2k_tls12_free(tls_legacy); }
+            if (tls) { d2s_tls_free(tls); }
+            if (tls_legacy) { d2s_tls12_free(tls_legacy); }
             close(fd);
             if (!plain) {
                 probe_response_volume(&res, ip, port, sni, tls12, hello_wire, mark, path);
@@ -714,11 +714,11 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
         nap_ms(CHUNK_DELAY_MS);
     }
 
-    res.verdict = D2K_VOL_PASSED;
-    res.at_kb = D2K_VOL_STEPS * D2K_VOL_CHUNK / 1024;
+    res.verdict = D2S_VOL_PASSED;
+    res.at_kb = D2S_VOL_STEPS * D2S_VOL_CHUNK / 1024;
     snprintf(res.reason, sizeof res.reason, "лестница пройдена целиком");
-    if (tls) { d2k_tls_free(tls); }
-    if (tls_legacy) { d2k_tls12_free(tls_legacy); }
+    if (tls) { d2s_tls_free(tls); }
+    if (tls_legacy) { d2s_tls12_free(tls_legacy); }
     close(fd);
     if (!plain) {
         probe_response_volume(&res, ip, port, sni, tls12, hello_wire, mark, path);
@@ -726,7 +726,7 @@ d2k_vol_result d2k_volume_probe_path(const char *ip, uint16_t port, const char *
     return res;
 }
 
-d2k_vol_result d2k_volume_probe(const char *ip, uint16_t port, const char *sni,
+d2s_vol_result d2s_volume_probe(const char *ip, uint16_t port, const char *sni,
     int plain, int tls12, size_t hello_wire, uint32_t mark) {
-    return d2k_volume_probe_path(ip, port, sni, plain, tls12, hello_wire, mark, NULL);
+    return d2s_volume_probe_path(ip, port, sni, plain, tls12, hello_wire, mark, NULL);
 }

@@ -5,13 +5,13 @@ class MediaTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)
         for name in ['state','log','files','bin']: (self.root/name).mkdir()
-        shutil.copyfile(work/'d2k-meta-dns-library.sh',self.root/'d2k-meta-dns-library.sh')
+        shutil.copyfile(work/'d2s-meta-dns-library.sh',self.root/'d2s-meta-dns-library.sh')
         (self.root/'files/meta-ranges.txt').write_text('57.144.0.0/14\n')
         (self.root/'state/whatsapp-ip-hosts.tsv').write_text('web.whatsapp.com 57.144.245.32\nwww.whatsapp.com 57.144.249.32\n')
-        (self.root/'log/d2kd.log').write_text('QUIC client name=media-otp1-1.cdn.whatsapp.net\nname=media-evil.example.com\n')
-        (self.root/'log/d2kc.log').write_text('')
+        (self.root/'log/d2sd.log').write_text('QUIC client name=media-otp1-1.cdn.whatsapp.net\nname=media-evil.example.com\n')
+        (self.root/'log/d2sc.log').write_text('')
         (self.root/'ndm').write_text('ip host unrelated.example 192.0.2.7\n')
-        self.env=dict(os.environ,D2K_DIR=str(self.root),D2K_STUB_PATH=str(self.root/'bin'),FIXTURE=str(self.root),D2K_IP_PROBE_ATTEMPTS='1')
+        self.env=dict(os.environ,D2S_DIR=str(self.root),D2S_STUB_PATH=str(self.root/'bin'),FIXTURE=str(self.root),D2S_IP_PROBE_ATTEMPTS='1')
         ndmc='''#!/usr/bin/python3
 import os,sys
 from pathlib import Path
@@ -28,11 +28,11 @@ elif command.startswith('no ip host '):
 else: sys.exit(2)
 '''
         probe='#!/bin/sh\n[ "${FAIL_CERT:-0}" != 1 ]\n'
-        for name,text in [('ndmc',ndmc),('d2ktg',probe)]:
+        for name,text in [('ndmc',ndmc),('d2stg',probe)]:
             p=self.root/'bin'/name;p.write_text(text);p.chmod(0o755)
     def tearDown(self): self.tmp.cleanup()
     def call(self,command='refresh',**env):
-        return subprocess.run(['sh',str(work/'d2k-whatsapp-media.sh'),command],env=dict(self.env,**env),capture_output=True,text=True)
+        return subprocess.run(['sh',str(work/'d2s-whatsapp-media.sh'),command],env=dict(self.env,**env),capture_output=True,text=True)
     def test_add_idempotence_and_exact_removal(self):
         before=(self.root/'ndm').read_text()
         p=self.call();self.assertEqual(p.returncode,0,p.stderr)

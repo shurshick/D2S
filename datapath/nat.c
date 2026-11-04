@@ -1,4 +1,4 @@
-/* nat.c — контракт и все обоснования в d2k_nat.h.
+/* nat.c — контракт и все обоснования в d2s_nat.h.
  *
  * Разбор текстовый и намеренно грубый: строка conntrack — это набор полей
  * `ключ=значение` через пробел, и ПОРЯДОК полей в ней зависит от версии ядра
@@ -13,8 +13,8 @@
 #include <string.h>
 #include <arpa/inet.h>
 
-#include "d2k_nat.h"
-d2k_nat_family_fn d2k_nat_family_hook = d2k_nat_outside_family;
+#include "d2s_nat.h"
+d2s_nat_family_fn d2s_nat_family_hook = d2s_nat_outside_family;
 
 /* "192.168.1.117" -> адрес в сетевом порядке. 0 — не разобралось. */
 static int parse_ip4(const char *s, uint32_t *out) {
@@ -62,13 +62,13 @@ static char *field_after(char *s, const char *name, char **next) {
     return NULL;
 }
 
-d2k_nat_fn d2k_nat_hook = d2k_nat_outside;
+d2s_nat_fn d2s_nat_hook = d2s_nat_outside;
 
-int d2k_nat_outside(const char *path, uint8_t proto,
+int d2s_nat_outside(const char *path, uint8_t proto,
                     uint32_t src_ip, uint16_t src_port,
                     uint32_t dst_ip, uint16_t dst_port,
                     uint32_t *out_src, uint16_t *out_sport) {
-    return d2k_nat_outside_family(path, proto, (const uint8_t *)&src_ip, src_port,
+    return d2s_nat_outside_family(path, proto, (const uint8_t *)&src_ip, src_port,
         (const uint8_t *)&dst_ip, dst_port, 4, (uint8_t *)out_src, out_sport);
 }
 
@@ -81,7 +81,7 @@ static int parse_address(const char *text, uint8_t family, uint8_t out[16]) {
     return 0;
 }
 
-int d2k_nat_outside_family(const char *path, uint8_t proto,
+int d2s_nat_outside_family(const char *path, uint8_t proto,
     const uint8_t *src_ip, uint16_t src_port, const uint8_t *dst_ip, uint16_t dst_port,
     uint8_t family, uint8_t *out_src, uint16_t *out_sport) {
     if (!path || !src_ip || !dst_ip || !out_src || !out_sport ||

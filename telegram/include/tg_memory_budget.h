@@ -1,5 +1,5 @@
-#ifndef D2K_TG_MEMORY_BUDGET_H
-#define D2K_TG_MEMORY_BUDGET_H
+#ifndef D2S_TG_MEMORY_BUDGET_H
+#define D2S_TG_MEMORY_BUDGET_H
 
 #include <stddef.h>
 

@@ -2,22 +2,22 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "d2k_udp_release.h"
-#include "d2k_nl.h"
-#include "d2k_packet.h"
+#include "d2s_udp_release.h"
+#include "d2s_nl.h"
+#include "d2s_packet.h"
 
 typedef struct {
     int used;
     uint64_t due_ns;
     uint64_t seq;
     uint64_t token;
-    d2k_key key;
+    d2s_key key;
     size_t count;
     uint32_t *ids;
     uint32_t *verdicts;
 } release_slot;
 
-struct d2k_udp_release {
+struct d2s_udp_release {
     size_t slots;
     size_t batch_size;
     uint64_t next_seq;
@@ -26,12 +26,12 @@ struct d2k_udp_release {
     uint32_t *verdicts;
 };
 
-d2k_udp_release *d2k_udp_release_new(size_t slots, size_t batch_size) {
+d2s_udp_release *d2s_udp_release_new(size_t slots, size_t batch_size) {
     if (slots == 0 || batch_size == 0 ||
         slots > (size_t)-1 / batch_size) {
         return NULL;
     }
-    d2k_udp_release *q = calloc(1, sizeof *q);
+    d2s_udp_release *q = calloc(1, sizeof *q);
     if (!q) return NULL;
     size_t n = slots * batch_size;
     q->slots = slots;
@@ -40,7 +40,7 @@ d2k_udp_release *d2k_udp_release_new(size_t slots, size_t batch_size) {
     q->ids = calloc(n, sizeof *q->ids);
     q->verdicts = calloc(n, sizeof *q->verdicts);
     if (!q->slot || !q->ids || !q->verdicts) {
-        d2k_udp_release_free(q);
+        d2s_udp_release_free(q);
         return NULL;
     }
     for (size_t i = 0; i < slots; i++) {
@@ -50,7 +50,7 @@ d2k_udp_release *d2k_udp_release_new(size_t slots, size_t batch_size) {
     return q;
 }
 
-void d2k_udp_release_free(d2k_udp_release *q) {
+void d2s_udp_release_free(d2s_udp_release *q) {
     if (!q) return;
     free(q->verdicts);
     free(q->ids);
@@ -58,9 +58,9 @@ void d2k_udp_release_free(d2k_udp_release *q) {
     free(q);
 }
 
-int d2k_udp_release_enqueue(d2k_udp_release *q, uint64_t due_ns,
+int d2s_udp_release_enqueue(d2s_udp_release *q, uint64_t due_ns,
                             const uint32_t *ids, const uint32_t *verdicts,
-                            size_t count, const d2k_key *key, uint64_t token) {
+                            size_t count, const d2s_key *key, uint64_t token) {
     if (!q || !ids || !verdicts || !key || count == 0 || count > q->batch_size) {
         return -1;
     }
@@ -80,7 +80,7 @@ int d2k_udp_release_enqueue(d2k_udp_release *q, uint64_t due_ns,
     return 0;
 }
 
-static release_slot *next_due(d2k_udp_release *q, uint64_t now_ns) {
+static release_slot *next_due(d2s_udp_release *q, uint64_t now_ns) {
     release_slot *best = NULL;
     for (size_t i = 0; i < q->slots; i++) {
         release_slot *s = &q->slot[i];
@@ -93,8 +93,8 @@ static release_slot *next_due(d2k_udp_release *q, uint64_t now_ns) {
     return best;
 }
 
-size_t d2k_udp_release_flush(d2k_udp_release *q, uint64_t now_ns,
-                             d2k_udp_release_send send, d2k_udp_release_done done,
+size_t d2s_udp_release_flush(d2s_udp_release *q, uint64_t now_ns,
+                             d2s_udp_release_send send, d2s_udp_release_done done,
                              void *ctx) {
     size_t released = 0;
     if (!q) return 0;
@@ -103,7 +103,7 @@ size_t d2k_udp_release_flush(d2k_udp_release *q, uint64_t now_ns,
         if (!s) break;
         int complete = 1;
         uint64_t token = s->token;
-        d2k_key key = s->key;
+        d2s_key key = s->key;
         size_t count = s->count;
         size_t sent = 0;
         for (size_t i = 0; i < count; i++) {
@@ -121,7 +121,7 @@ size_t d2k_udp_release_flush(d2k_udp_release *q, uint64_t now_ns,
     return released;
 }
 
-uint64_t d2k_udp_release_next_ns(const d2k_udp_release *q) {
+uint64_t d2s_udp_release_next_ns(const d2s_udp_release *q) {
     uint64_t next = 0;
     if (!q) return 0;
     for (size_t i = 0; i < q->slots; i++) {
@@ -132,21 +132,21 @@ uint64_t d2k_udp_release_next_ns(const d2k_udp_release *q) {
     return next;
 }
 
-size_t d2k_udp_replay_fates(size_t count, uint32_t head_verdict, int owned,
+size_t d2s_udp_replay_fates(size_t count, uint32_t head_verdict, int owned,
                             int can_resend, uint32_t *verdicts, uint8_t *resend) {
     size_t again = 0;
     if (owned) { can_resend = 1; }
     for (size_t i = 0; i < count; i++) {
         if (i == 0) {
             /* An owned head already left as the plan's last emit. */
-            verdicts[i] = owned ? D2K_NF_DROP : head_verdict;
+            verdicts[i] = owned ? D2S_NF_DROP : head_verdict;
             resend[i] = 0;
         } else if (can_resend) {
-            verdicts[i] = D2K_NF_DROP;
+            verdicts[i] = D2S_NF_DROP;
             resend[i] = 1;
             again++;
         } else {
-            verdicts[i] = D2K_NF_ACCEPT;
+            verdicts[i] = D2S_NF_ACCEPT;
             resend[i] = 0;
         }
     }
@@ -164,13 +164,13 @@ typedef struct {
    it emits it), -1 — not sent (its copy is ACCEPTed here). */
 typedef int (*resend_id_fn)(void *ctx, const uint8_t *pkt, size_t len, uint32_t id);
 
-static size_t release_batch(const d2k_udp_hold_batch *b, uint32_t head_verdict,
+static size_t release_batch(const d2s_udp_hold_batch *b, uint32_t head_verdict,
                             int owned, int can_resend, const uint8_t *may,
                             const defer_op *defer,
-                            d2k_udp_release_send verdict, resend_id_fn resend,
+                            d2s_udp_release_send verdict, resend_id_fn resend,
                             void *ctx, int *verdict_failed, size_t *resend_failed);
 
-typedef struct { d2k_udp_release_send verdict; d2k_udp_resend resend; void *ctx; } plain_ctx;
+typedef struct { d2s_udp_release_send verdict; d2s_udp_resend resend; void *ctx; } plain_ctx;
 static int plain_verdict(void *ctx, uint32_t id, uint32_t v) {
     plain_ctx *p = ctx;
     return p->verdict(p->ctx, id, v);
@@ -181,9 +181,9 @@ static int plain_resend(void *ctx, const uint8_t *pkt, size_t len, uint32_t id) 
     return p->resend(p->ctx, pkt, len) == 0 ? 0 : -1;
 }
 
-size_t d2k_udp_release_batch(const d2k_udp_hold_batch *b, uint32_t head_verdict,
+size_t d2s_udp_release_batch(const d2s_udp_hold_batch *b, uint32_t head_verdict,
                              int owned, int can_resend,
-                             d2k_udp_release_send verdict, d2k_udp_resend resend,
+                             d2s_udp_release_send verdict, d2s_udp_resend resend,
                              void *ctx, int *verdict_failed, size_t *resend_failed) {
     plain_ctx p = {verdict, resend, ctx};
     return release_batch(b, head_verdict, owned, can_resend, NULL, NULL,
@@ -191,36 +191,36 @@ size_t d2k_udp_release_batch(const d2k_udp_hold_batch *b, uint32_t head_verdict,
                          &p, verdict_failed, resend_failed);
 }
 
-static size_t release_batch(const d2k_udp_hold_batch *b, uint32_t head_verdict,
+static size_t release_batch(const d2s_udp_hold_batch *b, uint32_t head_verdict,
                             int owned, int can_resend, const uint8_t *may,
                             const defer_op *defer,
-                            d2k_udp_release_send verdict, resend_id_fn resend,
+                            d2s_udp_release_send verdict, resend_id_fn resend,
                             void *ctx, int *verdict_failed, size_t *resend_failed) {
-    uint32_t v[D2K_UDP_HOLD_PACKETS];
-    uint8_t again[D2K_UDP_HOLD_PACKETS];
+    uint32_t v[D2S_UDP_HOLD_PACKETS];
+    uint8_t again[D2S_UDP_HOLD_PACKETS];
     size_t resent = 0, fell_back = 0;
     int vfail = 0;
-    if (!b || !verdict || b->count == 0 || b->count > D2K_UDP_HOLD_PACKETS) {
+    if (!b || !verdict || b->count == 0 || b->count > D2S_UDP_HOLD_PACKETS) {
         if (verdict_failed) { *verdict_failed = b && b->count ? 1 : 0; }
         if (resend_failed) { *resend_failed = 0; }
         return 0;
     }
     if (!resend) { can_resend = 0; owned = 0; }
-    (void)d2k_udp_replay_fates(b->count, head_verdict, owned, can_resend, v, again);
+    (void)d2s_udp_replay_fates(b->count, head_verdict, owned, can_resend, v, again);
     for (size_t i = 0; i < b->count; i++) {
         if (again[i] && vfail && !owned) {
             /* The head's verdict did not reach the kernel: it is still queued
                and its entry unconfirmed.  A raw tail now would overtake it
                and create the entry itself (review M2). */
             again[i] = 0;
-            v[i] = D2K_NF_ACCEPT;
+            v[i] = D2S_NF_ACCEPT;
             fell_back++;
         }
         if (again[i] && may && !may[i]) {
             /* Marked client: its policy route must hold; the kernel path —
                but never ahead of a deferred head (rereview4 I3). */
             again[i] = 0;
-            v[i] = D2K_NF_ACCEPT;
+            v[i] = D2S_NF_ACCEPT;
             if (defer && defer->fn) {
                 if (defer->fn(defer->ctx, defer->at_ns, b->ids[i], v[i]) != 0) { vfail = 1; }
                 continue;
@@ -235,7 +235,7 @@ static size_t release_batch(const d2k_udp_hold_batch *b, uint32_t head_verdict,
             if (rr == 0) {
                 resent++;
             } else {
-                v[i] = D2K_NF_ACCEPT;
+                v[i] = D2S_NF_ACCEPT;
                 fell_back++;
             }
         }
@@ -258,8 +258,8 @@ typedef struct {
     uint8_t ports[4];
 } follow_entry;
 
-struct d2k_udp_follow {
-    follow_entry e[D2K_UDP_FOLLOW_SLOTS];
+struct d2s_udp_follow {
+    follow_entry e[D2S_UDP_FOLLOW_SLOTS];
     size_t live;         /* used entries: none -> no parse, no scan (M-5) */
     uint64_t busy;       /* re-sends refused by a full socket (M-3) */
     uint64_t queue_full; /* deferred re-sends refused by a full queue */
@@ -274,35 +274,35 @@ static int follow_stale(const follow_entry *e, uint64_t now_ns, uint64_t seq) {
     return e->seq == 0 || (seq != 0 && e->seq < seq);
 }
 
-static void follow_drop(d2k_udp_follow *f, follow_entry *e) {
+static void follow_drop(d2s_udp_follow *f, follow_entry *e) {
     e->used = 0;
     if (f->live) { f->live--; }
 }
 
-void d2k_udp_follow_age(d2k_udp_follow *f, uint64_t now_ns, uint64_t seq) {
+void d2s_udp_follow_age(d2s_udp_follow *f, uint64_t now_ns, uint64_t seq) {
     if (!f) { return; }
-    for (size_t i = 0; i < D2K_UDP_FOLLOW_SLOTS && f->live; i++) {
+    for (size_t i = 0; i < D2S_UDP_FOLLOW_SLOTS && f->live; i++) {
         if (f->e[i].used && follow_stale(&f->e[i], now_ns, seq)) { follow_drop(f, &f->e[i]); }
     }
 }
 
-size_t d2k_udp_follow_live(const d2k_udp_follow *f) { return f ? f->live : 0; }
-uint64_t d2k_udp_follow_busy(const d2k_udp_follow *f) { return f ? f->busy : 0; }
-uint64_t d2k_udp_follow_queue_full(const d2k_udp_follow *f) { return f ? f->queue_full : 0; }
-uint64_t d2k_udp_follow_refused(const d2k_udp_follow *f) { return f ? f->refused : 0; }
+size_t d2s_udp_follow_live(const d2s_udp_follow *f) { return f ? f->live : 0; }
+uint64_t d2s_udp_follow_busy(const d2s_udp_follow *f) { return f ? f->busy : 0; }
+uint64_t d2s_udp_follow_queue_full(const d2s_udp_follow *f) { return f ? f->queue_full : 0; }
+uint64_t d2s_udp_follow_refused(const d2s_udp_follow *f) { return f ? f->refused : 0; }
 
-int d2k_udp_send_busy(int err) {
+int d2s_udp_send_busy(int err) {
     return err == EAGAIN || err == EWOULDBLOCK || err == ENOBUFS;
 }
 
-d2k_udp_follow *d2k_udp_follow_new(void) { return calloc(1, sizeof(d2k_udp_follow)); }
+d2s_udp_follow *d2s_udp_follow_new(void) { return calloc(1, sizeof(d2s_udp_follow)); }
 
-void d2k_udp_follow_free(d2k_udp_follow *f) { free(f); }
+void d2s_udp_follow_free(d2s_udp_follow *f) { free(f); }
 
 static int follow_tuple(const uint8_t *pkt, size_t len, follow_entry *out) {
-    d2k_packet_view v;
-    if (!d2k_packet_parse(pkt, len, &v) || v.protocol != 17) { return -1; }
-    /* d2k_packet_parse refuses later fragments; the first one still parses.
+    d2s_packet_view v;
+    if (!d2s_packet_parse(pkt, len, &v) || v.protocol != 17) { return -1; }
+    /* d2s_packet_parse refuses later fragments; the first one still parses.
        Neither is a whole datagram to re-send. */
     if (v.family == 4 && (v.fragment & 0x2000u)) { return -1; }
     /* Broadcast and multicast are never followed: a raw socket may not send
@@ -323,25 +323,25 @@ static int same_tuple(const follow_entry *a, const follow_entry *b) {
            !memcmp(a->dst, b->dst, sizeof a->dst) && !memcmp(a->ports, b->ports, 4);
 }
 
-static follow_entry *follow_put(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
+static follow_entry *follow_put(d2s_udp_follow *f, const uint8_t *pkt, size_t len,
                                 uint64_t now_ns, uint64_t at_ns, uint64_t seq);
 
-int d2k_udp_follow_mark(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
+int d2s_udp_follow_mark(d2s_udp_follow *f, const uint8_t *pkt, size_t len,
                         uint64_t now_ns, uint64_t at_ns, uint64_t seq) {
     return follow_put(f, pkt, len, now_ns, at_ns, seq) ? 0 : -1;
 }
 
-static follow_entry *follow_put(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
+static follow_entry *follow_put(d2s_udp_follow *f, const uint8_t *pkt, size_t len,
                                 uint64_t now_ns, uint64_t at_ns, uint64_t seq) {
     follow_entry t;
     if (!f || follow_tuple(pkt, len, &t) != 0) { return NULL; }
     uint64_t out = at_ns > now_ns ? at_ns : now_ns;
-    t.until_ns = out + D2K_UDP_FOLLOW_NS;
+    t.until_ns = out + D2S_UDP_FOLLOW_NS;
     t.at_ns = at_ns > now_ns ? at_ns : 0;
     t.seq = seq;
     t.used = 1;
     follow_entry *slot = NULL, *spare = NULL;
-    for (size_t i = 0; i < D2K_UDP_FOLLOW_SLOTS && !slot; i++) {
+    for (size_t i = 0; i < D2S_UDP_FOLLOW_SLOTS && !slot; i++) {
         follow_entry *e = &f->e[i];
         if (e->used && same_tuple(e, &t)) { slot = e; }
         else if (!spare || (spare->used && (!e->used || e->until_ns < spare->until_ns))) {
@@ -354,11 +354,11 @@ static follow_entry *follow_put(d2k_udp_follow *f, const uint8_t *pkt, size_t le
     return e;
 }
 
-static follow_entry *follow_find(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
+static follow_entry *follow_find(d2s_udp_follow *f, const uint8_t *pkt, size_t len,
                                  uint64_t now_ns, uint64_t seq) {
     follow_entry t;
     if (!f || !f->live || follow_tuple(pkt, len, &t) != 0) { return NULL; }
-    for (size_t i = 0; i < D2K_UDP_FOLLOW_SLOTS && f->live; i++) {
+    for (size_t i = 0; i < D2S_UDP_FOLLOW_SLOTS && f->live; i++) {
         follow_entry *e = &f->e[i];
         if (!e->used) { continue; }
         /* Cheap fields first; a stale entry is expired on the way. */
@@ -369,7 +369,7 @@ static follow_entry *follow_find(d2k_udp_follow *f, const uint8_t *pkt, size_t l
     return NULL;
 }
 
-int d2k_udp_follow_match(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
+int d2s_udp_follow_match(d2s_udp_follow *f, const uint8_t *pkt, size_t len,
                          uint64_t now_ns, uint64_t seq, uint64_t *at_ns) {
     const follow_entry *e = follow_find(f, pkt, len, now_ns, seq);
     if (!e) { return 0; }
@@ -378,7 +378,7 @@ int d2k_udp_follow_match(d2k_udp_follow *f, const uint8_t *pkt, size_t len,
 }
 
 typedef struct {
-    const d2k_udp_out *o;
+    const d2s_udp_out *o;
     uint64_t at, now;
     const uint8_t *failed_pkt;   /* first refused re-send */
     size_t failed_len;
@@ -402,7 +402,7 @@ static int out_resend(void *ctx, const uint8_t *pkt, size_t len, uint32_t id) {
     if (rc != 0 && errno == ENOSPC) {
         /* The deferred queue is full: this copy goes to the kernel now. */
         if (c->o->follow) { c->o->follow->queue_full++; }
-    } else if (rc != 0 && d2k_udp_send_busy(errno)) {
+    } else if (rc != 0 && d2s_udp_send_busy(errno)) {
         /* A full socket (M-3): this copy goes to the kernel, the flow is not
            given up and no line is written — only counted. */
         if (c->o->follow) { c->o->follow->busy++; }
@@ -414,17 +414,17 @@ static int out_resend(void *ctx, const uint8_t *pkt, size_t len, uint32_t id) {
     return rc != 0 ? -1 : taken ? 1 : 0;
 }
 
-int d2k_udp_out_owned_emit(const d2k_udp_out *o, uint32_t id, int err) {
+int d2s_udp_out_owned_emit(const d2s_udp_out *o, uint32_t id, int err) {
     if (!o || !o->verdict) { return -1; }
-    if (err && d2k_udp_send_busy(err) && o->follow) { o->follow->busy++; }
-    return o->verdict(o->ctx, id, err ? D2K_NF_ACCEPT : D2K_NF_DROP) != 0 ? -1 : 0;
+    if (err && d2s_udp_send_busy(err) && o->follow) { o->follow->busy++; }
+    return o->verdict(o->ctx, id, err ? D2S_NF_ACCEPT : D2S_NF_DROP) != 0 ? -1 : 0;
 }
 
-/* One refused flow: counted always, told for the first D2K_UDP_REFUSED_LOG
+/* One refused flow: counted always, told for the first D2S_UDP_REFUSED_LOG
    only (M-7: a refused destination class must not drown the log). */
-static void refused_flow(const d2k_udp_out *o, const uint8_t *pkt, size_t len, int err) {
+static void refused_flow(const d2s_udp_out *o, const uint8_t *pkt, size_t len, int err) {
     uint64_t nth = o->follow ? ++o->follow->refused : 1;
-    if (o->resend_failed && nth <= D2K_UDP_REFUSED_LOG) {
+    if (o->resend_failed && nth <= D2S_UDP_REFUSED_LOG) {
         o->resend_failed(o->ctx, pkt, len, err);
     }
 }
@@ -434,23 +434,23 @@ static int out_verdict(void *ctx, uint32_t id, uint32_t verdict) {
     return c->o->verdict(c->o->ctx, id, verdict);
 }
 
-int d2k_udp_out_neutral(const d2k_udp_out *o, uint32_t mark, uint8_t ipver) {
+int d2s_udp_out_neutral(const d2s_udp_out *o, uint32_t mark, uint8_t ipver) {
     if (mark == 0 || (o && o->neutral_mark && mark == o->neutral_mark)) { return 1; }
     return o && o->routed && !o->routed(o->routes, ipver, mark);
 }
 
-int d2k_udp_out_batch(const d2k_udp_out *o, const d2k_udp_hold_batch *b,
+int d2s_udp_out_batch(const d2s_udp_out *o, const d2s_udp_hold_batch *b,
                       uint32_t head_verdict, int owned,
                       uint64_t at_ns, uint64_t now_ns, uint64_t seq) {
-    if (!o || !o->verdict || !b || !b->count || b->count > D2K_UDP_HOLD_PACKETS) { return 0; }
+    if (!o || !o->verdict || !b || !b->count || b->count > D2S_UDP_HOLD_PACKETS) { return 0; }
     out_tail c = {o, at_ns, now_ns, NULL, 0, 0};
     int can = o->can_resend && o->send_now;
     int vfail = 0;
     size_t rfail = 0;
-    uint8_t may[D2K_UDP_HOLD_PACKETS];
+    uint8_t may[D2S_UDP_HOLD_PACKETS];
     int marked_tail = 0;
     for (size_t i = 0; i < b->count; i++) {
-        may[i] = (uint8_t)d2k_udp_out_neutral(o, b->marks[i], (uint8_t)(b->packets[i][0] >> 4));
+        may[i] = (uint8_t)d2s_udp_out_neutral(o, b->marks[i], (uint8_t)(b->packets[i][0] >> 4));
         if (i > 0 && !may[i]) { marked_tail = 1; }
     }
     defer_op d = {o->defer_verdict, o->ctx, at_ns};
@@ -472,19 +472,19 @@ int d2k_udp_out_batch(const d2k_udp_out *o, const d2k_udp_hold_batch *b,
     return vfail;
 }
 
-int d2k_udp_out_late(const d2k_udp_out *o, uint32_t id, const uint8_t *pkt,
+int d2s_udp_out_late(const d2s_udp_out *o, uint32_t id, const uint8_t *pkt,
                      size_t len, uint32_t mark, uint64_t now_ns, uint64_t seq,
                      int *verdict_failed) {
     if (!o || !o->verdict || !o->can_resend || !o->send_now || !o->follow) { return 0; }
     follow_entry *e = follow_find(o->follow, pkt, len, now_ns, seq);
     if (!e || e->failed) { return 0; }   /* refused before: the kernel path */
-    if (!d2k_udp_out_neutral(o, mark, (uint8_t)(pkt[0] >> 4))) {
+    if (!d2s_udp_out_neutral(o, mark, (uint8_t)(pkt[0] >> 4))) {
         if (!e->noted && o->marked) { o->marked(o->ctx, pkt, len, mark); }
         e->noted = 1;
         if (e->at_ns && o->defer_verdict) {
             /* Behind a deferred planned head: ACCEPT, but not before it
                leaves (rereview4 I3). */
-            int rc = o->defer_verdict(o->ctx, e->at_ns, id, D2K_NF_ACCEPT);
+            int rc = o->defer_verdict(o->ctx, e->at_ns, id, D2S_NF_ACCEPT);
             if (verdict_failed) { *verdict_failed = rc != 0; }
             return 1;
         }
@@ -498,7 +498,7 @@ int d2k_udp_out_late(const d2k_udp_out *o, uint32_t id, const uint8_t *pkt,
         if (verdict_failed) { *verdict_failed = 0; }
         return 1;     /* owned by the deferred queue: its verdict comes then */
     }
-    uint32_t v = rr == 0 ? D2K_NF_DROP : D2K_NF_ACCEPT;
+    uint32_t v = rr == 0 ? D2S_NF_DROP : D2S_NF_ACCEPT;
     if (c.failed_pkt) {
         e->failed = 1;
         refused_flow(o, pkt, len, c.failed_err);

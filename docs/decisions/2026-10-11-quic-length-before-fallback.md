@@ -12,7 +12,7 @@ QUIC-остатка и не подтверждение открытия целе
 перед перебором нельзя: версия, порт и бит заголовка не становятся автоматически
 применимым к чужому потоку решением.
 
-Теперь `d2k_quic_strategy_arms` задаёт один независимый вопрос после
+Теперь `d2s_quic_strategy_arms` задаёт один независимый вопрос после
 benign16/разреза CRYPTO и до фрагментации/лестницы: неизменённый Initial с
 100 нулевыми байтами после него. Приоритет существующего TTL3-вопроса для
 пост-рукопожатного обрыва сохранён. Это UDP trailing bytes, **не** TLS padding
@@ -35,7 +35,7 @@ UNKNOWN/incomplete. Диагностический хвост не повтор�
 
 ## Один исполнитель и точность журнала
 
-`d2k_quic_question_plan` компилирует вопрос. Его используют фильтрующий
+`d2s_quic_question_plan` компилирует вопрос. Его используют фильтрующий
 отправитель и `qp_arm_first_send` полного QUIC-клиента. Экспортированный arm
 проходит через тот же compiler → PlanApply → UDP wire. Второго сборщика нет.
 Недопустимые комбинации length + fake/split отвергаются компилятором.
@@ -57,35 +57,35 @@ Linux/NFQUEUE-провода, где контекст и входы могут �
 ## Воспроизведение и проверки
 
 - Новый `test_quic_strategy` до правки: 12 CHECK, make exit 2,
-  `/tmp/d2k-quic-length-red.log`. Вопрос не мог остановить лестницу.
+  `/tmp/d2s-quic-length-red.log`. Вопрос не мог остановить лестницу.
 - Отдельная свежая компиляция `quicarms.c` из `c72bd5f` с текущим
   регрессом: compile exit 0, test exit 1,
-  `/tmp/d2k-quic-length-baseline.log`. Старые объектники не использованы;
+  `/tmp/d2s-quic-length-baseline.log`. Старые объектники не использованы;
   рабочие файлы не откатывались.
 - Регресс пути `test_sched_summary`: 3 CHECK, make exit 2,
-  `/tmp/d2k-quic-length-summary-red.log`; после metadata-правки exit 0.
+  `/tmp/d2s-quic-length-summary-red.log`; после metadata-правки exit 0.
 - Ревью обнаружило сброс incomplete в старой ветке `both_no`. Добавленные
   проверки mixed/local-error/NOT_RUN дали 3 CHECK, make exit 2,
-  `/tmp/d2k-quic-length-incomplete-red.log`; после сохранения UNKNOWN прошли.
+  `/tmp/d2s-quic-length-incomplete-red.log`; после сохранения UNKNOWN прошли.
 - `test-quic-strategy test-quic-run-order test-udp-runtime test-quic-sink
-  test-sched-summary`: exit 0, `/tmp/d2k-quic-length-final-targeted.log`.
+  test-sched-summary`: exit 0, `/tmp/d2s-quic-length-final-targeted.log`.
 - Runtime gate: 136 full-packet cases, 20 distinct actual questions, 0 failures.
   `core/test_udp_runtime --diverge`: exit 1, 136 failures; намеренное
-  расхождение действительно отвергается (`/tmp/d2k-quic-length-diverge.log`).
+  расхождение действительно отвергается (`/tmp/d2s-quic-length-diverge.log`).
 
 Полные проверки на финальном коде:
 
-- `make -C core check` — exit 0, `/tmp/d2k-quic-length-core-check.log`;
+- `make -C core check` — exit 0, `/tmp/d2s-quic-length-core-check.log`;
   включает release arm64+mipsel в отдельном временном каталоге.
-- `make -C detect check` — exit 0, `/tmp/d2k-quic-length-detect-check.log`.
-- `make -C datapath check` — exit 0, `/tmp/d2k-quic-length-datapath-check.log`.
-- `make -C core san-udp-runtime` — exit 0, `/tmp/d2k-quic-length-san.log`;
+- `make -C detect check` — exit 0, `/tmp/d2s-quic-length-detect-check.log`.
+- `make -C datapath check` — exit 0, `/tmp/d2s-quic-length-datapath-check.log`.
+- `make -C core san-udp-runtime` — exit 0, `/tmp/d2s-quic-length-san.log`;
   включает actual QUIC sink и HTTP runtime с ASan/UBSan.
 - `git diff --check` — exit 0.
 
 Ревью было read-only; единственное существенное замечание о сбросе
 incomplete закрыто красным→зелёным регрессом. Бинарники владельца
-`builds/d2kc-linux-arm64` и `builds/d2kd-linux-arm64` не менялись и не
+`builds/d2sc-linux-arm64` и `builds/d2sd-linux-arm64` не менялись и не
 включены в коммит. После коммита dirty должны остаться только они.
 
 ## Поле и следующий шаг

@@ -2,7 +2,7 @@
 #define _DARWIN_C_SOURCE
 #endif
 #include "server.h"
-#include "../runtime/d2k_diagnostics_files.h"
+#include "../runtime/d2s_diagnostics_files.h"
 
 #include <errno.h>
 #include <ctype.h>
@@ -25,14 +25,14 @@
 #define REQUEST_MAX (32u * 1024u)
 #define BODY_MAX (1024u * 1024u)
 #define TELEGRAM_STATS_MAX 131072u
-#ifndef D2K_PANEL_HEADER_TIMEOUT_MS
-#define D2K_PANEL_HEADER_TIMEOUT_MS 5000
+#ifndef D2S_PANEL_HEADER_TIMEOUT_MS
+#define D2S_PANEL_HEADER_TIMEOUT_MS 5000
 #endif
-#ifndef D2K_PANEL_RESPONSE_TIMEOUT_MS
-#define D2K_PANEL_RESPONSE_TIMEOUT_MS 5000
+#ifndef D2S_PANEL_RESPONSE_TIMEOUT_MS
+#define D2S_PANEL_RESPONSE_TIMEOUT_MS 5000
 #endif
-#ifndef D2K_PANEL_ACTION_TIMEOUT_MS
-#define D2K_PANEL_ACTION_TIMEOUT_MS 60000
+#ifndef D2S_PANEL_ACTION_TIMEOUT_MS
+#define D2S_PANEL_ACTION_TIMEOUT_MS 60000
 #endif
 
 static pid_t action_pid;
@@ -44,7 +44,7 @@ static long long monotonic_ms(void) {
     return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
-void d2k_panel_control_tick(void) {
+void d2s_panel_control_tick(void) {
     if (!action_pid) return;
     int status;
     pid_t r = waitpid(action_pid, &status, WNOHANG);
@@ -55,7 +55,7 @@ void d2k_panel_control_tick(void) {
         WEXITSTATUS(status) == 0 ? "done" : "failed";
 }
 
-int d2k_panel_ignore_sigpipe(void) {
+int d2s_panel_ignore_sigpipe(void) {
     struct sigaction action;
     memset(&action, 0, sizeof action);
     action.sa_handler = SIG_IGN;
@@ -230,11 +230,11 @@ static int pid_path_running(const char *path, time_t *started_at) {
     return running;
 }
 
-static int engine_pid_running(const d2k_panel_config *cfg, time_t *started_at) {
+static int engine_pid_running(const d2s_panel_config *cfg, time_t *started_at) {
     return pid_path_running(cfg ? cfg->engine_pid_path : NULL, started_at);
 }
 
-static int controller_pid_running(const d2k_panel_config *cfg) {
+static int controller_pid_running(const d2s_panel_config *cfg) {
     return pid_path_running(cfg ? cfg->controller_pid_path : NULL, NULL);
 }
 
@@ -275,7 +275,7 @@ static int response_ex(int fd, int code, const char *reason, const char *type,
     int flags = fcntl(fd, F_GETFL);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) { return -1; }
     /* One deadline covers headers and body, including repeated partial writes. */
-    const long long deadline = monotonic_ms() + D2K_PANEL_RESPONSE_TIMEOUT_MS;
+    const long long deadline = monotonic_ms() + D2S_PANEL_RESPONSE_TIMEOUT_MS;
     int rc = write_all(fd, hdr, (size_t)n, deadline);
     if (rc == 0 && len) { rc = write_all(fd, body, len, deadline); }
     int saved_errno = errno;
@@ -313,7 +313,7 @@ static int header_value(const char *req, const char *wanted,
     return 0;
 }
 
-int d2k_panel_same_origin(const char *req) {
+int d2s_panel_same_origin(const char *req) {
   const char *host = NULL, *origin = NULL;
   size_t host_len = 0, origin_len = 0;
   if (!header_value(req, "Host", &host, &host_len) ||
@@ -326,9 +326,9 @@ int d2k_panel_same_origin(const char *req) {
   return host_len == authority_len && memcmp(host, authority, host_len) == 0;
 }
 
-static int run_service_action(const d2k_panel_config *cfg, const char *action, int client) {
+static int run_service_action(const d2s_panel_config *cfg, const char *action, int client) {
     if (!cfg || !cfg->service_path || !cfg->service_path[0]) { return -1; }
-    d2k_panel_control_tick();
+    d2s_panel_control_tick();
     if (action_pid) return 1;
     pid_t pid = fork();
     if (pid < 0) { return -1; }
@@ -344,7 +344,7 @@ static int run_service_action(const d2k_panel_config *cfg, const char *action, i
             _exit(127);
         }
         (void)setpgid(worker, worker);
-        long long deadline = monotonic_ms() + D2K_PANEL_ACTION_TIMEOUT_MS;
+        long long deadline = monotonic_ms() + D2S_PANEL_ACTION_TIMEOUT_MS;
         int status = 0, timed_out = 0;
         for (;;) {
             pid_t r = waitpid(worker, &status, WNOHANG);
@@ -373,7 +373,7 @@ static int run_service_action(const d2k_panel_config *cfg, const char *action, i
     return 0;
 }
 
-static void telegram_config_flags(const d2k_panel_config *cfg,int *enabled,int *configured) {
+static void telegram_config_flags(const d2s_panel_config *cfg,int *enabled,int *configured) {
     *enabled=0;*configured=0;
     if(!cfg||!cfg->config_path)return;
     FILE *f=fopen(cfg->config_path,"r");if(!f)return;
@@ -402,7 +402,7 @@ static void telegram_config_flags(const d2k_panel_config *cfg,int *enabled,int *
     fclose(f);*configured=mode_valid&&mode_seen&&local_mode;
 }
 
-static void telegram_status_value(const d2k_panel_config *cfg,int enabled,int configured,int *running,char out[24]) {
+static void telegram_status_value(const d2s_panel_config *cfg,int enabled,int configured,int *running,char out[24]) {
     *running=cfg&&cfg->telegram_pid_path?pid_path_running(cfg->telegram_pid_path,NULL):0;
     const char *fallback=!configured?"not_configured":(!enabled||!*running?"stopped":"connecting");
     if(!configured||!enabled||!*running){snprintf(out,24,"%s",fallback);return;}
@@ -442,7 +442,7 @@ static int telegram_stats_optional_number(const char *json, const char *key,
     return telegram_stats_number(json, key, out);
 }
 
-static void telegram_stats_value(const d2k_panel_config *cfg,
+static void telegram_stats_value(const d2s_panel_config *cfg,
                                  char out[TELEGRAM_STATS_MAX]) {
     snprintf(out, TELEGRAM_STATS_MAX, "null");
     if (!cfg || !cfg->telegram_stats_path) return;
@@ -801,7 +801,7 @@ static int worker_request_body(int fd, const char *req, size_t used,
     size_t received = used > offset ? used - offset : 0;
     if (received > expected) return -1;
     if (received) memcpy(body, req + offset, received);
-    long long deadline = monotonic_ms() + D2K_PANEL_HEADER_TIMEOUT_MS;
+    long long deadline = monotonic_ms() + D2S_PANEL_HEADER_TIMEOUT_MS;
     while (received < expected) {
         long long remaining = deadline - monotonic_ms();
         if (remaining <= 0) return -1;
@@ -819,7 +819,7 @@ static int worker_request_body(int fd, const char *req, size_t used,
     return 0;
 }
 
-static int api_telegram_workers(int fd, const d2k_panel_config *cfg,
+static int api_telegram_workers(int fd, const d2s_panel_config *cfg,
                                 const char *req, size_t used,
                                 const char *method) {
     static const char json_type[] = "application/json; charset=utf-8";
@@ -854,7 +854,7 @@ static int api_telegram_workers(int fd, const d2k_panel_config *cfg,
         static const char body[] = "{\"ok\":false,\"message\":\"Метод не поддерживается\"}";
         return response(fd, 405, "Method Not Allowed", json_type, body, sizeof body - 1);
     }
-    if (!cfg->control_enabled || !d2k_panel_same_origin(req)) {
+    if (!cfg->control_enabled || !d2s_panel_same_origin(req)) {
         static const char body[] = "{\"ok\":false,\"message\":\"Изменять настройки можно только с этой панели\"}";
         return response(fd, 403, "Forbidden", json_type, body, sizeof body - 1);
     }
@@ -872,7 +872,7 @@ static int api_telegram_workers(int fd, const d2k_panel_config *cfg,
         static const char body[] = "{\"ok\":false,\"message\":\"Проверьте домены: до 8 имён без URL и пути\"}";
         return response(fd, 400, "Bad Request", json_type, body, sizeof body - 1);
     }
-    d2k_panel_control_tick();
+    d2s_panel_control_tick();
     if (action_pid) {
         static const char body[] = "{\"ok\":false,\"message\":\"Дождитесь завершения текущей команды\"}";
         return response(fd, 409, "Conflict", json_type, body, sizeof body - 1);
@@ -892,7 +892,7 @@ static int api_telegram_workers(int fd, const d2k_panel_config *cfg,
     return response(fd, 202, "Accepted", json_type, body, sizeof body - 1);
 }
 
-static int api_control(int fd, const d2k_panel_config *cfg, const char *req,
+static int api_control(int fd, const d2s_panel_config *cfg, const char *req,
                        const char *path) {
     static const struct { const char *path; const char *command; const char *label; } actions[] = {
         { "/api/control/start", "engine-start", "Запуск движка" },
@@ -924,7 +924,7 @@ static int api_control(int fd, const d2k_panel_config *cfg, const char *req,
         return response(fd, 404, "Not Found", "application/json; charset=utf-8",
                         body, sizeof body - 1);
     }
-    if (!cfg || !cfg->control_enabled || !d2k_panel_same_origin(req)) {
+    if (!cfg || !cfg->control_enabled || !d2s_panel_same_origin(req)) {
       static const char body[] = "{\"ok\":false,\"message\":\"Управление "
                                  "разрешено только с этой панели\"}";
       return response(fd, 403, "Forbidden", "application/json; charset=utf-8",
@@ -975,9 +975,9 @@ static int api_control(int fd, const d2k_panel_config *cfg, const char *req,
     return response(fd, 202, "Accepted", "application/json; charset=utf-8", body, (size_t)n);
 }
 
-/* Состояние автообновления — файл d2k-update.sh, отдаётся как есть: его
+/* Состояние автообновления — файл d2s-update.sh, отдаётся как есть: его
    пишет только эта утилита, атомарно и целиком. */
-static int api_update(int fd, const d2k_panel_config *cfg) {
+static int api_update(int fd, const d2s_panel_config *cfg) {
     static const char json[] = "application/json; charset=utf-8";
     if (!cfg || !cfg->updater_path || access(cfg->updater_path, X_OK) != 0) {
         static const char body[] = "{\"absent\":true}";
@@ -1007,7 +1007,7 @@ static int api_update(int fd, const d2k_panel_config *cfg) {
 
 static int read_request(int fd, char *buf, size_t cap, size_t *used) {
     *used = 0;
-    const long long deadline = monotonic_ms() + D2K_PANEL_HEADER_TIMEOUT_MS;
+    const long long deadline = monotonic_ms() + D2S_PANEL_HEADER_TIMEOUT_MS;
     while (*used + 1 < cap) {
         long long remaining = deadline - monotonic_ms();
         if (remaining <= 0) { return -2; }
@@ -1162,7 +1162,7 @@ static void append_stage(panel_buf *b, const char *key, const char *title,
     buf_puts(b, "}");
 }
 
-static void append_snapshot(panel_buf *b, const d2k_panel_config *cfg,
+static void append_snapshot(panel_buf *b, const d2s_panel_config *cfg,
                             int linked, int have_catalog, int live_fresh,
                             int engine_running, int controller_running) {
     time_t now = time(NULL);
@@ -1176,8 +1176,8 @@ static void append_snapshot(panel_buf *b, const d2k_panel_config *cfg,
         strftime(started_iso, sizeof started_iso, "%Y-%m-%dT%H:%M:%SZ", &tmv);
     } else { snprintf(started_iso, sizeof started_iso, "0001-01-01T00:00:00Z"); }
     long long uptime = started > 0 && (long long)now > started ? (long long)now - started : 0;
-    const char *cfg_path = cfg && cfg->config_path ? cfg->config_path : "/opt/d2k/config";
-    const char *state_dir = cfg && cfg->state_dir ? cfg->state_dir : "/opt/d2k/state";
+    const char *cfg_path = cfg && cfg->config_path ? cfg->config_path : "/opt/d2s/config";
+    const char *state_dir = cfg && cfg->state_dir ? cfg->state_dir : "/opt/d2s/state";
     const char *state_note = cfg && cfg->state_dir_note ? cfg->state_dir_note : "неизвестно";
     const char *mode = cfg && cfg->mode ? cfg->mode : "observe";
     const char *panel_listen = cfg && cfg->panel_listen ? cfg->panel_listen : "127.0.0.1:8090";
@@ -1197,7 +1197,7 @@ static void append_snapshot(panel_buf *b, const d2k_panel_config *cfg,
     buf_json_string(b, mode);
     buf_puts(b, ",\"panel_listen\":"); buf_json_string(b, panel_listen);
     buf_printf(b, ",\"controls_enabled\":%s", cfg && cfg->control_enabled ? "true" : "false");
-    d2k_panel_control_tick();
+    d2s_panel_control_tick();
     buf_puts(b, ",\"control_state\":"); buf_json_string(b, action_state);
     buf_printf(b, ",\"catalog_available\":%s", have_catalog ? "true" : "false");
     buf_printf(b, ",\"live_fresh\":%s", live_fresh ? "true" : "false");
@@ -1246,7 +1246,7 @@ static void append_snapshot(panel_buf *b, const d2k_panel_config *cfg,
     buf_puts(b, "]}");
 }
 
-static int api_status(int fd, const d2k_panel_config *cfg, const char *query) {
+static int api_status(int fd, const d2s_panel_config *cfg, const char *query) {
     char *live = NULL;
     size_t live_len = 0;
     if (cfg && cfg->live_path && json_object_file(cfg->live_path, &live, &live_len) == 0) {
@@ -1311,7 +1311,7 @@ static int api_status(int fd, const d2k_panel_config *cfg, const char *query) {
 /* Статика отдаётся с ETag из размера и времени изменения и всегда
    перепроверяется (no-cache): после обновления панели браузер не держит
    старый файл, а неизменённый получает ответ 304 без тела. */
-static int static_file(int fd, const d2k_panel_config *cfg, const char *req,
+static int static_file(int fd, const d2s_panel_config *cfg, const char *req,
                        const char *name, const char *type) {
     if (!cfg || !cfg->asset_dir) {
         return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
@@ -1361,27 +1361,27 @@ static int static_file(int fd, const d2k_panel_config *cfg, const char *req,
 static int diagnostic_response(int fd,int code,const char *reason,const char *type,const char *body,size_t len) {
     return response_ex(fd,code,reason,type,"Cache-Control: no-store\r\n",body,len);
 }
-static int api_diagnostics(int fd,const d2k_panel_config *cfg,const char *req,
+static int api_diagnostics(int fd,const d2s_panel_config *cfg,const char *req,
                            const char *method,const char *action) {
-    const char *dir=cfg&&cfg->diagnostics_dir?cfg->diagnostics_dir:D2K_DIAG_DIR;
+    const char *dir=cfg&&cfg->diagnostics_dir?cfg->diagnostics_dir:D2S_DIAG_DIR;
     if(!strcmp(method,"POST")) {
-        if(!cfg||!cfg->control_enabled||!d2k_panel_same_origin(req))
+        if(!cfg||!cfg->control_enabled||!d2s_panel_same_origin(req))
             return diagnostic_response(fd,403,"Forbidden","application/json","{\"error\":\"требуется запрос с того же источника\"}",sizeof "{\"error\":\"требуется запрос с того же источника\"}"-1);
         if(strcmp(action,"enable")&&strcmp(action,"disable"))
             return diagnostic_response(fd,400,"Bad Request","application/json","{}",2);
-        if(d2k_diag_toggle(dir,!strcmp(action,"enable")))
+        if(d2s_diag_toggle(dir,!strcmp(action,"enable")))
             return diagnostic_response(fd,500,"Internal Server Error","application/json","{\"error\":\"не удалось изменить состояние диагностики\"}",sizeof "{\"error\":\"не удалось изменить состояние диагностики\"}"-1);
-        const char *body=d2k_diag_enabled(dir)?"{\"enabled\":true}":"{\"enabled\":false}";
+        const char *body=d2s_diag_enabled(dir)?"{\"enabled\":true}":"{\"enabled\":false}";
         return diagnostic_response(fd,200,"OK","application/json",body,strlen(body));
     }
     if(strcmp(method,"GET"))return diagnostic_response(fd,405,"Method Not Allowed","text/plain","",0);
-    if(!d2k_diag_enabled(dir))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":false}",17);
+    if(!d2s_diag_enabled(dir))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":false}",17);
     if(!strcmp(action,"status"))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":true}",16);
     char path[512];struct stat st;
-    if(d2k_diag_path(path,sizeof path,dir,"report.json"))return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
+    if(d2s_diag_path(path,sizeof path,dir,"report.json"))return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
     int in=open(path,O_RDONLY|O_NOFOLLOW);
     if(in<0)return diagnostic_response(fd,503,"Service Unavailable","application/json","{\"enabled\":true,\"pending\":true}",31);
-    if(fstat(in,&st)||!S_ISREG(st.st_mode)||st.st_size<0||(uint64_t)st.st_size>D2K_DIAG_REPORT_MAX) {
+    if(fstat(in,&st)||!S_ISREG(st.st_mode)||st.st_size<0||(uint64_t)st.st_size>D2S_DIAG_REPORT_MAX) {
         close(in);return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
     }
     size_t len=(size_t)st.st_size,off=0;char *body=malloc(len+1);
@@ -1389,12 +1389,12 @@ static int api_diagnostics(int fd,const d2k_panel_config *cfg,const char *req,
     while(off<len){ssize_t n=read(in,body+off,len-off);if(n<0&&errno==EINTR)continue;if(n<=0)break;off+=(size_t)n;}
     close(in);
     int rc=off==len?response_ex(fd,200,"OK","application/json; charset=utf-8",
-        !strcmp(action,"download")?"Cache-Control: no-store\r\nContent-Disposition: attachment; filename=\"d2k-diagnostics.json\"\r\n":"Cache-Control: no-store\r\n",body,len):
+        !strcmp(action,"download")?"Cache-Control: no-store\r\nContent-Disposition: attachment; filename=\"d2s-diagnostics.json\"\r\n":"Cache-Control: no-store\r\n",body,len):
         diagnostic_response(fd,503,"Service Unavailable","text/plain","",0);
     free(body);return rc;
 }
 
-int d2k_panel_handle_fd(int fd, const d2k_panel_config *cfg) {
+int d2s_panel_handle_fd(int fd, const d2s_panel_config *cfg) {
     char req[REQUEST_MAX + 1];
     size_t used = 0;
     int rr = read_request(fd, req, sizeof req, &used);

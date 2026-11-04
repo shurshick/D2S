@@ -17,10 +17,10 @@
 #include <linux/netlink.h>
 #include <poll.h>
 
-#include "d2k_nfq.h"
-#include "d2k_nl.h"
+#include "d2s_nfq.h"
+#include "d2s_nl.h"
 
-struct d2k_nfq {
+struct d2s_nfq {
     int      fd;
     uint16_t queue;
     uint32_t seq;
@@ -86,12 +86,12 @@ static int await_ack(int fd, uint32_t seq, char *err, size_t errcap) {
             return -1;
         }
 
-        d2k_nl_iter it;
-        d2k_nl_msg m;
-        d2k_nl_iter_init(&it, buf, (size_t)n);
-        while (d2k_nl_next(&it, &m)) {
+        d2s_nl_iter it;
+        d2s_nl_msg m;
+        d2s_nl_iter_init(&it, buf, (size_t)n);
+        while (d2s_nl_next(&it, &m)) {
             int32_t e = 0;
-            if (d2k_nl_errno(&m, &e) != 0) {
+            if (d2s_nl_errno(&m, &e) != 0) {
                 continue;   /* не наш ответ — ждём дальше */
             }
             if (m.seq != seq) {
@@ -108,7 +108,7 @@ static int await_ack(int fd, uint32_t seq, char *err, size_t errcap) {
     return -1;
 }
 
-static int send_and_ack(d2k_nfq *q, const uint8_t *msg, size_t len, uint32_t seq,
+static int send_and_ack(d2s_nfq *q, const uint8_t *msg, size_t len, uint32_t seq,
                         char *err, size_t errcap) {
     if (len == 0) {
         say(err, errcap, "сообщение настройки не собралось");
@@ -144,12 +144,12 @@ static int set_rcvbuf(int fd, int requested, int *effective) {
     return v >= requested ? 0 : 1;
 }
 
-d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
+d2s_nfq *d2s_nfq_open(const d2s_nfq_cfg *cfg, char *err, size_t errcap) {
     if (!cfg) {
         say(err, errcap, "нет настроек очереди");
         return NULL;
     }
-    d2k_nfq *q = calloc(1, sizeof *q);
+    d2s_nfq *q = calloc(1, sizeof *q);
     if (!q) {
         say(err, errcap, "нет памяти");
         return NULL;
@@ -157,7 +157,7 @@ d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
     q->queue = cfg->queue;
     q->seq = 1;
 
-    q->fd = socket(AF_NETLINK, SOCK_RAW, D2K_NETLINK_NETFILTER);
+    q->fd = socket(AF_NETLINK, SOCK_RAW, D2S_NETLINK_NETFILTER);
     if (q->fd < 0) {
         say(err, errcap, "socket(NETLINK_NETFILTER): %s", strerror(errno));
         free(q);
@@ -183,11 +183,11 @@ d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
         /* Невозможность увеличить буфер не выключает очередь: fail-open
            сохраняет трафик. Но скрытый лимит должен быть виден в журнале. */
         if (rc < 0) {
-            fprintf(stderr, "d2kd: не удалось настроить SO_RCVBUF NFQUEUE: %s\n",
+            fprintf(stderr, "d2sd: не удалось настроить SO_RCVBUF NFQUEUE: %s\n",
                     strerror(errno));
         } else if (rc > 0) {
             fprintf(stderr,
-                    "d2kd: SO_RCVBUF NFQUEUE ограничен: запрос %d, ядро установило %d\n",
+                    "d2sd: SO_RCVBUF NFQUEUE ограничен: запрос %d, ядро установило %d\n",
                     cfg->rcvbuf, effective);
         }
     }
@@ -201,24 +201,24 @@ d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
        устройстве. */
 
     seq = q->seq++;
-    n = d2k_nl_cfg_cmd(msg, sizeof msg, cfg->queue, seq,
-                       D2K_NFQNL_CFG_CMD_BIND, AF_INET);
+    n = d2s_nl_cfg_cmd(msg, sizeof msg, cfg->queue, seq,
+                       D2S_NFQNL_CFG_CMD_BIND, AF_INET);
     if (send_and_ack(q, msg, n, seq, err, errcap) != 0) {
         close(q->fd);
         free(q);
         return NULL;
     }
 
-    uint32_t flags = cfg->fail_open ? D2K_NFQA_CFG_F_FAIL_OPEN : 0;
+    uint32_t flags = cfg->fail_open ? D2S_NFQA_CFG_F_FAIL_OPEN : 0;
     /* Маска перечисляет флаги, которыми мы вообще распоряжаемся. GSO указан в
        маске и НЕ указан в значении: он должен быть выключен явно. С GSO ядро
        отдаёт склеенный суперпакет, а это не то, что уйдёт на провод, — резать
        его по границам сегментов мы не умеем и делать вид не будем. */
-    uint32_t mask = D2K_NFQA_CFG_F_FAIL_OPEN | D2K_NFQA_CFG_F_GSO;
+    uint32_t mask = D2S_NFQA_CFG_F_FAIL_OPEN | D2S_NFQA_CFG_F_GSO;
 
     seq = q->seq++;
-    n = d2k_nl_cfg_params(msg, sizeof msg, cfg->queue, seq,
-                          cfg->copy_range, D2K_NFQNL_COPY_PACKET,
+    n = d2s_nl_cfg_params(msg, sizeof msg, cfg->queue, seq,
+                          cfg->copy_range, D2S_NFQNL_COPY_PACKET,
                           cfg->maxlen, flags, mask);
     if (send_and_ack(q, msg, n, seq, err, errcap) != 0) {
         close(q->fd);
@@ -229,14 +229,14 @@ d2k_nfq *d2k_nfq_open(const d2k_nfq_cfg *cfg, char *err, size_t errcap) {
     return q;
 }
 
-void d2k_nfq_close(d2k_nfq *q) {
+void d2s_nfq_close(d2s_nfq *q) {
     if (!q) {
         return;
     }
     if (q->fd >= 0) {
         uint8_t msg[256];
-        size_t n = d2k_nl_cfg_cmd(msg, sizeof msg, q->queue, q->seq++,
-                                  D2K_NFQNL_CFG_CMD_UNBIND, AF_INET);
+        size_t n = d2s_nl_cfg_cmd(msg, sizeof msg, q->queue, q->seq++,
+                                  D2S_NFQNL_CFG_CMD_UNBIND, AF_INET);
         /* Ответ не ждём: мы закрываемся, и закрытие сокета отвяжет очередь в
            любом случае. Отвязка послана из вежливости к ядру. */
         if (n) {
@@ -247,11 +247,11 @@ void d2k_nfq_close(d2k_nfq *q) {
     free(q);
 }
 
-int d2k_nfq_fd(const d2k_nfq *q) {
+int d2s_nfq_fd(const d2s_nfq *q) {
     return q ? q->fd : -1;
 }
 
-ssize_t d2k_nfq_recv(d2k_nfq *q, uint8_t *buf, size_t cap, char *err, size_t errcap) {
+ssize_t d2s_nfq_recv(d2s_nfq *q, uint8_t *buf, size_t cap, char *err, size_t errcap) {
     if (!q || !buf || cap == 0) {
         say(err, errcap, "нет буфера для чтения");
         return -1;
@@ -273,13 +273,13 @@ ssize_t d2k_nfq_recv(d2k_nfq *q, uint8_t *buf, size_t cap, char *err, size_t err
     return -1;
 }
 
-int d2k_nfq_verdict(d2k_nfq *q, uint32_t pkt_id, uint32_t verdict,
+int d2s_nfq_verdict(d2s_nfq *q, uint32_t pkt_id, uint32_t verdict,
                     char *err, size_t errcap) {
     if (!q) {
         return -1;
     }
     uint8_t msg[64];
-    size_t n = d2k_nl_verdict(msg, sizeof msg, q->queue, q->seq++, pkt_id, verdict);
+    size_t n = d2s_nl_verdict(msg, sizeof msg, q->queue, q->seq++, pkt_id, verdict);
     if (n == 0) {
         say(err, errcap, "вердикт не собрался");
         return -1;
@@ -291,13 +291,13 @@ int d2k_nfq_verdict(d2k_nfq *q, uint32_t pkt_id, uint32_t verdict,
     return 0;
 }
 
-int d2k_nfq_verdict_payload(d2k_nfq *q, uint32_t pkt_id, uint32_t verdict,
+int d2s_nfq_verdict_payload(d2s_nfq *q, uint32_t pkt_id, uint32_t verdict,
                             const uint8_t *payload, size_t len, char *err, size_t errcap) {
     if (!q) {
         return -1;
     }
     uint8_t msg[64 + 2048];
-    size_t n = d2k_nl_verdict_payload(msg, sizeof msg, q->queue, q->seq++, pkt_id, verdict,
+    size_t n = d2s_nl_verdict_payload(msg, sizeof msg, q->queue, q->seq++, pkt_id, verdict,
                                       payload, len);
     if (n == 0) {
         say(err, errcap, "вердикт с заменой не собрался");
@@ -310,6 +310,6 @@ int d2k_nfq_verdict_payload(d2k_nfq *q, uint32_t pkt_id, uint32_t verdict,
     return 0;
 }
 
-uint64_t d2k_nfq_lost(const d2k_nfq *q) {
+uint64_t d2s_nfq_lost(const d2s_nfq *q) {
     return q ? q->lost : 0;
 }

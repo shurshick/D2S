@@ -1,5 +1,5 @@
 ---
-name: D2K — Ведомость
+name: D2S — Ведомость
 description: Local router control panel set as a warm paper-and-ink ledger with one signal colour for live search.
 colors:
   signal: "#e8470f"
@@ -156,7 +156,7 @@ components:
     padding: "28px 32px"
 ---
 
-# Design System: D2K — Ведомость
+# Design System: D2S — Ведомость
 
 ## Overview
 
@@ -178,7 +178,7 @@ Colour is information, not decoration. One orange signal belongs to live search 
 Paper and ink with a single hot accent and two semantic states, each state paired with a wash for tags and notices.
 
 ### Primary
-- **Signal Orange** (signal): live search activity only: the live lamp and its pulse, occupied measurement slots, the phase track's fill and current step, the highlighted word of the headline while a search runs, the active nav dot, the D2K mark block, text selection, the filter caret. `signal-ink` is its text-safe form on paper; `signal-wash` is the ring around the current phase step and the background of live tags («перепроверяется»).
+- **Signal Orange** (signal): live search activity only: the live lamp and its pulse, occupied measurement slots, the phase track's fill and current step, the highlighted word of the headline while a search runs, the active nav dot, the D2S mark block, text selection, the filter caret. `signal-ink` is its text-safe form on paper; `signal-wash` is the ring around the current phase step and the background of live tags («перепроверяется»).
 
 ### Secondary
 - **Confirmed Green** (ok, ok-wash, ok-bright): confirmed or applied only: ok lamp, finished searches (track fill and step turn green), "applied" tags, passed diagnostic stages. `ok-bright` is the applied tag on the dark applied family card.
@@ -246,7 +246,7 @@ Two families of form. Controls are pills (999px): buttons, tags, the filter fiel
 - **Busy:** the icon spins; disabled turns ink-3 on transparent.
 
 ### Masthead
-Sticky, opaque olive ink, ruled below. Mark + 800-weight «D2K» wordmark + mono host name (the theme name «Ведомость» is internal and never shown in the interface); then the engine lamp with a one-line state; then the controls. The lamp is idle (ink-3), ok, live (signal with an expanding ring pulse), warn or bad.
+Sticky, opaque olive ink, ruled below. Mark + 800-weight «D2S» wordmark + mono host name (the theme name «Ведомость» is internal and never shown in the interface); then the engine lamp with a one-line state; then the controls. The lamp is idle (ink-3), ok, live (signal with an expanding ring pulse), warn or bad.
 
 ### Statement and slots («Сейчас»)
 Display headline whose state word takes the tone colour (signal while searching, green when idle and well, red when stopped or unlinked), the lede, then a ruled strip of measurement slot cells: empty outlined squares, filled signal when occupied, with counts beside them.

@@ -4,14 +4,14 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const helper = path.resolve(__dirname, '../files/d2k-log-maintenance.sh');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2k-log-test.'));
+const helper = path.resolve(__dirname, '../files/d2s-log-maintenance.sh');
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'd2s-log-test.'));
 const log = path.join(tmp, 'log');
 const runtime = path.join(tmp, 'runtime');
 fs.mkdirSync(log);
-const owned = ['d2kd.log', 'd2kc.log', 'panel.log', 'telegram.log', 'instagram-dns.log', 'instagram-dns-scheduler.log', 'd2khttp.log'];
+const owned = ['d2sd.log', 'd2sc.log', 'panel.log', 'telegram.log', 'instagram-dns.log', 'instagram-dns-scheduler.log', 'd2shttp.log'];
 const payload = Buffer.concat([Buffer.alloc(3072, 'A'), Buffer.alloc(1024, 'Z')]);
-const env = { ...process.env, D2K_DIR: tmp, D2K_RUNTIME_DIR: runtime, LOGMAX: '3072', LOGKEEP: '1024' };
+const env = { ...process.env, D2S_DIR: tmp, D2S_RUNTIME_DIR: runtime, LOGMAX: '3072', LOGKEEP: '1024' };
 function run(extra = {}) {
   const result = spawnSync('/bin/sh', [helper, 'tick'], { env: { ...env, ...extra }, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr);
@@ -80,13 +80,13 @@ try {
     trap 'kill "$worker" 2>/dev/null; wait "$worker" 2>/dev/null || true' EXIT
     wait_rotation() {
       attempt=0
-      while [ "$(wc -c < "$D2K_DIR/log/panel.log")" -ne 1024 ]; do
+      while [ "$(wc -c < "$D2S_DIR/log/panel.log")" -ne 1024 ]; do
         attempt=$((attempt + 1)); [ "$attempt" -lt 40 ] || return 1
         sleep 0.1
       done
     }
     wait_rotation || exit 1
-    cp "$FIXTURE" "$D2K_DIR/log/panel.log"
+    cp "$FIXTURE" "$D2S_DIR/log/panel.log"
     wait_rotation || exit 2
   `], { env: { ...env, HELPER: helper, FIXTURE: fixture, LOG_EVERY: '1' }, encoding: 'utf8', timeout: 7000 });
   assert.equal(periodic.status, 0, 'periodic log worker must rotate again while engine is absent');

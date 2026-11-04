@@ -20,14 +20,14 @@
  *
  * Профили в core/profiles/ (настоящий современный захват и настоящий
  * библиотечный TLS 1.2 — оба живые, см. их шапки) проверяются здесь ЖЕ,
- * через d2k_hello_from_profile: это единственный путь, которым их вообще
+ * через d2s_hello_from_profile: это единственный путь, которым их вообще
  * можно исполнить, и одновременно сквозная проверка core/hello_profiles.inc
  * (генерируется Makefile'ом из тех же .hex, см. его правило).
  */
 #include <stdio.h>
 #include <string.h>
 
-#include "d2k_hello.h"
+#include "d2s_hello.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -67,9 +67,9 @@ static const uint8_t legacy[] = {
 }; /* "legacy.example", БЕЗ расширения supported_versions вовсе */
 
 /* Расширение supported_versions ЕСТЬ, но в списке только 0x0303 — граничный
- * случай, которым d2k_hello_shape обязан остаться LEGACY: признак — не
+ * случай, которым d2s_hello_shape обязан остаться LEGACY: признак — не
  * присутствие расширения само по себе, а 0x0304 СРЕДИ перечисленных версий
- * (см. doc-комментарий d2k_hello_shape). */
+ * (см. doc-комментарий d2s_hello_shape). */
 static const uint8_t legacy_versions_no_13[] = {
     0x16, 0x03, 0x01, 0x00, 0x53, 0x01, 0x00, 0x00, 0x4f, 0x03, 0x03, 0x01,
     0x08, 0x0f, 0x16, 0x1d, 0x24, 0x2b, 0x32, 0x39, 0x40, 0x47, 0x4e, 0x55,
@@ -158,9 +158,9 @@ static size_t build_ch(uint8_t *out, const char *sni, int with_tls13) {
 
 int main(void) {
     /* --- вид приветствия читается по supported_versions -------------------- */
-    CHECK(d2k_hello_shape(modern, sizeof modern) == D2K_SHAPE_MODERN,
+    CHECK(d2s_hello_shape(modern, sizeof modern) == D2S_SHAPE_MODERN,
           "современное приветствие не опознано");
-    CHECK(d2k_hello_shape(legacy, sizeof legacy) == D2K_SHAPE_LEGACY,
+    CHECK(d2s_hello_shape(legacy, sizeof legacy) == D2S_SHAPE_LEGACY,
           "старое приветствие не опознано");
     /* --- ОБОРВАННЫЙ БЛОК РАСШИРЕНИЙ ФОРМЫ НЕ ДАЁТ ------------------------
      *
@@ -172,17 +172,17 @@ int main(void) {
      * Обрезаем СОВРЕМЕННОЕ приветствие так, чтобы блок расширений не
      * поместился: форма обязана стать НЕИЗВЕСТНОЙ, а не LEGACY. Уверенный
      * LEGACY здесь — выдуманный замер, и он уезжает в каталог и в
-     * ограничение применения плана (§2.4, «UNKNOWN ≠ LEGACY» в d2k_hello.h). */
+     * ограничение применения плана (§2.4, «UNKNOWN ≠ LEGACY» в d2s_hello.h). */
     {
         size_t cut = sizeof modern - 8;
-        CHECK(d2k_hello_shape(modern, cut) != D2K_SHAPE_LEGACY,
+        CHECK(d2s_hello_shape(modern, cut) != D2S_SHAPE_LEGACY,
               "форма объявлена LEGACY по оборванному блоку расширений — "
               "выдуманный замер вместо «не измерено»");
     }
     /* --- имя находится по координатам, а не поиском подстроки ------------- */
     {
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(modern, sizeof modern, &off, &len) == 0,
+        CHECK(d2s_hello_sni(modern, sizeof modern, &off, &len) == 0,
               "имя не найдено в приветствии");
         CHECK(len == strlen("пример.example"), "длина имени неверна");
         CHECK(off == 67 && memcmp(modern + off, "пример.example", len) == 0,
@@ -200,24 +200,24 @@ int main(void) {
      * 2048, с тем же запасом, что и в остальных проверках профиля ниже. */
     {
         uint8_t out[2048]; size_t n = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "цель.example", out, sizeof out, &n) == 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "цель.example", out, sizeof out, &n) == 0,
               "профиль не собрался");
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(out, n, &off, &len) == 0, "в собранном приветствии нет имени");
+        CHECK(d2s_hello_sni(out, n, &off, &len) == 0, "в собранном приветствии нет имени");
         CHECK(memcmp(out + off, "цель.example", len) == 0, "подставлено не то имя");
-        CHECK(d2k_hello_shape(out, n) == D2K_SHAPE_MODERN, "профиль сменил вид приветствия");
+        CHECK(d2s_hello_shape(out, n) == D2S_SHAPE_MODERN, "профиль сменил вид приветствия");
     }
 
     /* --- граничный случай вида: расширение есть, а 0x0304 в нём нет -------- */
-    CHECK(d2k_hello_shape(legacy_versions_no_13, sizeof legacy_versions_no_13) == D2K_SHAPE_LEGACY,
+    CHECK(d2s_hello_shape(legacy_versions_no_13, sizeof legacy_versions_no_13) == D2S_SHAPE_LEGACY,
           "supported_versions без 0x0304 распознан как современный");
 
     /* --- настоящий снимок, не синтетика ------------------------------------ */
     {
-        CHECK(d2k_hello_shape(real_legacy_youtube, sizeof real_legacy_youtube) == D2K_SHAPE_LEGACY,
+        CHECK(d2s_hello_shape(real_legacy_youtube, sizeof real_legacy_youtube) == D2S_SHAPE_LEGACY,
               "настоящее приветствие TLS 1.2 (youtube.com) не опознано как LEGACY");
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(real_legacy_youtube, sizeof real_legacy_youtube, &off, &len) == 0,
+        CHECK(d2s_hello_sni(real_legacy_youtube, sizeof real_legacy_youtube, &off, &len) == 0,
               "имя не найдено в настоящем снимке TLS 1.2");
         CHECK(off == 151 && len == 11 &&
               memcmp(real_legacy_youtube + off, "youtube.com", 11) == 0,
@@ -226,20 +226,20 @@ int main(void) {
 
     /* --- честные "не знаю": UNKNOWN, а не угаданный MODERN/LEGACY ---------- */
     {
-        CHECK(d2k_hello_shape(NULL, 0) == D2K_SHAPE_UNKNOWN, "NULL должен давать UNKNOWN");
+        CHECK(d2s_hello_shape(NULL, 0) == D2S_SHAPE_UNKNOWN, "NULL должен давать UNKNOWN");
         static const uint8_t tiny[] = {0x16, 0x03};
-        CHECK(d2k_hello_shape(tiny, sizeof tiny) == D2K_SHAPE_UNKNOWN,
+        CHECK(d2s_hello_shape(tiny, sizeof tiny) == D2S_SHAPE_UNKNOWN,
               "обрывок из двух байт не может быть ни MODERN, ни LEGACY");
         static const uint8_t not_tls[] = {0x47, 0x45, 0x54, 0x20, 0x2f}; /* "GET /" */
-        CHECK(d2k_hello_shape(not_tls, sizeof not_tls) == D2K_SHAPE_UNKNOWN,
+        CHECK(d2s_hello_shape(not_tls, sizeof not_tls) == D2S_SHAPE_UNKNOWN,
               "не-TLS вход распознан как приветствие");
         /* Запись TLS, но тип рукопожатия — ServerHello (0x02), не ClientHello. */
         uint8_t not_ch[64];
         memcpy(not_ch, modern, sizeof not_ch);
         not_ch[5] = 0x02;
-        CHECK(d2k_hello_shape(not_ch, sizeof not_ch) == D2K_SHAPE_UNKNOWN,
+        CHECK(d2s_hello_shape(not_ch, sizeof not_ch) == D2S_SHAPE_UNKNOWN,
               "ServerHello распознан как ClientHello");
-        CHECK(d2k_hello_shape(modern, 4) == D2K_SHAPE_UNKNOWN,
+        CHECK(d2s_hello_shape(modern, 4) == D2S_SHAPE_UNKNOWN,
               "четырёх байт недостаточно даже для заголовка записи, а не UNKNOWN");
     }
 
@@ -247,17 +247,17 @@ int main(void) {
     {
         uint8_t buf[256];
         size_t n = build_ch(buf, NULL, 1);
-        CHECK(d2k_hello_shape(buf, n) == D2K_SHAPE_MODERN,
+        CHECK(d2s_hello_shape(buf, n) == D2S_SHAPE_MODERN,
               "вид не должен зависеть от присутствия имени");
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(buf, n, &off, &len) != 0,
+        CHECK(d2s_hello_sni(buf, n, &off, &len) != 0,
               "имя найдено там, где расширения server_name вообще нет");
     }
     /* --- негодные аргументы --------------------------------------------- */
     {
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(modern, sizeof modern, NULL, &len) != 0, "NULL off должен отвергаться");
-        CHECK(d2k_hello_sni(modern, sizeof modern, &off, NULL) != 0, "NULL len должен отвергаться");
+        CHECK(d2s_hello_sni(modern, sizeof modern, NULL, &len) != 0, "NULL off должен отвергаться");
+        CHECK(d2s_hello_sni(modern, sizeof modern, &off, NULL) != 0, "NULL len должен отвергаться");
     }
 
     /* --- обрывок против противоречия: разные причины отказа, не одна ------ */
@@ -268,12 +268,12 @@ int main(void) {
         uint8_t buf[256];
         size_t n = build_ch(buf, "example.com", 1);
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(buf, 60, &off, &len) != 0,
+        CHECK(d2s_hello_sni(buf, 60, &off, &len) != 0,
               "обрубленный ДО имени вход не должен давать имя");
         /* А если обрубить ПОСЛЕ имени, но до конца расширений — имя всё
            равно должно найтись, ровно как в tls.c для браузерной записи,
            разъехавшейся по сегментам. */
-        CHECK(d2k_hello_sni(buf, n - 4, &off, &len) == 0,
+        CHECK(d2s_hello_sni(buf, n - 4, &off, &len) == 0,
               "имя потеряно при обрубке ПОСЛЕ него самого");
 
         /* Противоречие: длина блока расширений объявлена больше, чем
@@ -285,26 +285,26 @@ int main(void) {
            +1(session_id=0)+2+6(cipher_suites)+1+1(compression) = 54. */
         size_t exts_len_off = 54;
         bad[exts_len_off] = 0x7f; bad[exts_len_off + 1] = 0xff; /* заведомо огромно */
-        CHECK(d2k_hello_sni(bad, n, &off, &len) != 0,
+        CHECK(d2s_hello_sni(bad, n, &off, &len) != 0,
               "противоречивая длина блока расширений не должна давать имя");
     }
 
-    /* --- d2k_hello_from_profile: отказы -------------------------------- */
+    /* --- d2s_hello_from_profile: отказы -------------------------------- */
     {
         uint8_t out[2048]; size_t n = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_UNKNOWN, "x.example", out, sizeof out, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_UNKNOWN, "x.example", out, sizeof out, &n) != 0,
               "профиля для UNKNOWN не бывает");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "", out, sizeof out, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "", out, sizeof out, &n) != 0,
               "пустое имя должно отвергаться");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, NULL, out, sizeof out, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, NULL, out, sizeof out, &n) != 0,
               "NULL имя должно отвергаться");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "x.example", NULL, sizeof out, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "x.example", NULL, sizeof out, &n) != 0,
               "NULL буфер должен отвергаться");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "x.example", out, sizeof out, NULL) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "x.example", out, sizeof out, NULL) != 0,
               "NULL out_len должен отвергаться");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "x.example", out, 5, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "x.example", out, 5, &n) != 0,
               "буфер размером 5 не должен вмещать современный профиль");
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "x.example", out, 5, &n) != 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "x.example", out, 5, &n) != 0,
               "буфер размером 5 не должен вмещать старый профиль");
     }
 
@@ -324,25 +324,25 @@ int main(void) {
         static const size_t MODERN_SNI_OFF = 137;
 
         uint8_t out[2048]; size_t n = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, "a.co", out, sizeof out, &n) == 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, "a.co", out, sizeof out, &n) == 0,
               "короткая подстановка в современный профиль не собралась");
         CHECK(n == MODERN_BASE_LEN - 7 + 4, "итоговая длина не сошлась для короткого имени");
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(out, n, &off, &len) == 0 && off == MODERN_SNI_OFF && len == 4 &&
+        CHECK(d2s_hello_sni(out, n, &off, &len) == 0 && off == MODERN_SNI_OFF && len == 4 &&
               memcmp(out + off, "a.co", 4) == 0,
               "короткое имя в современном профиле разъехалось");
-        CHECK(d2k_hello_shape(out, n) == D2K_SHAPE_MODERN, "короткое имя сменило вид приветствия");
+        CHECK(d2s_hello_shape(out, n) == D2S_SHAPE_MODERN, "короткое имя сменило вид приветствия");
 
         const char *longname = "очень-длинное-поддоменное-имя.example.com";
         size_t longlen = strlen(longname);
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_MODERN, longname, out, sizeof out, &n) == 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_MODERN, longname, out, sizeof out, &n) == 0,
               "длинная подстановка в современный профиль не собралась");
         CHECK(n == MODERN_BASE_LEN - 7 + longlen, "итоговая длина не сошлась для длинного имени");
         off = 0; len = 0;
-        CHECK(d2k_hello_sni(out, n, &off, &len) == 0 && off == MODERN_SNI_OFF && len == longlen &&
+        CHECK(d2s_hello_sni(out, n, &off, &len) == 0 && off == MODERN_SNI_OFF && len == longlen &&
               memcmp(out + off, longname, longlen) == 0,
               "длинное имя в современном профиле разъехалось");
-        CHECK(d2k_hello_shape(out, n) == D2K_SHAPE_MODERN, "длинное имя сменило вид приветствия");
+        CHECK(d2s_hello_shape(out, n) == D2S_SHAPE_MODERN, "длинное имя сменило вид приветствия");
     }
 
     /* --- профиль LEGACY: то же самое, другое смещение (151, из youtube.com) */
@@ -351,40 +351,40 @@ int main(void) {
         static const size_t LEGACY_SNI_OFF = 151;
 
         uint8_t out[2048]; size_t n = 0;
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, "a.co", out, sizeof out, &n) == 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, "a.co", out, sizeof out, &n) == 0,
               "короткая подстановка в старый профиль не собралась");
         CHECK(n == LEGACY_BASE_LEN - 7 + 4, "итоговая длина не сошлась для короткого имени (LEGACY)");
         size_t off = 0, len = 0;
-        CHECK(d2k_hello_sni(out, n, &off, &len) == 0 && off == LEGACY_SNI_OFF && len == 4 &&
+        CHECK(d2s_hello_sni(out, n, &off, &len) == 0 && off == LEGACY_SNI_OFF && len == 4 &&
               memcmp(out + off, "a.co", 4) == 0,
               "короткое имя в старом профиле разъехалось");
-        CHECK(d2k_hello_shape(out, n) == D2K_SHAPE_LEGACY, "короткое имя сменило вид приветствия (LEGACY)");
+        CHECK(d2s_hello_shape(out, n) == D2S_SHAPE_LEGACY, "короткое имя сменило вид приветствия (LEGACY)");
 
         const char *longname = "очень-длинное-поддоменное-имя.example.com";
         size_t longlen = strlen(longname);
-        CHECK(d2k_hello_from_profile(D2K_SHAPE_LEGACY, longname, out, sizeof out, &n) == 0,
+        CHECK(d2s_hello_from_profile(D2S_SHAPE_LEGACY, longname, out, sizeof out, &n) == 0,
               "длинная подстановка в старый профиль не собралась");
         CHECK(n == LEGACY_BASE_LEN - 7 + longlen, "итоговая длина не сошлась для длинного имени (LEGACY)");
         off = 0; len = 0;
-        CHECK(d2k_hello_sni(out, n, &off, &len) == 0 && off == LEGACY_SNI_OFF && len == longlen &&
+        CHECK(d2s_hello_sni(out, n, &off, &len) == 0 && off == LEGACY_SNI_OFF && len == longlen &&
               memcmp(out + off, longname, longlen) == 0,
               "длинное имя в старом профиле разъехалось");
-        CHECK(d2k_hello_shape(out, n) == D2K_SHAPE_LEGACY, "длинное имя сменило вид приветствия (LEGACY)");
+        CHECK(d2s_hello_shape(out, n) == D2S_SHAPE_LEGACY, "длинное имя сменило вид приветствия (LEGACY)");
     }
 
     /* Observing SNI in a prefix does not make it a complete probe input. */
-    CHECK(d2k_hello_complete(modern, sizeof modern), "complete modern rejected");
-    CHECK(d2k_hello_complete(legacy, sizeof legacy), "complete legacy rejected");
-    CHECK(!d2k_hello_complete(NULL, 0), "null complete hello");
+    CHECK(d2s_hello_complete(modern, sizeof modern), "complete modern rejected");
+    CHECK(d2s_hello_complete(legacy, sizeof legacy), "complete legacy rejected");
+    CHECK(!d2s_hello_complete(NULL, 0), "null complete hello");
     for (size_t i = 0; i < sizeof modern; i++) {
-        CHECK(!d2k_hello_complete(modern, i), "fragment accepted as complete");
+        CHECK(!d2s_hello_complete(modern, i), "fragment accepted as complete");
     }
     {
         uint8_t bad[sizeof modern + 1];
         memcpy(bad, modern, sizeof modern); bad[sizeof modern] = 0;
-        CHECK(!d2k_hello_complete(bad, sizeof bad), "trailing bytes accepted");
+        CHECK(!d2s_hello_complete(bad, sizeof bad), "trailing bytes accepted");
         bad[8]--;
-        CHECK(!d2k_hello_complete(bad, sizeof modern), "short handshake accepted");
+        CHECK(!d2s_hello_complete(bad, sizeof modern), "short handshake accepted");
     }
 
     if (fails) {

@@ -21,15 +21,15 @@
    blockcheck. Три файла по 1200 байт встроены без изменения; default=620
    байт (0x40 и нули), последняя гипотеза — 16 нулей. Лицензия/происхождение
    сохранены в `THIRD_PARTY_NOTICES.md`.
-2. `Run` → `core/quicprobe.c:d2k_quic_run`. Арсенал теперь вызывается ДО
+2. `Run` → `core/quicprobe.c:d2s_quic_run`. Арсенал теперь вызывается ДО
    свойств; `addrPool.take` использует тот же pinned IP без residual и
    одноразовые запасные адреса при residual. Пул и бюджет не перезапускаются.
    Удалён дополнительный контроль на свежем IP, которого нет в оригинале.
    Диагноз content сохраняется при исчерпании пула; любой положительный
    residual-контроль допускает pinned-путь, как в исходнике.
 3. `core/sched.c:worker_run` получает диагноз и приём одним вызовом.
-   Отдельного позднего `d2k_sched_arm_hook` больше нет. Старый
-   `d2k_quic_pick_arm` оставлен только для старых транспортных тестов,
+   Отдельного позднего `d2s_sched_arm_hook` больше нет. Старый
+   `d2s_quic_pick_arm` оставлен только для старых транспортных тестов,
    НЕ используется runtime и НЕ является образцом для продолжения.
 4. Результат владеет найденными байтами. Scheduler/Plan больше не пересобирает
    их в «похожий» ClientHello. Копии не теряются при наличии TTL; если ось
@@ -72,8 +72,8 @@
 Команды воспроизведения:
 
 ```sh
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh
-D2K_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh
+D2S_REF_GO=/Users/mark/go/bin/go1.25.12 sh scripts/check-quic-run-parity.sh --linux
 make -C core check
 make -C core cross
 ```
@@ -82,7 +82,7 @@ make -C core cross
 исходников с `-fsanitize=address,undefined -fno-sanitize-recover=all`, код 0.
 ASan этих тестов не означает ASan всего проекта.
 
-Логи `/tmp/d2k-original-*-20260919.log`: `plan-red`, `gap-red`, `mark-red`
+Логи `/tmp/d2s-original-*-20260919.log`: `plan-red`, `gap-red`, `mark-red`
 содержат реальные красные воспроизведения; `unit-final`, `parity-final`,
 `linux-final`, `cross-final`, `sched-final`, `core-check-final` — проверки продолжения.
 

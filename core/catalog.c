@@ -2,7 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 /* catalog.c — каталог: чтение и запись файла, который остаётся общим с
- * Go-панелью. Контракт и обоснования — в шапке d2k_catalog.h; здесь —
+ * Go-панелью. Контракт и обоснования — в шапке d2s_catalog.h; здесь —
  * реализация и её собственные инварианты.
  *
  * УСТРОЙСТВО РАЗБОРА. Рекурсивный спуск по шести формам JSON (объект,
@@ -14,24 +14,24 @@
  * пропускается" из задания). Массивы переменной длины (планы, привязки,
  * коробки) идут через тот же приём — parse_array. Единственное
  * исключение — fingerprint.signals: он не растёт, а пишется в фиксированный
- * d2k_cat_fp.sig[8] (так задан контракт), и девятая примета — отказ, а не
+ * d2s_cat_fp.sig[8] (так задан контракт), и девятая примета — отказ, а не
  * рост за пределы буфера.
  *
  * ИНВАРИАНТ ОЧИСТКИ ПРИ ОТКАЗЕ. И parse_array, и бespoke-цикл signals
  * резервируют слот (n++) ДО разбора элемента, а не после. Если элемент
- * упадёт на середине — скажем, d2k_cat_plan.text уже выделен, а
+ * упадёт на середине — скажем, d2s_cat_plan.text уже выделен, а
  * "successes" ещё нет, — счётчик n_plans уже считает этот слот
- * существующим, и d2k_catalog_free (вызванный ОДИН раз, из
- * d2k_catalog_load, на любом отказе на любой глубине) найдёт и освободит
+ * существующим, и d2s_catalog_free (вызванный ОДИН раз, из
+ * d2s_catalog_load, на любом отказе на любой глубине) найдёт и освободит
  * всё, что успело выделиться, а не только то, что успело доразобраться до
  * конца. Каждый parse_* обязан начинать с memset(out, 0, sizeof *out) —
  * это то, что делает частично заполненную структуру безопасной для free
  * ещё ДО того, как в неё вообще что-то записали.
  *
  * ПОРЯДОК ФУНКЦИЙ В ЭТОМ ФАЙЛЕ — СНИЗУ ВВЕРХ ПО ЗАВИСИМОСТЯМ: каждая
- * вызывающая определена ПОСЛЕ того, кого зовёт (кроме d2k_catalog_free,
- * которую d2k_catalog_load зовёт из своей ветки отказа, но её объявление
- * приходит из d2k_catalog.h — обратных ссылок внутри файла нет нигде).
+ * вызывающая определена ПОСЛЕ того, кого зовёт (кроме d2s_catalog_free,
+ * которую d2s_catalog_load зовёт из своей ветки отказа, но её объявление
+ * приходит из d2s_catalog.h — обратных ссылок внутри файла нет нигде).
  * Ни одной forward declaration в файле поэтому не требуется.
  */
 #include <errno.h>
@@ -46,11 +46,11 @@
 #include <string.h>
 #include <time.h>
 
-#include "d2k_catalog.h"
+#include "d2s_catalog.h"
 
 /* Пишет причину отказа в err, если есть куда. err[0]!=0 после этого
  * вызова гарантированно — "не разобралось" без объяснения нечитаемо (см.
- * d2k_verdict.h про тот же принцип у вердиктов дерева). */
+ * d2s_verdict.h про тот же принцип у вердиктов дерева). */
 static void set_err(char *err, size_t cap, const char *fmt, ...) {
     if (!err || cap == 0) return;
     va_list ap;
@@ -124,7 +124,7 @@ static int jeat_null_if_present(jctx *j) {
  * кросс-сборкой — см. Makefile). mktime зависит от TZ окружения, которого
  * на роутере нет, а на кросс-собранном mipsel/aarch64-musl оно может вести
  * себя иначе, чем при разработке на маке. Все времена в файле — UTC ("Z",
- * см. шапку d2k_catalog.h), и календарная арифметика ниже это не обходит
+ * см. шапку d2s_catalog.h), и календарная арифметика ниже это не обходит
  * стороной через окружение, а считает сама, целыми числами.
  *
  * АЛГОРИТМ — days_from_civil/civil_from_days Ховарда Хиннанта
@@ -177,7 +177,7 @@ static void civil_from_days(int64_t z, int64_t *y, unsigned *m, unsigned *d) {
 }
 
 /* Секунды эпохи -> строка RFC 3339 с суффиксом Z, БЕЗ дробной доли (см.
- * d2k_catalog.h: точнее целой секунды каталогу не нужно, и это осознанная
+ * d2s_catalog.h: точнее целой секунды каталогу не нужно, и это осознанная
  * потеря точности при чтении, а не ошибка округления при записи). out
  * должен вмещать минимум 21 байт при 4-значном годе — outcap проверяется
  * snprintf'ом, не молча. */
@@ -403,7 +403,7 @@ static int jparse_string_dyn(jctx *j, char **out, char *err, size_t errcap) {
 /* Тот же разбор строки, но в буфер фиксированного размера (id/kind/
  * target/proto/plan_id). Отказ, если результат не влезает — тихое
  * обрезание сделало бы из длинного id ДРУГОЙ, ложный идентификатор без
- * единого следа подмены в файле (см. d2k_catalog.h). */
+ * единого следа подмены в файле (см. d2s_catalog.h). */
 static int jparse_string_fixed(jctx *j, char *out, size_t outcap,
                                 const char *field, char *err, size_t errcap) {
     char *dyn = NULL;
@@ -455,7 +455,7 @@ static int eat_lit(jctx *j, char want, char *err, size_t errcap) {
 /* Разбирает JSON-строку, обязанную быть RFC 3339 в форме
  * "YYYY-MM-DDTHH:MM:SS[.дробь]Z" — единственной, которую этот проект
  * производит (time.Time.MarshalJSON, всегда UTC — см. шапку файла и
- * d2k_catalog.h). Пояса со смещением (+03:00 и т.п.) не разбираются: их
+ * d2s_catalog.h). Пояса со смещением (+03:00 и т.п.) не разбираются: их
  * не бывает в данных, а полу-поддержка хуже явного отказа. Дробная доля
  * секунды пропускается и не хранится (секунды эпохи в int64_t). */
 static int jparse_rfc3339(jctx *j, int64_t *out, const char *field, char *err, size_t errcap) {
@@ -509,7 +509,7 @@ static int jparse_rfc3339(jctx *j, int64_t *out, const char *field, char *err, s
  * ЗНАКОМЫХ ключей (см. дальше по файлу), а jskip_value обязан пройти
  * ЛЮБУЮ форму под незнакомым ключом, в том числе бесконечно вложенную.
  *
- * D2K_JSON_MAX_DEPTH — общий предел для всех трёх мест рекурсивного
+ * D2S_JSON_MAX_DEPTH — общий предел для всех трёх мест рекурсивного
  * спуска (jskip_value, parse_object, parse_array): один счётчик, а не три
  * раздельных, потому что известная и незнакомая вложенность считаются с
  * одной и той же точки отсчёта (незнакомое поле внутри coробки уже сидит
@@ -527,7 +527,7 @@ static int jparse_rfc3339(jctx *j, int64_t *out, const char *field, char *err, s
  * порядка меньше глубины, на которой падает стек, а не "на всякий
  * случай": оба факта проверены (test_catalog.c,
  * check_depth_limit_rejects_not_crashes), а не приняты на слово. */
-#define D2K_JSON_MAX_DEPTH 64
+#define D2S_JSON_MAX_DEPTH 64
 
 /* Пропускает одно JSON-значение произвольной формы — единственный
  * честный способ "не знать" незнакомое поле: прочитать и отбросить по
@@ -542,11 +542,11 @@ static int jparse_rfc3339(jctx *j, int64_t *out, const char *field, char *err, s
  * обязан посчитать её: при спуске в значение одного ключа объекта или
  * элемента массива — depth+1 относительно СВОЕЙ. */
 static int jskip_value(jctx *j, int depth, char *err, size_t errcap) {
-    if (depth > D2K_JSON_MAX_DEPTH) {
+    if (depth > D2S_JSON_MAX_DEPTH) {
         set_err(err, errcap,
                 "JSON вложен глубже %d уровней — отказ вместо риска переполнения стека "
                 "(настоящая вложенность каталога не превышает 6)",
-                D2K_JSON_MAX_DEPTH);
+                D2S_JSON_MAX_DEPTH);
         return -1;
     }
     int c = jpeek(j);
@@ -621,14 +621,14 @@ typedef int (*key_handler)(jctx *j, const char *key, void *ctx, int depth, char 
  * что делать со значением ДАННОГО ключа; неизвестный ключ — его забота
  * позвать jskip_value, не забота parse_object.
  *
- * depth — глубина ЭТОГО объекта (см. D2K_JSON_MAX_DEPTH и шапку
+ * depth — глубина ЭТОГО объекта (см. D2S_JSON_MAX_DEPTH и шапку
  * jskip_value про общий счётчик на все три места спуска). Проверяется
  * ДО потребления '{': пустой вызов на уже недопустимой глубине не должен
  * даже начинать читать байты, которых, может, и нет. */
 static int parse_object(jctx *j, key_handler handle, void *ctx, int depth, char *err, size_t errcap) {
-    if (depth > D2K_JSON_MAX_DEPTH) {
+    if (depth > D2S_JSON_MAX_DEPTH) {
         set_err(err, errcap, "JSON вложен глубже %d уровней — отказ вместо риска переполнения стека",
-                D2K_JSON_MAX_DEPTH);
+                D2S_JSON_MAX_DEPTH);
         return -1;
     }
     if (jeat(j, '{', err, errcap) != 0) return -1;
@@ -656,8 +656,8 @@ static int parse_object(jctx *j, key_handler handle, void *ctx, int depth, char 
 /* Растит массив вдвое, когда некуда больше писать. Стартовая ёмкость 4 —
  * коробок и планов в реальном каталоге единицы (см. testdata),
  * экономить нечего, а частые realloc на пустом месте дороже одного
- * лишнего удвоения. cap передаётся снаружи, а не хранится в d2k_cat_box/
- * d2k_catalog: в этих структурах его нет (см. "Produces" задания), и
+ * лишнего удвоения. cap передаётся снаружи, а не хранится в d2s_cat_box/
+ * d2s_catalog: в этих структурах его нет (см. "Produces" задания), и
  * вызывающий (handle_box_key/handle_catalog_key) инициализирует его
  * ТЕКУЩИМ числом элементов на каждый вызов — благодаря этому дубль ключа
  * "plans" в одном объекте (не встречается в реальных файлах, но не должен
@@ -682,18 +682,18 @@ typedef int (*elem_parser)(jctx *j, void *out_elem, int depth, char *err, size_t
  * размера. null — валидный пустой массив (см. jeat_null_if_present).
  * Слот резервируется (*n += 1) ДО разбора элемента — см. шапку файла про
  * инвариант очистки при отказе: это единственный способ гарантировать,
- * что d2k_catalog_free найдёт и освободит частично разобранный элемент,
+ * что d2s_catalog_free найдёт и освободит частично разобранный элемент,
  * а не только полностью разобранные.
  *
  * depth — глубина ЭТОГО массива (см. parse_object про тот же параметр и
- * D2K_JSON_MAX_DEPTH про общий предел). Элементы массива на один уровень
+ * D2S_JSON_MAX_DEPTH про общий предел). Элементы массива на один уровень
  * глубже самого массива — parse_elem зовётся с depth+1. */
 static int parse_array(jctx *j, void **arr, size_t *n, size_t *cap,
                         size_t elemsize, elem_parser parse_elem,
                         const char *what, int depth, char *err, size_t errcap) {
-    if (depth > D2K_JSON_MAX_DEPTH) {
+    if (depth > D2S_JSON_MAX_DEPTH) {
         set_err(err, errcap, "JSON вложен глубже %d уровней — отказ вместо риска переполнения стека",
-                D2K_JSON_MAX_DEPTH);
+                D2S_JSON_MAX_DEPTH);
         return -1;
     }
     if (jeat_null_if_present(j)) return 0;
@@ -720,7 +720,7 @@ static int parse_array(jctx *j, void **arr, size_t *n, size_t *cap,
  * -------------------------------------------------------------------- */
 
 static int handle_signal_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_cat_signal *out = (d2k_cat_signal *)ctx;
+    d2s_cat_signal *out = (d2s_cat_signal *)ctx;
     if (strcmp(key, "kind") == 0)
         return jparse_string_fixed(j, out->kind, sizeof out->kind, "signal.kind", err, errcap);
     if (strcmp(key, "ttl") == 0)
@@ -739,27 +739,27 @@ static int handle_signal_key(jctx *j, const char *key, void *ctx, int depth, cha
         return jparse_i32(j, &out->packets, "signal.packets", err, errcap);
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_signal(jctx *j, d2k_cat_signal *out, int depth, char *err, size_t errcap) {
+static int parse_signal(jctx *j, d2s_cat_signal *out, int depth, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     return parse_object(j, handle_signal_key, out, depth, err, errcap);
 }
 
 /* fingerprint.signals — единственный массив каталога, который НЕ растёт:
- * ёмкость d2k_cat_fp.sig фиксирована на 8 самим контрактом (см.
- * "Produces" задания и d2k_catalog.h), и девятая примета — отказ, а не
+ * ёмкость d2s_cat_fp.sig фиксирована на 8 самим контрактом (см.
+ * "Produces" задания и d2s_catalog.h), и девятая примета — отказ, а не
  * рост за пределы буфера или молчаливая потеря одной из девяти. Поэтому
  * этот цикл — не parse_array (которому есть куда расти), а bespoke, но
  * тот же приём "слот резервируется до разбора элемента" — и тот же приём
  * "depth+1 на каждый спуск", что и в parse_array, хоть массив и не растёт:
  * предел вложенности общий на весь файл, а не только на растущие массивы. */
 static int handle_fp_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_cat_fp *out = (d2k_cat_fp *)ctx;
+    d2s_cat_fp *out = (d2s_cat_fp *)ctx;
     if (strcmp(key, "method") == 0)
         return jparse_i32(j, &out->method, "fingerprint.method", err, errcap);
     if (strcmp(key, "signals") == 0) {
-        if (depth + 1 > D2K_JSON_MAX_DEPTH) {
+        if (depth + 1 > D2S_JSON_MAX_DEPTH) {
             set_err(err, errcap, "JSON вложен глубже %d уровней — отказ вместо риска переполнения стека",
-                    D2K_JSON_MAX_DEPTH);
+                    D2S_JSON_MAX_DEPTH);
             return -1;
         }
         if (jeat_null_if_present(j)) return 0;
@@ -785,7 +785,7 @@ static int handle_fp_key(jctx *j, const char *key, void *ctx, int depth, char *e
     }
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_fp(jctx *j, d2k_cat_fp *out, int depth, char *err, size_t errcap) {
+static int parse_fp(jctx *j, d2s_cat_fp *out, int depth, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     return parse_object(j, handle_fp_key, out, depth, err, errcap);
 }
@@ -795,7 +795,7 @@ static int parse_fp(jctx *j, d2k_cat_fp *out, int depth, char *err, size_t errca
  * -------------------------------------------------------------------- */
 
 static int handle_plan_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_cat_plan *out = (d2k_cat_plan *)ctx;
+    d2s_cat_plan *out = (d2s_cat_plan *)ctx;
     if (strcmp(key, "id") == 0)
         return jparse_string_fixed(j, out->id, sizeof out->id, "plan.id", err, errcap);
     if (strcmp(key, "proto") == 0)
@@ -813,25 +813,25 @@ static int handle_plan_key(jctx *j, const char *key, void *ctx, int depth, char 
         return jparse_bool_i(j, &out->enabled, "plan.enabled", err, errcap);
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_plan(jctx *j, d2k_cat_plan *out, int depth, char *err, size_t errcap) {
+static int parse_plan(jctx *j, d2s_cat_plan *out, int depth, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     return parse_object(j, handle_plan_key, out, depth, err, errcap);
 }
 static int elem_plan(jctx *j, void *o, int depth, char *err, size_t errcap) {
-    return parse_plan(j, (d2k_cat_plan *)o, depth, err, errcap);
+    return parse_plan(j, (d2s_cat_plan *)o, depth, err, errcap);
 }
 
-/* transport — поле, которого нет в Go-структуре Binding (см. d2k_catalog.h
+/* transport — поле, которого нет в Go-структуре Binding (см. d2s_catalog.h
  * про то, зачем оно и почему совместимость односторонняя). Для файла,
  * снятого до его появления, ключ "transport" в объекте попросту
  * отсутствует — handle_binding_key на него не попадёт, а memset в
  * parse_binding уже оставил 0 ("не записано"), см. testdata и
  * check_transport_default_zero_on_old_file. Ровно то же и по той же
- * механике верно для shape/verified_by, заведённых позже (см. d2k_catalog.h
+ * механике верно для shape/verified_by, заведённых позже (см. d2s_catalog.h
  * про контекст проверки): ключей нет — поля остаются нулями, и такая
  * привязка совместима с любой формой. */
 static int handle_binding_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_cat_binding *out = (d2k_cat_binding *)ctx;
+    d2s_cat_binding *out = (d2s_cat_binding *)ctx;
     if (strcmp(key, "kind") == 0)
         return jparse_string_fixed(j, out->kind, sizeof out->kind, "binding.kind", err, errcap);
     if (strcmp(key, "target") == 0)
@@ -874,26 +874,26 @@ static int handle_binding_key(jctx *j, const char *key, void *ctx, int depth, ch
         return jparse_u8(j, &out->budget, "binding.budget", err, errcap);
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_binding(jctx *j, d2k_cat_binding *out, int depth, char *err, size_t errcap) {
+static int parse_binding(jctx *j, d2s_cat_binding *out, int depth, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     out->family = 4;
     return parse_object(j, handle_binding_key, out, depth, err, errcap);
 }
 static int elem_binding(jctx *j, void *o, int depth, char *err, size_t errcap) {
-    return parse_binding(j, (d2k_cat_binding *)o, depth, err, errcap);
+    return parse_binding(j, (d2s_cat_binding *)o, depth, err, errcap);
 }
 
-/* Числа поля d2k_cat_binding.shape — ЭТО ЗНАЧЕНИЯ d2k_shape, а не своя
- * нумерация (см. d2k_catalog.h). Связь закреплена на сборке, потому что
- * проверить её иначе нечем: перестановка перечисления в d2k_hello.h ничего
+/* Числа поля d2s_cat_binding.shape — ЭТО ЗНАЧЕНИЯ d2s_shape, а не своя
+ * нумерация (см. d2s_catalog.h). Связь закреплена на сборке, потому что
+ * проверить её иначе нечем: перестановка перечисления в d2s_hello.h ничего
  * здесь не сломает — она молча переименует то, что уже записано в файл на
  * роутере, и накопленные привязки начнут утверждать про форму приветствия
  * обратное тому, что измерялось. Отрицательный размер массива — способ
  * сказать это компилятору на C99, где _Static_assert ещё нет. */
-typedef char d2k_cat_shape_numbering_check[
-    (D2K_SHAPE_MODERN == 1 && D2K_SHAPE_LEGACY == 2) ? 1 : -1];
+typedef char d2s_cat_shape_numbering_check[
+    (D2S_SHAPE_MODERN == 1 && D2S_SHAPE_LEGACY == 2) ? 1 : -1];
 
-int d2k_cat_shape_fits(uint8_t stored, uint8_t got) {
+int d2s_cat_shape_fits(uint8_t stored, uint8_t got) {
     /* Ноль с любой стороны — «не измерено» (§2.4), и оно не противоречит
        ничему: старый файл без поля совместим с любой формой, а проверка без
        измеренной формы не спорит с записанной. Противоречат только две
@@ -907,7 +907,7 @@ int d2k_cat_shape_fits(uint8_t stored, uint8_t got) {
  * -------------------------------------------------------------------- */
 
 static int handle_box_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_cat_box *out = (d2k_cat_box *)ctx;
+    d2s_cat_box *out = (d2s_cat_box *)ctx;
     if (strcmp(key, "id") == 0)
         return jparse_string_fixed(j, out->id, sizeof out->id, "box.id", err, errcap);
     if (strcmp(key, "created") == 0)
@@ -919,31 +919,31 @@ static int handle_box_key(jctx *j, const char *key, void *ctx, int depth, char *
     if (strcmp(key, "plans") == 0) {
         size_t cap = out->n_plans; /* см. grow() про то, почему не 0 */
         return parse_array(j, (void **)&out->plans, &out->n_plans, &cap,
-                            sizeof(d2k_cat_plan), elem_plan, "plans", depth + 1, err, errcap);
+                            sizeof(d2s_cat_plan), elem_plan, "plans", depth + 1, err, errcap);
     }
     if (strcmp(key, "bindings") == 0) {
         size_t cap = out->n_binds;
         return parse_array(j, (void **)&out->binds, &out->n_binds, &cap,
-                            sizeof(d2k_cat_binding), elem_binding, "bindings", depth + 1, err, errcap);
+                            sizeof(d2s_cat_binding), elem_binding, "bindings", depth + 1, err, errcap);
     }
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_box(jctx *j, d2k_cat_box *out, int depth, char *err, size_t errcap) {
+static int parse_box(jctx *j, d2s_cat_box *out, int depth, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     return parse_object(j, handle_box_key, out, depth, err, errcap);
 }
 static int elem_box(jctx *j, void *o, int depth, char *err, size_t errcap) {
-    return parse_box(j, (d2k_cat_box *)o, depth, err, errcap);
+    return parse_box(j, (d2s_cat_box *)o, depth, err, errcap);
 }
 
 /* "schema" и верхнеуровневый "updated" пропускаются jskip_value: в
- * d2k_catalog им нет соответствующего поля (см. d2k_catalog.h — подробно
+ * d2s_catalog им нет соответствующего поля (см. d2s_catalog.h — подробно
  * о том, почему это не потеря: schema всегда константа 1, updated Go
  * перезаписывает текущим временем на каждой записи независимо от
  * прочитанного). */
 static int handle_domain_observation(jctx *j,const char *key,void *ctx,
                                     int depth,char *err,size_t errcap) {
-    d2k_group_observation *o=ctx;
+    d2s_group_observation *o=ctx;
     if(!strcmp(key,"name")) return jparse_string_fixed(j,o->name,sizeof o->name,"domain.name",err,errcap);
     if(!strcmp(key,"plan_id")) return jparse_string_fixed(j,o->plan_id,sizeof o->plan_id,"domain.plan_id",err,errcap);
     if(!strcmp(key,"transport")) return jparse_u8(j,&o->key.transport,"domain.transport",err,errcap);
@@ -960,16 +960,16 @@ static int handle_domain_observation(jctx *j,const char *key,void *ctx,
     return jskip_value(j,depth+1,err,errcap);
 }
 
-static int parse_domain_observations(jctx *j,d2k_group_state *s,int depth,
+static int parse_domain_observations(jctx *j,d2s_group_state *s,int depth,
                                      char *err,size_t errcap) {
-    if(depth>D2K_JSON_MAX_DEPTH) { set_err(err,errcap,"domain observations too deep"); return -1; }
+    if(depth>D2S_JSON_MAX_DEPTH) { set_err(err,errcap,"domain observations too deep"); return -1; }
     if(jeat(j,'[',err,errcap)) return -1;
     if(jpeek(j)==']') { j->i++; return 0; }
     for(;;) {
-        if(s->n_observations==D2K_GROUP_OBSERVATION_MAX) {
+        if(s->n_observations==D2S_GROUP_OBSERVATION_MAX) {
             set_err(err,errcap,"too many domain observations"); return -1;
         }
-        d2k_group_observation *o=&s->observations[s->n_observations++];
+        d2s_group_observation *o=&s->observations[s->n_observations++];
         memset(o,0,sizeof *o);
         if(parse_object(j,handle_domain_observation,o,depth+1,err,errcap)) return -1;
         int c=jpeek(j);
@@ -981,7 +981,7 @@ static int parse_domain_observations(jctx *j,d2k_group_state *s,int depth,
 
 static int handle_net_whitelist_key(jctx *j, const char *key, void *ctx, int depth,
                                     char *err, size_t errcap) {
-    d2k_net_whitelist *n = (d2k_net_whitelist *)ctx;
+    d2s_net_whitelist *n = (d2s_net_whitelist *)ctx;
     if (!strcmp(key, "name")) return jparse_string_fixed(j, n->name, sizeof n->name, "network_whitelist.name", err, errcap);
     if (!strcmp(key, "searched")) return jparse_bool_i(j, &n->searched, "network_whitelist.searched", err, errcap);
     if (!strcmp(key, "tx_only")) return jparse_bool_i(j, &n->tx_only, "network_whitelist.tx_only", err, errcap);
@@ -990,11 +990,11 @@ static int handle_net_whitelist_key(jctx *j, const char *key, void *ctx, int dep
 }
 
 static int handle_catalog_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
-    d2k_catalog *out = (d2k_catalog *)ctx;
+    d2s_catalog *out = (d2s_catalog *)ctx;
     if (strcmp(key, "boxes") == 0) {
         size_t cap = out->n_boxes;
         return parse_array(j, (void **)&out->boxes, &out->n_boxes, &cap,
-                            sizeof(d2k_cat_box), elem_box, "boxes", depth + 1, err, errcap);
+                            sizeof(d2s_cat_box), elem_box, "boxes", depth + 1, err, errcap);
     }
     if(!strcmp(key,"domain_observations") || !strcmp(key,"domain_groups_frozen") ||
        !strcmp(key,"domain_groups_disabled") || !strcmp(key,"domain_groups_disabled_at")) {
@@ -1016,25 +1016,25 @@ static int handle_catalog_key(jctx *j, const char *key, void *ctx, int depth, ch
        to activate a rule without its retained learning observations. */
     return jskip_value(j, depth + 1, err, errcap);
 }
-static int parse_catalog_obj(jctx *j, d2k_catalog *out, char *err, size_t errcap) {
+static int parse_catalog_obj(jctx *j, d2s_catalog *out, char *err, size_t errcap) {
     memset(out, 0, sizeof *out);
     /* Вершина спуска: глубина 1 (мы вот-вот войдём в самую внешнюю '{').
        Дальше глубина считается ОТСЮДА на каждый вложенный уровень — см.
-       D2K_JSON_MAX_DEPTH про весь путь catalog{1->boxes[2->box{3->... */
+       D2S_JSON_MAX_DEPTH про весь путь catalog{1->boxes[2->box{3->... */
     return parse_object(j, handle_catalog_key, out, 1, err, errcap);
 }
 
-static void prune_unavailable_domain_groups(d2k_catalog *cat) {
-    d2k_group_state *s=cat->groups;
+static void prune_unavailable_domain_groups(d2s_catalog *cat) {
+    d2s_group_state *s=cat->groups;
     if(!s) return;
     for(size_t i=0;i<s->n_groups;) {
-        const d2k_domain_group *g=&s->groups[i];
+        const d2s_domain_group *g=&s->groups[i];
         int found=0;
         const char *proto=g->key.transport==17?"quic":"tls";
         for(size_t bi=0;bi<cat->n_boxes && !found;bi++) {
-            const d2k_cat_box *b=&cat->boxes[bi];
+            const d2s_cat_box *b=&cat->boxes[bi];
             for(size_t pi=0;pi<b->n_plans;pi++) {
-                const d2k_cat_plan *p=&b->plans[pi];
+                const d2s_cat_plan *p=&b->plans[pi];
                 if(p->enabled && p->text && !strcmp(p->id,g->plan_id) &&
                    !strcmp(p->proto,proto)) { found=1; break; }
             }
@@ -1044,13 +1044,13 @@ static void prune_unavailable_domain_groups(d2k_catalog *cat) {
 }
 
 /* --------------------------------------------------------------------
- * Освобождение. Определено ДО d2k_catalog_load, потому что тот зовёт
- * d2k_catalog_free на пути отказа (объявление берётся из d2k_catalog.h в
+ * Освобождение. Определено ДО d2s_catalog_load, потому что тот зовёт
+ * d2s_catalog_free на пути отказа (объявление берётся из d2s_catalog.h в
  * любом случае, но порядок определений в файле — снизу вверх без
  * исключений, см. шапку).
  * -------------------------------------------------------------------- */
 
-static void free_box(d2k_cat_box *b) {
+static void free_box(d2s_cat_box *b) {
     for (size_t i = 0; i < b->n_plans; i++) {
         free(b->plans[i].text);
     }
@@ -1060,7 +1060,7 @@ static void free_box(d2k_cat_box *b) {
     b->binds = NULL; b->n_binds = 0;
 }
 
-void d2k_catalog_free(d2k_catalog *c) {
+void d2s_catalog_free(d2s_catalog *c) {
     if (!c) return;
     for (size_t i = 0; i < c->n_boxes; i++) {
         free_box(&c->boxes[i]);
@@ -1118,7 +1118,7 @@ static int read_whole_file(const char *path, char **buf_out, size_t *len_out,
     return 0;
 }
 
-int d2k_catalog_load(const char *path, d2k_catalog *out, char *err, size_t errcap) {
+int d2s_catalog_load(const char *path, d2s_catalog *out, char *err, size_t errcap) {
     if (err && errcap) err[0] = '\0';
     memset(out, 0, sizeof *out);
 
@@ -1128,7 +1128,7 @@ int d2k_catalog_load(const char *path, d2k_catalog *out, char *err, size_t errca
 
     jctx j; j.s = buf; j.len = len; j.i = 0;
     int rc = parse_catalog_obj(&j, out, err, errcap);
-    if(rc==0 && out->groups && d2k_group_restore(out->groups)) {
+    if(rc==0 && out->groups && d2s_group_restore(out->groups)) {
         set_err(err,errcap,"invalid domain learning observations"); rc=-1;
     }
     if(rc==0) prune_unavailable_domain_groups(out);
@@ -1156,11 +1156,11 @@ int d2k_catalog_load(const char *path, d2k_catalog *out, char *err, size_t errca
     if (rc != 0) {
         /* Незакрытая структура/дробное число/переполнение/мусор в хвосте —
            отказ разбора ЦЕЛИКОМ, а не результат с потерянной частью (см.
-           шапку файла и d2k_catalog.h). Всё, что успело выделиться до
+           шапку файла и d2s_catalog.h). Всё, что успело выделиться до
            отказа, найдено и освобождено здесь же, вызывающему звать free
-           не на чем и не нужно (см. d2k_catalog.h и test_catalog.c, блок
+           не на чем и не нужно (см. d2s_catalog.h и test_catalog.c, блок
            про обрубок). */
-        d2k_catalog_free(out);
+        d2s_catalog_free(out);
         return -1;
     }
     return 0;
@@ -1216,7 +1216,7 @@ static void write_json_array(FILE *f, const void *arr, size_t n, size_t elemsize
 }
 
 static void write_signal_elem(FILE *f, const void *e, int depth) {
-    const d2k_cat_signal *s = (const d2k_cat_signal *)e;
+    const d2s_cat_signal *s = (const d2s_cat_signal *)e;
     wr_indent(f, depth); fputs("{\n", f);
     wr_indent(f, depth + 1); fputs("\"kind\": ", f); write_json_string(f, s->kind); fputs(",\n", f);
     wr_indent(f, depth + 1); fprintf(f, "\"ttl\": %u,\n", (unsigned)s->ttl);
@@ -1232,17 +1232,17 @@ static void write_signal_elem(FILE *f, const void *e, int depth) {
     wr_indent(f, depth); fputc('}', f);
 }
 
-static void write_fp(FILE *f, const d2k_cat_fp *fp, int depth) {
+static void write_fp(FILE *f, const d2s_cat_fp *fp, int depth) {
     fputs("{\n", f);
     wr_indent(f, depth + 1); fprintf(f, "\"method\": %d,\n", fp->method);
     wr_indent(f, depth + 1); fputs("\"signals\": ", f);
-    write_json_array(f, fp->sig, fp->n_sig, sizeof(d2k_cat_signal), write_signal_elem, depth + 1);
+    write_json_array(f, fp->sig, fp->n_sig, sizeof(d2s_cat_signal), write_signal_elem, depth + 1);
     fputc('\n', f);
     wr_indent(f, depth); fputc('}', f);
 }
 
 static void write_plan_elem(FILE *f, const void *e, int depth) {
-    const d2k_cat_plan *p = (const d2k_cat_plan *)e;
+    const d2s_cat_plan *p = (const d2s_cat_plan *)e;
     char added_s[32];
     format_rfc3339(p->added, added_s, sizeof added_s);
     wr_indent(f, depth); fputs("{\n", f);
@@ -1256,7 +1256,7 @@ static void write_plan_elem(FILE *f, const void *e, int depth) {
 }
 
 static void write_binding_elem(FILE *f, const void *e, int depth) {
-    const d2k_cat_binding *bd = (const d2k_cat_binding *)e;
+    const d2s_cat_binding *bd = (const d2s_cat_binding *)e;
     char confirmed_s[32];
     format_rfc3339(bd->confirmed, confirmed_s, sizeof confirmed_s);
     wr_indent(f, depth); fputs("{\n", f);
@@ -1267,9 +1267,9 @@ static void write_binding_elem(FILE *f, const void *e, int depth) {
     wr_indent(f, depth + 1); fprintf(f, "\"confirmed\": \"%s\",\n", confirmed_s);
     wr_indent(f, depth + 1); fprintf(f, "\"successes\": %d,\n", bd->successes);
     wr_indent(f, depth + 1); fprintf(f, "\"enabled\": %s,\n", bd->enabled ? "true" : "false");
-    /* transport — новое поле, последним, как в d2k_cat_binding (задание,
+    /* transport — новое поле, последним, как в d2s_cat_binding (задание,
        "Produces"). Выводится всегда, даже 0 ("не записано") — Go
-       незнакомое поле молча пропустит (см. d2k_catalog.h), а сохранить
+       незнакомое поле молча пропустит (см. d2s_catalog.h), а сохранить
        для НЕЁ omitempty-поведение Go смысла не имеет: этого поля в её
        структуре нет вообще, ей нечего сравнивать с нулём. */
     wr_indent(f, depth + 1); fprintf(f, "\"transport\": %u,\n", (unsigned)bd->transport);
@@ -1307,7 +1307,7 @@ static void write_binding_elem(FILE *f, const void *e, int depth) {
 }
 
 static void write_box_elem(FILE *f, const void *e, int depth) {
-    const d2k_cat_box *b = (const d2k_cat_box *)e;
+    const d2s_cat_box *b = (const d2s_cat_box *)e;
     char created_s[32], updated_s[32];
     format_rfc3339(b->created, created_s, sizeof created_s);
     format_rfc3339(b->updated, updated_s, sizeof updated_s);
@@ -1317,22 +1317,22 @@ static void write_box_elem(FILE *f, const void *e, int depth) {
     wr_indent(f, depth + 1); fprintf(f, "\"updated\": \"%s\",\n", updated_s);
     wr_indent(f, depth + 1); fputs("\"fingerprint\": ", f); write_fp(f, &b->fp, depth + 1); fputs(",\n", f);
     wr_indent(f, depth + 1); fputs("\"plans\": ", f);
-    write_json_array(f, b->plans, b->n_plans, sizeof(d2k_cat_plan), write_plan_elem, depth + 1);
+    write_json_array(f, b->plans, b->n_plans, sizeof(d2s_cat_plan), write_plan_elem, depth + 1);
     fputs(",\n", f);
     wr_indent(f, depth + 1); fputs("\"bindings\": ", f);
-    write_json_array(f, b->binds, b->n_binds, sizeof(d2k_cat_binding), write_binding_elem, depth + 1);
+    write_json_array(f, b->binds, b->n_binds, sizeof(d2s_cat_binding), write_binding_elem, depth + 1);
     fputc('\n', f);
     wr_indent(f, depth); fputc('}', f);
 }
 
-static void write_domain_key(FILE *f,const d2k_group_key *key) {
+static void write_domain_key(FILE *f,const d2s_group_key *key) {
     fprintf(f,",\"transport\":%u,\"family\":%u,\"shape\":%u,\"probe_path\":",
             key->transport,key->family,key->shape);
     write_json_string(f,key->probe_path);
     fputs(",\"ech_origin\":",f); write_json_string(f,key->ech_origin);
 }
 static void write_domain_observation(FILE *f,const void *value,int depth) {
-    const d2k_group_observation *o=value; char at[32];
+    const d2s_group_observation *o=value; char at[32];
     format_rfc3339(o->at,at,sizeof at);
     wr_indent(f,depth); fputs("{\"name\":",f); write_json_string(f,o->name);
     fputs(",\"plan_id\":",f); write_json_string(f,o->plan_id);
@@ -1340,13 +1340,13 @@ static void write_domain_observation(FILE *f,const void *value,int depth) {
     fprintf(f,",\"evidence\":%u,\"at\":\"%s\"}",o->evidence,at);
 }
 static void write_domain_group(FILE *f,const void *value,int depth) {
-    const d2k_domain_group *g=value;
+    const d2s_domain_group *g=value;
     wr_indent(f,depth); fputs("{\"suffix\":",f); write_json_string(f,g->suffix);
     fputs(",\"plan_id\":",f); write_json_string(f,g->plan_id);
     write_domain_key(f,&g->key); fprintf(f,",\"evidence_count\":%u}",g->evidence_count);
 }
 
-int d2k_catalog_save(const d2k_catalog *c, const char *path, char *err, size_t errcap) {
+int d2s_catalog_save(const d2s_catalog *c, const char *path, char *err, size_t errcap) {
     if (err && errcap) err[0] = '\0';
 
     FILE *f = fopen(path, "w");
@@ -1361,19 +1361,19 @@ int d2k_catalog_save(const d2k_catalog *c, const char *path, char *err, size_t e
     fputs("{\n", f);
     /* "schema" константой 1, не полем структуры — единственное значение,
        с которым Go вообще соглашается прочитать файл (Validate,
-       internal/catalog/catalog.go — см. d2k_catalog.h). "updated" —
+       internal/catalog/catalog.go — см. d2s_catalog.h). "updated" —
        текущее время: Go делает ТО ЖЕ САМОЕ на каждой записи, независимо
        от того, что было прочитано (internal/catalog/store.go,
        writeLocked: "s.cat.Updated = now"). */
     fputs("  \"schema\": 1,\n", f);
     fprintf(f, "  \"updated\": \"%s\",\n", now_s);
     fputs("  \"boxes\": ", f);
-    write_json_array(f, c->boxes, c->n_boxes, sizeof(d2k_cat_box), write_box_elem, 1);
+    write_json_array(f, c->boxes, c->n_boxes, sizeof(d2s_cat_box), write_box_elem, 1);
     if(c->groups) {
         fputs(",\n  \"domain_groups\": ",f);
-        write_json_array(f,c->groups->groups,c->groups->n_groups,sizeof(d2k_domain_group),write_domain_group,1);
+        write_json_array(f,c->groups->groups,c->groups->n_groups,sizeof(d2s_domain_group),write_domain_group,1);
         fputs(",\n  \"domain_observations\": ",f);
-        write_json_array(f,c->groups->observations,c->groups->n_observations,sizeof(d2k_group_observation),write_domain_observation,1);
+        write_json_array(f,c->groups->observations,c->groups->n_observations,sizeof(d2s_group_observation),write_domain_observation,1);
         fprintf(f,",\n  \"domain_groups_frozen\": %s",c->groups->frozen?"true":"false");
         fprintf(f,",\n  \"domain_groups_disabled\": %s",c->groups->disabled?"true":"false");
         if(c->groups->disabled_at) {
@@ -1417,15 +1417,15 @@ int d2k_catalog_save(const d2k_catalog *c, const char *path, char *err, size_t e
 }
 
 /* rename в том же каталоге делает замену атомарной, fsync закрепляет её на диске. */
-int d2k_catalog_save_atomic(const d2k_catalog *cat, const char *path,
+int d2s_catalog_save_atomic(const d2s_catalog *cat, const char *path,
                             char *err, size_t errcap) {
-    char tmp[D2K_CATALOG_PATH_MAX + sizeof(".new")], dir[D2K_CATALOG_PATH_MAX];
+    char tmp[D2S_CATALOG_PATH_MAX + sizeof(".new")], dir[D2S_CATALOG_PATH_MAX];
     if (!path || strlen(path) >= sizeof dir) {
         set_err(err, errcap, "слишком длинный путь каталога (максимум %u байт)",
-                (unsigned)(D2K_CATALOG_PATH_MAX - 1)); return -1;
+                (unsigned)(D2S_CATALOG_PATH_MAX - 1)); return -1;
     }
     snprintf(tmp, sizeof tmp, "%s.new", path);
-    if (d2k_catalog_save(cat, tmp, err, errcap) != 0) {
+    if (d2s_catalog_save(cat, tmp, err, errcap) != 0) {
         (void)remove(tmp); return -1;
     }
     if (rename(tmp, path) != 0) {

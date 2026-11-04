@@ -1,5 +1,5 @@
-#ifndef D2K_TG_CONFIG_H
-#define D2K_TG_CONFIG_H
+#ifndef D2S_TG_CONFIG_H
+#define D2S_TG_CONFIG_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,7 +37,7 @@ typedef struct {
     uint16_t listen_port;
 } tg_config;
 
-/* Strictly reads only Telegram-owned keys; unknown D2K config keys are ignored. */
+/* Strictly reads only Telegram-owned keys; unknown D2S config keys are ignored. */
 int tg_config_read(const char *path, tg_config *out);
 void tg_config_clean(tg_config *config);
 

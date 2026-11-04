@@ -1037,7 +1037,7 @@ static int build_config_query(discovery_writer *writer) {
                    discovery_write_u32(writer, 4) != 0 ||
                    discovery_write_string(writer, "OpenWrt") != 0 ||
                    discovery_write_string(writer, "OpenWrt") != 0 ||
-                   discovery_write_string(writer, "d2k-tg-0.3") != 0 ||
+                   discovery_write_string(writer, "d2s-tg-0.3") != 0 ||
                    discovery_write_string(writer, "ru") != 0 ||
                    discovery_write_string(writer, "") != 0 ||
                    discovery_write_string(writer, "ru") != 0 ||

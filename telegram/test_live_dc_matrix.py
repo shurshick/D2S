@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Проверяет живые TCP resPQ и help.getConfig для DC1–DC5 у собранного d2ktg."""
+"""Проверяет живые TCP resPQ и help.getConfig для DC1–DC5 у собранного d2stg."""
 
 import json
 import subprocess
@@ -29,13 +29,13 @@ def check_matrix(executable: str, option: str, stage: str) -> bool:
         print(f"{option}: проверка DC1–DC5 превысила 50 секунд", file=sys.stderr)
         return False
     except OSError as error:
-        print(f"Не удалось запустить d2ktg: {error}", file=sys.stderr)
+        print(f"Не удалось запустить d2stg: {error}", file=sys.stderr)
         return False
 
     try:
         records = [json.loads(line) for line in result.stdout.splitlines() if line]
     except json.JSONDecodeError as error:
-        print(f"{option}: d2ktg вернул некорректный JSON: {error}", file=sys.stderr)
+        print(f"{option}: d2stg вернул некорректный JSON: {error}", file=sys.stderr)
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
         return False
@@ -79,13 +79,13 @@ def check_wss_matrix(executable: str, ca_bundle: str) -> bool:
         print(f"{option}: проверка DC1–DC5 превысила 50 секунд", file=sys.stderr)
         return False
     except OSError as error:
-        print(f"Не удалось запустить d2ktg: {error}", file=sys.stderr)
+        print(f"Не удалось запустить d2stg: {error}", file=sys.stderr)
         return False
 
     try:
         records = [json.loads(line) for line in result.stdout.splitlines() if line]
     except json.JSONDecodeError as error:
-        print(f"{option}: d2ktg вернул некорректный JSON: {error}", file=sys.stderr)
+        print(f"{option}: d2stg вернул некорректный JSON: {error}", file=sys.stderr)
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
         return False
@@ -111,7 +111,7 @@ def check_wss_matrix(executable: str, ca_bundle: str) -> bool:
 def main() -> int:
     if len(sys.argv) not in (2, 3):
         print(
-            "Использование: python3 test_live_dc_matrix.py /путь/к/d2ktg [CA_BUNDLE]",
+            "Использование: python3 test_live_dc_matrix.py /путь/к/d2stg [CA_BUNDLE]",
             file=sys.stderr,
         )
         return 2

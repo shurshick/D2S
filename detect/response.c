@@ -36,7 +36,7 @@
  * сломался бы позже, на нашем ClientKeyExchange. Это несовместимость клиента,
  * а не цензура, и эталон назвал бы её «режут ответ» ошибочно.
  */
-#include "d2k_detect.h"
+#include "d2s_detect.h"
 
 #include <errno.h>
 #include <netdb.h>
@@ -61,7 +61,7 @@
  * Он НИЖЕ общего: сюда мы попадаем только тогда, когда сервер уже ответил на
  * наш ClientHello, то есть он рядом и жив. Ждать его шесть секунд незачем, а
  * цена ожидания — прямое время в глазах человека. */
-static int resp_timeout(const d2k_opts *opt)
+static int resp_timeout(const d2s_opts *opt)
 {
     if (opt->timeout_ms > 0 && opt->timeout_ms < 3000) {
         return opt->timeout_ms;
@@ -80,7 +80,7 @@ static int resp_timeout(const d2k_opts *opt)
  *
  * Возврат: 0 — продолжать читать; 1 — конец (*done=1: ServerHelloDone,
  * *done=0: фатальный алерт). Недочитанная запись — это 0, не «дошло». */
-int d2k_resp_scan12(const uint8_t *buf, size_t have, int *done)
+int d2s_resp_scan12(const uint8_t *buf, size_t have, int *done)
 {
     size_t pos = 0, i;
     uint8_t hdr[4];
@@ -120,10 +120,10 @@ int d2k_resp_scan12(const uint8_t *buf, size_t have, int *done)
 /* Ждём ServerHelloDone, разбирая поток записей TLS. Возврат 1 — дошёл. */
 /* 1 — ServerHelloDone; 0 — не завершилось (алерт, обрыв, тишина); -1 — НЕ ИЗМЕРЕНО:
  * упёрлись в собственный предел буфера, про сервер это ничего не говорит. */
-int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
-                       const d2k_opts *opt)
+int d2s_resp_handshake12(const char *host, const char *port, const char *sni,
+                       const d2s_opts *opt)
 {
-    d2k_trigger tr;
+    d2s_trigger tr;
     char err[160];
     struct addrinfo hints, *ai = NULL;
     int fd = -1, rc = 0;
@@ -133,7 +133,7 @@ int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
     uint8_t *buf; /* heap-owned: each handshake has its own partial records */
     size_t have = 0;
 
-    if (d2k_trigger_tls(sni, 1 /* legacy: без supported_versions, сервер пойдёт на 1.2 */,
+    if (d2s_trigger_tls(sni, 1 /* legacy: без supported_versions, сервер пойдёт на 1.2 */,
                         &tr, err, sizeof(err)) != 0) {
         return 0;
     }
@@ -150,7 +150,7 @@ int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
         return 0;
     }
     {
-        int mark = (int)(opt->mark ? opt->mark : (uint32_t)D2K_BYPASS_MARK);
+        int mark = (int)(opt->mark ? opt->mark : (uint32_t)D2S_BYPASS_MARK);
         int one = 1;
         struct timeval tv;
         (void)setsockopt(fd, SOL_SOCKET, SO_MARK, &mark, sizeof(mark));
@@ -167,18 +167,18 @@ int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
     }
     freeaddrinfo(ai);
 
-    if (d2k_send_nosig(fd, tr.payload, tr.len) != (ssize_t)tr.len) {
+    if (d2s_send_nosig(fd, tr.payload, tr.len) != (ssize_t)tr.len) {
         close(fd);
         return 0;
     }
 
     buf = malloc(RESPONSE_CAP);
     if (!buf) { close(fd); return 0; }
-    deadline = d2k_now_ms() + to;
-    while (d2k_now_ms() < deadline) {
+    deadline = d2s_now_ms() + to;
+    while (d2s_now_ms() < deadline) {
         struct pollfd pfd;
         ssize_t n;
-        int left = (int)(deadline - d2k_now_ms());
+        int left = (int)(deadline - d2s_now_ms());
 
         pfd.fd = fd;
         pfd.events = POLLIN;
@@ -192,7 +192,7 @@ int d2k_resp_handshake12(const char *host, const char *port, const char *sni,
         }
         have += (size_t)n;
 
-        if (d2k_resp_scan12(buf, have, &rc) != 0) {
+        if (d2s_resp_scan12(buf, have, &rc) != 0) {
             goto out; /* ServerHelloDone, либо фатальный алерт */
         }
         if (have == RESPONSE_CAP) {
@@ -213,11 +213,11 @@ out:
  * платит рантайм Go, а здесь пришлось бы заводить потоки ради одной функции.
  * Цена честная и названа: до полуминуты на заблокированной цели. */
 static int count_handshakes(const char *host, const char *port, const char *sni,
-                            const d2k_opts *opt, int *unmeasured)
+                            const d2s_opts *opt, int *unmeasured)
 {
     int i, done = 0;
     for (i = 0; i < opt->repeats; i++) {
-        int r = d2k_resp_handshake12(host, port, sni, opt);
+        int r = d2s_resp_handshake12(host, port, sni, opt);
         if (r > 0) {
             done++;
         } else if (r < 0) {
@@ -230,7 +230,7 @@ static int count_handshakes(const char *host, const char *port, const char *sni,
 /* neutralSNI — имя для контроля. Домен example.com зарезервирован IANA
  * (RFC 2606) и в списках не встречается; случайная метка спереди убирает
  * попадание в кэши и в состояние коробки. */
-void d2k_neutral_sni(char *out, size_t cap)
+void d2s_neutral_sni(char *out, size_t cap)
 {
     unsigned i;
     char hex[11];
@@ -271,33 +271,33 @@ void d2k_neutral_sni(char *out, size_t cap)
 /* Чистое решение по счётчикам. Неизмеренный прогон (локальный предел буфера) не
  * есть ни «дошло», ни «не дошло»: любой такой прогон — НЕ ИЗМЕРЕНО, но не
  * «режут ответ». */
-void d2k_resp_decide(int target, int control, int unmeasured, int repeats,
-                     d2k_resp_result *res)
+void d2s_resp_decide(int target, int control, int unmeasured, int repeats,
+                     d2s_resp_result *res)
 {
     res->target = target;
     res->control = control;
     if (unmeasured > 0) {
-        res->verdict = D2K_RESP_NOT_APPLICABLE;
+        res->verdict = D2S_RESP_NOT_APPLICABLE;
         snprintf(res->reason, sizeof(res->reason),
                  "ответ сервера не поместился в локальный предел буфера (64 КБ) в %d прогонах — "
                  "про ответное направление вывода нет", unmeasured);
     } else if (control == 0) {
-        res->verdict = D2K_RESP_NOT_APPLICABLE;
+        res->verdict = D2S_RESP_NOT_APPLICABLE;
         snprintf(res->reason, sizeof(res->reason),
                  "контрольное рукопожатие по TLS 1.2 не завершается — сервер его не поддерживает "
                  "или мешает что-то ещё; про ответное направление вывода нет");
     } else if (target == repeats) {
-        res->verdict = D2K_RESP_CLEAR;
+        res->verdict = D2S_RESP_CLEAR;
         snprintf(res->reason, sizeof(res->reason),
                  "рукопожатие TLS 1.2 доходит до конца — сертификат не режут");
     } else if (target == 0) {
-        res->verdict = D2K_RESP_BLOCKED;
+        res->verdict = D2S_RESP_BLOCKED;
         snprintf(res->reason, sizeof(res->reason),
                  "запрос проходит, а рукопожатие не завершается: с нейтральным именем на тот же "
                  "адрес оно завершается каждый раз. Значит режут ОТВЕТ — сертификат в TLS 1.2 "
                  "идёт открытым текстом");
     } else {
-        res->verdict = D2K_RESP_FLAKY;
+        res->verdict = D2S_RESP_FLAKY;
         snprintf(res->reason, sizeof(res->reason),
                  "рукопожатий дошло %d из %d — не воспроизводится", target, repeats);
     }
@@ -307,8 +307,8 @@ void d2k_resp_decide(int target, int control, int unmeasured, int repeats,
  *
  * Зовётся только там, где запрос уже признан проходящим: если режут запрос,
  * про ответ говорить рано. */
-void d2k_probe_response(const char *host, const char *port, const char *sni,
-                        const d2k_opts *opt, d2k_resp_result *res)
+void d2s_probe_response(const char *host, const char *port, const char *sni,
+                        const d2s_opts *opt, d2s_resp_result *res)
 {
     char neutral[64];
     int target, control, unmeasured = 0;
@@ -318,7 +318,7 @@ void d2k_probe_response(const char *host, const char *port, const char *sni,
     /* Контроль ОБЯЗАН быть другим именем на том же адресе. Если бы мы взяли то
      * же самое, молчали бы оба, и «режут ответ» получилось бы из собственной
      * ошибки ввода. */
-    d2k_neutral_sni(neutral, sizeof(neutral));
+    d2s_neutral_sni(neutral, sizeof(neutral));
     control = count_handshakes(host, port, neutral, opt, &unmeasured);
-    d2k_resp_decide(target, control, unmeasured, opt->repeats, res);
+    d2s_resp_decide(target, control, unmeasured, opt->repeats, res);
 }

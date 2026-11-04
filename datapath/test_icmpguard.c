@@ -9,7 +9,7 @@
  * клиента, просроченная запись). */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_icmpguard.h"
+#include "d2s_icmpguard.h"
 
 static int fails;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
@@ -84,141 +84,141 @@ static size_t icmp6(uint8_t *out, uint8_t type, uint8_t code, const uint8_t *q, 
 }
 
 int main(void) {
-    static d2k_icmpguard g;
+    static d2s_icmpguard g;
     uint8_t fk[1500], ic[1500], q[1500];
     size_t n, m;
     const uint64_t t0 = 100 * S;
 
     /* --- поле: тот самый ICMP ------------------------------------------- */
-    d2k_icmpguard_init(&g);
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);  /* записи нет */
+    d2s_icmpguard_init(&g);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);  /* записи нет */
     n = fake4(fk, 3, 1, 55435);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 1);
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + S / 30) == 1);
-    CHECK(d2k_icmpguard_dropped(&g) == 1);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + S / 30) == 1);
+    CHECK(d2s_icmpguard_dropped(&g) == 1);
     /* Вторая фальшивка того же потока — та же цитата, тоже своя. */
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + S / 30) == 1);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + S / 30) == 1);
     /* Просрочено: старая запись не оправдывает чужой ICMP. */
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + D2K_ICMPGUARD_KEEP_NS + 1) == 0);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0 + D2S_ICMPGUARD_KEEP_NS + 1) == 0);
     /* Отрезанная цитата (меньше 8 байт L4) — не судим, пропускаем. */
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp - 1, t0 + S / 30) == 0);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp - 1, t0 + S / 30) == 0);
 
     /* Пакет без пониженного TTL — не фальшивка и не записывается. */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake4(fk, 63, 1, 55435);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 0);
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);
 
     /* --- окружение при записанной фальшивке ------------------------------ */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake4(fk, 3, 1, 55435);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 1);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 1);
     /* Настоящий Initial клиента того же потока (ID 0): его ICMP не наш. */
     memcpy(q, fk, 28); q[4] = 0; q[5] = 0; q[8] = 1;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* traceroute из LAN: UDP 33434, свой кортеж. */
     memcpy(q, fk, 28); q[8] = 1; q[20] = 0xd4; q[21] = 0x31; q[22] = 0x82; q[23] = 0x9a;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* PMTU «нужна фрагментация» с цитатой той же фальшивки — не трогаем. */
     memcpy(q, fk, 28);
     m = icmp4(ic, 3, 4, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Time-exceeded при сборке фрагментов (код 1) — не TTL, не наш. */
     memcpy(q, fk, 28); q[8] = 1;
     m = icmp4(ic, 11, 1, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Другой порт клиента. */
     memcpy(q, fk, 28); q[8] = 1; q[21] ^= 1;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Цитата с TTL выше посланного — не та посылка. */
     memcpy(q, fk, 28); q[8] = 4;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Сама фальшивка (не ICMP) — не судится. */
-    CHECK(d2k_icmpguard_check(&g, fk, n, t0) == 0);
-    CHECK(d2k_icmpguard_dropped(&g) == 0);
+    CHECK(d2s_icmpguard_check(&g, fk, n, t0) == 0);
+    CHECK(d2s_icmpguard_dropped(&g) == 0);
 
     /* Узел цитирует больше 8 байт (RFC 1812) — тоже наш. */
     memcpy(q, fk, 128); q[8] = 1;
     m = icmp4(ic, 11, 0, q, 128);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
 
     /* ID 0 в посылке: ядро ставит свой (raw(7)), сверять ID нечем — сверяем
        длину и слово L4. */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake4(fk, 3, 0, 55435);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 1);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 1);
     memcpy(q, fk, 28); q[8] = 1; q[4] = 0x12; q[5] = 0x34;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
 
     /* --- TCP-фальшивка: сверяется номер последовательности --------------- */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake4(fk, 4, 0x2001, 40000);
     fk[9] = 6; n = 20 + 20 + 100; fk[2] = 0; fk[3] = (uint8_t)n;
     fk[24] = 0xde; fk[25] = 0xad; fk[26] = 0xbe; fk[27] = 0xef; fk[32] = 0x50;
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 1);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 1);
     memcpy(q, fk, 28); q[8] = 1;
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
     q[27] ^= 1;   /* другой сегмент того же потока */
     m = icmp4(ic, 11, 0, q, 28);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
 
     /* --- IPv6 ------------------------------------------------------------ */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake6(fk, 3, 17, 55435, 443, 1172);
     memcpy(q, fk, 48); q[7] = 1;
     m = icmp6(ic, 3, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);                /* записи нет */
-    CHECK(d2k_icmpguard_note(&g, fk, n, 64, t0) == 1);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);                /* записи нет */
+    CHECK(d2s_icmpguard_note(&g, fk, n, 64, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
     /* Узел IPv6 цитирует до 1232 байт — длинная цитата. */
     memcpy(q, fk, 600); q[7] = 1;
     m = icmp6(ic, 3, 0, q, 600);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
     /* Packet Too Big (тип 2) с той же цитатой — PMTU, пропускаем. */
     memcpy(q, fk, 48);
     m = icmp6(ic, 2, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* traceroute6 из LAN: свой порт назначения. */
     memcpy(q, fk, 48); q[7] = 1; q[42] = 0x82; q[43] = 0x9a;
     m = icmp6(ic, 3, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Настоящий пакет клиента того же потока другой длины. */
     memcpy(q, fk, 48); q[7] = 1; q[5] ^= 0x10;
     m = icmp6(ic, 3, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 0);
     /* Просрочено. */
     memcpy(q, fk, 48); q[7] = 1;
     m = icmp6(ic, 3, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0 + D2K_ICMPGUARD_KEEP_NS + 1) == 0);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0 + D2S_ICMPGUARD_KEEP_NS + 1) == 0);
     /* TCP по IPv6. */
     n = fake6(fk, 2, 6, 40001, 443, 50);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 64, t0) == 1);
+    CHECK(d2s_icmpguard_note(&g, fk, n, 64, t0) == 1);
     memcpy(q, fk, 48); q[7] = 0;
     m = icmp6(ic, 3, 0, q, 48);
-    CHECK(d2k_icmpguard_check(&g, ic, m, t0) == 1);
+    CHECK(d2s_icmpguard_check(&g, ic, m, t0) == 1);
 
     /* --- кольцо: старые записи вытесняются, а не копятся ---------------- */
-    d2k_icmpguard_init(&g);
+    d2s_icmpguard_init(&g);
     n = fake4(fk, 3, 1, 55435);
-    CHECK(d2k_icmpguard_note(&g, fk, n, 63, t0) == 1);
-    for (unsigned i = 0; i < D2K_ICMPGUARD_SLOTS; i++) {
+    CHECK(d2s_icmpguard_note(&g, fk, n, 63, t0) == 1);
+    for (unsigned i = 0; i < D2S_ICMPGUARD_SLOTS; i++) {
         uint8_t other[1500];
         size_t on = fake4(other, 3, 1, (uint16_t)(1000 + i));
-        (void)d2k_icmpguard_note(&g, other, on, 63, t0);
+        (void)d2s_icmpguard_note(&g, other, on, 63, t0);
     }
-    CHECK(d2k_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, sizeof field_icmp, t0) == 0);
 
     /* Мусор не роняет разбор. */
-    CHECK(d2k_icmpguard_check(&g, NULL, 0, t0) == 0);
-    CHECK(d2k_icmpguard_check(&g, field_icmp, 20, t0) == 0);
-    CHECK(d2k_icmpguard_note(&g, NULL, 0, 63, t0) == 0);
-    CHECK(d2k_icmpguard_note(&g, fk, 10, 63, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, NULL, 0, t0) == 0);
+    CHECK(d2s_icmpguard_check(&g, field_icmp, 20, t0) == 0);
+    CHECK(d2s_icmpguard_note(&g, NULL, 0, 63, t0) == 0);
+    CHECK(d2s_icmpguard_note(&g, fk, 10, 63, t0) == 0);
 
     if (fails) { fprintf(stderr, "test_icmpguard: %d провал(ов)\n", fails); return 1; }
     printf("test_icmpguard: все проверки прошли\n");

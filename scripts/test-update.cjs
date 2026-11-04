@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// files/d2k-update.sh: подпись выпуска, установка из архива выпуска,
+// files/d2s-update.sh: подпись выпуска, установка из архива выпуска,
 // проверка служб, возврат прежней версии при отказе.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -7,13 +7,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync, execFileSync } = require('node:child_process');
 
-const updater = path.resolve(__dirname, '../files/d2k-update.sh');
-const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd2k-update-test.')));
+const updater = path.resolve(__dirname, '../files/d2s-update.sh');
+const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'd2s-update-test.')));
 const feed = path.join(tmp, 'feed');
 const stub = path.join(tmp, 'stub');
-const dir = path.join(tmp, 'opt/d2k');
+const dir = path.join(tmp, 'opt/d2s');
 const sbin = path.join(tmp, 'opt/sbin');
-const init = path.join(tmp, 'S99d2k');
+const init = path.join(tmp, 'S99d2s');
 const initLog = path.join(tmp, 'init.log');
 for (const d of [feed, stub, dir, sbin, path.join(dir, 'state'), path.join(dir, 'run'), path.join(dir, 'panel')]) fs.mkdirSync(d, { recursive: true });
 
@@ -49,18 +49,18 @@ function release(id, { installOk = true, pid = live } = {}) {
   fs.mkdirSync(path.join(src, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(src, 'scripts/install.sh'), `#!/bin/sh
 printf '%s\\n' "$0" > "${tmp}/installer-path"
-printf '%s\\n' "$D2K_RELEASE_ID" > "${dir}/release-id"
-printf 'binary ${id}\\n' > "${sbin}/d2kd"
-printf 'resolver ${id}\\n' > "${sbin}/d2o-resolver"
-printf 'observer ${id}\\n' > "${sbin}/d2o-dns-watch"
-printf 'fetch ${id}\\n' > "${sbin}/d2kfetch"
-printf 'helper ${id}\\n' > "${dir}/d2k-lan.sh"
+printf '%s\\n' "$D2S_RELEASE_ID" > "${dir}/release-id"
+printf 'binary ${id}\\n' > "${sbin}/d2sd"
+printf 'resolver ${id}\\n' > "${sbin}/d2s-resolver"
+printf 'observer ${id}\\n' > "${sbin}/d2s-dns-watch"
+printf 'fetch ${id}\\n' > "${sbin}/d2sfetch"
+printf 'helper ${id}\\n' > "${dir}/d2s-lan.sh"
 printf 'panel ${id}\\n' > "${dir}/panel/index.html"
-echo ${pid} > "${dir}/run/d2kd.pid"; echo ${pid} > "${dir}/run/d2k.pid"
+echo ${pid} > "${dir}/run/d2sd.pid"; echo ${pid} > "${dir}/run/d2s.pid"
 exit ${installOk ? 0 : 1}
 `);
   fs.mkdirSync(path.join(feed, id), { recursive: true });
-  const tar = path.join(feed, id, 'd2k-arm64.tar.gz');
+  const tar = path.join(feed, id, 'd2s-arm64.tar.gz');
   execFileSync('tar', ['-czf', tar, '-C', src, 'scripts']);
   const sum = execFileSync(openssl, ['dgst', '-sha256', '-r', tar]).toString().split(' ')[0];
   const latest = path.join(feed, 'latest/latest.json');
@@ -70,9 +70,9 @@ exit ${installOk ? 0 : 1}
 }
 
 const env = {
-  ...process.env, D2K_STUB_PATH: stub, D2K_DIR: dir, D2K_SBIN: sbin, D2K_INIT: init,
-  D2K_NDM_HOOK: path.join(tmp, 'ndm-hook'), D2K_UPDATE_KEY: pub, D2K_UPDATE_HEALTH_WAIT: '0', D2K_GATE: 'http://192.0.2.44:9444', D2K_GATE: 'http://192.0.2.44:9444',
-  D2K_UPDATE_LATEST: 'https://example.test/latest', D2K_UPDATE_DOWNLOAD: 'https://example.test',
+  ...process.env, D2S_STUB_PATH: stub, D2S_DIR: dir, D2S_SBIN: sbin, D2S_INIT: init,
+  D2S_NDM_HOOK: path.join(tmp, 'ndm-hook'), D2S_UPDATE_KEY: pub, D2S_UPDATE_HEALTH_WAIT: '0', D2S_GATE: 'http://192.0.2.44:9444', D2S_GATE: 'http://192.0.2.44:9444',
+  D2S_UPDATE_LATEST: 'https://example.test/latest', D2S_UPDATE_DOWNLOAD: 'https://example.test',
 };
 const run = (...args) => spawnSync('/bin/sh', [updater, ...args], { env, encoding: 'utf8' });
 const state = () => JSON.parse(fs.readFileSync(path.join(dir, 'state/update.json'), 'utf8'));
@@ -82,7 +82,7 @@ try {
   fs.writeFileSync(path.join(dir, 'release-arch'), 'arm64\n');
   fs.writeFileSync(path.join(dir, 'release-id'), 'r1\n');
   fs.writeFileSync(path.join(dir, 'config'), 'MODE=apply\n');
-  fs.writeFileSync(path.join(sbin, 'd2kd'), 'binary r1\n');
+  fs.writeFileSync(path.join(sbin, 'd2sd'), 'binary r1\n');
   fs.writeFileSync(path.join(dir, 'panel/index.html'), 'panel r1\n');
 
   // Проверка: подписанный выпуск виден, поддельный — нет.
@@ -102,11 +102,11 @@ try {
   assert.equal(run('install').status, 0, read(path.join(dir, 'log/update.log')));
   s = state();
   assert.equal(s.last_ok, true); assert.equal(s.current, 'r2'); assert.equal(s.busy, '');
-  assert.equal(read(path.join(sbin, 'd2kd')), 'binary r2\n');
+  assert.equal(read(path.join(sbin, 'd2sd')), 'binary r2\n');
   assert(!fs.existsSync(path.join(dir, '.update/previous.tar')), 'копия прежней версии осталась');
   assert(!fs.existsSync(path.join(dir, '.update/release')), 'распакованный выпуск остался');
   assert.equal(run('install').status, 0, 'повтор того же выпуска не сводится к «уже установлен»');
-  assert(read(path.join(tmp, 'installer-path')).startsWith(path.join(dir, '.update') + '/'), 'Keenetic: рабочий каталог — /opt/d2k/.update');
+  assert(read(path.join(tmp, 'installer-path')).startsWith(path.join(dir, '.update') + '/'), 'Keenetic: рабочий каталог — /opt/d2s/.update');
 
 
   // Отказ установщика: прежняя версия возвращается целиком.
@@ -115,24 +115,24 @@ try {
   assert.notEqual(run('install').status, 0);
   s = state();
   assert.equal(s.last_ok, false); assert.equal(s.bad_release, 'r3'); assert.equal(s.current, 'r2');
-  assert.equal(read(path.join(sbin, 'd2kd')), 'binary r2\n');
+  assert.equal(read(path.join(sbin, 'd2sd')), 'binary r2\n');
   assert.equal(read(path.join(dir, 'panel/index.html')), 'panel r2\n');
-  assert.equal(read(path.join(sbin, 'd2o-resolver')), 'resolver r2\n');
-  assert.equal(read(path.join(sbin, 'd2o-dns-watch')), 'observer r2\n');
-  assert.equal(read(path.join(sbin, 'd2kfetch')), 'fetch r2\n');
-  assert.equal(read(path.join(dir, 'd2k-lan.sh')), 'helper r2\n');
+  assert.equal(read(path.join(sbin, 'd2s-resolver')), 'resolver r2\n');
+  assert.equal(read(path.join(sbin, 'd2s-dns-watch')), 'observer r2\n');
+  assert.equal(read(path.join(sbin, 'd2sfetch')), 'fetch r2\n');
+  assert.equal(read(path.join(dir, 'd2s-lan.sh')), 'helper r2\n');
   assert.deepEqual(read(initLog).trim().split('\n'), ['stop', 'start']);
   assert(!fs.existsSync(path.join(dir, '.update/previous.tar')));
 
   // Служба умерла после установки — тоже возврат.
   release('r4', { pid: dead });
   assert.notEqual(run('install').status, 0);
-  assert.equal(state().bad_release, 'r4'); assert.equal(read(path.join(sbin, 'd2kd')), 'binary r2\n');
+  assert.equal(state().bad_release, 'r4'); assert.equal(read(path.join(sbin, 'd2sd')), 'binary r2\n');
 
   // Не прошедший проверку выпуск ночью не ставится, вручную — да.
   release('r4');
   assert.notEqual(run('install').status, 0, 'ночная установка повторила плохой выпуск');
-  assert.equal(read(path.join(sbin, 'd2kd')), 'binary r2\n');
+  assert.equal(read(path.join(sbin, 'd2sd')), 'binary r2\n');
   assert.equal(run('install', 'manual').status, 0);
   assert.equal(state().current, 'r4');
 
@@ -155,7 +155,7 @@ try {
       `#!/bin/sh\n[ "$1" = +%H ] && exec cat "${hour}"\nexec /bin/date "$@"\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(clock, 'start-stop-daemon'),
       `#!/bin/sh\necho "$*" >> "${ssd}"\n`, { mode: 0o755 });
-    const nightEnv = { ...env, D2K_STUB_PATH: `${clock}:${stub}`, D2K_UPDATE_TICK: '1' };
+    const nightEnv = { ...env, D2S_STUB_PATH: `${clock}:${stub}`, D2S_UPDATE_TICK: '1' };
     const wait = ms => spawnSync('/bin/sleep', [String(ms / 1000)]);
     const loop = require('node:child_process').spawn('/bin/sh', [updater, 'run'], { env: nightEnv, stdio: 'ignore' });
     try {
@@ -181,7 +181,7 @@ try {
     const owrtRelease = path.join(tmp, 'openwrt_release'); fs.writeFileSync(owrtRelease, "DISTRIB_ID='OpenWrt'\n");
     const dfStub = path.join(tmp, 'dfstub'); fs.mkdirSync(dfStub);
     const df = (mnt) => fs.writeFileSync(path.join(dfStub, 'df'), `#!/bin/sh\necho 'Filesystem 1024-blocks Used Available Capacity Mounted on'\necho "/dev/root 100 10 90 10% ${mnt}"\n`, { mode: 0o755 });
-    const owrt = { ...env, D2K_STUB_PATH: `${dfStub}:${stub}`, D2K_OPENWRT_RELEASE: owrtRelease, D2K_UPDATE_RAM: ram };
+    const owrt = { ...env, D2S_STUB_PATH: `${dfStub}:${stub}`, D2S_OPENWRT_RELEASE: owrtRelease, D2S_UPDATE_RAM: ram };
     df('/');
     release('r5');
     assert.equal(spawnSync('/bin/sh', [updater, 'install'], { env: owrt, encoding: 'utf8' }).status, 0);
@@ -204,7 +204,7 @@ try {
     'упавший проводник не мешает проверке выпуска');
   assert.equal(state().check_ok, true);
   assert.match(read(gateLog), /latest\.json/, 'попытка через проводник была и при его отказе');
-  assert.equal(spawnSync('/bin/sh', [updater, 'check'], { env: { ...env, D2K_GATE: '' }, encoding: 'utf8' }).status, 0);
+  assert.equal(spawnSync('/bin/sh', [updater, 'check'], { env: { ...env, D2S_GATE: '' }, encoding: 'utf8' }).status, 0);
   // Exercise signed archive installation at both edges of the night window.
   // Downloads finishing after 04:00 must not replace the current runtime.
   {
@@ -212,7 +212,7 @@ try {
     const hour = path.join(tmp, 'boundary-hour');
     fs.writeFileSync(path.join(clock, 'date'),
       `#!/bin/sh\n[ "$1" = +%H ] && exec cat "${hour}"\nexec /bin/date "$@"\n`, { mode: 0o755 });
-    const boundaryEnv = { ...env, D2K_STUB_PATH: `${clock}:${stub}` };
+    const boundaryEnv = { ...env, D2S_STUB_PATH: `${clock}:${stub}` };
     for (const [h, allowed] of [['01', false], ['02', true], ['03', true], ['04', false]]) {
       const before = state().current;
       const id = 'night-' + h;

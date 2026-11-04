@@ -3,15 +3,15 @@
  *
  * Коробка рвёт поток после бюджета пакетов (у QUIC 04.10 — 14–17 пакетов
  * сервера), а свой запрос «/» у короткой страницы заканчивался ВНУТРИ
- * бюджета: ответ целиком — «обрыв не воспроизвёлся», d2kc говорил
+ * бюджета: ответ целиком — «обрыв не воспроизвёлся», d2sc говорил
  * «проходит как есть», пока Safari стоял. Теперь, как у подтверждений
  * задачи 55: запросы на новых потоках той же связи, пока она не перенесёт
  * 2 × бюджет датаграмм (сервер отвечает — не заблокировано) или сервер не
  * замолчит (PING без ответа — обрыв воспроизведён).
  *
- * Стенд на петле: связь d2k_qc с ключами из постоянного секрета (как
+ * Стенд на петле: связь d2s_qc с ключами из постоянного секрета (как
  * test_quicconn_fc), «сервер» в своём потоке читает запросы клиента и
- * отвечает по режиму. Проверяется d2k_quic_data_stage — тот же этап, что
+ * отвечает по режиму. Проверяется d2s_quic_data_stage — тот же этап, что
  * у прямого запроса поиска. */
 #include "quicconn.c"
 
@@ -19,7 +19,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 
-#include "d2k_quic_arms.h"
+#include "d2s_quic_arms.h"
 
 static int fails;
 #define CHECK(x, m) do { if (!(x)) { printf("FAIL %s (line %d)\n", m, __LINE__); fails++; } \
@@ -44,7 +44,7 @@ enum {
 };
 
 typedef struct {
-    d2k_qc *srv;
+    d2s_qc *srv;
     int mode;
     volatile int stop;
     int sent;       /* пакетов сервера всего */
@@ -56,11 +56,11 @@ typedef struct {
     uint64_t oneway_sid;
 } stand;
 
-static void keys(d2k_qc *c) {
+static void keys(d2s_qc *c) {
     uint8_t secret[32];
     memset(secret, 0x42, sizeof secret);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].tx) == 0);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].rx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].tx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].rx) == 0);
 }
 
 /* Кадр STREAM: HEADERS (:status 200, QPACK статический индекс 25) и/или
@@ -78,20 +78,20 @@ static int srv_stream(stand *st, uint64_t sid, uint64_t off, int headers, size_t
     }
     if (data) {
         body[b++] = 0x00;
-        b += d2k_qw_varint_write(body + b, sizeof body - b, data);
+        b += d2s_qw_varint_write(body + b, sizeof body - b, data);
         memset(body + b, 'x', data);
         b += data;
     }
     uint8_t fr[1300];
     size_t o = 0;
     fr[o++] = (uint8_t)(0x08 | 0x04 | 0x02 | (fin ? 1 : 0));
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, sid);
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, off);
-    o += d2k_qw_varint_write(fr + o, sizeof fr - o, b);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, sid);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, off);
+    o += d2s_qw_varint_write(fr + o, sizeof fr - o, b);
     memcpy(fr + o, body, b);
     o += b;
     char err[160];
-    if (send_level(st->srv, D2K_QW_LEVEL_APP, fr, o, 0, err, sizeof err) != 0) return -1;
+    if (send_level(st->srv, D2S_QW_LEVEL_APP, fr, o, 0, err, sizeof err) != 0) return -1;
     st->sent++;
     return (int)b;
 }
@@ -99,11 +99,11 @@ static int srv_stream(stand *st, uint64_t sid, uint64_t off, int headers, size_t
 static void srv_ack(stand *st) {
     /* Молчащий сервер не отвечает и на PING. */
     if (st->mode != M_MANY && st->mode != M_NO_HEADERS && st->mode != M_ALIVE_NO_ANSWER) return;
-    level *L = &st->srv->lv[D2K_QW_LEVEL_APP];
+    level *L = &st->srv->lv[D2S_QW_LEVEL_APP];
     uint8_t ab[32];
     size_t an = build_ack(ab, sizeof ab, L->largest_rx);
     char err[160];
-    if (send_level(st->srv, D2K_QW_LEVEL_APP, ab, an, 0, err, sizeof err) == 0) st->sent++;
+    if (send_level(st->srv, D2S_QW_LEVEL_APP, ab, an, 0, err, sizeof err) == 0) st->sent++;
 }
 
 static void srv_request(stand *st, uint64_t sid) {
@@ -168,40 +168,40 @@ static void srv_frames(stand *st, const uint8_t *p, size_t n) {
     int ping = 0;
     while (i < n) {
         uint64_t t = 0, a = 0, cnt = 0;
-        if (d2k_qw_varint_read(p + i, n - i, &t, &w) != 0) return;
+        if (d2s_qw_varint_read(p + i, n - i, &t, &w) != 0) return;
         i += w;
         if (t == 0x00) continue;
         if (t == 0x01) { ping = 1; st->pings++; continue; }
         if (t == 0x02 || t == 0x03) {
             for (int k = 0; k < 4; k++) {
-                if (d2k_qw_varint_read(p + i, n - i, &a, &w)) return;
+                if (d2s_qw_varint_read(p + i, n - i, &a, &w)) return;
                 i += w;
                 if (k == 2) cnt = a;
             }
             for (uint64_t k = 0; k < 2 * cnt; k++) {
-                if (d2k_qw_varint_read(p + i, n - i, &a, &w)) return;
+                if (d2s_qw_varint_read(p + i, n - i, &a, &w)) return;
                 i += w;
             }
             if (t == 0x03) for (int k = 0; k < 3; k++) {
-                if (d2k_qw_varint_read(p + i, n - i, &a, &w)) return;
+                if (d2s_qw_varint_read(p + i, n - i, &a, &w)) return;
                 i += w;
             }
             continue;
         }
-        if (t == 0x10) { if (d2k_qw_varint_read(p + i, n - i, &a, &w)) return; i += w; continue; }
+        if (t == 0x10) { if (d2s_qw_varint_read(p + i, n - i, &a, &w)) return; i += w; continue; }
         if (t == 0x11) {
             for (int k = 0; k < 2; k++) {
-                if (d2k_qw_varint_read(p + i, n - i, &a, &w)) return;
+                if (d2s_qw_varint_read(p + i, n - i, &a, &w)) return;
                 i += w;
             }
             continue;
         }
         if (t >= 0x08 && t <= 0x0f) {
             uint64_t sid = 0, off = 0, len = 0;
-            if (d2k_qw_varint_read(p + i, n - i, &sid, &w)) return;
+            if (d2s_qw_varint_read(p + i, n - i, &sid, &w)) return;
             i += w;
-            if (t & 0x04) { if (d2k_qw_varint_read(p + i, n - i, &off, &w)) return; i += w; }
-            if (t & 0x02) { if (d2k_qw_varint_read(p + i, n - i, &len, &w)) return; i += w; }
+            if (t & 0x04) { if (d2s_qw_varint_read(p + i, n - i, &off, &w)) return; i += w; }
+            if (t & 0x02) { if (d2s_qw_varint_read(p + i, n - i, &len, &w)) return; i += w; }
             else len = n - i;
             if (len > n - i) return;
             i += (size_t)len;
@@ -217,17 +217,17 @@ static void srv_frames(stand *st, const uint8_t *p, size_t n) {
 
 static void *srv_run(void *arg) {
     stand *st = arg;
-    level *L = &st->srv->lv[D2K_QW_LEVEL_APP];
+    level *L = &st->srv->lv[D2S_QW_LEVEL_APP];
     while (!st->stop) {
         uint8_t pk[DGRAM_IN];
         ssize_t n = recv(st->srv->fd, pk, sizeof pk, 0);
         if (n <= 0) continue;
-        d2k_qw_hdr h;
-        if (d2k_qw_hdr_parse(pk, (size_t)n, 8, &h) != 0 || h.long_hdr) continue;
+        d2s_qw_hdr h;
+        if (d2s_qw_hdr_parse(pk, (size_t)n, 8, &h) != 0 || h.long_hdr) continue;
         uint8_t plain[DGRAM_IN];
         size_t plen = 0;
         uint64_t pn = 0;
-        if (d2k_qw_open(&L->rx, &h, pk, L->have_rx ? L->largest_rx : 0, plain, &plen, &pn) != 0)
+        if (d2s_qw_open(&L->rx, &h, pk, L->have_rx ? L->largest_rx : 0, plain, &plen, &pn) != 0)
             continue;
         if (!L->have_rx || pn > L->largest_rx) L->largest_rx = pn;
         L->have_rx = 1;
@@ -247,7 +247,7 @@ static void *srv_run(void *arg) {
     return NULL;
 }
 
-static d2k_quic_arm_data run(int mode, unsigned budget_pk, stand *out) {
+static d2s_quic_arm_data run(int mode, unsigned budget_pk, stand *out) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     assert(s >= 0);
     struct sockaddr_in a;
@@ -266,13 +266,13 @@ static d2k_quic_arm_data run(int mode, unsigned budget_pk, stand *out) {
     struct timeval tv = {0, 50000};
     setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
-    d2k_qc *c = calloc(1, sizeof *c);
-    d2k_qc *srv = calloc(1, sizeof *srv);
+    d2s_qc *c = calloc(1, sizeof *c);
+    d2s_qc *srv = calloc(1, sizeof *srv);
     assert(c && srv);
-    c->fd = fd; c->peer_name = -1; c->version = D2K_QW_V1;
+    c->fd = fd; c->peer_name = -1; c->version = D2S_QW_V1;
     c->dcid_len = 8; memset(c->dcid, 0x5a, 8);
     c->scid_len = 8; memset(c->scid, 0x77, 8);
-    srv->fd = s; srv->version = D2K_QW_V1;
+    srv->fd = s; srv->version = D2S_QW_V1;
     srv->dcid_len = 8; memset(srv->dcid, 0x77, 8);
     keys(c); keys(srv);
 
@@ -283,12 +283,12 @@ static d2k_quic_arm_data run(int mode, unsigned budget_pk, stand *out) {
     pthread_t th;
     assert(pthread_create(&th, NULL, srv_run, &st) == 0);
 
-    d2k_quic_arm_data d;
+    d2s_quic_arm_data d;
     memset(&d, 0, sizeof d);
-    d2k_quic_data_stage(c, "repro.example", "/", 1, budget_pk, 300, &d);
+    d2s_quic_data_stage(c, "repro.example", "/", 1, budget_pk, 300, &d);
     st.stop = 1;
     pthread_join(th, NULL);
-    d2k_qc_close(c);
+    d2s_qc_close(c);
     close(s);
     free(srv);
     if (out) *out = st;
@@ -299,12 +299,12 @@ static d2k_quic_arm_data run(int mode, unsigned budget_pk, stand *out) {
 
 int main(void) {
     stand st;
-    d2k_quic_arm_data d;
+    d2s_quic_arm_data d;
 
     /* Поле 04.10: короткие полные ответы, но после 15 пакетов сервер молчит.
        Один запрос «/» кончался целиком внутри бюджета — «не воспроизвёлся». */
     d = run(M_SHORT_THEN_SILENT, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT,
+    CHECK(d.verdict == D2S_QAD_CUT,
           "15 пакетов сервера и тишина: обрыв воспроизведён, хотя первый ответ пришёл целиком");
     CHECK(st.requests >= 2, "после полного короткого ответа ушёл следующий запрос на новом потоке");
     /* «Сервер молчит» доказывается PING: он обязан дойти до сервера.
@@ -315,33 +315,33 @@ int main(void) {
 
     /* Сервер отвечает на каждый запрос: связь переносит 2 × бюджет — не заблокировано. */
     d = run(M_MANY, 25, &st);
-    CHECK(d.verdict == D2K_QAD_PASS, "сервер отвечает на каждый запрос: бюджет пройден, не обрыв");
+    CHECK(d.verdict == D2S_QAD_PASS, "сервер отвечает на каждый запрос: бюджет пройден, не обрыв");
     CHECK(st.requests >= 2 && st.responses < 200,
           "бюджет пройден повторами, без лишних запросов сверх 2 × бюджет");
 
     /* Первый запрос целиком, второй встаёт: прежде — «приходит целиком». */
     d = run(M_CUT_LATER, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT, "первый ответ целиком, второй встал: обрыв воспроизведён");
+    CHECK(d.verdict == D2S_QAD_CUT, "первый ответ целиком, второй встал: обрыв воспроизведён");
     CHECK(st.requests == 2, "второй запрос ушёл новым потоком той же связи");
 
     /* Один большой ответ без FIN, тишина: обрыв и прежде, и теперь. */
     d = run(M_ONE_BIG_CUT, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT, "большой ответ встал на 15 пакетах: обрыв");
+    CHECK(d.verdict == D2S_QAD_CUT, "большой ответ встал на 15 пакетах: обрыв");
     CHECK(st.pings >= 2, "PING тишины дошёл до сервера (один большой ответ)");
 
     /* Сервер жив (подтверждает PING), но на второй запрос не отвечает —
        это не обрыв: «не измерено». Отличает обрыв от медленного сервера
        именно PING, дошедший до провода. */
     d = run(M_ALIVE_NO_ANSWER, 25, &st);
-    CHECK(d.verdict == D2K_QAD_NOT_RUN && st.pings >= 1,
+    CHECK(d.verdict == D2S_QAD_NOT_RUN && st.pings >= 1,
           "сервер жив и подтверждает PING, ответа нет: не обрыв, не измерено");
 
     d = run(M_SECOND_451, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT && st.requests == 2,
+    CHECK(d.verdict == D2S_QAD_CUT && st.requests == 2,
           "second stream HTTP 451 stops the experiment as a refusal");
 
     d = run(M_NO_HEADERS, 25, &st);
-    CHECK(d.verdict != D2K_QAD_PASS && st.requests == 2,
+    CHECK(d.verdict != D2S_QAD_PASS && st.requests == 2,
           "second stream without HEADERS cannot inherit the first HTTP status");
 
     /* ОДНОСТОРОННЕЕ ЗАГЛУШЕНИЕ. Сервер шлёт датаграммы без остановки, но ни
@@ -350,19 +350,19 @@ int main(void) {
        при живом сервере», хотя датаграммы были повторами одного и того же
        полёта, а ответ не вырос ни на байт. */
     d = run(M_ONEWAY, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT,
+    CHECK(d.verdict == D2S_QAD_CUT,
           "сервер шлёт, наших пакетов не подтверждает: обрыв, а не пройденный бюджет");
     CHECK(d.oneway == 1, "направление обрыва измерено: заглушено наше исходящее");
     CHECK(st.dropped >= 2, "клиент продолжал спрашивать, его пакеты роняла «коробка»");
     /* Тишина в обе стороны направления не называет: обрыв остаётся обрывом,
        но выдумывать для него направление нельзя. */
     d = run(M_ONE_BIG_CUT, 25, &st);
-    CHECK(d.verdict == D2K_QAD_CUT && d.oneway == 0,
+    CHECK(d.verdict == D2S_QAD_CUT && d.oneway == 0,
           "обрыв тишиной: направление не измерено и не выдумано");
 
     /* Без запрошенного воспроизведения — прежнее правило: один полный ответ засчитан. */
     d = run(M_CUT_LATER, 0, &st);
-    CHECK(d.verdict == D2K_QAD_PASS && st.requests == 1,
+    CHECK(d.verdict == D2S_QAD_PASS && st.requests == 1,
           "без бюджета один полный ответ засчитывается, как прежде");
 
     if (!fails) puts("test_quic_repro_budget: all passed");

@@ -1,6 +1,6 @@
 /* match.c — узнавание коробки по примете (задача 2). Контракт и правило
- * сравнения — в шапке d2k_catalog.h над D2K_TTL_SLACK/D2K_VOLUME_SLACK/
- * d2k_fp_same/d2k_catalog_match; здесь — только реализация.
+ * сравнения — в шапке d2s_catalog.h над D2S_TTL_SLACK/D2S_VOLUME_SLACK/
+ * d2s_fp_same/d2s_catalog_match; здесь — только реализация.
  *
  * КРУГ ПРАВОК 1. Первая редакция здесь сравнивала отпечатки ПОЗИЦИОННО
  * (sig[i] против sig[i]) и требовала точного равенства n_sig — это было
@@ -12,30 +12,30 @@
  * противоречит, и хотя бы один общий род есть), а не по равенству списков.
  *
  * Ни malloc, ни разбор байт провода здесь не происходит — сравниваются уже
- * типизированные поля d2k_cat_fp, выделенного и заполненного catalog.c
+ * типизированные поля d2s_cat_fp, выделенного и заполненного catalog.c
  * (задача 1) или собранного вручную (как в тестах). Наложения структуры на
  * буфер нет и здесь по построению быть не может, поэтому оговорка про
- * выравнивание MIPS/ARM (см. шапку d2k_catalog.h) этого файла не касается.
+ * выравнивание MIPS/ARM (см. шапку d2s_catalog.h) этого файла не касается.
  *
  * ПОРЯДОК ФУНКЦИЙ — СНИЗУ ВВЕРХ ПО ЗАВИСИМОСТЯМ, как в catalog.c:
- * same_evidence определена раньше d2k_fp_same (зовёт её), та — раньше
- * d2k_catalog_match (зовёт её). Ни одной forward declaration не требуется.
+ * same_evidence определена раньше d2s_fp_same (зовёт её), та — раньше
+ * d2s_catalog_match (зовёт её). Ни одной forward declaration не требуется.
  */
 #include <string.h>
 
-#include "d2k_catalog.h"
+#include "d2s_catalog.h"
 
 /* same_evidence — одна ли это улика (см. sameEvidence в
  * internal/catalog/catalog.go:120). ПРЕДУСЛОВИЕ: a->kind и b->kind УЖЕ
- * проверены равными вызывающим (d2k_fp_same, ниже) — здесь это не
+ * проверены равными вызывающим (d2s_fp_same, ниже) — здесь это не
  * перепроверяется, ровно как в Go-оригинале: sameEvidence тоже смотрит
  * только a.Kind, доверяя, что b.Kind ему уже равен.
  *
  * ttl_delta в сравнение НЕ входит: это наблюдение пары "коробка-сервер", а
- * не примета самой коробки (см. её комментарий у d2k_cat_signal в
- * d2k_catalog.h) — на разных целях она разная, и в этой функции она даже
+ * не примета самой коробки (см. её комментарий у d2s_cat_signal в
+ * d2s_catalog.h) — на разных целях она разная, и в этой функции она даже
  * не читается. seen тоже не входит — это счётчик встреч, а не улика. */
-static int same_evidence(const d2k_cat_signal *a, const d2k_cat_signal *b) {
+static int same_evidence(const d2s_cat_signal *a, const d2s_cat_signal *b) {
     int d;
 
     if (strcmp(a->kind, "volume") == 0 || strcmp(a->kind, "rx-volume") == 0 ||
@@ -47,7 +47,7 @@ static int same_evidence(const d2k_cat_signal *a, const d2k_cat_signal *b) {
         if (d < 0) {
             d = -d;
         }
-        return d <= D2K_VOLUME_SLACK;
+        return d <= D2S_VOLUME_SLACK;
     }
 
     /* ttl — uint8_t. Явные (int)-приведения ниже не полагаются молча на
@@ -56,13 +56,13 @@ static int same_evidence(const d2k_cat_signal *a, const d2k_cat_signal *b) {
      * умещается в int) — они документируют это рассуждение и не сломаются
      * тихо, если ttl когда-нибудь станет шире uint8_t. Без него при a < b
      * беззнаковая разность дала бы огромное положительное число вместо
-     * отрицательного, и |d| <= D2K_TTL_SLACK никогда бы не сработало для
+     * отрицательного, и |d| <= D2S_TTL_SLACK никогда бы не сработало для
      * "соседа снизу". */
     d = (int)a->ttl - (int)b->ttl;
     if (d < 0) {
         d = -d;
     }
-    if (d > D2K_TTL_SLACK) {
+    if (d > D2S_TTL_SLACK) {
         return 0;
     }
 
@@ -72,7 +72,7 @@ static int same_evidence(const d2k_cat_signal *a, const d2k_cat_signal *b) {
     return a->tos == b->tos && a->ipid == b->ipid;
 }
 
-int d2k_fp_same(const d2k_cat_fp *a, const d2k_cat_fp *b) {
+int d2s_fp_same(const d2s_cat_fp *a, const d2s_cat_fp *b) {
     size_t i, j;
     int common = 0;
 
@@ -88,11 +88,11 @@ int d2k_fp_same(const d2k_cat_fp *a, const d2k_cat_fp *b) {
      * лежит не первым в списке (см. test_match.c, проверка №1, и Go-тест
      * TestУзнаваниеСмотритВсеПриметыОдногоВида). */
     for (i = 0; i < b->n_sig; i++) {
-        const d2k_cat_signal *s = &b->sig[i];
+        const d2s_cat_signal *s = &b->sig[i];
         int seen = 0, agreed = 0;
 
         for (j = 0; j < a->n_sig; j++) {
-            const d2k_cat_signal *t = &a->sig[j];
+            const d2s_cat_signal *t = &a->sig[j];
             if (strcmp(t->kind, s->kind) != 0) {
                 continue;
             }
@@ -124,11 +124,11 @@ int d2k_fp_same(const d2k_cat_fp *a, const d2k_cat_fp *b) {
     return common > 0;
 }
 
-int d2k_catalog_match(const d2k_catalog *c, const d2k_cat_fp *fp) {
+int d2s_catalog_match(const d2s_catalog *c, const d2s_cat_fp *fp) {
     size_t i;
 
     for (i = 0; i < c->n_boxes; i++) {
-        if (d2k_fp_same(&c->boxes[i].fp, fp)) {
+        if (d2s_fp_same(&c->boxes[i].fp, fp)) {
             return (int)i;
         }
     }

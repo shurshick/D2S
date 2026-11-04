@@ -9,7 +9,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_tls.h"
+#include "d2s_tls.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -107,9 +107,9 @@ static const uint8_t real_hello[] = {
 };
 
 static void check_real_hello(void) {
-    d2k_tls_info info;
+    d2s_tls_info info;
     memset(&info, 0, sizeof info);
-    CHECK(d2k_tls_parse(real_hello, sizeof real_hello, &info) == 0,
+    CHECK(d2s_tls_parse(real_hello, sizeof real_hello, &info) == 0,
           "настоящее приветствие openssl не разобралось");
     CHECK(info.is_client_hello == 1, "настоящее приветствие не признано ClientHello");
     CHECK(info.have_sni == 1, "имя в настоящем приветствии не найдено");
@@ -220,13 +220,13 @@ static size_t build_hello_pq(uint8_t *out, const char *sni, int sv_has13) {
 static void check_pq_hello_split(void) {
     uint8_t big[4096];
     size_t n = build_hello_pq(big, "forum.ru-board.com", 1);
-    d2k_tls_info info;
+    d2s_tls_info info;
     /* Два обрыва: внутри тела key_share (его заголовок уже прочитан) и сразу
        за ним, перед supported_versions. */
     const size_t cuts[2] = { 600, n - 5 };
     for (int c = 0; c < 2; c++) {
         memset(&info, 0, sizeof info);
-        d2k_tls_parse(big, cuts[c], &info);
+        d2s_tls_parse(big, cuts[c], &info);
         CHECK(info.is_client_hello && info.have_sni, "PQ-приветствие не узнано по первому сегменту");
         CHECK(info.exts_truncated, "блок расширений PQ-приветствия не объявлен оборванным");
         CHECK(info.is_tls13,
@@ -236,27 +236,27 @@ static void check_pq_hello_split(void) {
 
     /* Целиком — то же самое, по supported_versions. */
     memset(&info, 0, sizeof info);
-    d2k_tls_parse(big, n, &info);
+    d2s_tls_parse(big, n, &info);
     CHECK(info.is_tls13 && !info.exts_truncated, "целое PQ-приветствие не TLS 1.3");
 
     /* Прочитанный целиком supported_versions главнее: без 0x0304 это не
        TLS 1.3, что бы ни лежало рядом. */
     n = build_hello_pq(big, "forum.ru-board.com", 0);
     memset(&info, 0, sizeof info);
-    d2k_tls_parse(big, n, &info);
+    d2s_tls_parse(big, n, &info);
     CHECK(!info.is_tls13, "supported_versions без TLS 1.3 перебит key_share");
 }
 
 int main(void) {
     uint8_t buf[1024];
-    d2k_tls_info info;
+    d2s_tls_info info;
 
     check_pq_hello_split();
 
     /* --- нормальный ClientHello --------------------------------------- */
     size_t n = build_hello(buf, "hetzner.com", 1);
     memset(&info, 0, sizeof info);
-    CHECK(d2k_tls_parse(buf, n, &info) == 0, "настоящий ClientHello не распознан");
+    CHECK(d2s_tls_parse(buf, n, &info) == 0, "настоящий ClientHello не распознан");
     CHECK(info.is_client_hello == 1, "не помечен как ClientHello");
     CHECK(info.have_sni == 1, "имя не найдено");
     CHECK(info.sni_len == 11, "длина имени неверна");
@@ -267,7 +267,7 @@ int main(void) {
     /* --- ClientHello без расширения имени ------------------------------ */
     n = build_hello(buf, "", 0);
     memset(&info, 0, sizeof info);
-    CHECK(d2k_tls_parse(buf, n, &info) == 0, "hello без SNI обязан разбираться");
+    CHECK(d2s_tls_parse(buf, n, &info) == 0, "hello без SNI обязан разбираться");
     CHECK(info.is_client_hello == 1, "не помечен как ClientHello");
     CHECK(info.have_sni == 0, "имени нет, но модуль его нашёл");
     /* Отсутствие имени — не ошибка: так выглядит ECH и часть клиентов.
@@ -276,13 +276,13 @@ int main(void) {
     /* --- обрезанная запись --------------------------------------------- */
     n = build_hello(buf, "hetzner.com", 1);
     memset(&info, 0, sizeof info);
-    CHECK(d2k_tls_parse(buf, n - 20, &info) == 0, "обрезанный вход не должен ронять разбор");
+    CHECK(d2s_tls_parse(buf, n - 20, &info) == 0, "обрезанный вход не должен ронять разбор");
     CHECK(info.have_sni == 0, "имя выдано из обрезанной записи");
     CHECK(info.have_record_end == 0, "конец записи выдан для обрезанной записи");
 
     /* --- не TLS вовсе --------------------------------------------------- */
     memset(&info, 0, sizeof info);
-    CHECK(d2k_tls_parse((const uint8_t *)"GET / HTTP/1.1\r\n", 16, &info) == 0,
+    CHECK(d2s_tls_parse((const uint8_t *)"GET / HTTP/1.1\r\n", 16, &info) == 0,
           "не-TLS не должен быть ошибкой разбора");
     CHECK(info.is_client_hello == 0, "HTTP принят за ClientHello");
 
@@ -290,7 +290,7 @@ int main(void) {
     {
         uint8_t app[] = {0x17, 0x03, 0x03, 0x00, 0x02, 0xAA, 0xBB};
         memset(&info, 0, sizeof info);
-        CHECK(d2k_tls_parse(app, sizeof app, &info) == 0, "запись данных не должна быть ошибкой");
+        CHECK(d2s_tls_parse(app, sizeof app, &info) == 0, "запись данных не должна быть ошибкой");
         CHECK(info.is_client_hello == 0, "запись данных принята за ClientHello");
         CHECK(info.have_record_end == 1, "конец записи данных обязан вычисляться");
         CHECK(info.record_end == sizeof app, "конец записи данных неверен");
@@ -300,7 +300,7 @@ int main(void) {
     {
         uint8_t sh[] = {0x16, 0x03, 0x03, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00};
         memset(&info, 0, sizeof info);
-        CHECK(d2k_tls_parse(sh, sizeof sh, &info) == 0, "ServerHello не должен быть ошибкой");
+        CHECK(d2s_tls_parse(sh, sizeof sh, &info) == 0, "ServerHello не должен быть ошибкой");
         CHECK(info.is_client_hello == 0, "ServerHello принят за ClientHello");
     }
 
@@ -319,7 +319,7 @@ int main(void) {
         off += 1 + buf[off];                /* сжатие */
         buf[off] = 0x7f; buf[off + 1] = 0xff;
     }
-    CHECK(d2k_tls_parse(buf, n, &info) == 0, "враньё в длине не должно ронять разбор");
+    CHECK(d2s_tls_parse(buf, n, &info) == 0, "враньё в длине не должно ронять разбор");
     CHECK(info.have_sni == 0, "имя выдано из записи с враньём в длине");
 
     check_real_hello();
@@ -340,8 +340,8 @@ int main(void) {
         /* Обрезаем как MSS: даём разборщику только первый сегмент. */
         size_t seg = 1400;
         CHECK(n > seg, "приветствие в проверке влезло в сегмент — проверять нечего");
-        d2k_tls_info info;
-        d2k_tls_parse(big, seg, &info);
+        d2s_tls_info info;
+        d2s_tls_parse(big, seg, &info);
         CHECK(info.is_tls_record, "обрезанная запись не признана записью TLS");
         CHECK(info.is_client_hello,
               "приветствие браузера не узнано: запись не влезла в сегмент");
@@ -383,7 +383,7 @@ int main(void) {
      * Проверяем все четыре случая из списка приёмки U1: годный ответ, алерт,
      * мусор и оборванная запись. */
     {
-        d2k_tls_info si;
+        d2s_tls_info si;
 
         /* Годный: запись рукопожатия, тело 42 байта, рукопожатие 0x02 длиной
            38 — минимально возможное тело ServerHello (RFC 8446 §4.1.3) и
@@ -392,20 +392,20 @@ int main(void) {
         memset(ok, 0, sizeof ok);
         ok[0] = 0x16; ok[1] = 0x03; ok[2] = 0x03; ok[3] = 0x00; ok[4] = 0x2A;
         ok[5] = 0x02; ok[6] = 0x00; ok[7] = 0x00; ok[8] = 0x26;
-        CHECK(d2k_tls_parse(ok, sizeof ok, &si) == 0 && si.is_server_hello,
+        CHECK(d2s_tls_parse(ok, sizeof ok, &si) == 0 && si.is_server_hello,
               "годный ServerHello не признан ответом сервера");
         CHECK(!si.is_client_hello, "ServerHello принят за ClientHello");
 
         /* Фатальный алерт: тип записи 21. Ответ есть, приёмки нет. */
         uint8_t alert[7] = { 0x15, 0x03, 0x03, 0x00, 0x02, 0x02, 0x28 };
-        CHECK(d2k_tls_parse(alert, sizeof alert, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(alert, sizeof alert, &si) == 0 && !si.is_server_hello,
               "фатальный алерт засчитан за ответ сервера — блокировка стала бы обходом");
 
         /* Мусор в теле записи рукопожатия: тип сообщения не 0x02. */
         uint8_t junk[45];
         memcpy(junk, ok, sizeof junk);
         junk[5] = 0x0b;   /* certificate, а не server_hello */
-        CHECK(d2k_tls_parse(junk, sizeof junk, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(junk, sizeof junk, &si) == 0 && !si.is_server_hello,
               "чужое сообщение рукопожатия засчитано за ServerHello");
 
         /* Запись, спорящая сама с собой: рукопожатие длиннее собственной
@@ -414,18 +414,18 @@ int main(void) {
         uint8_t bad[45];
         memcpy(bad, ok, sizeof bad);
         bad[6] = 0x00; bad[7] = 0x01; bad[8] = 0x00;  /* 256 > 42 - 4 */
-        CHECK(d2k_tls_parse(bad, sizeof bad, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(bad, sizeof bad, &si) == 0 && !si.is_server_hello,
               "ServerHello длиннее своей записи признан годным");
 
         /* Обрывок: пришли только первые пять байт. */
-        CHECK(d2k_tls_parse(ok, 5, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(ok, 5, &si) == 0 && !si.is_server_hello,
               "оборванная запись признана ответом сервера");
 
         /* Рукопожатие НУЛЕВОЙ длины: тип тот, разметка непротиворечива, а
            ServerHello'ом это быть не может — по RFC 8446 §4.1.3 его тело не
            короче 38 байт. Раньше такой вход приёмку проходил. */
         uint8_t empty[9] = { 0x16, 0x03, 0x03, 0x00, 0x04, 0x02, 0x00, 0x00, 0x00 };
-        CHECK(d2k_tls_parse(empty, sizeof empty, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(empty, sizeof empty, &si) == 0 && !si.is_server_hello,
               "рукопожатие нулевой длины признано ответом сервера");
 
         /* Тело есть, но короче минимального: 20 байт вместо 38. */
@@ -434,7 +434,7 @@ int main(void) {
         shortbody[0] = 0x16; shortbody[1] = 0x03; shortbody[2] = 0x03;
         shortbody[3] = 0x00; shortbody[4] = 0x18;   /* запись 24 байта */
         shortbody[5] = 0x02; shortbody[6] = 0x00; shortbody[7] = 0x00; shortbody[8] = 0x14;
-        CHECK(d2k_tls_parse(shortbody, sizeof shortbody, &si) == 0 && !si.is_server_hello,
+        CHECK(d2s_tls_parse(shortbody, sizeof shortbody, &si) == 0 && !si.is_server_hello,
               "ServerHello короче минимально возможного признан годным");
     }
 

@@ -5,7 +5,7 @@
  */
 #include <string.h>
 
-#include "d2k_nl.h"
+#include "d2s_nl.h"
 
 static size_t align4(size_t v) {
     return (v + 3u) & ~(size_t)3u;
@@ -34,7 +34,7 @@ static void wn32(uint8_t *p, uint32_t v) {
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
 }
 
-void d2k_nl_iter_init(d2k_nl_iter *it, const uint8_t *buf, size_t len) {
+void d2s_nl_iter_init(d2s_nl_iter *it, const uint8_t *buf, size_t len) {
     if (!it) {
         return;
     }
@@ -42,8 +42,8 @@ void d2k_nl_iter_init(d2k_nl_iter *it, const uint8_t *buf, size_t len) {
     it->left = buf ? len : 0;
 }
 
-int d2k_nl_next(d2k_nl_iter *it, d2k_nl_msg *m) {
-    if (!it || !m || it->left < D2K_NLMSG_HDRLEN) {
+int d2s_nl_next(d2s_nl_iter *it, d2s_nl_msg *m) {
+    if (!it || !m || it->left < D2S_NLMSG_HDRLEN) {
         if (it) {
             it->left = 0;
         }
@@ -51,7 +51,7 @@ int d2k_nl_next(d2k_nl_iter *it, d2k_nl_msg *m) {
     }
 
     uint32_t mlen = h32(it->p);
-    if (mlen < D2K_NLMSG_HDRLEN || (size_t)mlen > it->left) {
+    if (mlen < D2S_NLMSG_HDRLEN || (size_t)mlen > it->left) {
         /* Врущая или обрезанная длина. Гасим итератор: следующий заголовок
            пришлось бы искать по выдуманному смещению. */
         it->left = 0;
@@ -62,8 +62,8 @@ int d2k_nl_next(d2k_nl_iter *it, d2k_nl_msg *m) {
     m->flags    = h16(it->p + 6);
     m->seq      = h32(it->p + 8);
     m->pid      = h32(it->p + 12);
-    m->body     = it->p + D2K_NLMSG_HDRLEN;
-    m->body_len = (size_t)mlen - D2K_NLMSG_HDRLEN;
+    m->body     = it->p + D2S_NLMSG_HDRLEN;
+    m->body_len = (size_t)mlen - D2S_NLMSG_HDRLEN;
 
     size_t step = align4(mlen);
     if (step >= it->left) {
@@ -76,29 +76,29 @@ int d2k_nl_next(d2k_nl_iter *it, d2k_nl_msg *m) {
     return 1;
 }
 
-int d2k_nl_packet(const d2k_nl_msg *m, d2k_nl_pkt *out) {
+int d2s_nl_packet(const d2s_nl_msg *m, d2s_nl_pkt *out) {
     if (!m || !out) {
         return -1;
     }
     memset(out, 0, sizeof *out);
-    if (m->body_len < D2K_NFGENMSG_LEN) {
+    if (m->body_len < D2S_NFGENMSG_LEN) {
         return -1;
     }
 
-    size_t pos = align4(D2K_NFGENMSG_LEN);
-    while (pos + D2K_NLA_HDRLEN <= m->body_len) {
+    size_t pos = align4(D2S_NFGENMSG_LEN);
+    while (pos + D2S_NLA_HDRLEN <= m->body_len) {
         const uint8_t *a = m->body + pos;
         size_t   alen  = h16(a);
-        uint16_t atype = (uint16_t)(h16(a + 2) & D2K_NLA_TYPE_MASK);
+        uint16_t atype = (uint16_t)(h16(a + 2) & D2S_NLA_TYPE_MASK);
 
-        if (alen < D2K_NLA_HDRLEN || alen > m->body_len - pos) {
+        if (alen < D2S_NLA_HDRLEN || alen > m->body_len - pos) {
             break;
         }
-        const uint8_t *val = a + D2K_NLA_HDRLEN;
-        size_t vlen = alen - D2K_NLA_HDRLEN;
+        const uint8_t *val = a + D2S_NLA_HDRLEN;
+        size_t vlen = alen - D2S_NLA_HDRLEN;
 
         switch (atype) {
-        case D2K_NFQA_PACKET_HDR:
+        case D2S_NFQA_PACKET_HDR:
             /* Заголовок упакован: 4+2+1 = 7 байт без хвоста. */
             if (vlen >= 7) {
                 out->id          = n32(val);
@@ -107,28 +107,28 @@ int d2k_nl_packet(const d2k_nl_msg *m, d2k_nl_pkt *out) {
                 out->have_hdr    = 1;
             }
             break;
-        case D2K_NFQA_PAYLOAD:
+        case D2S_NFQA_PAYLOAD:
             out->payload      = val;
             out->payload_len  = vlen;
             out->have_payload = 1;
             break;
-        case D2K_NFQA_CAP_LEN:
+        case D2S_NFQA_CAP_LEN:
             if (vlen >= 4) {
                 out->cap_len = n32(val);
             }
             break;
-        case D2K_NFQA_SKB_INFO:
+        case D2S_NFQA_SKB_INFO:
             if (vlen >= 4) {
                 out->skb_info = n32(val);
             }
             break;
-        case D2K_NFQA_MARK:
+        case D2S_NFQA_MARK:
             if (vlen >= 4) {
                 out->mark = n32(val);
                 out->have_mark = 1;
             }
             break;
-        case D2K_NFQA_TIMESTAMP:
+        case D2S_NFQA_TIMESTAMP:
             if (vlen >= 16) {
                 uint64_t sec = (uint64_t)n32(val) << 32 | n32(val + 4);
                 uint64_t usec = (uint64_t)n32(val + 8) << 32 | n32(val + 12);
@@ -138,7 +138,7 @@ int d2k_nl_packet(const d2k_nl_msg *m, d2k_nl_pkt *out) {
                 }
             }
             break;
-        case D2K_NFQA_IFINDEX_OUTDEV:
+        case D2S_NFQA_IFINDEX_OUTDEV:
             if (vlen >= 4) {
                 out->outdev = n32(val);
                 out->have_outdev = 1;
@@ -160,8 +160,8 @@ int d2k_nl_packet(const d2k_nl_msg *m, d2k_nl_pkt *out) {
     return 0;
 }
 
-int d2k_nl_errno(const d2k_nl_msg *m, int32_t *err) {
-    if (!m || m->type != D2K_NLMSG_ERROR || m->body_len < 4) {
+int d2s_nl_errno(const d2s_nl_msg *m, int32_t *err) {
+    if (!m || m->type != D2S_NLMSG_ERROR || m->body_len < 4) {
         return -1;
     }
     if (err) {
@@ -180,7 +180,7 @@ int d2k_nl_errno(const d2k_nl_msg *m, int32_t *err) {
 /* Общий заголовок: nlmsghdr + nfgenmsg. Возвращает позицию за ними. */
 static size_t hdr_init(uint8_t *o, size_t cap, uint16_t type, uint16_t flags,
                        uint32_t seq, uint16_t queue) {
-    size_t need = D2K_NLMSG_HDRLEN + D2K_NFGENMSG_LEN;
+    size_t need = D2S_NLMSG_HDRLEN + D2S_NFGENMSG_LEN;
     if (!o || cap < need) {
         return 0;
     }
@@ -191,7 +191,7 @@ static size_t hdr_init(uint8_t *o, size_t cap, uint16_t type, uint16_t flags,
     wh32(o + 8, seq);
     wh32(o + 12, 0);            /* pid: ядро подставит наш */
     o[16] = 0;                  /* nfgen_family = AF_UNSPEC */
-    o[17] = D2K_NFNETLINK_V0;
+    o[17] = D2S_NFNETLINK_V0;
     wn16(o + 18, queue);        /* res_id — в порядке сети */
     return need;
 }
@@ -199,14 +199,14 @@ static size_t hdr_init(uint8_t *o, size_t cap, uint16_t type, uint16_t flags,
 /* Кладёт атрибут, возвращает новую позицию или 0 при нехватке места. */
 static size_t put_attr(uint8_t *o, size_t cap, size_t pos, uint16_t type,
                        const uint8_t *val, size_t vlen) {
-    size_t alen = D2K_NLA_HDRLEN + vlen;
+    size_t alen = D2S_NLA_HDRLEN + vlen;
     size_t step = align4(alen);
     if (pos + step > cap) {
         return 0;
     }
     wh16(o + pos, (uint16_t)alen);
     wh16(o + pos + 2, type);
-    memcpy(o + pos + D2K_NLA_HDRLEN, val, vlen);
+    memcpy(o + pos + D2S_NLA_HDRLEN, val, vlen);
     /* Выравнивающий хвост обнуляем: ядро его не читает, но посылать наружу
        содержимое чужой памяти нельзя. */
     if (step > alen) {
@@ -215,17 +215,17 @@ static size_t put_attr(uint8_t *o, size_t cap, size_t pos, uint16_t type,
     return pos + step;
 }
 
-size_t d2k_nl_verdict(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
+size_t d2s_nl_verdict(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
                       uint32_t pkt_id, uint32_t verdict) {
-    size_t pos = hdr_init(o, cap, D2K_NFQ_TYPE(D2K_NFQNL_MSG_VERDICT),
-                          D2K_NLM_F_REQUEST, seq, queue);
+    size_t pos = hdr_init(o, cap, D2S_NFQ_TYPE(D2S_NFQNL_MSG_VERDICT),
+                          D2S_NLM_F_REQUEST, seq, queue);
     if (pos == 0) {
         return 0;
     }
     uint8_t vh[8];
     wn32(vh + 0, verdict);
     wn32(vh + 4, pkt_id);
-    pos = put_attr(o, cap, pos, D2K_NFQA_VERDICT_HDR, vh, sizeof vh);
+    pos = put_attr(o, cap, pos, D2S_NFQA_VERDICT_HDR, vh, sizeof vh);
     if (pos == 0) {
         return 0;
     }
@@ -233,17 +233,17 @@ size_t d2k_nl_verdict(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
     return pos;
 }
 
-size_t d2k_nl_verdict_payload(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
+size_t d2s_nl_verdict_payload(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
                               uint32_t pkt_id, uint32_t verdict,
                               const uint8_t *payload, size_t len) {
-    if (!payload || len == 0 || len > 0xffffu - D2K_NLA_HDRLEN) {
+    if (!payload || len == 0 || len > 0xffffu - D2S_NLA_HDRLEN) {
         return 0;
     }
-    size_t pos = d2k_nl_verdict(o, cap, queue, seq, pkt_id, verdict);
+    size_t pos = d2s_nl_verdict(o, cap, queue, seq, pkt_id, verdict);
     if (pos == 0) {
         return 0;
     }
-    pos = put_attr(o, cap, pos, D2K_NFQA_PAYLOAD, payload, len);
+    pos = put_attr(o, cap, pos, D2S_NFQA_PAYLOAD, payload, len);
     if (pos == 0) {
         return 0;
     }
@@ -251,12 +251,12 @@ size_t d2k_nl_verdict_payload(uint8_t *o, size_t cap, uint16_t queue, uint32_t s
     return pos;
 }
 
-size_t d2k_nl_cfg_cmd(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
+size_t d2s_nl_cfg_cmd(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
                       uint8_t cmd, uint16_t pf) {
     /* NLM_F_ACK намеренно: без подтверждения «привязались к очереди» и «ядро
        нас отвергло» неразличимы, а различать их обязательно. */
-    size_t pos = hdr_init(o, cap, D2K_NFQ_TYPE(D2K_NFQNL_MSG_CONFIG),
-                          D2K_NLM_F_REQUEST | D2K_NLM_F_ACK, seq, queue);
+    size_t pos = hdr_init(o, cap, D2S_NFQ_TYPE(D2S_NFQNL_MSG_CONFIG),
+                          D2S_NLM_F_REQUEST | D2S_NLM_F_ACK, seq, queue);
     if (pos == 0) {
         return 0;
     }
@@ -264,7 +264,7 @@ size_t d2k_nl_cfg_cmd(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
     c[0] = cmd;
     c[1] = 0;
     wn16(c + 2, pf);
-    pos = put_attr(o, cap, pos, D2K_NFQA_CFG_CMD, c, sizeof c);
+    pos = put_attr(o, cap, pos, D2S_NFQA_CFG_CMD, c, sizeof c);
     if (pos == 0) {
         return 0;
     }
@@ -272,11 +272,11 @@ size_t d2k_nl_cfg_cmd(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
     return pos;
 }
 
-size_t d2k_nl_cfg_params(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
+size_t d2s_nl_cfg_params(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
                          uint32_t copy_range, uint8_t copy_mode,
                          uint32_t maxlen, uint32_t flags, uint32_t mask) {
-    size_t pos = hdr_init(o, cap, D2K_NFQ_TYPE(D2K_NFQNL_MSG_CONFIG),
-                          D2K_NLM_F_REQUEST | D2K_NLM_F_ACK, seq, queue);
+    size_t pos = hdr_init(o, cap, D2S_NFQ_TYPE(D2S_NFQNL_MSG_CONFIG),
+                          D2S_NLM_F_REQUEST | D2S_NLM_F_ACK, seq, queue);
     if (pos == 0) {
         return 0;
     }
@@ -285,22 +285,22 @@ size_t d2k_nl_cfg_params(uint8_t *o, size_t cap, uint16_t queue, uint32_t seq,
     params[4] = copy_mode;
     uint8_t u32be[4];
 
-    pos = put_attr(o, cap, pos, D2K_NFQA_CFG_PARAMS, params, sizeof params);
+    pos = put_attr(o, cap, pos, D2S_NFQA_CFG_PARAMS, params, sizeof params);
     if (pos == 0) {
         return 0;
     }
     wn32(u32be, maxlen);
-    pos = put_attr(o, cap, pos, D2K_NFQA_CFG_QUEUE_MAXLEN, u32be, sizeof u32be);
+    pos = put_attr(o, cap, pos, D2S_NFQA_CFG_QUEUE_MAXLEN, u32be, sizeof u32be);
     if (pos == 0) {
         return 0;
     }
     wn32(u32be, flags);
-    pos = put_attr(o, cap, pos, D2K_NFQA_CFG_FLAGS, u32be, sizeof u32be);
+    pos = put_attr(o, cap, pos, D2S_NFQA_CFG_FLAGS, u32be, sizeof u32be);
     if (pos == 0) {
         return 0;
     }
     wn32(u32be, mask);
-    pos = put_attr(o, cap, pos, D2K_NFQA_CFG_MASK, u32be, sizeof u32be);
+    pos = put_attr(o, cap, pos, D2S_NFQA_CFG_MASK, u32be, sizeof u32be);
     if (pos == 0) {
         return 0;
     }

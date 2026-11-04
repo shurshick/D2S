@@ -1,15 +1,15 @@
 /* test_compose.c — проверки свойств коробки и вывода плана для TCP.
  *
- * d2k_compose — без сети: чистая сборка текста плана из вектора свойств и
+ * d2s_compose — без сети: чистая сборка текста плана из вектора свойств и
  * вида приветствия цели (задача 5, шаг 0б добавила второй параметр — см.
  * блок проверок "вид приманки").
  *
- * d2k_props_ask (задача 5, шаг 0) — С СЕТЬЮ, тем же приёмом, что test_link.c:
+ * d2s_props_ask (задача 5, шаг 0) — С СЕТЬЮ, тем же приёмом, что test_link.c:
  * настоящий ctlprobe (datapath/ctlprobe.c) как датапат, и петля-мишень
- * test_stand.h (mode 0, "отвечает всегда") как цель для d2k_meas_once внутри
- * d2k_props_ask — стенд и ctlprobe не заменяют друг друга: петля-мишень нужна,
+ * test_stand.h (mode 0, "отвечает всегда") как цель для d2s_meas_once внутри
+ * d2s_props_ask — стенд и ctlprobe не заменяют друг друга: петля-мишень нужна,
  * чтобы "одно обращение к цели" не упёрлось в ECONNREFUSED, а ctlprobe — чтобы
- * дать событие обмена, по которому судит сам d2k_props_ask. Проверять этот
+ * дать событие обмена, по которому судит сам d2s_props_ask. Проверять этот
  * протокол по представлению о нём бесполезно — расхождение падает молча
  * (см. шапку test_link.c).
  *
@@ -27,7 +27,7 @@
  * проверяют ИСПРАВЛЕННОЕ ожидание — ровно 1 план (everythingPlan), а не 0 — и
  * это подтверждено и в отчёте задачи.
  *
- * ЗАДАЧА 5 (11.09.2026): d2k_props_ask.Set в Go — ОДИН исход на один вопрос
+ * ЗАДАЧА 5 (11.09.2026): d2s_props_ask.Set в Go — ОДИН исход на один вопрос
  * (`Set: func(*Properties, bool)`), а не сама точка входа опроса: реально
  * `.Set` в бою вызывается ТОЛЬКО в properties_test.go — controller.go
  * (verdictCandidates) читает у PropProbe только Plan, кладёт кандидатов в
@@ -35,7 +35,7 @@
  * проходом вопросов с записью Set(). Свойства (t.Traits.Props) в проде
  * поэтому НИКОГДА не заполняются самим Go — controller.go прямо это
  * признаёт (комментарий у verdictCandidates: "до сбора нескольких
- * подтверждённых свойств... дело физически не доходит"). d2k_props_ask на
+ * подтверждённых свойств... дело физически не доходит"). d2s_props_ask на
  * C-стороне — САМОСТОЯТЕЛЬНЫЙ синхронный опрос по всем пяти вопросам подряд
  * (так решает бриф задачи 5, шаг 0, явно), а не копия недостроенного пути
  * Go — это и есть то расхождение с Go-стороной, которое велено искать и
@@ -55,14 +55,14 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "d2k_compose.h"
-#include "d2k_compose_internal.h"
-#include "d2k_link.h"
-/* Только ради D2K_KEY_WIRE_LEN — поддельный конец связи (fakeend_run ниже)
+#include "d2s_compose.h"
+#include "d2s_compose_internal.h"
+#include "d2s_link.h"
+/* Только ради D2S_KEY_WIRE_LEN — поддельный конец связи (fakeend_run ниже)
  * строит кадры событий руками, тем же приёмом, что test_link.c и datapath/
  * test_ctl.c: ширина ключа нужна настоящая, а не переизобретённая здесь
  * копией. */
-#include "d2k_ctlsrv.h"
+#include "d2s_ctlsrv.h"
 #include "test_stand.h"
 
 static int fails;
@@ -75,7 +75,7 @@ static int fails;
     } while (0)
 
 /* Подстрока, которая может встретиться ТОЛЬКО в checksum_plan_text: 64 байта
- * набивки D2K_OVERLAP_FILLER гарантируют длинный повтор "0f", которого в
+ * набивки D2S_OVERLAP_FILLER гарантируют длинный повтор "0f", которого в
  * decoy-приветствии нет ни разу — проверено по обоим исходникам,
  * profiles/legacy.hex и profiles/modern.hex, ноль вхождений в каждом. Так
  * отличаем "это план про сумму" от "это план про разбор протокола/дубликаты",
@@ -128,7 +128,7 @@ static int write_file_text(const char *path, const char *text) {
 }
 
 /* Запускает planlab (лаборатория плана, datapath/planlab.c — тот же
- * исполнитель, d2k_plan_load+d2k_plan_apply, что и прод) на паре файлов и
+ * исполнитель, d2s_plan_load+d2s_plan_apply, что и прод) на паре файлов и
  * возвращает его STDOUT целиком в out (обрезан до cap-1, для пяти зондов
  * этого с большим запасом достаточно). Возвращает 0, если сам процесс
  * запустился (даже если planlab написал "reject"/"refuse" — это результат
@@ -258,7 +258,7 @@ static void probe_stop(probe *p, const char *sock_path) {
 static int dial_retry(const char *sock_path, char *err, size_t errcap) {
     int fd = -1;
     for (int i = 0; i < 50; i++) {
-        fd = d2k_link_open(sock_path, err, errcap);
+        fd = d2s_link_open(sock_path, err, errcap);
         if (fd >= 0) {
             return fd;
         }
@@ -271,9 +271,9 @@ static int dial_retry(const char *sock_path, char *err, size_t errcap) {
  * 500мс — тот же приём и та же причина, что next_of_kind в test_link.c:
  * REFUSED/HELLO чужих проверок могут смешаться с нужным. */
 static int next_of_kind2(int fd, uint16_t want, uint16_t want2, int tries,
-                         d2k_ev *out, char *err, size_t errcap) {
+                         d2s_ev *out, char *err, size_t errcap) {
     for (int i = 0; i < tries; i++) {
-        int rc = d2k_link_next(fd, out, 500, err, errcap);
+        int rc = d2s_link_next(fd, out, 500, err, errcap);
         if (rc != 0) { return -1; }
         if (out->kind == want || (want2 && out->kind == want2)) { return 0; }
     }
@@ -284,16 +284,16 @@ static int next_of_kind2(int fd, uint16_t want, uint16_t want2, int tries,
  * очереди событий, без разбора вида — чтобы события ОДНОГО блока проверок не
  * просочились в следующий и не были прочитаны за "своё" в другом контексте. */
 static void drain_all(int fd) {
-    d2k_ev ev;
+    d2s_ev ev;
     char err[200];
-    while (d2k_link_next(fd, &ev, 150, err, sizeof err) == 0) { }
+    while (d2s_link_next(fd, &ev, 150, err, sizeof err) == 0) { }
 }
 
 /* "plans" отдаёт СЕРВЕРНЫЙ, некопящийся у клиента счётчик принятых команд
- * (cx.ok_cmds, ctlprobe.c) — в отличие от событий ACK, который d2k_props_ask
+ * (cx.ok_cmds, ctlprobe.c) — в отличие от событий ACK, который d2s_props_ask
  * сам вычитывает из очереди по пути (иначе после её возврата в очереди уже
  * нечего было бы посчитать). Разница before/after — надёжный способ узнать,
- * сколько РЕАЛЬНО раз d2k_props_ask поставил план за один вызов, не читая
+ * сколько РЕАЛЬНО раз d2s_props_ask поставил план за один вызов, не читая
  * события параллельно с ним. */
 static unsigned long long query_plan_total(probe *p) {
     const char *resp = probe_say(p, "plans");
@@ -310,15 +310,15 @@ static unsigned long long query_ok_cmds(probe *p) {
 }
 
 /* Собирает НАСТОЯЩЕЕ приветствие (LEGACY-профиль, hello.c) с заданным SNI —
- * тем же путём, каким его строил бы вызывающий d2k_props_ask на первом
- * контакте с целью (d2k_hello_from_profile, задача 1). Нужно, чтобы
- * d2k_hello_sni внутри d2k_props_ask нашёл настоящее имя, а не подстроку по
+ * тем же путём, каким его строил бы вызывающий d2s_props_ask на первом
+ * контакте с целью (d2s_hello_from_profile, задача 1). Нужно, чтобы
+ * d2s_hello_sni внутри d2s_props_ask нашёл настоящее имя, а не подстроку по
  * случайности: самодельные байты здесь были бы тем самым грехом, против
  * которого возражает вся остальная приманка этого файла. */
-static d2k_hello build_trigger(uint8_t *buf, size_t cap, const char *sni) {
-    d2k_hello h = {0}; h.bytes = NULL; h.len = 0;
+static d2s_hello build_trigger(uint8_t *buf, size_t cap, const char *sni) {
+    d2s_hello h = {0}; h.bytes = NULL; h.len = 0;
     size_t len = 0;
-    if (d2k_hello_from_profile(D2K_SHAPE_LEGACY, sni, buf, cap, &len) == 0) {
+    if (d2s_hello_from_profile(D2S_SHAPE_LEGACY, sni, buf, cap, &len) == 0) {
         h.bytes = buf;
         h.len = len;
     }
@@ -326,19 +326,19 @@ static d2k_hello build_trigger(uint8_t *buf, size_t cap, const char *sni) {
 }
 
 /* --------------------------------------------------------------------
- * Ведущий поток стенда: пока d2k_props_ask синхронно блокируется внутри
+ * Ведущий поток стенда: пока d2s_props_ask синхронно блокируется внутри
  * своего цикла (SET_NAME → ack → одно обращение → ждать обмен), кто-то
  * должен ПАРАЛЛЕЛЬНО дать ctlprobe команды "hello"/"reply", изображающие
  * датапат, который увидел ту же цель и её ответ. Без этого события для
- * d2k_props_ask взяться неоткуда — ctlprobe их не производит сам.
+ * d2s_props_ask взяться неоткуда — ctlprobe их не производит сам.
  *
  * pre_delay_ms ПЕРЕД каждой парой — не гонка "на глаз": SET_NAME/ack — это
  * АФ_UNIX-обмен на этой же машине (см. wait_for_event, compose.c, комментарий
- * про миллисекунды), а connect+send в d2k_meas_once — TCP-петля на
+ * про миллисекунды), а connect+send в d2s_meas_once — TCP-петля на
  * локалхосте, тоже миллисекунды; 300мс — на порядок больше того и другого
- * вместе, тем же приёмом запаса, что D2K_TEST_IDLE_MS в test_stand.h.
+ * вместе, тем же приёмом запаса, что D2S_TEST_IDLE_MS в test_stand.h.
  * Без этой паузы пара "hello+reply" рисковала бы прийти РАНЬШЕ, чем
- * d2k_props_ask поставит план и начнёт ждать обмен — и её событие
+ * d2s_props_ask поставит план и начнёт ждать обмен — и её событие
  * потерялось бы, будучи прочитанным (и отброшенным как "не тот вид") ещё
  * во время ожидания ack. -------------------------------------------------- */
 typedef struct {
@@ -366,12 +366,12 @@ static void *driver_run(void *arg) {
 
 /* ========================================================================
  * ПОДДЕЛЬНЫЙ КОНЕЦ СВЯЗИ — нужен РОВНО для находки 1 ревью 11.09 (круг
- * правок 2): D2K_EV_EXCHANGE не адресован нашей команде, его несёт ключ
+ * правок 2): D2S_EV_EXCHANGE не адресован нашей команде, его несёт ключ
  * потока (свой адрес:порт против адреса:порта цели), а настоящий ctlprobe
  * строит синтетические пакеты с ЖЁСТКО ЗАШИТЫМ адресом клиента (LAN
  * 192.168.1.67, datapath/ctlprobe.c: build_pkt) — тем же для ЛЮБОГО теста,
  * что даёт test_link.c проверять КОНСТАНТУ (её же тесты на key.low_ip и
- * т.п.). d2k_props_ask, наоборот, соединяется с целью НАСТОЯЩИМ сокетом
+ * т.п.). d2s_props_ask, наоборот, соединяется с целью НАСТОЯЩИМ сокетом
  * (props_ask_contact, compose.c) — местный порт назначает ядро при
  * connect(), заранее его не знает НИКТО, включая ctlprobe, и подделать
  * событие с ключом, который действительно совпадёт, через её "hello"/
@@ -410,7 +410,7 @@ static uint16_t peerstand_start(peerstand *s) {
 /* ВОЗВРАЩАЕТ принятый сокет открытым (out_c): живой прогон 11.09 показал, что
  * зонд закрывал своё соединение сразу после посылки приветствия, а датапат по
  * FIN удаляет ячейку потока (datapath/session.c: `if (rst || fin) {
- * d2k_track_remove(...) }`) — ответ сервера приходить было уже некуда, и НИ
+ * d2s_track_remove(...) }`) — ответ сервера приходить было уже некуда, и НИ
  * ОДИН вопрос не мог быть отвечен. Прежняя версия этой функции закрывала
  * принятый сокет здесь же и потому такое поведение не замечала: чтобы
  * проверить, что зонд ДЕРЖИТ соединение до самого события обмена, стенд
@@ -452,28 +452,28 @@ static int peer_closed(int c) {
 
 /* Читает и отбрасывает РОВНО один кадр команды (заголовок [длина
  * payload BE32][тип BE16], затем длина-2 байт тела) — та же раскладка,
- * что и у события (d2k_ctl.h: "Кадр: [длина payload u32 BE][тип u16
+ * что и у события (d2s_ctl.h: "Кадр: [длина payload u32 BE][тип u16
  * BE][payload]", общая для обоих направлений), поэтому разбирать ВНУТРЕННЕЕ
  * устройство SET_NAME здесь незачем: границы кадра снаружи одни на всех. */
 /* Вытаскивает идентификатор плана из команды SET_NAME.
-   Тело команды: [длина имени 1 байт][имя][план ДВОИЧНЫЙ] — d2k_link_set_name
+   Тело команды: [длина имени 1 байт][имя][план ДВОИЧНЫЙ] — d2s_link_set_name
    раскодирует hex перед отправкой (link.c: hex_decode в g_scratch). План
    начинается заголовком 12 байт, следом запись REC_ID: тип(2)+длина(2)+
    16 байт значения. 0 — нашли, -1 — тело короче ожидаемого. */
 static int plan_id_from_setname(uint16_t kind, const uint8_t *body, size_t len,
-                                uint8_t out[D2K_PLAN_ID_LEN]) {
+                                uint8_t out[D2S_PLAN_ID_LEN]) {
     if (len < 1) { return -1; }
-    if (kind != D2K_CMD_SET_NAME && kind != D2K_CMD_SET_NAME_PROBE) { return -1; }
+    if (kind != D2S_CMD_SET_NAME && kind != D2S_CMD_SET_NAME_PROBE) { return -1; }
     /* body = name_len(1) + name + shape(1) + [probe port(2)] +
        plan header(12) + REC_ID header(4) + plan id.  The previous helper
        started from 2 and then added shape once more, shifting the ID by one
        byte; APPLIED was then treated as a foreign plan and every negative
        question paid the full wait budget. */
     size_t off = (size_t)1 + body[0] + 2;
-    if (kind == D2K_CMD_SET_NAME_PROBE) { off += 2; } /* reserved probe port */
+    if (kind == D2S_CMD_SET_NAME_PROBE) { off += 2; } /* reserved probe port */
     off += 12 + 4;
-    if (off + D2K_PLAN_ID_LEN > len) { return -1; }
-    memcpy(out, body + off, D2K_PLAN_ID_LEN);
+    if (off + D2S_PLAN_ID_LEN > len) { return -1; }
+    memcpy(out, body + off, D2S_PLAN_ID_LEN);
     return 0;
 }
 
@@ -521,21 +521,21 @@ static void send_event_frame(int fd, uint16_t kind,
                              const uint8_t *high_ip, uint16_t high_port,
                              uint8_t transport,
                              const uint8_t *rest, size_t rest_len) {
-    uint8_t frame[6 + D2K_KEY_WIRE_LEN + 32];
-    size_t body_len = D2K_KEY_WIRE_LEN + rest_len;
+    uint8_t frame[6 + D2S_KEY_WIRE_LEN + 32];
+    size_t body_len = D2S_KEY_WIRE_LEN + rest_len;
     uint32_t plen = (uint32_t)(2 + body_len);
     frame[0] = (uint8_t)(plen >> 24); frame[1] = (uint8_t)(plen >> 16);
     frame[2] = (uint8_t)(plen >> 8);  frame[3] = (uint8_t)plen;
     frame[4] = (uint8_t)(kind >> 8);  frame[5] = (uint8_t)kind;
     uint8_t *k = frame + 6;
-    memset(k, 0, D2K_KEY_WIRE_LEN);
+    memset(k, 0, D2S_KEY_WIRE_LEN);
     k[0] = 4;
     if (low_ip) { memcpy(k + 1, low_ip, 4); }
     if (high_ip) { memcpy(k + 17, high_ip, 4); }
     k[33] = (uint8_t)(low_port >> 8); k[34] = (uint8_t)low_port;
     k[35] = (uint8_t)(high_port >> 8); k[36] = (uint8_t)high_port;
     k[37] = transport;
-    if (rest_len) { memcpy(frame + 6 + D2K_KEY_WIRE_LEN, rest, rest_len); }
+    if (rest_len) { memcpy(frame + 6 + D2S_KEY_WIRE_LEN, rest, rest_len); }
     (void)!write(fd, frame, 6 + body_len);
 }
 
@@ -543,12 +543,12 @@ static void send_ack_ok(int fd, uint16_t cmd) {
     uint8_t rest[4];
     rest[0] = (uint8_t)(cmd >> 8); rest[1] = (uint8_t)cmd;
     rest[2] = 1; /* признак успеха */
-    rest[3] = 0; /* D2K_ACK_OK */
-    send_event_frame(fd, D2K_EV_ACK, NULL, 0, NULL, 0, 0, rest, sizeof rest);
+    rest[3] = 0; /* D2S_ACK_OK */
+    send_event_frame(fd, D2S_EV_ACK, NULL, 0, NULL, 0, 0, rest, sizeof rest);
 }
 
 /* seen_types: бит appdata — (1<<(23-20))=0x08; бит "только рукопожатие" —
- * (1<<(22-20))=0x04 (см. d2k_ev_outer_appdata, d2k_link.h). code/num — тут не
+ * (1<<(22-20))=0x04 (см. d2s_ev_outer_appdata, d2s_link.h). code/num — тут не
  * важны для порога (см. её же большой комментарий про липкое поле code),
  * заполнены правдоподобно, не нулём, чтобы не полагаться на memset. */
 static void send_exchange(int fd, const uint8_t *ip_a, uint16_t port_a,
@@ -562,7 +562,7 @@ static void send_exchange(int fd, const uint8_t *ip_a, uint16_t port_a,
     rest[1] = seen_types;
     rest[2] = 0; rest[3] = 0; rest[4] = 0; rest[5] = 64;
     rest[6] = server_hello;
-    send_event_frame(fd, D2K_EV_EXCHANGE, ip_a, port_a, ip_b, port_b, transport, rest, sizeof rest);
+    send_event_frame(fd, D2S_EV_EXCHANGE, ip_a, port_a, ip_b, port_b, transport, rest, sizeof rest);
 }
 
 /* «План применён к этому потоку» с ИМЕННО ТЕМ идентификатором, каким вопрос
@@ -570,12 +570,12 @@ static void send_exchange(int fd, const uint8_t *ip_a, uint16_t port_a,
    датапат план принял (0009, U1). */
 static void send_applied(int fd, const uint8_t *ip_a, uint16_t port_a,
                          const uint8_t *ip_b, uint16_t port_b,
-                         uint8_t transport, const uint8_t plan_id[D2K_PLAN_ID_LEN]) {
+                         uint8_t transport, const uint8_t plan_id[D2S_PLAN_ID_LEN]) {
     /* Wire v3 appends the address-trial generation to APPLIED. These TCP
        measurements are name probes, so their generation is the all-zero ID. */
-    uint8_t rest[D2K_PLAN_ID_LEN + D2K_TRIAL_ID_LEN] = {0};
-    memcpy(rest, plan_id, D2K_PLAN_ID_LEN);
-    send_event_frame(fd, D2K_EV_APPLIED, ip_a, port_a, ip_b, port_b, transport,
+    uint8_t rest[D2S_PLAN_ID_LEN + D2S_TRIAL_ID_LEN] = {0};
+    memcpy(rest, plan_id, D2S_PLAN_ID_LEN);
+    send_event_frame(fd, D2S_EV_APPLIED, ip_a, port_a, ip_b, port_b, transport,
                      rest, sizeof rest);
 }
 
@@ -628,15 +628,15 @@ static void *fakeend_run(void *arg) {
     (void)setsockopt(a->fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
     for (size_t i = 0; i < a->n; i++) {
         uint8_t cmd[4096]; size_t cmdlen = 0;
-        uint8_t qid[D2K_PLAN_ID_LEN];
+        uint8_t qid[D2S_PLAN_ID_LEN];
         uint16_t kind;
         /* Не прошедший вопрос снимается своей DEL_NAME_PROBE (задача 21) —
            это не новый раунд: считаем и читаем дальше. */
         do {
             if (drain_one_command_body(a->fd, cmd, sizeof cmd, &cmdlen, &kind) != 0) { return NULL; }
-            if (kind == D2K_CMD_DEL_NAME_PROBE) { a->retired++; }
-            if (kind == D2K_CMD_DEL_NAME) { a->broad_del++; }
-        } while (kind == D2K_CMD_DEL_NAME_PROBE || kind == D2K_CMD_DEL_NAME);
+            if (kind == D2S_CMD_DEL_NAME_PROBE) { a->retired++; }
+            if (kind == D2S_CMD_DEL_NAME) { a->broad_del++; }
+        } while (kind == D2S_CMD_DEL_NAME_PROBE || kind == D2S_CMD_DEL_NAME);
         int have_id = (plan_id_from_setname(kind, cmd, cmdlen, qid) == 0);
         send_ack_ok(a->fd, kind);
 
@@ -664,12 +664,12 @@ static void *fakeend_run(void *arg) {
            5 — старый PREPARED (0x0003) вместо APPLIED: подготовка
                доказательством не является (0009, F1). */
         if (have_id && a->outcomes[i] != 3) {
-            uint8_t id[D2K_PLAN_ID_LEN];
+            uint8_t id[D2S_PLAN_ID_LEN];
             memcpy(id, qid, sizeof id);
             if (a->outcomes[i] == 4) { id[0] = (uint8_t)~id[0]; }
             if (a->outcomes[i] == 5) {
-                send_event_frame(a->fd, D2K_EV_PREPARED, LOOPBACK4, a->target_port,
-                                 peer_ip, peer_port, 6, id, D2K_PLAN_ID_LEN);
+                send_event_frame(a->fd, D2S_EV_PREPARED, LOOPBACK4, a->target_port,
+                                 peer_ip, peer_port, 6, id, D2S_PLAN_ID_LEN);
             } else {
                 send_applied(a->fd, LOOPBACK4, a->target_port, peer_ip, peer_port, 6, id);
             }
@@ -697,8 +697,8 @@ static void *fakeend_run(void *arg) {
     while (poll(&pfd, 1, 300) > 0) {
         uint8_t cmd[4096]; size_t cmdlen = 0; uint16_t kind = 0;
         if (drain_one_command_body(a->fd, cmd, sizeof cmd, &cmdlen, &kind) != 0) { break; }
-        if (kind == D2K_CMD_DEL_NAME_PROBE) { a->retired++; continue; }
-        if (kind == D2K_CMD_DEL_NAME) { a->broad_del++; continue; }
+        if (kind == D2S_CMD_DEL_NAME_PROBE) { a->retired++; continue; }
+        if (kind == D2S_CMD_DEL_NAME) { a->broad_del++; continue; }
         a->extra_round_seen = 1;
         break;
     }
@@ -713,10 +713,10 @@ int main(int argc, char **argv) {
         uint16_t reserved = 0, actual = 0;
         uint8_t local[16] = {0};
         CHECK(port != 0, "IPv6 contact fixture starts");
-        CHECK(d2k_props_bind_family(6, &fd, &reserved) == 0,
+        CHECK(d2s_props_bind_family(6, &fd, &reserved) == 0,
               "reserve IPv6 TCP probe port");
-        d2k_hello empty = {0};
-        CHECK(d2k_props_contact_on_family(fd, "::1", port, empty, 6,
+        d2s_hello empty = {0};
+        CHECK(d2s_props_contact_on_family(fd, "::1", port, empty, 6,
                                          local, &actual, &connected) == 0,
               "connect IPv6 property probe using reserved socket");
         CHECK(actual == ntohs(reserved) && actual != 0,
@@ -725,13 +725,13 @@ int main(int argc, char **argv) {
               "contact returns entire IPv6 source address");
         if (connected >= 0) close(connected);
         fd = -1;
-        CHECK(d2k_props_bind_udp_family(6, &fd, &reserved) == 0,
+        CHECK(d2s_props_bind_udp_family(6, &fd, &reserved) == 0,
               "reserve IPv6 UDP probe port");
         if (fd >= 0) close(fd);
     }
     {
-        d2k_ev ev = {0};
-        d2k_flowkey k = {0};
+        d2s_ev ev = {0};
+        d2s_flowkey k = {0};
         ev.family = 6; k.family = 6;
         ev.transport = k.transport = 6;
         ev.low_port = k.a_port = 100;
@@ -754,8 +754,8 @@ int main(int argc, char **argv) {
      *
      * См. большой комментарий в шапке файла про расхождение с брифом. */
     {
-        d2k_props pr = {0};
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "полностью неизмеренный вектор обязан дать ровно один "
                        "запасной план (everythingPlan), а не ноль и не больше");
         CHECK(strstr(out[0], "seqovl") != NULL, "запасной план без перекрытия");
@@ -772,15 +772,15 @@ int main(int argc, char **argv) {
 
     /* --- перекрытие выводится только из своего свойства -------------------- */
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "ожидалось ровно одно плечо");
         CHECK(strstr(out[0], "seqovl") != NULL, "плечо перекрытия не собрано");
         CHECK(strstr(out[0], "payload 1 0f") != NULL, "приставка перекрытия не та");
 
-        pr.tolerates_left_overlap = D2K_P_YES;
-        n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        pr.tolerates_left_overlap = D2S_P_YES;
+        n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "коробка держит перекрытие: свой план не должен выводиться, "
                        "но вектор пуст и обязан дать everythingPlan, а не 0 и не 2");
         CHECK(strstr(out[0], "seqovl") != NULL && strstr(out[0], "order reverse") != NULL,
@@ -789,9 +789,9 @@ int main(int argc, char **argv) {
 
     /* --- порядок режет ПО ИМЕНИ, а не по середине приветствия -------------- */
     {
-        d2k_props pr = {0};
-        pr.tolerates_reorder = D2K_P_NO;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_reorder = D2S_P_NO;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "ожидалось ровно одно плечо");
         CHECK(strstr(out[0], "sni_middle") != NULL,
               "рез не по имени: замер донора 07.09 показал, что середина приветствия не работает");
@@ -802,10 +802,10 @@ int main(int argc, char **argv) {
 
     /* --- «не измерено» не равно «нет»: неизмеренная сумма ------------------ */
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        pr.validates_checksum = D2K_P_UNKNOWN;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        pr.validates_checksum = D2S_P_UNKNOWN;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "неизмеренная сумма всё равно породила своё плечо");
         CHECK(strstr(out[0], CHECKSUM_FILLER_MARK) == NULL,
               "неизмеренное свойство породило checksum-плечо");
@@ -813,9 +813,9 @@ int main(int argc, char **argv) {
 
     /* --- счёт дубликатов: YES выводит пару с разрывом 20000мкс ------------- */
     {
-        d2k_props pr = {0};
-        pr.counts_duplicates = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.counts_duplicates = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "ожидалось ровно одно плечо");
         CHECK(strstr(out[0], "fake payload=1 poison=1 repeats=2 gap_us=20000 place=before") != NULL,
               "план дубликатов: не та форма fake");
@@ -826,9 +826,9 @@ int main(int argc, char **argv) {
 
     /* --- разбор протокола: YES выводит целое приветствие с decoy-именем ---- */
     {
-        d2k_props pr = {0};
-        pr.parses_l7 = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.parses_l7 = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "ожидалось ровно одно плечо");
         CHECK(strstr(out[0], "fake payload=1 poison=1 repeats=1 gap_us=0 place=before") != NULL,
               "план разбора протокола: не та форма fake (repeats/gap перепутаны с дубликатами)");
@@ -843,23 +843,23 @@ int main(int argc, char **argv) {
      *
      * MODERN (1530 «живых» байт) даёт заметно длиннее hex, чем LEGACY (210
      * байт) — разница больше чем в 2 раза с большим запасом, поэтому порог
-     * *2 не хрупкий. D2K_SHAPE_UNKNOWN обязан падать на тот же LEGACY, что
+     * *2 не хрупкий. D2S_SHAPE_UNKNOWN обязан падать на тот же LEGACY, что
      * и раньше — безопасный запасной вид, а не угаданный MODERN. */
     {
-        d2k_props pr = {0};
-        pr.parses_l7 = D2K_P_YES;
-        CHECK(d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8) == 1, "LEGACY: не одно плечо");
+        d2s_props pr = {0};
+        pr.parses_l7 = D2S_P_YES;
+        CHECK(d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8) == 1, "LEGACY: не одно плечо");
         size_t legacy_hex = hexrun_after(out[0], "payload 1 ");
         CHECK(legacy_hex > 100 && legacy_hex < 1000,
               "длина hex LEGACY-приманки вне ожидаемых границ (~420 симв. для LEGACY)");
 
-        CHECK(d2k_compose(&pr, D2K_SHAPE_MODERN, decoy, 0, out, 8) == 1, "MODERN: не одно плечо");
+        CHECK(d2s_compose(&pr, D2S_SHAPE_MODERN, decoy, 0, out, 8) == 1, "MODERN: не одно плечо");
         size_t modern_hex = hexrun_after(out[0], "payload 1 ");
         CHECK(modern_hex > legacy_hex * 2,
               "вид цели MODERN не выбрал MODERN-приманку — hex не заметно длиннее LEGACY");
         CHECK(strlen(out[0]) < 4096, "MODERN-план не поместился бы в старый буфер out[][2048]" );
 
-        CHECK(d2k_compose(&pr, D2K_SHAPE_UNKNOWN, decoy, 0, out, 8) == 1, "UNKNOWN: не одно плечо");
+        CHECK(d2s_compose(&pr, D2S_SHAPE_UNKNOWN, decoy, 0, out, 8) == 1, "UNKNOWN: не одно плечо");
         size_t unknown_hex = hexrun_after(out[0], "payload 1 ");
         CHECK(unknown_hex == legacy_hex,
               "вид цели UNKNOWN не упал на безопасный запасной LEGACY, дал другую длину");
@@ -867,9 +867,9 @@ int main(int argc, char **argv) {
 
     /* --- сумма выводится только из своего свойства -------------------------- */
     {
-        d2k_props pr = {0};
-        pr.validates_checksum = D2K_P_NO;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.validates_checksum = D2S_P_NO;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "ожидалось ровно одно плечо");
         CHECK(strstr(out[0], CHECKSUM_FILLER_MARK) != NULL,
               "план суммы не содержит набивку 0x0f — приманка не та");
@@ -882,10 +882,10 @@ int main(int argc, char **argv) {
     /* --- ловушка донора наоборот: сумма=NO вместе с разбором=YES не даёт
      * ДВУХ планов ---------------------------------------------------------- */
     {
-        d2k_props pr = {0};
-        pr.validates_checksum = D2K_P_NO;
-        pr.parses_l7 = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.validates_checksum = D2S_P_NO;
+        pr.parses_l7 = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 1, "сумма=NO вместе с разбором=YES дала не одно плечо — "
                        "ловушка донора наоборот не подавлена");
         CHECK(strstr(out[0], CHECKSUM_FILLER_MARK) == NULL,
@@ -894,10 +894,10 @@ int main(int argc, char **argv) {
 
     /* --- несколько свойств сразу: порядок и отсутствие взаимного стирания -- */
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        pr.counts_duplicates = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        pr.counts_duplicates = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out, 8);
         CHECK(n == 2, "два независимых свойства обязаны дать два плеча");
         CHECK(strstr(out[0], "seqovl") != NULL,
               "порядок плеч расходится с Go Compose: перекрытие обязано идти первым");
@@ -907,48 +907,48 @@ int main(int argc, char **argv) {
 
     /* --- cap ограничивает запись и не переполняет буфер вызывающего -------- */
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        pr.counts_duplicates = D2K_P_YES;
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        pr.counts_duplicates = D2S_P_YES;
         char out1[1][4096];
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out1, 1);
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out1, 1);
         CHECK(n == 1, "cap=1 не ограничил число записанных плеч");
         CHECK(strstr(out1[0], "seqovl") != NULL,
               "при cap=1 записано не первое по порядку плечо");
     }
     {
-        d2k_props pr = {0};
+        d2s_props pr = {0};
         char out0[1][4096];
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, out0, 0);
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, out0, 0);
         CHECK(n == 0, "cap=0 обязан дать 0 независимо от вектора");
     }
 
     /* --- decoy не нужен свойствам, которые его не используют --------------- */
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, NULL, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, NULL, 0, out, 8);
         CHECK(n == 1, "план перекрытия обязан собираться и без decoy");
     }
     {
-        d2k_props pr = {0};
-        pr.tolerates_reorder = D2K_P_NO;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, NULL, 0, out, 8);
+        d2s_props pr = {0};
+        pr.tolerates_reorder = D2S_P_NO;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, NULL, 0, out, 8);
         CHECK(n == 1, "план порядка обязан собираться и без decoy — якорь вычисляется датапатом");
     }
 
     /* --- decoy нужен свойствам, которые его используют ---------------------- */
     {
-        d2k_props pr = {0};
-        pr.counts_duplicates = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, NULL, 0, out, 8);
+        d2s_props pr = {0};
+        pr.counts_duplicates = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, NULL, 0, out, 8);
         CHECK(n == 0, "без decoy план дубликатов обязан быть пропущен, а не выдуман; "
                        "запасной план тоже нуждается в decoy и падает по той же причине");
     }
     {
-        d2k_props pr = {0};
-        pr.counts_duplicates = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_LEGACY, "", 0, out, 8);
+        d2s_props pr = {0};
+        pr.counts_duplicates = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_LEGACY, "", 0, out, 8);
         CHECK(n == 0, "пустая строка decoy обязана трактоваться как «имени нет», а не как имя");
     }
 
@@ -957,24 +957,24 @@ int main(int argc, char **argv) {
         char long_decoy[2000];
         memset(long_decoy, 'a', sizeof long_decoy - 1);
         long_decoy[sizeof long_decoy - 1] = '\0';
-        d2k_props pr = {0};
-        pr.parses_l7 = D2K_P_YES;
-        size_t n = d2k_compose(&pr, D2K_SHAPE_MODERN, long_decoy, 0, out, 8);
+        d2s_props pr = {0};
+        pr.parses_l7 = D2S_P_YES;
+        size_t n = d2s_compose(&pr, D2S_SHAPE_MODERN, long_decoy, 0, out, 8);
         CHECK(n == 0, "слишком длинный decoy обязан дать пропуск плеча, а не переполнение/усечение");
     }
 
-    /* --- нулевые/негодные аргументы d2k_compose не падают и не пишут ------- */
+    /* --- нулевые/негодные аргументы d2s_compose не падают и не пишут ------- */
     {
-        CHECK(d2k_compose(NULL, D2K_SHAPE_LEGACY, decoy, 0, out, 8) == 0, "pr==NULL обязан дать 0, а не падение");
+        CHECK(d2s_compose(NULL, D2S_SHAPE_LEGACY, decoy, 0, out, 8) == 0, "pr==NULL обязан дать 0, а не падение");
     }
     {
-        d2k_props pr = {0};
-        pr.tolerates_left_overlap = D2K_P_NO;
-        CHECK(d2k_compose(&pr, D2K_SHAPE_LEGACY, decoy, 0, NULL, 8) == 0, "out==NULL обязан дать 0, а не падение");
+        d2s_props pr = {0};
+        pr.tolerates_left_overlap = D2S_P_NO;
+        CHECK(d2s_compose(&pr, D2S_SHAPE_LEGACY, decoy, 0, NULL, 8) == 0, "out==NULL обязан дать 0, а не падение");
     }
 
     /* ======================================================================
-     * planlab: содержимое пяти TLV-планов зонда d2k_props_ask (ревью 11.09,
+     * planlab: содержимое пяти TLV-планов зонда d2s_props_ask (ревью 11.09,
      * круг правок 1) — байты и порядок посылок, а не структурная валидность.
      *
      * Обмен на настоящем ctlprobe (блок ниже) НЕ зависит от содержимого
@@ -982,7 +982,7 @@ int main(int argc, char **argv) {
      * ТЕСТ, а не применение плана к синтетическому пакету. Значит порченный
      * бит порчи или переставленный порядок посылок там пройдёт молча (это
      * и произошло с мутациями 3 и 6 в первом отчёте задачи). planlab гоняет
-     * ТОТ ЖЕ исполнитель, что и датапат (d2k_plan_load+d2k_plan_apply, см.
+     * ТОТ ЖЕ исполнитель, что и датапат (d2s_plan_load+d2s_plan_apply, см.
      * её шапку) — единственный способ проверить содержимое без второй его
      * реализации в тесте (§2.5 запрещает вторую реализацию преобразований).
      * ==================================================================== */
@@ -998,8 +998,8 @@ int main(int argc, char **argv) {
         {
             uint8_t plan[256]; size_t plen;
             CHECK(overlap_plan_tlv(plan, sizeof plan, &plen) == 0, "overlap_plan_tlv не собрался");
-            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2k-core-planlab-%d-overlap.tlv", (int)getpid());
-            snprintf(scnpath, sizeof scnpath, "/tmp/d2k-core-planlab-%d-overlap.scn", (int)getpid());
+            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2s-core-planlab-%d-overlap.tlv", (int)getpid());
+            snprintf(scnpath, sizeof scnpath, "/tmp/d2s-core-planlab-%d-overlap.scn", (int)getpid());
             CHECK(write_file_bytes(tlvpath, plan, plen) == 0, "план перекрытия не записался");
             CHECK(write_file_text(scnpath, "pkt 5000 none 0 00010203040506070809\n") == 0,
                   "сценарий перекрытия не записался");
@@ -1019,9 +1019,9 @@ int main(int argc, char **argv) {
             memcpy(flipped, plan, plen); flen = plen;
             flipped[flen - 1] = (uint8_t)(flipped[flen - 1] ? 0 : 1); /* последний байт — значение REC_ORDER */
             char tlvpath2[128];
-            snprintf(tlvpath2, sizeof tlvpath2, "/tmp/d2k-core-planlab-%d-overlap-flip.tlv", (int)getpid());
+            snprintf(tlvpath2, sizeof tlvpath2, "/tmp/d2s-core-planlab-%d-overlap-flip.tlv", (int)getpid());
             CHECK(write_file_bytes(tlvpath2, flipped, flen) == 0, "перевёрнутый план перекрытия не записался");
-            snprintf(scnpath, sizeof scnpath, "/tmp/d2k-core-planlab-%d-overlap.scn", (int)getpid());
+            snprintf(scnpath, sizeof scnpath, "/tmp/d2s-core-planlab-%d-overlap.scn", (int)getpid());
             CHECK(write_file_text(scnpath, "pkt 5000 none 0 00010203040506070809\n") == 0,
                   "сценарий перекрытия (повтор) не записался");
             char out2[4096];
@@ -1040,8 +1040,8 @@ int main(int argc, char **argv) {
         {
             uint8_t plan[256]; size_t plen;
             CHECK(reorder_plan_tlv(plan, sizeof plan, &plen) == 0, "reorder_plan_tlv не собрался");
-            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2k-core-planlab-%d-reorder.tlv", (int)getpid());
-            snprintf(scnpath, sizeof scnpath, "/tmp/d2k-core-planlab-%d-reorder.scn", (int)getpid());
+            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2s-core-planlab-%d-reorder.tlv", (int)getpid());
+            snprintf(scnpath, sizeof scnpath, "/tmp/d2s-core-planlab-%d-reorder.scn", (int)getpid());
             CHECK(write_file_bytes(tlvpath, plan, plen) == 0, "план порядка не записался");
             /* 20 байт 00..13, sni_off=10 sni_len=6 → sni_middle=10+3=13:
                разрезы {1,13} дают куски [0,1) [1,13) [13,20). */
@@ -1056,7 +1056,7 @@ int main(int argc, char **argv) {
                их наличие: три strstr по отдельности не отличили бы "хвост,
                середина, голова" от любой другой перестановки тех же трёх строк. */
             /* Задержки: первый ушедший кусок — сразу, остальные через
-               D2K_PACE_PIECE_US. Пауза здесь не украшение: приём про
+               D2S_PACE_PIECE_US. Пауза здесь не украшение: приём про
                переупорядочивание без разноса во времени переупорядочивания не
                создаёт (донор: time.Sleep(12ms) после каждого куска,
                raw_linux.go:686-694). Проверяется ИМЕННО позиционно — задержка
@@ -1076,10 +1076,10 @@ int main(int argc, char **argv) {
 
         /* --- контрольная сумма/дубликаты/разбор протокола: общая форма
          * badsum_fake_plan_tlv. Мутация 6 (первый отчёт) — снятый бит
-         * D2K_POISON_BADSUM — здесь виден напрямую в поле poison=, которое
-         * planlab печатает из ТОГО ЖЕ d2k_emit.poison, что уйдёт на провод. */
+         * D2S_POISON_BADSUM — здесь виден напрямую в поле poison=, которое
+         * planlab печатает из ТОГО ЖЕ d2s_emit.poison, что уйдёт на провод. */
         {
-            snprintf(scnpath, sizeof scnpath, "/tmp/d2k-core-planlab-%d-fakes.scn", (int)getpid());
+            snprintf(scnpath, sizeof scnpath, "/tmp/d2s-core-planlab-%d-fakes.scn", (int)getpid());
             CHECK(write_file_text(scnpath, "pkt 7000 none 0 aabbccdd\n") == 0,
                   "сценарий фальшивок не записался");
 
@@ -1088,7 +1088,7 @@ int main(int argc, char **argv) {
                перед ним отдельной посылкой. */
             uint8_t plan[256]; size_t plen;
             CHECK(checksum_plan_tlv(plan, sizeof plan, &plen) == 0, "checksum_plan_tlv не собрался");
-            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2k-core-planlab-%d-checksum.tlv", (int)getpid());
+            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2s-core-planlab-%d-checksum.tlv", (int)getpid());
             CHECK(write_file_bytes(tlvpath, plan, plen) == 0, "план суммы не записался");
             CHECK(run_planlab(tlvpath, scnpath, out, sizeof out) == 0, "planlab (сумма) не запустился");
             CHECK(count_substr(out, "emit ") == 2, "сумма: ожидались фальшивка и правда");
@@ -1097,7 +1097,7 @@ int main(int argc, char **argv) {
             CHECK(count_substr(out, "0f") >= 64, "сумма: набивка не похожа на 64 байта 0x0f");
             /*
                ВЫДЕРЖКА. С 12.09.2026 план сам выпускает правду после паузы
-               D2K_PACE_SETTLE_US (донор: time.Sleep(15ms) в конце шага 1
+               D2S_PACE_SETTLE_US (донор: time.Sleep(15ms) в конце шага 1
                probePoison, raw_linux.go:537), поэтому посылок на одну больше,
                а оригинал СНИМАЕТСЯ (fate drop): выдержать паузу перед правдой
                можно только тогда, когда правду выпускаем мы сами, — оригинал,
@@ -1114,7 +1114,7 @@ int main(int argc, char **argv) {
             static const uint8_t ctrl[8] = { 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22 };
             CHECK(badsum_fake_plan_tlv(ctrl, sizeof ctrl, 2, 20000, plan, sizeof plan, &plen) == 0,
                   "badsum_fake_plan_tlv (дубликаты) не собрался");
-            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2k-core-planlab-%d-dup.tlv", (int)getpid());
+            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2s-core-planlab-%d-dup.tlv", (int)getpid());
             CHECK(write_file_bytes(tlvpath, plan, plen) == 0, "план дубликатов не записался");
             CHECK(run_planlab(tlvpath, scnpath, out, sizeof out) == 0, "planlab (дубликаты) не запустился");
             CHECK(count_substr(out, "emit ") == 3, "дубликаты: ожидались две фальшивки и правда");
@@ -1137,7 +1137,7 @@ int main(int argc, char **argv) {
                набивка), а не формой; здесь это и проверяется. */
             CHECK(badsum_fake_plan_tlv(ctrl, sizeof ctrl, 1, 0, plan, sizeof plan, &plen) == 0,
                   "badsum_fake_plan_tlv (разбор протокола) не собрался");
-            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2k-core-planlab-%d-parse.tlv", (int)getpid());
+            snprintf(tlvpath, sizeof tlvpath, "/tmp/d2s-core-planlab-%d-parse.tlv", (int)getpid());
             CHECK(write_file_bytes(tlvpath, plan, plen) == 0, "план разбора протокола не записался");
             CHECK(run_planlab(tlvpath, scnpath, out, sizeof out) == 0, "planlab (разбор протокола) не запустился");
             CHECK(count_substr(out, "emit ") == 2, "разбор протокола: ожидались фальшивка и правда");
@@ -1153,7 +1153,7 @@ int main(int argc, char **argv) {
     }
 
     /* ======================================================================
-     * d2k_props_ask — задача 5, шаг 0: настоящий оракул.
+     * d2s_props_ask — задача 5, шаг 0: настоящий оракул.
      * ==================================================================== */
 
     /* --- нечем спросить: защита входа БЕЗ сети (эти пути возвращают до
@@ -1161,32 +1161,32 @@ int main(int argc, char **argv) {
      * там, где нужно ИЗОЛИРОВАТЬ, что виновата не связь) --------------------- */
     {
         uint8_t tb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "guard.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "guard.example");
         uint8_t cb[2048];
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "guard-control.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "guard-control.example");
         CHECK(trig.bytes != NULL && ctl.bytes != NULL, "стенд build_trigger не собрался — проверки guard бессмысленны");
 
-        d2k_props pr = d2k_props_ask(-1, "192.0.2.1", 443, trig, ctl, 0x2d);
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN &&
-              pr.tolerates_reorder == D2K_P_UNKNOWN &&
-              pr.validates_checksum == D2K_P_UNKNOWN &&
-              pr.parses_l7 == D2K_P_UNKNOWN &&
-              pr.counts_duplicates == D2K_P_UNKNOWN,
-              "link_fd < 0 обязан дать вектор из одних D2K_P_UNKNOWN");
+        d2s_props pr = d2s_props_ask(-1, "192.0.2.1", 443, trig, ctl, 0x2d);
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN &&
+              pr.tolerates_reorder == D2S_P_UNKNOWN &&
+              pr.validates_checksum == D2S_P_UNKNOWN &&
+              pr.parses_l7 == D2S_P_UNKNOWN &&
+              pr.counts_duplicates == D2S_P_UNKNOWN,
+              "link_fd < 0 обязан дать вектор из одних D2S_P_UNKNOWN");
 
-        d2k_hello empty = {NULL, 0, NULL, 0, 0, 0};
-        pr = d2k_props_ask(-1, NULL, 0, empty, empty, 0);
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN &&
-              pr.tolerates_reorder == D2K_P_UNKNOWN &&
-              pr.validates_checksum == D2K_P_UNKNOWN &&
-              pr.parses_l7 == D2K_P_UNKNOWN &&
-              pr.counts_duplicates == D2K_P_UNKNOWN,
+        d2s_hello empty = {NULL, 0, NULL, 0, 0, 0};
+        pr = d2s_props_ask(-1, NULL, 0, empty, empty, 0);
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN &&
+              pr.tolerates_reorder == D2S_P_UNKNOWN &&
+              pr.validates_checksum == D2S_P_UNKNOWN &&
+              pr.parses_l7 == D2S_P_UNKNOWN &&
+              pr.counts_duplicates == D2S_P_UNKNOWN,
               "полностью вырожденный вход изменил вектор");
     }
 
     /* --- дальше всё против НАСТОЯЩЕГО ctlprobe и настоящей петли-мишени ---- */
     char sock_path[64];
-    snprintf(sock_path, sizeof sock_path, "/tmp/d2k-core-compose-%d.sock", (int)getpid());
+    snprintf(sock_path, sizeof sock_path, "/tmp/d2s-core-compose-%d.sock", (int)getpid());
     probe p;
     memset(&p, 0, sizeof p);
     p.in_fd = -1;
@@ -1216,56 +1216,56 @@ int main(int argc, char **argv) {
      * а не наблюдение, будто коробка держит вообще всё --------------------- */
     {
         uint8_t tb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "guard2.example");
-        d2k_hello empty = {NULL, 0, NULL, 0, 0, 0};
+        d2s_hello trig = build_trigger(tb, sizeof tb, "guard2.example");
+        d2s_hello empty = {NULL, 0, NULL, 0, 0, 0};
 
-        d2k_props pr = d2k_props_ask(fd, NULL, 443, trig, empty, 0x2d);
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN && pr.parses_l7 == D2K_P_UNKNOWN,
+        d2s_props pr = d2s_props_ask(fd, NULL, 443, trig, empty, 0x2d);
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN && pr.parses_l7 == D2S_P_UNKNOWN,
               "ip == NULL при валидном fd всё равно обязан дать вектор из одних UNKNOWN");
 
-        d2k_hello notrig = {NULL, 0, NULL, 0, 0, 0};
-        pr = d2k_props_ask(fd, stand_port ? "127.0.0.1" : "127.0.0.1", stand_port, notrig, empty, 0x2d);
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN,
+        d2s_hello notrig = {NULL, 0, NULL, 0, 0, 0};
+        pr = d2s_props_ask(fd, stand_port ? "127.0.0.1" : "127.0.0.1", stand_port, notrig, empty, 0x2d);
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN,
               "trigger без байт при валидных fd/ip обязан дать вектор из одних UNKNOWN");
 
-        /* Триггер без извлекаемого SNI (не ClientHello вовсе) — d2k_hello_sni
+        /* Триггер без извлекаемого SNI (не ClientHello вовсе) — d2s_hello_sni
            честно откажет, а не подставит первые байты за имя. */
         uint8_t garbage[32];
         memset(garbage, 0x99, sizeof garbage);
-        d2k_hello notls = {garbage, sizeof garbage, NULL, 0, 0, 0};
-        pr = d2k_props_ask(fd, "127.0.0.1", stand_port, notls, empty, 0x2d);
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN,
+        d2s_hello notls = {garbage, sizeof garbage, NULL, 0, 0, 0};
+        pr = d2s_props_ask(fd, "127.0.0.1", stand_port, notls, empty, 0x2d);
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN,
               "триггер без извлекаемого SNI обязан дать вектор из одних UNKNOWN, а не имя из мусора");
         drain_all(fd); /* эти вызовы не должны были ничего послать, но убеждаемся, что очередь чиста для дальше */
     }
 
     /* --- ev_matches_flow напрямую: неупорядоченная пара, транспорт обязан
-     * совпасть — прежде чем гонять сквозь весь d2k_props_ask, проверяем саму
+     * совпасть — прежде чем гонять сквозь весь d2s_props_ask, проверяем саму
      * сверку ключа на руками собранных значениях (находка 1 ревью 11.09). -- */
     {
-        d2k_ev ev; memset(&ev, 0, sizeof ev);
+        d2s_ev ev; memset(&ev, 0, sizeof ev);
         memcpy(ev.low_ip, (uint8_t[4]){1,2,3,4}, 4);
         memcpy(ev.high_ip, (uint8_t[4]){5,6,7,8}, 4);
         ev.low_port = 100; ev.high_port = 200; ev.transport = 6;
 
-        d2k_flowkey k; memset(&k, 0, sizeof k);
+        d2s_flowkey k; memset(&k, 0, sizeof k);
         memcpy(k.a_ip, (uint8_t[4]){1,2,3,4}, 4); k.a_port = 100;
         memcpy(k.b_ip, (uint8_t[4]){5,6,7,8}, 4); k.b_port = 200;
         k.transport = 6;
         CHECK(ev_matches_flow(&ev, &k) == 1, "прямой порядок (a=low, b=high) не совпал");
 
-        d2k_flowkey k2 = k;
+        d2s_flowkey k2 = k;
         memcpy(k2.a_ip, (uint8_t[4]){5,6,7,8}, 4); k2.a_port = 200;
         memcpy(k2.b_ip, (uint8_t[4]){1,2,3,4}, 4); k2.b_port = 100;
         CHECK(ev_matches_flow(&ev, &k2) == 1, "обратный порядок (a=high, b=low) не совпал — ключ неупорядоченный");
 
-        d2k_flowkey bad_ip = k; memcpy(bad_ip.a_ip, (uint8_t[4]){1,2,3,9}, 4);
+        d2s_flowkey bad_ip = k; memcpy(bad_ip.a_ip, (uint8_t[4]){1,2,3,9}, 4);
         CHECK(ev_matches_flow(&ev, &bad_ip) == 0, "отличающийся ОДНИМ байтом адрес засчитан как совпадение");
 
-        d2k_flowkey bad_port = k; bad_port.a_port = 101;
+        d2s_flowkey bad_port = k; bad_port.a_port = 101;
         CHECK(ev_matches_flow(&ev, &bad_port) == 0, "отличающийся порт засчитан как совпадение");
 
-        d2k_flowkey bad_transport = k; bad_transport.transport = 17;
+        d2s_flowkey bad_transport = k; bad_transport.transport = 17;
         CHECK(ev_matches_flow(&ev, &bad_transport) == 0,
               "разный транспорт (TCP-событие против UDP-ключа) засчитан как совпадение");
     }
@@ -1277,8 +1277,8 @@ int main(int argc, char **argv) {
      * ключом, который действительно совпадёт с настоящим соединением. ----- */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b1.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "b1-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b1.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "b1-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(b1) не собрался");
 
         int sv[2];
@@ -1293,7 +1293,7 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "b1: поддельный конец связи не запустился");
 
-        d2k_props pr = d2k_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
+        d2s_props pr = d2s_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
         CHECK(!fa.closed_early, "зонд закрыл соединение с целью ДО события обмена — "
@@ -1301,9 +1301,9 @@ int main(int argc, char **argv) {
               "(docs/field/2026-09-11-first-c-ask.md)");
 
         CHECK(!fa.extra_round_seen, "b1: опрос продолжился после первого прохода — лишняя команда");
-        CHECK(pr.tolerates_left_overlap == D2K_P_NO, "b1: перекрытие не записано по проходу");
-        CHECK(pr.tolerates_reorder == D2K_P_UNKNOWN && pr.validates_checksum == D2K_P_UNKNOWN &&
-              pr.parses_l7 == D2K_P_UNKNOWN && pr.counts_duplicates == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_left_overlap == D2S_P_NO, "b1: перекрытие не записано по проходу");
+        CHECK(pr.tolerates_reorder == D2S_P_UNKNOWN && pr.validates_checksum == D2S_P_UNKNOWN &&
+              pr.parses_l7 == D2S_P_UNKNOWN && pr.counts_duplicates == D2S_P_UNKNOWN,
               "b1: опрос не остановился на первом проходе — задал вопрос, до которого не должен дойти");
     }
 
@@ -1311,8 +1311,8 @@ int main(int argc, char **argv) {
      * прикладных данных), второй (счёт дубликатов, нужен control) проходит -- */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b2.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "b2-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b2.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "b2-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(b2) не собрался");
 
         int sv[2];
@@ -1329,7 +1329,7 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "b2: поддельный конец связи не запустился");
 
-        d2k_props pr = d2k_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
+        d2s_props pr = d2s_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
         CHECK(!fa.closed_early, "зонд закрыл соединение с целью ДО события обмена — "
@@ -1339,11 +1339,11 @@ int main(int argc, char **argv) {
         CHECK(!fa.extra_round_seen, "b2: опрос продолжился после второго прохода — лишняя команда");
         CHECK(fa.retired == 4 && fa.broad_del == 0,
               "b2: четыре не прошедших вопроса не сняты каждый своим ключом (или ушла DEL_NAME)");
-        CHECK(pr.counts_duplicates == D2K_P_YES, "b2: счёт дубликатов не записан по проходу");
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN,
+        CHECK(pr.counts_duplicates == D2S_P_YES, "b2: счёт дубликатов не записан по проходу");
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN,
               "b2: промах первого вопроса записал что-то — промах обязан не писать НИЧЕГО (§2.4)");
-        CHECK(pr.tolerates_reorder == D2K_P_UNKNOWN && pr.validates_checksum == D2K_P_UNKNOWN &&
-              pr.parses_l7 == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_reorder == D2S_P_UNKNOWN && pr.validates_checksum == D2S_P_UNKNOWN &&
+              pr.parses_l7 == D2S_P_UNKNOWN,
               "b2: опрос не остановился на втором проходе");
     }
 
@@ -1357,8 +1357,8 @@ int main(int argc, char **argv) {
      * чужим ключом лежит в очереди РЯДОМ с ожиданием. ------------------------ */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "c1.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "c1-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "c1.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "c1-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(c1) не собрался");
 
         int sv[2];
@@ -1378,14 +1378,14 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "c1: поддельный конец связи не запустился");
 
-        d2k_props pr = d2k_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
+        d2s_props pr = d2s_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
         CHECK(!fa.closed_early, "зонд закрыл соединение с целью ДО события обмена — "
               "датапат по FIN удаляет ячейку потока, и обмену не с чем связаться "
               "(docs/field/2026-09-11-first-c-ask.md)");
 
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN,
               "c1: чужое событие обмена (appdata, чужой ключ) засчитано за свой зонд — находка 1 не закрыта");
     }
 
@@ -1395,8 +1395,8 @@ int main(int argc, char **argv) {
      * подряд события без разбора. ------------------------------------------- */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "c2.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "c2-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "c2.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "c2-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(c2) не собрался");
 
         int sv[2];
@@ -1411,14 +1411,14 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "c2: поддельный конец связи не запустился");
 
-        d2k_props pr = d2k_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
+        d2s_props pr = d2s_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
         CHECK(!fa.closed_early, "зонд закрыл соединение с целью ДО события обмена — "
               "датапат по FIN удаляет ячейку потока, и обмену не с чем связаться "
               "(docs/field/2026-09-11-first-c-ask.md)");
 
-        CHECK(pr.tolerates_left_overlap == D2K_P_NO,
+        CHECK(pr.tolerates_left_overlap == D2S_P_NO,
               "c2: своё событие обмена, пришедшее ПОСЛЕ чужого, не признано — фильтр отбрасывает лишнее");
     }
 
@@ -1428,12 +1428,12 @@ int main(int argc, char **argv) {
      * СНЯТ своим ключом (DEL_NAME_PROBE, задача 21) — иначе на боевом
      * датапате оставался бы стоять план, про который это же измерение только
      * что сказало «не работает». Что имя при этом бралось ПРАВИЛЬНОЕ (то, что
-     * дал d2k_hello_sni, а не подстрока по случайности), проверяет B5: там
+     * дал d2s_hello_sni, а не подстрока по случайности), проверяет B5: там
      * вопрос проходит, план остаётся, и "hello" по имени получает APPLIED. -- */
     {
         uint8_t tb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b3.example");
-        d2k_hello nodecoy = {NULL, 0, NULL, 0, 0, 0};
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b3.example");
+        d2s_hello nodecoy = {NULL, 0, NULL, 0, 0, 0};
         CHECK(trig.bytes, "build_trigger(b3) не собрался");
 
         /* Перекрытие, дубликаты, порядок, сумма — все промах. Дубликаты
@@ -1448,7 +1448,7 @@ int main(int argc, char **argv) {
 
         unsigned long long before = query_ok_cmds(&p);
         unsigned long long plans_before = query_plan_total(&p);
-        d2k_props pr = d2k_props_ask(fd, "127.0.0.1", stand_port, trig, nodecoy, 0);
+        d2s_props pr = d2s_props_ask(fd, "127.0.0.1", stand_port, trig, nodecoy, 0);
         pthread_join(th, NULL);
         unsigned long long after = query_ok_cmds(&p);
 
@@ -1458,42 +1458,42 @@ int main(int argc, char **argv) {
                                     "протокола пропущен целиком) и четыре точных DEL_NAME_PROBE");
         CHECK(query_plan_total(&p) == plans_before,
               "b3: после полного промаха пробные планы вопросов остались в таблице");
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN && pr.tolerates_reorder == D2K_P_UNKNOWN &&
-              pr.validates_checksum == D2K_P_UNKNOWN && pr.parses_l7 == D2K_P_UNKNOWN &&
-              pr.counts_duplicates == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN && pr.tolerates_reorder == D2S_P_UNKNOWN &&
+              pr.validates_checksum == D2S_P_UNKNOWN && pr.parses_l7 == D2S_P_UNKNOWN &&
+              pr.counts_duplicates == D2S_P_UNKNOWN,
               "b3: полный промах записал хоть что-то — отрицательный результат не должен сохраняться");
         drain_all(fd);
 
         /* Ни один вопрос не прошёл — плана под именем "b3.example" больше нет. */
         (void)probe_say(&p, "hello b3.example");
-        d2k_ev ev;
-        CHECK(next_of_kind2(fd, D2K_EV_APPLIED, D2K_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
+        d2s_ev ev;
+        CHECK(next_of_kind2(fd, D2S_EV_APPLIED, D2S_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
               "b3: ни APPLIED, ни REFUSED не пришли после повторного hello");
-        CHECK(ev.kind == D2K_EV_REFUSED,
+        CHECK(ev.kind == D2S_EV_REFUSED,
               "b3: план последнего промахнувшегося вопроса остался стоять — DEL_NAME не сработал");
         drain_all(fd);
     }
 
-    /* --- B5: имя, под которым d2k_props_ask ставит и снимает план, — РОВНО
-     * то, что даёт d2k_hello_sni из триггера. Проверяется в обе стороны на
+    /* --- B5: имя, под которым d2s_props_ask ставит и снимает план, — РОВНО
+     * то, что даёт d2s_hello_sni из триггера. Проверяется в обе стороны на
      * НАСТОЯЩЕМ ctlprobe: сперва план ставится под извлечённым именем вручную
      * и "hello b5.example" получает APPLIED (значит имя извлечено верно и
-     * буквально), затем полный промах d2k_props_ask снимает ТОЛЬКО свои пробы
+     * буквально), затем полный промах d2s_props_ask снимает ТОЛЬКО свои пробы
      * вопросов (число планов вернулось к прежнему — снятие ушло ПО ТОМУ ЖЕ
      * имени), а постоянный план остаётся: то же "hello" снова APPLIED
-     * (задача 21, D2K_SPEC §7). Проход вопроса здесь показать нечем — ctlprobe
+     * (задача 21, D2S_SPEC §7). Проход вопроса здесь показать нечем — ctlprobe
      * строит событие обмена с жёстко зашитым адресом клиента (см. большой
      * комментарий про поддельный конец связи выше), а что проход НЕ приводит
      * к снятию плана, проверяет B4 своим !extra_round_seen. ---------------- */
     {
         uint8_t tb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b5.example");
-        d2k_hello nodecoy = {NULL, 0, NULL, 0, 0, 0};
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b5.example");
+        d2s_hello nodecoy = {NULL, 0, NULL, 0, 0, 0};
         CHECK(trig.bytes, "build_trigger(b5) не собрался");
 
         size_t sni_off = 0, sni_len = 0;
-        CHECK(d2k_hello_sni(trig.bytes, trig.len, &sni_off, &sni_len) == 0,
-              "b5: d2k_hello_sni не нашёл имени в собственном триггере теста");
+        CHECK(d2s_hello_sni(trig.bytes, trig.len, &sni_off, &sni_len) == 0,
+              "b5: d2s_hello_sni не нашёл имени в собственном триггере теста");
         char name[256];
         CHECK(sni_len > 0 && sni_len < sizeof name, "b5: длина имени из триггера вне разумного");
         memcpy(name, trig.bytes + sni_off, sni_len);
@@ -1508,58 +1508,58 @@ int main(int argc, char **argv) {
         }
         hex[2 * plen] = '\0';
 
-        CHECK(d2k_link_set_name(fd, name, 6, hex, D2K_LINK_SHAPE_GRANDFATHER, err, sizeof err) == 0,
+        CHECK(d2s_link_set_name(fd, name, 6, hex, D2S_LINK_SHAPE_GRANDFATHER, err, sizeof err) == 0,
               "b5: SET_NAME по имени из триггера не отправился");
         drain_all(fd);
         unsigned long long b5_plans_before = query_plan_total(&p);
         (void)probe_say(&p, "hello b5.example");
-        d2k_ev ev;
-        CHECK(next_of_kind2(fd, D2K_EV_APPLIED, D2K_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
+        d2s_ev ev;
+        CHECK(next_of_kind2(fd, D2S_EV_APPLIED, D2S_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
               "b5: ни APPLIED, ни REFUSED не пришли после первого hello");
-        CHECK(ev.kind == D2K_EV_APPLIED,
-              "b5: d2k_hello_sni дал НЕ то имя, которым построен триггер — REFUSED вместо APPLIED");
+        CHECK(ev.kind == D2S_EV_APPLIED,
+              "b5: d2s_hello_sni дал НЕ то имя, которым построен триггер — REFUSED вместо APPLIED");
         drain_all(fd);
 
         int replies[] = { 22, 22, 22 }; /* полный промах — план обязан быть снят */
         driver_args da = { &p, "b5.example", replies, 3, 300 };
         pthread_t th;
         CHECK(pthread_create(&th, NULL, driver_run, &da) == 0, "b5: ведущий поток не запустился");
-        d2k_props_step steps[D2K_PROPS_QUESTIONS];
-        d2k_props pr = d2k_props_ask_traced(fd, "127.0.0.1", stand_port, trig, nodecoy, 0, steps);
+        d2s_props_step steps[D2S_PROPS_QUESTIONS];
+        d2s_props pr = d2s_props_ask_traced(fd, "127.0.0.1", stand_port, trig, nodecoy, 0, steps);
         pthread_join(th, NULL);
 
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN && pr.tolerates_reorder == D2K_P_UNKNOWN &&
-              pr.validates_checksum == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN && pr.tolerates_reorder == D2S_P_UNKNOWN &&
+              pr.validates_checksum == D2S_P_UNKNOWN,
               "b5: полный промах записал хоть что-то");
         CHECK(steps[0].plan_len > 0 && steps[0].ack_ok == 1,
               "b5: трасса первого вопроса без длины плана или без принятого подтверждения");
         CHECK(steps[0].local_port != 0, "b5: трасса первого вопроса без местного порта обращения");
         /* Без control незаданным остаётся ТОЛЬКО разбор протокола: счёт
            дубликатов стал однофакторным и берёт от приветствия лишь длину. */
-        CHECK(steps[3].rc == D2K_STEP_NOT_ASKED,
+        CHECK(steps[3].rc == D2S_STEP_NOT_ASKED,
               "b5: вопрос без control должен быть отмечен как незаданный");
-        CHECK(steps[4].rc != D2K_STEP_NOT_ASKED,
+        CHECK(steps[4].rc != D2S_STEP_NOT_ASKED,
               "b5: счёт дубликатов пропущен, хотя control ему больше не нужен");
         /* Три законных исхода промаха, и все три — «не измерено»: плана не
            применили к нашему потоку, обмена не было вовсе, обмен был без
            ответа сервера. Который именно — зависит от стенда; важно, что ни
            один из них не записал свойство (проверено выше). */
-        CHECK(steps[0].rc == D2K_STEP_NO_EXCHANGE ||
-              steps[0].rc == D2K_STEP_NO_SERVER_HELLO ||
-              steps[0].rc == D2K_STEP_NO_APPLIED,
+        CHECK(steps[0].rc == D2S_STEP_NO_EXCHANGE ||
+              steps[0].rc == D2S_STEP_NO_SERVER_HELLO ||
+              steps[0].rc == D2S_STEP_NO_APPLIED,
               "b5: промах первого вопроса не отмечен в трассе");
         drain_all(fd);
 
-        /* Задача 21 (D2K_SPEC §7): полный промах снимает ТОЛЬКО свои пробы
+        /* Задача 21 (D2S_SPEC §7): полный промах снимает ТОЛЬКО свои пробы
            вопросов, точным ключом по тому же имени, — постоянный план цели,
            поставленный не опросником, остаётся и применяется. Прежде здесь
            утверждалось обратное: широкая DEL_NAME уносила и его. */
         CHECK(query_plan_total(&p) == b5_plans_before,
               "b5: пробы вопросов не сняты по тому же имени или снят чужой постоянный план");
         (void)probe_say(&p, "hello b5.example");
-        CHECK(next_of_kind2(fd, D2K_EV_APPLIED, D2K_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
+        CHECK(next_of_kind2(fd, D2S_EV_APPLIED, D2S_EV_REFUSED, 6, &ev, err, sizeof err) == 0,
               "b5: ни APPLIED, ни REFUSED не пришли после второго hello");
-        CHECK(ev.kind == D2K_EV_APPLIED,
+        CHECK(ev.kind == D2S_EV_APPLIED,
               "b5: полный промах опросника снял постоянный план цели");
         drain_all(fd);
     }
@@ -1569,8 +1569,8 @@ int main(int argc, char **argv) {
      * только своё -------------------------------------------------------------- */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b4.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "b4-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b4.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "b4-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(b4) не собрался");
 
         int sv[2];
@@ -1587,7 +1587,7 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "b4: поддельный конец связи не запустился");
 
-        d2k_props pr = d2k_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
+        d2s_props pr = d2s_props_ask(sv[0], "127.0.0.1", target_port, trig, ctl, 0);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
         CHECK(!fa.closed_early, "зонд закрыл соединение с целью ДО события обмена — "
@@ -1595,12 +1595,12 @@ int main(int argc, char **argv) {
               "(docs/field/2026-09-11-first-c-ask.md)");
 
         CHECK(!fa.extra_round_seen, "b4: опрос продолжился после пятого раунда — лишняя команда");
-        CHECK(pr.parses_l7 == D2K_P_YES, "b4: разбор протокола не записан по проходу");
-        CHECK(pr.validates_checksum == D2K_P_NO,
+        CHECK(pr.parses_l7 == D2S_P_YES, "b4: разбор протокола не записан по проходу");
+        CHECK(pr.validates_checksum == D2S_P_NO,
               "b4: разбор протокола обязан писать ОБА поля из одного факта (properties.go), "
               "а validates_checksum не встал");
-        CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN && pr.tolerates_reorder == D2K_P_UNKNOWN &&
-              pr.counts_duplicates == D2K_P_UNKNOWN,
+        CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN && pr.tolerates_reorder == D2S_P_UNKNOWN &&
+              pr.counts_duplicates == D2S_P_UNKNOWN,
               "b4: промахи первых четырёх вопросов записали что-то лишнее");
     }
 
@@ -1612,8 +1612,8 @@ int main(int argc, char **argv) {
      * сам, без единого действия клиента. ------------------------------------ */
     {
         uint8_t tb[2048], cb[2048];
-        d2k_hello trig = build_trigger(tb, sizeof tb, "b6.example");
-        d2k_hello ctl = build_trigger(cb, sizeof cb, "b6-control.example");
+        d2s_hello trig = build_trigger(tb, sizeof tb, "b6.example");
+        d2s_hello ctl = build_trigger(cb, sizeof cb, "b6-control.example");
         CHECK(trig.bytes && ctl.bytes, "build_trigger(b6) не собрался");
 
         int sv[2];
@@ -1628,15 +1628,15 @@ int main(int argc, char **argv) {
         pthread_t th;
         CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0, "b6: поддельный конец связи не запустился");
 
-        d2k_props_step steps[D2K_PROPS_QUESTIONS];
-        d2k_props pr = d2k_props_ask_traced(sv[0], "127.0.0.1", target_port, trig, ctl, 0, steps);
+        d2s_props_step steps[D2S_PROPS_QUESTIONS];
+        d2s_props pr = d2s_props_ask_traced(sv[0], "127.0.0.1", target_port, trig, ctl, 0, steps);
         pthread_join(th, NULL);
         close(sv[0]); close(sv[1]); close(ps.listen_fd);
 
         CHECK(!fa.closed_early, "b6: зонд закрыл соединение с целью ДО события обмена");
-        CHECK(pr.tolerates_left_overlap == D2K_P_NO,
+        CHECK(pr.tolerates_left_overlap == D2S_P_NO,
               "b6: опрос осудил обмен по ПЕРВОМУ событию, не дождавшись ответа сервера");
-        CHECK(steps[0].rc == D2K_STEP_PASSED, "b6: трасса не отметила проход");
+        CHECK(steps[0].rc == D2S_STEP_PASSED, "b6: трасса не отметила проход");
         CHECK((steps[0].seen_types & 0x08) != 0,
               "b6: трасса сохранила ПЕРВОЕ событие, а не то, по которому вынесен ответ");
     }
@@ -1665,8 +1665,8 @@ int main(int argc, char **argv) {
         };
         for (size_t ci = 0; ci < sizeof cases / sizeof cases[0]; ci++) {
             uint8_t tb[2048], cb[2048];
-            d2k_hello trig = build_trigger(tb, sizeof tb, "b7.example");
-            d2k_hello ctl = build_trigger(cb, sizeof cb, "b7-control.example");
+            d2s_hello trig = build_trigger(tb, sizeof tb, "b7.example");
+            d2s_hello ctl = build_trigger(cb, sizeof cb, "b7-control.example");
             CHECK(trig.bytes && ctl.bytes, "build_trigger(b7) не собрался");
 
             int sv[2];
@@ -1686,8 +1686,8 @@ int main(int argc, char **argv) {
             CHECK(pthread_create(&th, NULL, fakeend_run, &fa) == 0,
                   "b7: поддельный конец связи не запустился");
 
-            d2k_props_step steps[D2K_PROPS_QUESTIONS];
-            d2k_props pr = d2k_props_ask_traced(sv[0], "127.0.0.1", target_port,
+            d2s_props_step steps[D2S_PROPS_QUESTIONS];
+            d2s_props pr = d2s_props_ask_traced(sv[0], "127.0.0.1", target_port,
                                                 trig, ctl, 0, steps);
             pthread_join(th, NULL);
             close(sv[0]); close(sv[1]); close(ps.listen_fd);
@@ -1696,19 +1696,19 @@ int main(int argc, char **argv) {
             snprintf(msg, sizeof msg,
                      "b7 (%s): ответ сервера засчитан без доказательства исполнения",
                      cases[ci].what);
-            CHECK(pr.tolerates_left_overlap == D2K_P_UNKNOWN &&
-                  pr.tolerates_reorder == D2K_P_UNKNOWN &&
-                  pr.validates_checksum == D2K_P_UNKNOWN &&
-                  pr.parses_l7 == D2K_P_UNKNOWN &&
-                  pr.counts_duplicates == D2K_P_UNKNOWN, msg);
+            CHECK(pr.tolerates_left_overlap == D2S_P_UNKNOWN &&
+                  pr.tolerates_reorder == D2S_P_UNKNOWN &&
+                  pr.validates_checksum == D2S_P_UNKNOWN &&
+                  pr.parses_l7 == D2S_P_UNKNOWN &&
+                  pr.counts_duplicates == D2S_P_UNKNOWN, msg);
             snprintf(msg, sizeof msg,
                      "b7 (%s): трасса не назвала причину «план не применён»",
                      cases[ci].what);
-            CHECK(steps[0].rc == D2K_STEP_NO_APPLIED, msg);
+            CHECK(steps[0].rc == D2S_STEP_NO_APPLIED, msg);
         }
     }
 
-    d2k_link_close(fd);
+    d2s_link_close(fd);
     probe_stop(&p, sock_path);
 
     /* --- ТЕЛО ФАЛЬШИВКИ ПОМЕЩАЕТСЯ В КАНАЛ -------------------------------
@@ -1723,9 +1723,9 @@ int main(int argc, char **argv) {
         static const size_t caps[] = { 0, 300, 1500 };
         size_t longest[3] = { 0, 0, 0 };
         for (size_t ci = 0; ci < 3; ci++) {
-            for (size_t i = 0; i <= (size_t)D2K_FALLBACK_MAX; i++) {
+            for (size_t i = 0; i <= (size_t)D2S_FALLBACK_MAX; i++) {
                 char text[4096];
-                if (d2k_fallback_plan(i, D2K_SHAPE_MODERN, "control.example",
+                if (d2s_fallback_plan(i, D2S_SHAPE_MODERN, "control.example",
                                       caps[ci], text, sizeof text) != 0) {
                     continue;
                 }
@@ -1766,9 +1766,9 @@ int main(int argc, char **argv) {
     {
         static const size_t caps[] = { 1500, 1492 };
         for (size_t ci = 0; ci < 2; ci++) {
-            for (size_t i = 0; i <= (size_t)D2K_FALLBACK_MAX; i++) {
+            for (size_t i = 0; i <= (size_t)D2S_FALLBACK_MAX; i++) {
                 char text[8192];
-                if (d2k_fallback_plan(i, D2K_SHAPE_MODERN, "control.example",
+                if (d2s_fallback_plan(i, D2S_SHAPE_MODERN, "control.example",
                                       caps[ci], text, sizeof text) != 0) {
                     continue;
                 }
@@ -1786,9 +1786,9 @@ int main(int argc, char **argv) {
         }
         /* Без предела плечо с целым приветствием остаётся в списке. */
         int whole = 0;
-        for (size_t i = 0; i <= (size_t)D2K_FALLBACK_MAX && !whole; i++) {
+        for (size_t i = 0; i <= (size_t)D2S_FALLBACK_MAX && !whole; i++) {
             char text[8192];
-            if (d2k_fallback_plan(i, D2K_SHAPE_MODERN, "control.example", 0,
+            if (d2s_fallback_plan(i, D2S_SHAPE_MODERN, "control.example", 0,
                                   text, sizeof text) != 0) { continue; }
             const char *line = strstr(text, "payload 2 ");
             if (!line) { continue; }
@@ -1799,9 +1799,9 @@ int main(int argc, char **argv) {
         CHECK(whole, "без объявленного предела перекрытие целым приветствием пропало");
         /* LEGACY-приманка короткая — её плечо в канал помещается и остаётся. */
         int legacy = 0;
-        for (size_t i = 0; i <= (size_t)D2K_FALLBACK_MAX && !legacy; i++) {
+        for (size_t i = 0; i <= (size_t)D2S_FALLBACK_MAX && !legacy; i++) {
             char text[8192];
-            if (d2k_fallback_plan(i, D2K_SHAPE_LEGACY, "control.example", 1500,
+            if (d2s_fallback_plan(i, D2S_SHAPE_LEGACY, "control.example", 1500,
                                   text, sizeof text) != 0) { continue; }
             const char *line = strstr(text, "payload 2 ");
             if (!line) { continue; }
@@ -1826,25 +1826,25 @@ int main(int argc, char **argv) {
         char buf[8192];
         size_t last_ok = 0;
         for (size_t i = 0; i < 500; i++) {
-            if (d2k_fallback_plan(i, D2K_SHAPE_MODERN, "disk.rzd.ru", 1492,
+            if (d2s_fallback_plan(i, D2S_SHAPE_MODERN, "disk.rzd.ru", 1492,
                                   buf, sizeof buf) == 0) {
                 last_ok = i;
             }
         }
-        CHECK(d2k_fallback_arms() == last_ok + 1,
+        CHECK(d2s_fallback_arms() == last_ok + 1,
               "объявленное число плеч не сходится с длиной списка — бюджет зондов "
               "окажется меньше лестницы, и поиск сдастся раньше времени");
-        CHECK(d2k_fallback_plan(d2k_fallback_arms(), D2K_SHAPE_MODERN, "disk.rzd.ru",
+        CHECK(d2s_fallback_plan(d2s_fallback_arms(), D2S_SHAPE_MODERN, "disk.rzd.ru",
                                 1492, buf, sizeof buf) != 0,
               "за концом списка выдалось плечо");
-        CHECK(d2k_fallback_plan(0, D2K_SHAPE_MODERN, "disk.rzd.ru", 1492,
+        CHECK(d2s_fallback_plan(0, D2S_SHAPE_MODERN, "disk.rzd.ru", 1492,
                                 buf, sizeof buf) == 0 &&
               strstr(buf, "seqovl payload=2 poison=0\n") != NULL &&
               strstr(buf, "split payload_start +1\n") != NULL,
               "seqovl-1 должен экспортироваться как z2k multisplit pos=1 с перекрытием");
         int oob_found = 0;
-        for (size_t i = 0; i < d2k_fallback_arms(); i++) {
-            if (d2k_fallback_plan(i, D2K_SHAPE_MODERN, "disk.rzd.ru", 1492,
+        for (size_t i = 0; i < d2s_fallback_arms(); i++) {
+            if (d2s_fallback_plan(i, D2S_SHAPE_MODERN, "disk.rzd.ru", 1492,
                                   buf, sizeof buf) == 0 &&
                 strstr(buf, "oob sni_middle 0f\n")) { oob_found = 1; break; }
         }

@@ -7,10 +7,10 @@
 ## Воспроизведение и изменение
 
 Две последовательно созданные таблицы с первой установкой одного и того же
-плана возвращали одинаковый `d2k_binding_context`: generation=1 и одинаковые
+плана возвращали одинаковый `d2s_binding_context`: generation=1 и одинаковые
 kind/family/shape/temporary. Старое событие нельзя отличить от нового по этому
 контексту. Новый тест `test_plans` падает на исходном коде: «restart reused
-complete installation identity» (`/tmp/d2k-binding-red.log`, один CHECK).
+complete installation identity» (`/tmp/d2s-binding-red.log`, один CHECK).
 
 Таблица получает 128-битный случайный epoch на время своей жизни. Он вместе
 с поколением копируется в существующие снимки Session/track/journal и в
@@ -27,9 +27,9 @@ APPLIED/REFUSED, усечённые хвосты, исходный снимок 
 проверяет нулевой контекст и доступность самого плана.
 
 Ревью обнаружило соседний старый дефект: runtime сообщал wire=13 при control=15,
-из-за чего `d2kc --self-check` уже не проходил. Новый CHECK в
-`test_d2kc_proto` воспроизвёл отказ (`/tmp/d2k-runtime-wire-red.log`). Теперь
-`runtime/d2k_protocol.h` — единственное определение версии для handshake,
+из-за чего `d2sc --self-check` уже не проходил. Новый CHECK в
+`test_d2sc_proto` воспроизвёл отказ (`/tmp/d2s-runtime-wire-red.log`). Теперь
+`runtime/d2s_protocol.h` — единственное определение версии для handshake,
 CLI и health. Makefile-зависимости всех runtime-потребителей обновлены.
 JS-тест handshake читает новую версию отдельно от определения события,
 сохраняя возможность читать старые release fixtures.
@@ -37,7 +37,7 @@ JS-тест handshake читает новую версию отдельно от
 Контроль старого кода без checkout и stale-объектников: `plans.c` из
 `1b0abe3` скомпилирован заново в отдельный `/tmp`-бинарник с окончательным
 `test_plans`. Exit 1, два CHECK: restart identity и entropy failure
-(`/tmp/d2k-binding-baseline-fresh.log`). Текущие `test_plans`, `test_session`,
+(`/tmp/d2s-binding-baseline-fresh.log`). Текущие `test_plans`, `test_session`,
 `test_ctl`, `test_link` проходят. Равенство байтов исполнения этим изменением
 не переопределяется: epoch отсутствует в сериализованном packet program.
 
@@ -71,7 +71,7 @@ HTTP ACK установки пока возвращает корреляцию �
    привязку на стороне таблицы; старое событие не снимает новую установку.
 4. Регрессы: тот же hash после переустановки/рестарта, поздний портал,
    неизвестный контекст, чужая форма/семейство, повтор события; действительный
-   портал снимает только свою привязку. Проверять фактический путь d2kd/control,
+   портал снимает только свою привязку. Проверять фактический путь d2sd/control,
    а не только фальшивые callbacks измерителя.
 
 Даже после этого ACK/APPLIED не станет PASS. Положительный HTTP-критерий
@@ -81,20 +81,20 @@ TLS RX и QUIC требуют собственных наблюдаемых си
 
 ## Итоговая локальная проверка
 
-- `make -C core check` — exit 0, `/tmp/d2k-binding-core-final.log`.
+- `make -C core check` — exit 0, `/tmp/d2s-binding-core-final.log`.
 - `make -C detect check cross` — exit 0,
-  `/tmp/d2k-binding-detect-final.log`.
+  `/tmp/d2s-binding-detect-final.log`.
 - `make -C datapath check cross` — exit 0,
-  `/tmp/d2k-binding-datapath-final.log`.
+  `/tmp/d2s-binding-datapath-final.log`.
 - Core check включает release arm64/mipsel во временном каталоге. Native
-  `d2kc --self-check` — wire=16; handshake JS-тест — exit 0.
-- `make -C panel test-cli`, `make -C telegram d2ktg` — exit 0.
+  `d2sc --self-check` — wire=16; handshake JS-тест — exit 0.
+- `make -C panel test-cli`, `make -C telegram d2stg` — exit 0.
 - `test_probe_plan`: 0 mismatches; UDP runtime: 198 full-packet cases,
   53 actual questions, 0 failures; HTTP trial/permanent и live controller
   IPv4/IPv6, QUIC actual first-send sink — проходят.
 - `git diff --check` чист. Dirty-бинарники владельца сохранены без изменения
-  SHA-256: d2kc `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`,
-  d2kd `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.
+  SHA-256: d2sc `5a8b19aa4deaa891da0094e53704f870d4f7f3027c2c2ad0f3131394b7a40194`,
+  d2sd `179c59ee5fdfc5e51877daf39ea79bfa316edafdf8a0e2a4e0db80bd6e30301e`.
 
 Это локальные проверки и cross-сборка; Linux/NFQUEUE на живом браузерном
 потоке и полевые критерии сайтов не проверялись.

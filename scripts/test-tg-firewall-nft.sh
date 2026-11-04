@@ -1,11 +1,11 @@
 #!/bin/sh
-# Проверка files/d2k-tg-firewall.sh на OpenWrt без iptables (25.12):
-# перенаправления IPv4 и IPv6 находятся в отдельной таблице inet d2k_tg.
+# Проверка files/d2s-tg-firewall.sh на OpenWrt без iptables (25.12):
+# перенаправления IPv4 и IPv6 находятся в отдельной таблице inet d2s_tg.
 # Подмена nft хранит отдельный файл для каждой таблицы, iptables журналирует вызовы.
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-TGFW=$ROOT/files/d2k-tg-firewall.sh
+TGFW=$ROOT/files/d2s-tg-firewall.sh
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -46,13 +46,13 @@ printf "DISTRIB_ID='OpenWrt'\n" > "$TMP/openwrt_release"
 tg() {
     bindir=$1; shift
     env PATH="$bindir:/usr/bin:/bin" NFT_STATE="$TMP/nft" IPT_LOG="$TMP/ipt.log" \
-        D2K_OPENWRT_RELEASE="$TMP/openwrt_release" "$@"
+        D2S_OPENWRT_RELEASE="$TMP/openwrt_release" "$@"
 }
-table() { cat "$TMP/nft/inet_d2k_tg" 2>/dev/null; }
+table() { cat "$TMP/nft/inet_d2s_tg" 2>/dev/null; }
 
 tg "$TMP/nftonly" sh "$TGFW" start || fail "start on nft-only OpenWrt"
 r=$(table)
-[ -n "$r" ] || fail "table inet d2k_tg not loaded"
+[ -n "$r" ] || fail "table inet d2s_tg not loaded"
 want() { printf '%s\n' "$r" | grep -qF -- "$1" || fail "missing: $1"; }
 want 'set tg4 { type ipv4_addr; flags interval; elements = { 149.154.160.0/20, 91.108.4.0/22, 91.108.8.0/22, 91.108.12.0/22, 91.108.16.0/22, 91.108.20.0/22, 91.108.56.0/22, 91.105.192.0/23, 95.161.64.0/20, 185.76.151.0/24 }; }'
 want 'set tg6 { type ipv6_addr; flags interval; elements = { 2001:67c:4e8::/48, 2001:b28:f23c::/47, 2001:b28:f23f::/48, 2a0a:f280:203::/48 }; }'
@@ -67,28 +67,28 @@ want 'ip6 daddr @tg6 tcp dport 5222 redirect to :1443'
 [ "$(printf '%s\n' "$r" | grep -c 'tcp dport 5222 redirect to :1443')" -eq 4 ] || fail "не хватает перенаправлений IPv4/IPv6 для порта 5222 в prerouting и output"
 [ "$(printf '%s\n' "$r" | grep -c 'redirect to :1443')" -eq 8 ] || fail "не установлены все перенаправления IPv4/IPv6"
 [ "$(printf '%s\n' "$r" | grep -c 'reject with tcp reset')" -eq 0 ] || fail "IPv6-трафик Telegram не должен отклоняться"
-ok "в inet d2k_tg установлены перенаправления IPv4/IPv6 для LAN и роутера"
+ok "в inet d2s_tg установлены перенаправления IPv4/IPv6 для LAN и роутера"
 
 : > "$TMP/nft/calls"
 tg "$TMP/nftonly" sh "$TGFW" heal || fail "heal with the table in place"
 ! grep -q '^-f' "$TMP/nft/calls" || fail "heal reloaded a healthy table"
-rm -f "$TMP/nft/inet_d2k_tg"
+rm -f "$TMP/nft/inet_d2s_tg"
 tg "$TMP/nftonly" sh "$TGFW" heal || fail "heal after the table was removed"
 [ -n "$(table)" ] || fail "heal did not restore the table"
-sed '/redirect/d' "$TMP/nft/inet_d2k_tg" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2k_tg"
+sed '/redirect/d' "$TMP/nft/inet_d2s_tg" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2s_tg"
 tg "$TMP/nftonly" sh "$TGFW" heal || fail "heal with a lost rule"
 [ "$(table | grep -c 'redirect to :1443')" -eq 8 ] || fail "heal не восстановил перенаправления Telegram IPv4/IPv6"
-sed '/meta mark 0x31 return/d' "$TMP/nft/inet_d2k_tg" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2k_tg"
+sed '/meta mark 0x31 return/d' "$TMP/nft/inet_d2s_tg" > "$TMP/x" && mv "$TMP/x" "$TMP/nft/inet_d2s_tg"
 tg "$TMP/nftonly" sh "$TGFW" heal || fail "heal with a lost outbound mark exemption"
 [ "$(table | grep -c 'meta mark 0x31 return')" -eq 1 ] || fail "heal did not restore the outbound mark exemption"
 ok "heal leaves a healthy table alone and restores a lost one"
 
 printf 'table inet fw4 {\n}\n' > "$TMP/nft/inet_fw4"
 tg "$TMP/nftonly" sh "$TGFW" stop || fail "stop"
-[ -z "$(table)" ] || fail "stop left inet d2k_tg"
+[ -z "$(table)" ] || fail "stop left inet d2s_tg"
 [ -e "$TMP/nft/inet_fw4" ] || fail "stop removed a foreign table"
 tg "$TMP/nftonly" sh "$TGFW" stop || fail "stop without the table must succeed"
-ok "stop removes only inet d2k_tg and is idempotent"
+ok "stop removes only inet d2s_tg and is idempotent"
 
 mkdir -p "$TMP/t"
 if tg "$TMP/nftonly" STUB_NFT_FAIL=1 TMPDIR="$TMP/t" sh "$TGFW" start 2>/dev/null; then fail "start ignored an nft failure"; fi
@@ -98,14 +98,14 @@ if tg "$TMP/nftonly" STUB_NFT_FAIL=1 TMPDIR="$TMP/t" sh "$TGFW" heal 2>/dev/null
 ok "a refused nft load fails start and heal and leaves no temp file"
 
 # An Entware-era install had iptables rules: start under nft removes them,
-# and stop without D2K_FW (uninstall) removes both kinds.
+# and stop without D2S_FW (uninstall) removes both kinds.
 : > "$TMP/ipt.log"
 tg "$TMP/both" sh "$TGFW" start || fail "start with iptables present"
-grep -q 'iptables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
+grep -q 'iptables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
     || fail "start under nft did not clear the old iptables redirect"
-grep -q 'iptables -w -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2k_tg_dc dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
+grep -q 'iptables -w -t nat -C PREROUTING -p tcp --dport 5222 -m set --match-set d2s_tg_dc dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
     || fail "start under nft did not clear the old Telegram 5222 redirect"
-grep -q 'ip6tables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2k_tg_dc6 dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
+grep -q 'ip6tables -w -t nat -C PREROUTING -p tcp --dport 443 -m set --match-set d2s_tg_dc6 dst -j REDIRECT --to-port 1443' "$TMP/ipt.log" \
     || fail "при nft не удалено старое IPv6-перенаправление"
 ! grep -q -- ' -I ' "$TMP/ipt.log" || fail "start under nft added iptables rules"
 : > "$TMP/ipt.log"
@@ -161,13 +161,13 @@ EOF
 chmod +x "$TMP/iptablesok/ipset" "$TMP/iptablesok/conntrack"
 tg_iptables() {
     env PATH="$TMP/iptablesok:/usr/bin:/bin" IPT_STATE="$TMP/iptables-state" \
-        IPT_LOG="$TMP/ipt-ok.log" D2K_OPENWRT_RELEASE="$TMP/no-openwrt" "$@"
+        IPT_LOG="$TMP/ipt-ok.log" D2S_OPENWRT_RELEASE="$TMP/no-openwrt" "$@"
 }
 : > "$TMP/ipt-ok.log"
 tg_iptables sh "$TGFW" start || fail "не удалось запустить legacy iptables"
-grep -q 'ip6tables -w -t nat -I PREROUTING 1 -p tcp --dport 443 -m set --match-set d2k_tg_dc6 dst -j REDIRECT --to-port 1443' "$TMP/ipt-ok.log" \
+grep -q 'ip6tables -w -t nat -I PREROUTING 1 -p tcp --dport 443 -m set --match-set d2s_tg_dc6 dst -j REDIRECT --to-port 1443' "$TMP/ipt-ok.log" \
     || fail "legacy-правила не перенаправляют IPv6-трафик Telegram"
-grep -q 'ip6tables -w -t nat -I OUTPUT 1 -m mark --mark 0x31 -m comment --comment d2k-tg-outbound -j RETURN' "$TMP/ipt-ok.log" \
+grep -q 'ip6tables -w -t nat -I OUTPUT 1 -m mark --mark 0x31 -m comment --comment d2s-tg-outbound -j RETURN' "$TMP/ipt-ok.log" \
     || fail "legacy-правила не исключают помеченные IPv6-соединения прокси"
 ! grep -q -- '-j REJECT' "$TMP/iptables-state/ip6tables" || fail "legacy-правила всё ещё отклоняют IPv6"
 [ "$(grep -c 'REDIRECT --to-port 1443' "$TMP/iptables-state/iptables")" -eq 4 ] || fail "не хватает перенаправлений IPv4 для legacy-правил"
@@ -179,8 +179,8 @@ ok "legacy iptables перенаправляет IPv4/IPv6 и корректно
 
 # Keenetic: no openwrt_release — iptables as before, nft never called.
 : > "$TMP/nft/calls"
-tg "$TMP/both" D2K_OPENWRT_RELEASE="$TMP/none" sh "$TGFW" stop || fail "Keenetic stop"
+tg "$TMP/both" D2S_OPENWRT_RELEASE="$TMP/none" sh "$TGFW" stop || fail "Keenetic stop"
 [ ! -s "$TMP/nft/calls" ] || fail "Keenetic path called nft"
 ok "Keenetic keeps the iptables path"
 
-echo "d2k-tg-firewall nftables (stub): all checks passed"
+echo "d2s-tg-firewall nftables (stub): all checks passed"

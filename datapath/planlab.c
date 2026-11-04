@@ -5,7 +5,7 @@
  * времена.
  *
  * Главное свойство — не удобство, а то, что здесь работает ТОТ ЖЕ исполнитель,
- * что пойдёт в прод: те же d2k_plan_load и d2k_plan_apply. Второй реализации
+ * что пойдёт в прод: те же d2s_plan_load и d2s_plan_apply. Второй реализации
  * преобразований не появляется, а §2.5 документа запрещает её именно потому,
  * что две реализации разойдутся, и измеренное перестанет соответствовать
  * исполняемому.
@@ -20,10 +20,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "d2k_plan.h"
-/* Полное определение потока живёт здесь: d2k_plan.h объявляет тип
+#include "d2s_plan.h"
+/* Полное определение потока живёт здесь: d2s_plan.h объявляет тип
    опережающе, и одного объявления для переменной по значению мало. */
-#include "d2k_track.h"
+#include "d2s_track.h"
 
 #define MAX_PAYLOAD 65536
 
@@ -87,11 +87,11 @@ static uint8_t *read_file(const char *path, size_t *len) {
     return buf;
 }
 
-static const char *fate_name(d2k_orig_fate f) {
+static const char *fate_name(d2s_orig_fate f) {
     switch (f) {
-    case D2K_ORIG_PASS: return "pass";
-    case D2K_ORIG_DROP: return "drop";
-    case D2K_ORIG_HOLD: return "hold";
+    case D2S_ORIG_PASS: return "pass";
+    case D2S_ORIG_DROP: return "drop";
+    case D2S_ORIG_HOLD: return "hold";
     default:            return "неизвестно";
     }
 }
@@ -109,9 +109,9 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    d2k_plan *p = NULL;
+    d2s_plan *p = NULL;
     char err[200];
-    if (d2k_plan_load(plan_raw, plan_len, &p, err, sizeof err) != 0) {
+    if (d2s_plan_load(plan_raw, plan_len, &p, err, sizeof err) != 0) {
         /* Отказ — это результат, а не сбой инструмента: план, который
            исполнитель не принял, обязан быть видимым в эталоне. */
         printf("reject %s\n", err);
@@ -122,7 +122,7 @@ int main(int argc, char **argv) {
     FILE *sc = fopen(argv[2], "r");
     if (!sc) {
         fprintf(stderr, "не прочитать сценарий %s\n", argv[2]);
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         free(plan_raw);
         return 2;
     }
@@ -134,7 +134,7 @@ int main(int argc, char **argv) {
         free(payload);
         free(line);
         fclose(sc);
-        d2k_plan_free(p);
+        d2s_plan_free(p);
         free(plan_raw);
         return 2;
     }
@@ -162,7 +162,7 @@ int main(int argc, char **argv) {
             break;
         }
 
-        d2k_pkt in;
+        d2s_pkt in;
         memset(&in, 0, sizeof in);
         in.payload = payload;
         in.payload_len = (size_t)n;
@@ -175,16 +175,16 @@ int main(int argc, char **argv) {
             in.sni_len = sni_len;
         }
 
-        d2k_flow f;
+        d2s_flow f;
         memset(&f, 0, sizeof f);
-        d2k_actions a;
+        d2s_actions a;
         memset(&a, 0, sizeof a);
 
-        if (d2k_plan_apply(p, &f, &in, &a) != 0) {
+        if (d2s_plan_apply(p, &f, &in, &a) != 0) {
             /* Неприменимость — тоже результат: эталон обязан её показывать,
                иначе отказ будет неотличим от «действий не потребовалось». */
             printf("refuse\n");
-            d2k_actions_free(&a);
+            d2s_actions_free(&a);
             continue;
         }
 
@@ -193,7 +193,7 @@ int main(int argc, char **argv) {
                если фальшивка и кусок нагрузки однажды поменяются местами, — а
                от этого различия зависит поведение при отмене. */
             printf("emit %s %u %u ttl=%u poison=%02x ",
-                   a.v[i].kind == D2K_EMIT_PAYLOAD ? "payload" : "fake",
+                   a.v[i].kind == D2S_EMIT_PAYLOAD ? "payload" : "fake",
                    a.v[i].delay_us, a.v[i].seq, a.v[i].ttl, a.v[i].poison);
             /* Приставка печатается вместе с нагрузкой: на проводе это ОДИН
                сегмент, и эталон, показывающий только вторую половину, врёт о
@@ -205,13 +205,13 @@ int main(int argc, char **argv) {
             printf("\n");
         }
         printf("fate %s\n", fate_name(a.fate));
-        d2k_actions_free(&a);
+        d2s_actions_free(&a);
     }
 
     free(line);
     free(payload);
     fclose(sc);
-    d2k_plan_free(p);
+    d2s_plan_free(p);
     free(plan_raw);
     return rc;
 }

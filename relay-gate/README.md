@@ -1,6 +1,6 @@
-# D2K install gate on the relay VPS
+# D2S install gate on the relay VPS
 
-A small C service, `d2k-gate`, on `192.0.2.44:9444`. Router installs,
+A small C service, `d2s-gate`, on `192.0.2.44:9444`. Router installs,
 nightly updates and the package managers try it first and fall back to a
 direct download when it does not answer: from part of the lines in Russia
 GitHub (raw files and releases), Entware and the OpenWrt package server do
@@ -37,8 +37,8 @@ host, bytes each way, duration. The gate holds no secrets.
 router-to-VPS leg would carry the answer in clear text). Those tools use the
 `http://` feed path above, and the installer fetches GitHub with curl.
 
-D2K never queues traffic to the gate (`files/S99d2k`, `D2K_GATE`): it is
-D2K's own channel, not a target. Without that exclusion the datapath read
+D2S never queues traffic to the gate (`files/S99d2s`, `D2S_GATE`): it is
+D2S's own channel, not a target. Without that exclusion the datapath read
 the TLS hello inside a `CONNECT` tunnel as a flow to "github.com" on the VPS
 address and the controller started searching for a bypass of its own update
 channel (field, 14.10.2026).
@@ -47,13 +47,13 @@ channel (field, 14.10.2026).
 
 ```sh
 make -C relay-gate test   # unit tests, no network
-make -C relay-gate vps    # static x86_64 binary: build/relay-gate/d2k-gate-x86_64
+make -C relay-gate vps    # static x86_64 binary: build/relay-gate/d2s-gate-x86_64
 ```
 
-Copy the binary (as `d2k-gate`), `d2k-gate.service` and `install-server.sh`
+Copy the binary (as `d2s-gate`), `d2s-gate.service` and `install-server.sh`
 into one directory on the VPS and run `sh install-server.sh <dir>` as root.
 The unit runs as `nobody` with a read-only system, no capabilities, 64 MB of
 memory and 160 tasks.
 
-Router side: `D2K_GATE` (default `http://192.0.2.44:9444`) in the
-environment or in `/opt/d2k/config`; an empty value turns the gate off.
+Router side: `D2S_GATE` (default `http://192.0.2.44:9444`) in the
+environment or in `/opt/d2s/config`; an empty value turns the gate off.

@@ -6,7 +6,7 @@
  */
 #include <stdio.h>
 #include <string.h>
-#include "d2k_plan.h"
+#include "d2s_plan.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -24,11 +24,11 @@ static const uint8_t good[] = {
 };
 
 static int loads(const uint8_t *b, size_t n) {
-    d2k_plan *p = NULL;
+    d2s_plan *p = NULL;
     char err[160];
-    int rc = d2k_plan_load(b, n, &p, err, sizeof err);
+    int rc = d2s_plan_load(b, n, &p, err, sizeof err);
     if (rc == 0) {
-        d2k_plan_free(p);
+        d2s_plan_free(p);
     }
     return rc == 0;
 }
@@ -104,7 +104,7 @@ int main(void) {
 
     {
         uint8_t b[] = {'D','2','K','P',0,1,0,4,0,0,0,2,
-                       0,2,0,2,6,1, 1,9,0,1,D2K_WIRE_DETECT_TCP};
+                       0,2,0,2,6,1, 1,9,0,1,D2S_WIRE_DETECT_TCP};
         CHECK(loads(b, sizeof b), "detect wire profile rejected");
         b[7] = 3;
         CHECK(!loads(b, sizeof b), "detect wire profile accepted with minexec=3");

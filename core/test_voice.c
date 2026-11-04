@@ -1,7 +1,7 @@
 /* test_voice.c — голосовой путь: цель из живого разговора и три слоя.
  *
  * Сети здесь нет вовсе: оракул и разрешение имени подменяются крючками (см.
- * d2k_voice.h — почему они крючки), а таблица соединений подсовывается файлом.
+ * d2s_voice.h — почему они крючки), а таблица соединений подсовывается файлом.
  * Подменить файл честнее, чем подделывать ядро, и ровно так же устроен тест
  * NAT в датапате.
  */
@@ -21,8 +21,8 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 
-#include "d2k_stun.h"
-#include "d2k_voice.h"
+#include "d2s_stun.h"
+#include "d2s_voice.h"
 
 static int fails;
 #define CHECK(cond, msg)                                   \
@@ -34,9 +34,9 @@ static int fails;
     } while (0)
 
 static const char *write_ct(const char *body) {
-    static char path[] = "/tmp/d2k-voice-ct-XXXXXX";
+    static char path[] = "/tmp/d2s-voice-ct-XXXXXX";
     static char made[sizeof path];
-    strcpy(path, "/tmp/d2k-voice-ct-XXXXXX");
+    strcpy(path, "/tmp/d2s-voice-ct-XXXXXX");
     int fd = mkstemp(path);
     if (fd < 0) { return NULL; }
     FILE *f = fdopen(fd, "w");
@@ -66,11 +66,11 @@ static uint32_t g_answer_ip2;     /* и этот тоже (контроль ря
 static uint32_t g_err_ip;          /* на этот адрес зонд не уходит: ошибка сокета */
 static int      g_pre_calls;       /* сколько зондов шло с приманкой впереди */
 
-static d2k_tally stub_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_len,
+static d2s_tally stub_ask(uint32_t ip, uint16_t port, const uint8_t *pre, size_t pre_len,
                           int copies, uint32_t wait_ms, uint32_t mark, int repeats,
                           uint32_t *rtt_ms_out) {
     (void)port; (void)pre_len; (void)wait_ms;
-    d2k_tally t;
+    d2s_tally t;
     memset(&t, 0, sizeof t);
     /* Как у настоящего оракула: без запрошенной метки сокет НЕ помечен. */
     t.marked = (mark != 0) && g_marked_ok;
@@ -110,7 +110,7 @@ static int stub_alive(const char *ct_path, uint32_t ip, uint16_t port,
 }
 /* Настоящая проверка живости — берётся у крючка до подмены: тесты таблицы
    соединений обязаны идти через тот же разбор, что и продукт. */
-static d2k_voice_alive_fn real_alive;
+static d2s_voice_alive_fn real_alive;
 
 static uint32_t g_ctl_ip;
 static int stub_resolve(const char *hostport, uint32_t *ip, uint16_t *port) {
@@ -143,11 +143,11 @@ static void *stun_server(void *p) {
     uint8_t buf[1500];
     struct sockaddr_in from;
     socklen_t fl = sizeof from;
-    for (int i = 0; i < D2K_VOICE_REPEATS; i++) {
+    for (int i = 0; i < D2S_VOICE_REPEATS; i++) {
         ssize_t n = recvfrom(a->fd, buf, sizeof buf, 0, (struct sockaddr *)&from, &fl);
-        if (n < D2K_STUN_HDR_LEN) { break; }
+        if (n < D2S_STUN_HDR_LEN) { break; }
         uint8_t resp[32];
-        memcpy(resp, buf, D2K_STUN_HDR_LEN);
+        memcpy(resp, buf, D2S_STUN_HDR_LEN);
         resp[0] = 0x01; resp[1] = 0x01;          /* Binding Response */
         resp[2] = 0x00; resp[3] = 0x0c;          /* один атрибут, 12 байт */
         if (!a->honest) { resp[8] ^= 0xff; }     /* чужой идентификатор */
@@ -155,8 +155,8 @@ static void *stun_server(void *p) {
         static const uint8_t attr[12] = {
             0x00,0x20,0x00,0x08, 0x00,0x01,0xa1,0x47, 0xe1,0x12,0xa6,0x43
         };
-        memcpy(resp + D2K_STUN_HDR_LEN, attr, sizeof attr);
-        (void)sendto(a->fd, resp, D2K_STUN_HDR_LEN + sizeof attr, 0,
+        memcpy(resp + D2S_STUN_HDR_LEN, attr, sizeof attr);
+        (void)sendto(a->fd, resp, D2S_STUN_HDR_LEN + sizeof attr, 0,
                      (struct sockaddr *)&from, fl);
     }
     close(a->fd);
@@ -204,21 +204,21 @@ static void reset(void) {
 }
 
 static void test_managed_resource_root(void) {
-    char dir[]="/tmp/d2k-managed-voice.XXXXXX";CHECK(mkdtemp(dir)!=NULL,"managed resource fixture");
+    char dir[]="/tmp/d2s-managed-voice.XXXXXX";CHECK(mkdtemp(dir)!=NULL,"managed resource fixture");
     char path[128];snprintf(path,sizeof path,"%s/stun.bin",dir);FILE *f=fopen(path,"wb");
     const char bytes[]="voice resource bytes";if(!f){CHECK(0,"managed resource file");return;}
-    (void)!fwrite(bytes,1,sizeof bytes-1,f);fclose(f);setenv("D2K_FAKE_DIR",dir,1);
+    (void)!fwrite(bytes,1,sizeof bytes-1,f);fclose(f);setenv("D2S_FAKE_DIR",dir,1);
     unsigned char out[128];size_t n=0;
-    CHECK(!d2k_voice_blob_hook(NULL,"stun.bin",out,sizeof out,&n)&&n==sizeof bytes-1&&!memcmp(out,bytes,n),"default voice blob must use resolved managed release");
-    unsetenv("D2K_FAKE_DIR");unlink(path);rmdir(dir);
+    CHECK(!d2s_voice_blob_hook(NULL,"stun.bin",out,sizeof out,&n)&&n==sizeof bytes-1&&!memcmp(out,bytes,n),"default voice blob must use resolved managed release");
+    unsetenv("D2S_FAKE_DIR");unlink(path);rmdir(dir);
 }
 int main(void) {
     test_managed_resource_root();
-    d2k_voice_ask_hook = stub_ask;
-    d2k_voice_resolve_hook = stub_resolve;
-    d2k_voice_blob_hook = stub_blob;
-    real_alive = d2k_voice_alive_hook;
-    d2k_voice_alive_hook = stub_alive;
+    d2s_voice_ask_hook = stub_ask;
+    d2s_voice_resolve_hook = stub_resolve;
+    d2s_voice_blob_hook = stub_blob;
+    real_alive = d2s_voice_alive_hook;
+    d2s_voice_alive_hook = stub_alive;
 
     /* --- ЦЕЛЬ ИЗ ЖИВОГО РАЗГОВОРА ---------------------------------------
      * Формат строки conntrack на разных ядрах отличается началом (есть или
@@ -253,8 +253,8 @@ int main(void) {
             "dport=50005 packets=9999 bytes=90000 src=10.171.171.171 dst=192.168.1.117 "
             "sport=50005 dport=54444 packets=9999 bytes=9 mark=0 use=2\n";
         const char *path = write_ct(body);
-        d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-        size_t n = d2k_voice_targets(path, t, D2K_VOICE_MAX_TARGETS);
+        d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+        size_t n = d2s_voice_targets(path, t, D2S_VOICE_MAX_TARGETS);
 
         CHECK(n == 3, "найдено не три голосовых потока — фильтр или разделение по потокам неверны");
         /* Пометки [UNREPLIED] в этих строках нет — значит точка отвечала. */
@@ -270,7 +270,7 @@ int main(void) {
         }
         remove(path);
 
-        CHECK(d2k_voice_targets("/nonexistent/d2k-voice", t, D2K_VOICE_MAX_TARGETS) == 0,
+        CHECK(d2s_voice_targets("/nonexistent/d2s-voice", t, D2S_VOICE_MAX_TARGETS) == 0,
               "нечитаемая таблица выдала цели");
     }
 
@@ -285,8 +285,8 @@ int main(void) {
             "ipv4     2 udp      17 29 src=192.168.1.117 dst=35.217.0.68 sport=50002 "
             "dport=50100 packets=90 bytes=9000 src=35.217.0.68 dst=88.87.93.11 "
             "sport=50100 dport=50002 packets=80 bytes=8000 use=2\n");
-        d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-        size_t n = d2k_voice_targets(path, t, D2K_VOICE_MAX_TARGETS);
+        d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+        size_t n = d2s_voice_targets(path, t, D2S_VOICE_MAX_TARGETS);
         CHECK(n == 1 && t[0].port == 50099,
               "диапазон голосовых портов разошёлся с боевым профилем (50000–50099)");
         remove(path);
@@ -305,10 +305,10 @@ int main(void) {
             "dport=50003 packets=50 bytes=9000 [UNREPLIED] src=104.16.58.99 "
             "dst=88.87.93.11 sport=50003 dport=54999 packets=0 bytes=0 use=2\n");
         CHECK(real_alive(path, ip4(104, 16, 58, 99), 50003, ip4(192, 168, 1, 11), 54999)
-                  == D2K_VOICE_SILENT,
+                  == D2S_VOICE_SILENT,
               "ответ одному клиенту выдан за ответ другому");
         CHECK(real_alive(path, ip4(104, 16, 58, 99), 50003, ip4(192, 168, 1, 10), 54321)
-                  == D2K_VOICE_ANSWERS,
+                  == D2S_VOICE_ANSWERS,
               "отвечающий поток не узнан отвечающим");
         remove(path);
     }
@@ -323,33 +323,33 @@ int main(void) {
             "ipv4     2 udp      17 29 src=192.168.1.117 dst=35.217.0.67 sport=50011 "
             "dport=50004 packets=2 bytes=148 [UNREPLIED] src=35.217.0.67 "
             "dst=88.87.93.11 sport=50004 dport=50011 packets=0 bytes=0 use=2\n");
-        CHECK(real_alive(path, ip4(35, 217, 0, 67), 50004, 0, 0) == D2K_VOICE_YOUNG,
+        CHECK(real_alive(path, ip4(35, 217, 0, 67), 50004, 0, 0) == D2S_VOICE_YOUNG,
               "поток из двух пакетов без ответа объявлен заглушённым");
         remove(path);
         path = write_ct(
             "ipv4     2 udp      17 29 src=192.168.1.117 dst=35.217.0.67 sport=50012 "
             "dport=50004 packets=4 bytes=296 [UNREPLIED] src=35.217.0.67 "
             "dst=88.87.93.11 sport=50004 dport=50012 packets=0 bytes=0 use=2\n");
-        CHECK(real_alive(path, ip4(35, 217, 0, 67), 50004, 0, 0) == D2K_VOICE_SILENT,
+        CHECK(real_alive(path, ip4(35, 217, 0, 67), 50004, 0, 0) == D2S_VOICE_SILENT,
               "четыре ушедших без ответа не признаны молчанием");
         remove(path);
 
         /* И тот же молодой поток в прогоне — не вердикт, а «мало данных». */
         reset();
         g_answer_ip = g_ctl_ip;
-        d2k_voice_alive_hook = real_alive;
+        d2s_voice_alive_hook = real_alive;
         path = write_ct(
             "ipv4     2 udp      17 29 src=192.168.1.117 dst=35.217.0.67 sport=50011 "
             "dport=50004 packets=2 bytes=148 [UNREPLIED] src=35.217.0.67 "
             "dst=88.87.93.11 sport=50004 dport=50011 packets=0 bytes=0 use=2\n");
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ct_path = path;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_UNMEASURED,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_UNMEASURED,
               "молодой поток без ответа получил вердикт вместо «мало данных»");
         CHECK(strstr(r.reason, "из 4") != NULL, "не сказано, сколько ушло и сколько нужно");
-        d2k_voice_alive_hook = stub_alive;
+        d2s_voice_alive_hook = stub_alive;
         remove(path);
     }
 
@@ -361,7 +361,7 @@ int main(void) {
     {
         reset();
         g_answer_ip = g_ctl_ip;
-        d2k_voice_alive_hook = real_alive;
+        d2s_voice_alive_hook = real_alive;
         char body[1024];
         uint8_t c[4];
         memcpy(c, &g_ctl_ip, 4);
@@ -374,26 +374,26 @@ int main(void) {
             "dst=88.87.93.11 sport=50004 dport=50013 packets=0 bytes=0 use=2\n",
             c[0], c[1], c[2], c[3], c[0], c[1], c[2], c[3]);
         const char *path = write_ct(body);
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ct_path = path;
         o.flow_ip_a = ip4(35, 217, 0, 67);
         o.flow_port_a = 50004;
         o.flow_ip_b = ip4(192, 168, 1, 117);
         o.flow_port_b = 50013;
-        d2k_voice_res r = d2k_voice_run(&o);
+        d2s_voice_res r = d2s_voice_run(&o);
         CHECK(r.ip == ip4(35, 217, 0, 67),
               "целью взят поток собственного контрольного зонда, а не разговор");
         CHECK(r.client_ip == o.flow_ip_b && r.client_port == o.flow_port_b,
               "измеритель потерял клиентскую сторону выбранной conntrack-пятёрки");
-        CHECK(r.verdict == D2K_VOICE_BLOCKED,
+        CHECK(r.verdict == D2S_VOICE_BLOCKED,
               "разговор без ответа при живом контроле не признан заглушённым");
         int calls_after_match = g_calls;
         o.flow_port_b = 59999;
-        r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_NO_CALL && g_calls == calls_after_match,
+        r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_NO_CALL && g_calls == calls_after_match,
               "client tuple фильтр измерил другую сессию или отправил лишние пробы");
-        d2k_voice_alive_hook = stub_alive;
+        d2s_voice_alive_hook = stub_alive;
         remove(path);
     }
 
@@ -407,8 +407,8 @@ int main(void) {
             "ipv4     2 udp      17 3 src=88.87.93.11 dst=104.16.58.99 sport=57581 "
             "dport=50004 packets=10 bytes=13850 [UNREPLIED] src=104.16.58.99 "
             "dst=88.87.93.11 sport=50004 dport=57581 packets=0 bytes=0 [FASTNAT] use=2\n");
-        d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-        size_t n = d2k_voice_targets(path, t, D2K_VOICE_MAX_TARGETS);
+        d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+        size_t n = d2s_voice_targets(path, t, D2S_VOICE_MAX_TARGETS);
         CHECK(n == 1, "поток без ответа обязан находиться — он цель не хуже прочих");
         if (n == 1) {
             CHECK(t[0].replied == 0,
@@ -423,11 +423,11 @@ int main(void) {
         reset();
         const char *path = write_ct("ipv4 2 tcp 6 431999 ESTABLISHED src=1.2.3.4 dst=5.6.7.8 "
                                     "sport=1 dport=443 packets=1 bytes=1\n");
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ct_path = path;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_NO_CALL, "без разговора вердикт обязан быть «мерить нечего»");
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_NO_CALL, "без разговора вердикт обязан быть «мерить нечего»");
         CHECK(r.probes == 0, "зонды ушли, хотя цели не было");
         CHECK(strstr(r.reason, "позвони") != NULL || strstr(r.reason, "разговор") != NULL,
               "причина обязана объяснить человеку, что делать");
@@ -447,12 +447,12 @@ int main(void) {
         reset();
         g_answer_ip = 0;   /* зонд молчал бы, и это больше не важно */
         g_alive = 1;
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_CLEAR,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_CLEAR,
               "сервер отвечает настоящему клиенту, а вердикт не «резать нечего»");
         CHECK(g_calls == 0, "зонды ушли там, где ответ уже виден в таблице соединений");
         CHECK(r.probes == 0, "опыты посчитаны там, где их не было");
@@ -467,12 +467,12 @@ int main(void) {
         g_answer_with_pre = ip4(104, 16, 58, 99);
         g_need_copies = 6;
 
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_BLOCKED,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_BLOCKED,
               "поток идёт без единого ответа, а контроль жив — это блокировка потока");
         CHECK(r.arm_len > 0 && r.arm_copies == 6,
               "донорный голосовой поиск не вернул найденную фальшивку ×6");
@@ -484,14 +484,14 @@ int main(void) {
     {
         reset();
         g_answer_ip = ip4(104, 16, 58, 99);
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = g_answer_ip;
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_CLEAR, "сервер отвечает, а вердикт не «резать нечего»");
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_CLEAR, "сервер отвечает, а вердикт не «резать нечего»");
         CHECK(g_calls == 1, "контроль спрошен зря: первый слой уже всё доказал");
-        CHECK(r.probes == D2K_VOICE_REPEATS, "зонды посчитаны неверно");
+        CHECK(r.probes == D2S_VOICE_REPEATS, "зонды посчитаны неверно");
     }
 
     /* --- РАСХОЖДЕНИЕ ПОВТОРОВ: вердикт выносить нельзя -------------------- */
@@ -499,12 +499,12 @@ int main(void) {
         reset();
         g_answer_ip = ip4(104, 16, 58, 99);
         g_partial = 1;
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = g_answer_ip;
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_FLAKY,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_FLAKY,
               "1 из 3 — это «не воспроизводится», а не «резать нечего»");
     }
 
@@ -513,12 +513,12 @@ int main(void) {
         reset();
         g_answer_ip = 0; /* не отвечает никто */
         g_alive = 0;     /* поток к точке идёт, ответов по нему нет */
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_NO_UDP,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_NO_UDP,
               "молчит и контроль — значит режут UDP целиком, а не голос");
         CHECK(strstr(r.reason, "бессмысленно") != NULL,
               "причина обязана сказать, что обходить голос отдельно незачем");
@@ -540,13 +540,13 @@ int main(void) {
         reset();
         g_answer_ip = g_ctl_ip;   /* контроль отвечает — UDP на канале ходит */
         g_alive = 1;              /* а разговор к цели идёт прямо сейчас */
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
+        d2s_voice_res r = d2s_voice_run(&o);
 
-        CHECK(r.verdict == D2K_VOICE_CLEAR,
+        CHECK(r.verdict == D2S_VOICE_CLEAR,
               "поток жив и сервер отвечает — резать нечего");
     }
 
@@ -556,12 +556,12 @@ int main(void) {
         reset();
         g_answer_ip = 0;
         g_alive = -1;   /* потока к этой точке ядро не видит */
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_NO_ORACLE,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_NO_ORACLE,
               "молчание зонда выдано за блокировку там, где наблюдать нечего");
     }
 
@@ -575,17 +575,17 @@ int main(void) {
         reset();
         g_ctl_ip = 0;    /* имя контроля не разрешается */
         g_alive = 0;     /* поток идёт, ответов по нему нет */
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict != D2K_VOICE_BLOCKED,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict != D2S_VOICE_BLOCKED,
               "блокировка объявлена без единого зонда контроля — это вывод из недостачи данных");
-        CHECK(r.verdict == D2K_VOICE_UNMEASURED,
+        CHECK(r.verdict == D2S_VOICE_UNMEASURED,
               "незаконченное измерение не названо незаконченным");
         /* Ушёл только донорный прямой зонд к цели; контрольных — ноль. */
-        CHECK(r.probes == D2K_VOICE_REPEATS && g_calls == 1,
+        CHECK(r.probes == D2S_VOICE_REPEATS && g_calls == 1,
               "зонды посчитаны там, где их не было");
     }
 
@@ -605,8 +605,8 @@ int main(void) {
             "ipv4     2 udp      17 29 src=192.168.1.11 dst=104.16.58.99 sport=54999 "
             "dport=50003 packets=50 bytes=9000 [UNREPLIED] src=104.16.58.99 "
             "dst=88.87.93.11 sport=50003 dport=54999 packets=0 bytes=0 use=2\n");
-        d2k_voice_target t[D2K_VOICE_MAX_TARGETS];
-        size_t n = d2k_voice_targets(path, t, D2K_VOICE_MAX_TARGETS);
+        d2s_voice_target t[D2S_VOICE_MAX_TARGETS];
+        size_t n = d2s_voice_targets(path, t, D2S_VOICE_MAX_TARGETS);
         CHECK(n == 2,
               "два разных потока к одной точке слиты в один — беда одного клиента спрятана "
               "ответом другому");
@@ -630,13 +630,13 @@ int main(void) {
         g_need_copies = 6;                         /* и только шестью копиями */
 
 
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
+        d2s_voice_res r = d2s_voice_run(&o);
 
-        CHECK(r.verdict == D2K_VOICE_BLOCKED,
+        CHECK(r.verdict == D2S_VOICE_BLOCKED,
               "контроль жив, голос молчит — режут именно этот поток");
         CHECK(g_calls >= 3 && g_last_ip == o.ip && g_last_copies == 6,
               "после подтверждённого blocked не перебраны donor voice arms на целевом IP");
@@ -657,13 +657,13 @@ int main(void) {
         g_alive = 0;
         g_answer_with_pre = ip4(104, 16, 58, 99);
         g_need_copies = 1;
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
         o.mark = 0x2d;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_BLOCKED && strcmp(r.fake_arm, "stun:repeats=1") == 0 &&
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_BLOCKED && strcmp(r.fake_arm, "stun:repeats=1") == 0 &&
               r.arm_copies == 1,
               "экспортировано ровно измеренное число копий");
     }
@@ -674,11 +674,11 @@ int main(void) {
     {
         reset();
         g_alive = 1;   /* ни одного зонда — и всё равно не «помечен» */
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
-        d2k_voice_res r = d2k_voice_run(&o);
+        d2s_voice_res r = d2s_voice_run(&o);
         CHECK(r.marked == 0, "прогон без метки объявлен помеченным");
     }
 
@@ -691,13 +691,13 @@ int main(void) {
         g_answer_ip2 = g_ctl_ip;                /* и контроль жив */
         g_alive = 0;                            /* а поток клиента молчит */
         g_answer_with_pre = ip4(104, 16, 58, 99);
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
         o.mark = 0x2d;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_CLEAR && r.arm_len == 0 && g_pre_calls == 0,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_CLEAR && r.arm_len == 0 && g_pre_calls == 0,
               "прямой STUN-зонд к цели не выполнен до перебора приманок либо его ответ "
               "не остановил перебор");
     }
@@ -708,13 +708,13 @@ int main(void) {
         reset();
         g_err_ip = g_ctl_ip;
         g_alive = 0;
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = ip4(104, 16, 58, 99);
         o.port = 50003;
         o.mark = 0x2d;
-        d2k_voice_res r = d2k_voice_run(&o);
-        CHECK(r.verdict == D2K_VOICE_UNMEASURED,
+        d2s_voice_res r = d2s_voice_run(&o);
+        CHECK(r.verdict == D2S_VOICE_UNMEASURED,
               "ошибка отправки контрольного зонда названа «UDP не ходит»");
     }
 
@@ -723,12 +723,12 @@ int main(void) {
         reset();
         g_answer_ip = ip4(104, 16, 58, 99);
         g_marked_ok = 0;
-        d2k_voice_opt o;
+        d2s_voice_opt o;
         memset(&o, 0, sizeof o);
         o.ip = g_answer_ip;
         o.port = 50003;
         o.mark = 0x2d;
-        d2k_voice_res r = d2k_voice_run(&o);
+        d2s_voice_res r = d2s_voice_run(&o);
         CHECK(r.marked == 0, "метка не подтверждена, а прогон объявлен помеченным");
         CHECK(strstr(r.reason, "метк") != NULL || strstr(r.reason, "обход") != NULL,
               "непомеченный прогон обязан сказать о себе вслух");
@@ -741,7 +741,7 @@ int main(void) {
      * засчитывает чужой — через настоящий сокет, а не через договорённость
      * мока с собой. Мишень своя, на петле: сеть наружу тест не трогает. */
     {
-        d2k_voice_ask_hook = voice_ask_real();
+        d2s_voice_ask_hook = voice_ask_real();
         uint16_t port = 0;
         pthread_t th;
         int mode_ok = 1;
@@ -749,9 +749,9 @@ int main(void) {
         /* --- ответчик отвечает ПРАВИЛЬНО: зонд обязан засчитать 3/3 ------- */
         CHECK(stun_server_start(&th, &port, 1) == 0, "мишень STUN не поднялась");
         if (port) {
-            d2k_tally t = d2k_voice_ask_hook(ip4(127, 0, 0, 1), port, NULL, 0, 0,
-                                             1500, 0, D2K_VOICE_REPEATS, NULL);
-            CHECK(t.pass == D2K_VOICE_REPEATS,
+            d2s_tally t = d2s_voice_ask_hook(ip4(127, 0, 0, 1), port, NULL, 0, 0,
+                                             1500, 0, D2S_VOICE_REPEATS, NULL);
+            CHECK(t.pass == D2S_VOICE_REPEATS,
                   "настоящий ответ STUN не засчитан — оракул не узнаёт собственный запрос");
             CHECK(t.err == 0, "зонд не отправился");
             CHECK(t.marked == 0, "зонд без метки объявлен помеченным");
@@ -765,8 +765,8 @@ int main(void) {
         (void)mode_ok;
         CHECK(stun_server_start(&th, &port, 0) == 0, "мишень STUN не поднялась (второй раз)");
         if (port) {
-            d2k_tally t = d2k_voice_ask_hook(ip4(127, 0, 0, 1), port, NULL, 0, 0,
-                                             400, 0, D2K_VOICE_REPEATS, NULL);
+            d2s_tally t = d2s_voice_ask_hook(ip4(127, 0, 0, 1), port, NULL, 0, 0,
+                                             400, 0, D2S_VOICE_REPEATS, NULL);
             CHECK(t.pass == 0,
                   "ответ с чужим идентификатором засчитан за наш — доказательство подделано");
         }

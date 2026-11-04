@@ -32,9 +32,9 @@
 
 ### Task 1: Суффиксные границы и обучение
 
-**Files:** Create `core/domain.c`, `core/groups.c`, `core/include/d2k_domain.h`, `core/include/d2k_groups.h`, `core/test_domain.c`, `core/test_groups.c`, `core/data/public_suffix_list.dat`, `scripts/build-psl-index.py`; Modify `core/Makefile`.
+**Files:** Create `core/domain.c`, `core/groups.c`, `core/include/d2s_domain.h`, `core/include/d2s_groups.h`, `core/test_domain.c`, `core/test_groups.c`, `core/data/public_suffix_list.dat`, `scripts/build-psl-index.py`; Modify `core/Makefile`.
 
-**Interfaces:** `d2k_domain_base(const char *name, char out[256])` возвращает0 для допустимого registrable domain, иначе-1. `d2k_domain_member(name, suffix)` проверяет корень/поддомены по границе labels. `d2k_group_key` содержит transport/family/shape/probe_path/ech_origin; `d2k_group_observation` — name/key/plan_id/evidence/time. `d2k_group_learn(state, observation)` возвращает1 при изменении,0 без изменения,-1 при локальной ошибке; `d2k_group_match(state,name,key)` возвращает наиболее узкую активную группу либоNULL.
+**Interfaces:** `d2s_domain_base(const char *name, char out[256])` возвращает0 для допустимого registrable domain, иначе-1. `d2s_domain_member(name, suffix)` проверяет корень/поддомены по границе labels. `d2s_group_key` содержит transport/family/shape/probe_path/ech_origin; `d2s_group_observation` — name/key/plan_id/evidence/time. `d2s_group_learn(state, observation)` возвращает1 при изменении,0 без изменения,-1 при локальной ошибке; `d2s_group_match(state,name,key)` возвращает наиболее узкую активную группу либоNULL.
 
 - [ ] Написать падающие тесты co.uk, private suffix, wildcard/exception, trailing-dot/case, IP, invalid label и неизвестного suffix; один meet не создаёт группу, повтор одного имени не даёт три голоса.
 - [ ] Запустить `make -C core test-domain test-groups`, зафиксировать ожидаемые ошибки отсутствующих реализаций.
@@ -43,9 +43,9 @@
 
 ### Task 2: Сохранение обучения
 
-**Files:** Modify `core/include/d2k_catalog.h`, `core/catalog.c`, `core/test_catalog.c`; add `core/test_groups_catalog.c`, Makefile target `test-groups-catalog`.
+**Files:** Modify `core/include/d2s_catalog.h`, `core/catalog.c`, `core/test_catalog.c`; add `core/test_groups_catalog.c`, Makefile target `test-groups-catalog`.
 
-**Interfaces:** Каталог владеет `d2k_group_state`; load/save/free включают optional `domain_groups` и `domain_observations`. Группы ссылаются на существующий plan_id; отсутствующий/выключенный план не активируется. Старый JSON без новых полей сохраняет точные привязки как есть.
+**Interfaces:** Каталог владеет `d2s_group_state`; load/save/free включают optional `domain_groups` и `domain_observations`. Группы ссылаются на существующий plan_id; отсутствующий/выключенный план не активируется. Старый JSON без новых полей сохраняет точные привязки как есть.
 
 - [ ] Написать падающий roundtrip: группа/отрицательная улика/исключение/контексты переживают save/load; старые level3 не становятся BLOCKED_CONFIRMED автоматически.
 - [ ] Добавить ограниченный parser/writer/free. Тестировать malformed/oversized/unknown enum, dangling plan, выделения при ошибке и полный unknown-old JSON.
@@ -53,9 +53,9 @@
 
 ### Task 3: Суффиксное исполнение и ctl
 
-**Files:** Modify `datapath/plans.c`, `datapath/include/d2k_plans.h`, `datapath/include/d2k_ctl.h`, `datapath/ctlsrv.c`, `datapath/session.c`, `core/link.c`, `core/include/d2k_link.h`, tests plans/ctl/session/link.
+**Files:** Modify `datapath/plans.c`, `datapath/include/d2s_plans.h`, `datapath/include/d2s_ctl.h`, `datapath/ctlsrv.c`, `datapath/session.c`, `core/link.c`, `core/include/d2s_link.h`, tests plans/ctl/session/link.
 
-**Interfaces:** `d2k_plantab_set_suffix_family(tab,name,len,now_ns,plan,shape,family)` принимает ownership плана на успехе по существующей convention; `d2k_plantab_del_suffix_family(tab,name,len,transport,shape,family)` удаляет только этот ключ. `d2k_plantab_set_bypass_family(tab,name,len,transport,shape,family)` — точное явное исключение. Добавить SET_SUFFIX/DEL_SUFFIX/SET_BYPASS/DEL_BYPASS и helpers link с теми же полями. SET_SUFFIX wire: length/name/shape/family/TLV; delete/bypass: length/name/transport/shape/family. Использовать свободные номера после сверки enum, не менять смысл старых команд.
+**Interfaces:** `d2s_plantab_set_suffix_family(tab,name,len,now_ns,plan,shape,family)` принимает ownership плана на успехе по существующей convention; `d2s_plantab_del_suffix_family(tab,name,len,transport,shape,family)` удаляет только этот ключ. `d2s_plantab_set_bypass_family(tab,name,len,transport,shape,family)` — точное явное исключение. Добавить SET_SUFFIX/DEL_SUFFIX/SET_BYPASS/DEL_BYPASS и helpers link с теми же полями. SET_SUFFIX wire: length/name/shape/family/TLV; delete/bypass: length/name/transport/shape/family. Использовать свободные номера после сверки enum, не менять смысл старых команд.
 
 - [ ] Падающие тесты: ранее не виденный rr получает план сразу, без нового slot на имя; evilgooglevideo.com не совпадает; exact override/bypass выше suffix; самый длинный suffix побеждает; root coverage явно включена.
 - [ ] Добавить отдельную ограниченную таблицу групп без malloc на пакетном пути. Ownership/free/revision и ошибки ACK покрываются тестами. Exact trial выше точного правила и группы; baseline-mark пакеты обходят постоянные правила как прежде.
@@ -64,9 +64,9 @@
 
 ### Task 4: Обучение из реальных исходов и lifecycle
 
-**Files:** Modify `core/sched.c`, `core/include/d2k_sched.h`, `core/test_sched.c`, `core/test_catalog_sync.c`.
+**Files:** Modify `core/sched.c`, `core/include/d2s_sched.h`, `core/test_sched.c`, `core/test_catalog_sync.c`.
 
-**Interfaces:** Существующие точки `verify_confirm`, ветка CLEAR и `d2k_sched_sync_step` вызывают Task1/2. BLOCKED_CONFIRMED получает только доказанную блокировку и собственный APPLIED плюс принятый прикладной verifier; DIRECT_CLEAR — успешный прямой опыт, не один внешний TLS record. При формировании группы controller синхронизирует suffix; новый член не создаёт задачу или запись каталога от факта наследования.
+**Interfaces:** Существующие точки `verify_confirm`, ветка CLEAR и `d2s_sched_sync_step` вызывают Task1/2. BLOCKED_CONFIRMED получает только доказанную блокировку и собственный APPLIED плюс принятый прикладной verifier; DIRECT_CLEAR — успешный прямой опыт, не один внешний TLS record. При формировании группы controller синхронизирует suffix; новый член не создаёт задачу или запись каталога от факта наследования.
 
 - [ ] Падающий сценарий3 целей обучает группу; четвёртая проходит first-flow без вызова measure/verify; после нового sched+sync пятая также проходит немедленно.
 - [ ] Подключить исходы, атомарное сохранение и очередной sync. Не превращать исторический успех кандидата без block proof в учебный голос. Не добавлять фоновое массовое измерение.

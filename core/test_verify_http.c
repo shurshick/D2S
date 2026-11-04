@@ -58,7 +58,7 @@ static size_t h3_headers_frame(uint8_t *out, size_t section_len) {
 /* Задача 44, раунд 1 (I1): ответ HTTP/3 идёт через НАСТОЯЩЕЕ соединение
    quicconn с ключами из постоянного секрета: проверяется то, сколько байт
    потока оно удерживает, а не поддельный приёмник. */
-static d2k_qc *real_h3_conn(int *server, struct sockaddr_in *client_addr) {
+static d2s_qc *real_h3_conn(int *server, struct sockaddr_in *client_addr) {
     int s = socket(AF_INET, SOCK_DGRAM, 0);
     assert(s >= 0);
     int rb = 1 << 20;
@@ -76,15 +76,15 @@ static d2k_qc *real_h3_conn(int *server, struct sockaddr_in *client_addr) {
     assert(connect(fd, (struct sockaddr *)&a, sizeof a) == 0);
     len = sizeof *client_addr;
     assert(getsockname(fd, (struct sockaddr *)client_addr, &len) == 0);
-    d2k_qc *c = calloc(1, sizeof *c);
+    d2s_qc *c = calloc(1, sizeof *c);
     assert(c);
-    c->fd = fd; c->peer_name = -1; c->version = D2K_QW_V1;
+    c->fd = fd; c->peer_name = -1; c->version = D2S_QW_V1;
     c->dcid_len = 8; memset(c->dcid, 0x5a, 8);
     c->scid_len = 8; memset(c->scid, 0x3c, 8);
     uint8_t secret[32];
     memset(secret, 0x42, sizeof secret);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].tx) == 0);
-    assert(d2k_qw_keys_from_secret(c->version, secret, &c->lv[D2K_QW_LEVEL_APP].rx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].tx) == 0);
+    assert(d2s_qw_keys_from_secret(c->version, secret, &c->lv[D2S_QW_LEVEL_APP].rx) == 0);
     *server = s;
     return c;
 }
@@ -92,21 +92,21 @@ static d2k_qc *real_h3_conn(int *server, struct sockaddr_in *client_addr) {
 static void real_h3_serve(int server, const struct sockaddr_in *to, const uint8_t *data, size_t n) {
     uint8_t secret[32];
     memset(secret, 0x42, sizeof secret);
-    d2k_qw_keys sk;
-    assert(d2k_qw_keys_from_secret(D2K_QW_V1, secret, &sk) == 0);
+    d2s_qw_keys sk;
+    assert(d2s_qw_keys_from_secret(D2S_QW_V1, secret, &sk) == 0);
     uint64_t pn = 0;
     for (size_t off = 0; off < n; ) {
         size_t take = n - off > 1100 ? 1100 : n - off;
         uint8_t fr[1200], hdr[16], pkt[1500];
         size_t o = 0;
         fr[o++] = 0x0e; /* STREAM: OFF | LEN, без FIN */
-        o += d2k_qw_varint_write(fr + o, sizeof fr - o, 0);
-        o += d2k_qw_varint_write(fr + o, sizeof fr - o, off);
-        o += d2k_qw_varint_write(fr + o, sizeof fr - o, take);
+        o += d2s_qw_varint_write(fr + o, sizeof fr - o, 0);
+        o += d2s_qw_varint_write(fr + o, sizeof fr - o, off);
+        o += d2s_qw_varint_write(fr + o, sizeof fr - o, take);
         memcpy(fr + o, data + off, take); o += take;
         hdr[0] = 0x40; memset(hdr + 1, 0x3c, 8);
-        size_t pl = d2k_qw_pn_len(pn, -1);
-        size_t m = d2k_qw_seal(&sk, 0, hdr, 9, pn, pl, fr, o, pkt, sizeof pkt);
+        size_t pl = d2s_qw_pn_len(pn, -1);
+        size_t m = d2s_qw_seal(&sk, 0, hdr, 9, pn, pl, fr, o, pkt, sizeof pkt);
         assert(m > 0);
         assert(sendto(server, pkt, m, 0, (const struct sockaddr *)to, sizeof *to) == (ssize_t)m);
         pn++; off += take;
@@ -235,12 +235,12 @@ static int budget_checks(void) {
         k.resp = r403; k.mss = 1400; k.pk = 6; /* рукопожатие: 6 пакетов с данными */
         k.cut_at = fake_first ? 0 : 25;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
-        r.level = D2K_VER_HANDSHAKE;
+        d2s_ver_result r = {0}; char err[200] = "";
+        r.level = D2S_VER_HANDSHAKE;
         request_page_budget(ka_read, ka_write, &k, "cdn.discordapp.com", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        int want = fake_first ? D2K_BUDGET_PASSED : D2K_BUDGET_CUT;
-        if (r.level != D2K_VER_APPLICATION || r.status != 403 || r.budget != want ||
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        int want = fake_first ? D2S_BUDGET_PASSED : D2S_BUDGET_CUT;
+        if (r.level != D2S_VER_APPLICATION || r.status != 403 || r.budget != want ||
             r.budget_need != 50 || (fake_first && r.budget_packets < 50) ||
             (!fake_first && (r.budget_packets < 25 || r.budget_packets >= 50)) ||
             r.budget_requests < 2 || !r.budget_note[0]) {
@@ -258,11 +258,11 @@ static int budget_checks(void) {
         static ka_srv k; memset(&k, 0, sizeof k);
         k.resp = r404; k.mss = 1400; k.pk = 6; k.cut_at = cut ? 25 : 0;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
-        r.level = D2K_VER_HANDSHAKE;
+        d2s_ver_result r = {0}; char err[200] = "";
+        r.level = D2S_VER_HANDSHAKE;
         request_page_budget(ka_read, ka_write, &k, "gateway.discord.gg", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.budget != (cut ? D2K_BUDGET_CUT : D2K_BUDGET_PASSED) ||
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.budget != (cut ? D2S_BUDGET_CUT : D2S_BUDGET_PASSED) ||
             r.budget_requests < (cut ? 9u : 20u)) {
             fprintf(stderr, "budget 404 cut=%d: budget %d pk %u req %u [%s]\n", cut, r.budget,
                     r.budget_packets, r.budget_requests, r.budget_note); fails++;
@@ -288,10 +288,10 @@ static int budget_checks(void) {
         k.resp = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 2\r\n\r\nok";
         k.mss = 1400; k.pk = 6;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.level != D2K_VER_APPLICATION || r.budget != D2K_BUDGET_NOT_APPLICABLE ||
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.level != D2S_VER_APPLICATION || r.budget != D2S_BUDGET_NOT_APPLICABLE ||
             r.budget_requests != 1 || !strstr(r.budget_note, "keep-alive")) {
             fprintf(stderr, "budget conn-close: level %d budget %d req %u [%s]\n",
                     r.level, r.budget, r.budget_requests, r.budget_note); fails++;
@@ -302,10 +302,10 @@ static int budget_checks(void) {
         k.resp = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
         k.mss = 1400; k.pk = 6; k.close_after = 3;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.level != D2K_VER_APPLICATION || r.budget != D2K_BUDGET_NOT_APPLICABLE ||
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.level != D2S_VER_APPLICATION || r.budget != D2S_BUDGET_NOT_APPLICABLE ||
             r.budget_requests != 4) {
             fprintf(stderr, "budget server close: level %d budget %d req %u [%s]\n",
                     r.level, r.budget, r.budget_requests, r.budget_note); fails++;
@@ -317,10 +317,10 @@ static int budget_checks(void) {
         static ka_srv k; memset(&k, 0, sizeof k);
         k.resp = r403; k.mss = 1400; k.pk = 6;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 2, NULL,
                             60, 0, &io, 0, &r, err, sizeof err);
-        if (r.budget != D2K_BUDGET_NOT_CHECKED || k.answered != 1) {
+        if (r.budget != D2S_BUDGET_NOT_CHECKED || k.answered != 1) {
             fprintf(stderr, "budget off: budget %d answered %d\n", r.budget, k.answered); fails++;
         }
     }
@@ -332,10 +332,10 @@ static int budget_checks(void) {
         static ka_srv k; memset(&k, 0, sizeof k);
         k.resp = big; k.mss = 1400; k.pk = 6;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 0, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.budget != D2K_BUDGET_PASSED || r.budget_requests != 1 || k.answered != 1) {
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.budget != D2S_BUDGET_PASSED || r.budget_requests != 1 || k.answered != 1) {
             fprintf(stderr, "budget big: budget %d req %u\n", r.budget, r.budget_requests); fails++;
         }
     }
@@ -346,10 +346,10 @@ static int budget_checks(void) {
         k.resp = r403; k.mss = 1400; k.pk = 6;
         if (kind) k.bad_after = 2; else k.alert_after = 2;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.level != D2K_VER_APPLICATION || r.budget != D2K_BUDGET_NOT_APPLICABLE) {
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.level != D2S_VER_APPLICATION || r.budget != D2S_BUDGET_NOT_APPLICABLE) {
             fprintf(stderr, "budget non-silence kind=%d: budget %d [%s]\n", kind, r.budget,
                     r.budget_note); fails++;
         }
@@ -360,10 +360,10 @@ static int budget_checks(void) {
         static ka_srv k; memset(&k, 0, sizeof k);
         k.resp = r403; k.mss = 1400; k.pk = 6; k.nocount = 1;
         budget_io io = { ka_packets, ka_spoke, &k };
-        d2k_ver_result r = {0}; char err[200] = "";
+        d2s_ver_result r = {0}; char err[200] = "";
         request_page_budget(ka_read, ka_write, &k, "example.com", 2, NULL,
-                            60, 0, &io, D2K_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.budget != D2K_BUDGET_NOT_APPLICABLE || !r.budget_uncountable) {
+                            60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
+        if (r.budget != D2S_BUDGET_NOT_APPLICABLE || !r.budget_uncountable) {
             fprintf(stderr, "budget uncountable: budget %d flag %d\n", r.budget,
                     r.budget_uncountable); fails++;
         }
@@ -376,10 +376,10 @@ static int budget_checks(void) {
         q.dg = 3; q.pk = 5 + 1 + 3; q.fin = 1; q.bytes = 1800; q.answered = 1;
         q.cut_at = pass ? 0 : 25;
         quic_budget_io io = { q_request, q_recv, q_progress, q_packets, &q };
-        d2k_ver_result r = {0};
-        r.level = D2K_VER_APPLICATION; r.status = 200;
-        budget_quic(&io, 50, D2K_BUDGET_FIELD_PACKETS, &r);
-        if (r.budget != (pass ? D2K_BUDGET_PASSED : D2K_BUDGET_CUT) ||
+        d2s_ver_result r = {0};
+        r.level = D2S_VER_APPLICATION; r.status = 200;
+        budget_quic(&io, 50, D2S_BUDGET_FIELD_PACKETS, &r);
+        if (r.budget != (pass ? D2S_BUDGET_PASSED : D2S_BUDGET_CUT) ||
             r.budget_requests < 4 || q.last_sid == 0 || (q.last_sid & 3) != 0) {
             fprintf(stderr, "budget quic pass=%d: budget %d pk %u req %u sid %llu [%s]\n", pass,
                     r.budget, r.budget_packets, r.budget_requests,
@@ -391,10 +391,10 @@ static int budget_checks(void) {
         q.flen = h3_headers_frame(q.frame, 3);
         q.dg = 3; q.pk = 9; q.fin = 1; q.bytes = 1800; q.answered = 1; q.close_after = 2;
         quic_budget_io io = { q_request, q_recv, q_progress, q_packets, &q };
-        d2k_ver_result r = {0};
-        r.level = D2K_VER_APPLICATION; r.status = 200;
-        budget_quic(&io, 50, D2K_BUDGET_FIELD_PACKETS, &r);
-        if (r.budget != D2K_BUDGET_NOT_APPLICABLE) {
+        d2s_ver_result r = {0};
+        r.level = D2S_VER_APPLICATION; r.status = 200;
+        budget_quic(&io, 50, D2S_BUDGET_FIELD_PACKETS, &r);
+        if (r.budget != D2S_BUDGET_NOT_APPLICABLE) {
             fprintf(stderr, "budget quic close: budget %d [%s]\n", r.budget, r.budget_note); fails++;
         }
     }
@@ -407,12 +407,12 @@ static int budget_checks(void) {
         q.flen = h3_headers_frame(q.frame, 3);
         q.dg = 3; q.pk = 9; q.fin = 1; q.bytes = 1800; q.answered = 1; q.oneway_after = 2;
         quic_budget_io io = { q_request, q_recv, q_progress, q_packets, &q };
-        d2k_ver_result r = {0};
-        r.level = D2K_VER_APPLICATION; r.status = 200;
-        budget_quic(&io, 50, D2K_BUDGET_FIELD_PACKETS, &r);
+        d2s_ver_result r = {0};
+        r.level = D2S_VER_APPLICATION; r.status = 200;
+        budget_quic(&io, 50, D2S_BUDGET_FIELD_PACKETS, &r);
         /* Направление здесь не называется: у этого интерфейса нет
            подтверждений наших пакетов, он видит только остановку ответа. */
-        if (r.budget != D2K_BUDGET_CUT) {
+        if (r.budget != D2S_BUDGET_CUT) {
             fprintf(stderr, "budget quic oneway: budget %d pk %u/%u req %u [%s]\n", r.budget,
                     r.budget_packets, r.budget_need, r.budget_requests, r.budget_note); fails++;
         }
@@ -421,33 +421,33 @@ static int budget_checks(void) {
 }
 
 int main(void) {
-    struct { const char *reply; d2k_ver_level level; } cases[] = {
-        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nContent-Length: 0\r\n\r\n", D2K_VER_APPLICATION},
-        {"HTTP/1.1 302 Found\r\nLocation: https://warning.rt.ru/\r\nContent-Length: 0\r\n\r\n", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 302 Found\r\nLocation: //eais.rkn.gov.ru/\r\nContent-Length: 0\r\n\r\n", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n7\r\naccess \r\nE\r\nblocked by rkn\r\n0\r\n\r\n", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Encoding: gzip\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2K_VER_APPLICATION},
-        {"HTTP/1.1 403 Forbidden\r\nLink: <https://eais.rkn.gov.ru/>\r\nContent-Length: 0\r\n\r\n", D2K_VER_APPLICATION},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nok", D2K_VER_APPLICATION},
-        {"HTTP/1.1 451 Unavailable\r\nContent-Length: 0\r\n\r\n", D2K_VER_DENIED},
-        {"HTTP/1.1 403 Forbidden\r\ncf-mitigated: challenge\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2K_VER_CHALLENGE},
-        {"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nshort", D2K_VER_HANDSHAKE},
-        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nContent-Length: 20\r\n\r\nshort", D2K_VER_HANDSHAKE},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 14\r\n", D2K_VER_HANDSHAKE},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 15\r\n\r\neais.rkn.gov.ru", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 30\r\n\r\neais.rkn.gov.ru", D2K_VER_HANDSHAKE},
-        {"HTTP/1.1 302 Found\r\nLocation: https://warning.rt.ru/\r\nLocation: https://www.google.com/\r\nContent-Length: 0\r\n\r\n", D2K_VER_BLOCKPAGE},
-        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nLocation: https://warning.rt.ru/\r\nContent-Length: 0\r\n\r\n", D2K_VER_HANDSHAKE},
-        {"HTTP/1.1 451 Unavailable\r\nContent-Length: nope\r\n\r\n", D2K_VER_DENIED},
-        {"HTTP/1.1 451 Unavailable\r\nContent-Length: 0\r\nContent-Length: 4\r\n\r\n", D2K_VER_DENIED},
+    struct { const char *reply; d2s_ver_level level; } cases[] = {
+        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nContent-Length: 0\r\n\r\n", D2S_VER_APPLICATION},
+        {"HTTP/1.1 302 Found\r\nLocation: https://warning.rt.ru/\r\nContent-Length: 0\r\n\r\n", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 302 Found\r\nLocation: //eais.rkn.gov.ru/\r\nContent-Length: 0\r\n\r\n", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 403 Forbidden\r\nTransfer-Encoding: chunked\r\n\r\n7\r\naccess \r\nE\r\nblocked by rkn\r\n0\r\n\r\n", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Encoding: gzip\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2S_VER_APPLICATION},
+        {"HTTP/1.1 403 Forbidden\r\nLink: <https://eais.rkn.gov.ru/>\r\nContent-Length: 0\r\n\r\n", D2S_VER_APPLICATION},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 2\r\n\r\nok", D2S_VER_APPLICATION},
+        {"HTTP/1.1 451 Unavailable\r\nContent-Length: 0\r\n\r\n", D2S_VER_DENIED},
+        {"HTTP/1.1 403 Forbidden\r\ncf-mitigated: challenge\r\nContent-Length: 21\r\n\r\naccess blocked by rkn", D2S_VER_CHALLENGE},
+        {"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\nshort", D2S_VER_HANDSHAKE},
+        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nContent-Length: 20\r\n\r\nshort", D2S_VER_HANDSHAKE},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 14\r\n", D2S_VER_HANDSHAKE},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 15\r\n\r\neais.rkn.gov.ru", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 403 Forbidden\r\nContent-Length: 30\r\n\r\neais.rkn.gov.ru", D2S_VER_HANDSHAKE},
+        {"HTTP/1.1 302 Found\r\nLocation: https://warning.rt.ru/\r\nLocation: https://www.google.com/\r\nContent-Length: 0\r\n\r\n", D2S_VER_BLOCKPAGE},
+        {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nLocation: https://warning.rt.ru/\r\nContent-Length: 0\r\n\r\n", D2S_VER_HANDSHAKE},
+        {"HTTP/1.1 451 Unavailable\r\nContent-Length: nope\r\n\r\n", D2S_VER_DENIED},
+        {"HTTP/1.1 451 Unavailable\r\nContent-Length: 0\r\nContent-Length: 4\r\n\r\n", D2S_VER_DENIED},
     };
     int fails = 0;
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
         for (size_t fragment = 1; fragment <= 512; fragment *= 8) {
             fixture f = {cases[i].reply, 0, fragment, 0, 0};
-            d2k_ver_result r = {0}; char err[200] = "";
-            r.level = D2K_VER_HANDSHAKE; r.name_ok = 0;
+            d2s_ver_result r = {0}; char err[200] = "";
+            r.level = D2S_VER_HANDSHAKE; r.name_ok = 0;
             request_complete_page(fixture_read, fixture_write, &f, "googlevideo.com",
                 0, NULL, 1000, 0, &r, err, sizeof err);
             if (r.level != cases[i].level || r.name_ok != 0) {
@@ -456,35 +456,35 @@ int main(void) {
             }
             if (i == 0) {
                 fixture css = {cases[i].reply, 0, fragment, 0, 0};
-                memset(&r, 0, sizeof r); r.level = D2K_VER_HANDSHAKE;
+                memset(&r, 0, sizeof r); r.level = D2S_VER_HANDSHAKE;
                 request_complete_page(fixture_read, fixture_write, &css, "googlevideo.com",
                     0, "/assets/app.css", 1000, 0, &r, err, sizeof err);
-                if (r.level == D2K_VER_APPLICATION) {
+                if (r.level == D2S_VER_APPLICATION) {
                     fprintf(stderr, "cross-origin redirect accepted as stylesheet\n"); fails++;
                 }
             }
         }
     }
-    struct { int code; d2k_ver_level before, after; } ech[] = {
-        {451,D2K_VER_DENIED,D2K_VER_DENIED},
-        {403,D2K_VER_BLOCKPAGE,D2K_VER_BLOCKPAGE},
+    struct { int code; d2s_ver_level before, after; } ech[] = {
+        {451,D2S_VER_DENIED,D2S_VER_DENIED},
+        {403,D2S_VER_BLOCKPAGE,D2S_VER_BLOCKPAGE},
         /* Поле 04.10: корень свидетеля cdn.discordapp.com всегда отвечает
            403 — это ответ приложения через ECH, а не антибот (challenge
            распознаётся по своим признакам, cf-mitigated). Пауза — только
            на явное ограничение частоты. */
-        {403,D2K_VER_APPLICATION,D2K_VER_APPLICATION},
-        {404,D2K_VER_APPLICATION,D2K_VER_APPLICATION},
-        {429,D2K_VER_APPLICATION,D2K_VER_CHALLENGE},
-        {200,D2K_VER_APPLICATION,D2K_VER_APPLICATION},
+        {403,D2S_VER_APPLICATION,D2S_VER_APPLICATION},
+        {404,D2S_VER_APPLICATION,D2S_VER_APPLICATION},
+        {429,D2S_VER_APPLICATION,D2S_VER_CHALLENGE},
+        {200,D2S_VER_APPLICATION,D2S_VER_APPLICATION},
     };
     for (size_t i=0;i<sizeof ech/sizeof ech[0];i++) {
-        d2k_ver_result r={0}; r.status=ech[i].code; r.level=ech[i].before;
+        d2s_ver_result r={0}; r.status=ech[i].code; r.level=ech[i].before;
         ech_http_denial(&r);
         if (r.level != ech[i].after) { fprintf(stderr,"ECH denial case %zu failed\n",i); fails++; }
     }
     /* Задача 42: этап «рукопожатие прошло, приложение молчит» назван прямо. */
     {
-        d2k_ver_result r = {0};
+        d2s_ver_result r = {0};
         quic_app_silent(&r, 0, 4812, NULL);
         if (!strstr(r.reason, "рукопожатие прошло, приложение молчит, получено 0 байт") ||
             !strstr(r.reason, "4812")) {
@@ -524,19 +524,19 @@ int main(void) {
         size_t frags[] = {1, 7, 1460, sizeof big};
         for (size_t k = 0; k < 4; k++) {
             fixture f = {big, 0, frags[k], 0, 0};
-            d2k_ver_result r = {0}; char err[200] = "";
-            r.level = D2K_VER_HANDSHAKE;
+            d2s_ver_result r = {0}; char err[200] = "";
+            r.level = D2S_VER_HANDSHAKE;
             request_complete_page(fixture_read, fixture_write, &f, "web.whatsapp.com",
                 2, NULL, 1000, 0, &r, err, sizeof err);
-            if (r.level != D2K_VER_APPLICATION || r.status != 200 || !r.body_complete ||
+            if (r.level != D2S_VER_APPLICATION || r.status != 200 || !r.body_complete ||
                 r.local_limit) {
                 fprintf(stderr, "long headers, fragment %zu: level %d status %d (%s)\n",
                     frags[k], r.level, r.status, r.reason); fails++;
             }
         }
-        /* Предел: заголовки больше D2K_VERIFY_HEADER_LIMIT — отказ с названием
+        /* Предел: заголовки больше D2S_VERIFY_HEADER_LIMIT — отказ с названием
            предела, и это наш предел, а не улика с провода. */
-        static char huge[D2K_VERIFY_HEADER_LIMIT + 4096];
+        static char huge[D2S_VERIFY_HEADER_LIMIT + 4096];
         size_t h = (size_t)snprintf(huge, sizeof huge, "HTTP/1.1 200 OK\r\n");
         while (h < sizeof huge - 600) {
             h += (size_t)snprintf(huge + h, sizeof huge - h, "x-pad: ");
@@ -545,13 +545,13 @@ int main(void) {
         }
         huge[h] = '\0';
         fixture hf = {huge, 0, 1460, 0, 0};
-        d2k_ver_result r = {0}; char err[200] = "";
-        r.level = D2K_VER_HANDSHAKE;
+        d2s_ver_result r = {0}; char err[200] = "";
+        r.level = D2S_VER_HANDSHAKE;
         request_complete_page(fixture_read, fixture_write, &hf, "web.whatsapp.com",
             2, NULL, 1000, 0, &r, err, sizeof err);
         char want[64];
-        snprintf(want, sizeof want, "длиннее %d байт", D2K_VERIFY_HEADER_LIMIT);
-        if (r.level == D2K_VER_APPLICATION || !strstr(r.reason, "заголовки ответа") ||
+        snprintf(want, sizeof want, "длиннее %d байт", D2S_VERIFY_HEADER_LIMIT);
+        if (r.level == D2S_VER_APPLICATION || !strstr(r.reason, "заголовки ответа") ||
             !strstr(r.reason, want) || !r.local_limit) {
             fprintf(stderr, "header limit: level %d local %d (%s)\n",
                 r.level, r.local_limit, r.reason); fails++;
@@ -569,12 +569,12 @@ int main(void) {
         };
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
             fixture f = {bad[i].reply, 0, 64, bad[i].eof_err, i == 1 ? 20 : 0};
-            d2k_ver_result r = {0}; char err[200] = "";
-            r.level = D2K_VER_HANDSHAKE;
+            d2s_ver_result r = {0}; char err[200] = "";
+            r.level = D2S_VER_HANDSHAKE;
             request_complete_page(fixture_read, fixture_write, &f, "example.com",
                 0, NULL, 1000, 0, &r, err, sizeof err);
             const char *colon = strstr(r.reason, "ответа: ");
-            if (r.level == D2K_VER_APPLICATION || !colon || colon[strlen("ответа: ")] == '\0' ||
+            if (r.level == D2S_VER_APPLICATION || !colon || colon[strlen("ответа: ")] == '\0' ||
                 !strstr(r.reason, bad[i].needle) || r.local_limit) {
                 fprintf(stderr, "failure reason %zu: [%s]\n", i, r.reason); fails++;
             }
@@ -583,7 +583,7 @@ int main(void) {
     /* Задача 44: заголовки HTTP/3 длиннее 8 КБ разбираются; сверх предела —
        названная причина и признак нашего предела. */
     {
-        static uint8_t frame[D2K_VERIFY_HEADER_LIMIT + 8192], rx[D2K_VERIFY_HEADER_LIMIT];
+        static uint8_t frame[D2S_VERIFY_HEADER_LIMIT + 8192], rx[D2S_VERIFY_HEADER_LIMIT];
         size_t frames[] = {8600, 20000};
         for (size_t k = 0; k < 2; k++) {
             size_t fl = h3_headers_frame(frame, frames[k]);
@@ -595,7 +595,7 @@ int main(void) {
                 fprintf(stderr, "H3 headers %zu: too_long %d status %d\n", frames[k], too_long, st); fails++;
             }
         }
-        size_t fl = h3_headers_frame(frame, D2K_VERIFY_HEADER_LIMIT + 4000);
+        size_t fl = h3_headers_frame(frame, D2S_VERIFY_HEADER_LIMIT + 4000);
         h3_fixture f = {frame, fl, 0, 4096};
         size_t got = 0; int st = 0, closed = 0; char err[100] = "";
         int too_long = h3_read_headers(h3_fixture_recv, &f, rx, sizeof rx,
@@ -607,14 +607,14 @@ int main(void) {
     /* Задача 44, раунд 1 (I1): через настоящее соединение заголовки HTTP/3
        ~20 КБ проходят, а больше предела — наш предел, не «приложение молчит». */
     {
-        static uint8_t frame[D2K_VERIFY_HEADER_LIMIT + 8192], rx[D2K_VERIFY_HEADER_LIMIT];
-        size_t sizes[] = {20000, D2K_VERIFY_HEADER_LIMIT + 4000};
+        static uint8_t frame[D2S_VERIFY_HEADER_LIMIT + 8192], rx[D2S_VERIFY_HEADER_LIMIT];
+        size_t sizes[] = {20000, D2S_VERIFY_HEADER_LIMIT + 4000};
         for (size_t k = 0; k < 2; k++) {
             int server = -1; struct sockaddr_in to;
-            d2k_qc *c = real_h3_conn(&server, &to);
+            d2s_qc *c = real_h3_conn(&server, &to);
             char err[100] = "";
             static const uint8_t req[] = {1, 2, 3};
-            assert(d2k_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0);
+            assert(d2s_qc_stream_send(c, 0, req, sizeof req, 1, err, sizeof err) == 0);
             size_t fl = h3_headers_frame(frame, sizes[k]);
             real_h3_serve(server, &to, frame, fl);
             quic_recv_ctx rc = { c };
@@ -625,7 +625,7 @@ int main(void) {
                 fprintf(stderr, "real quicconn H3 headers %zu: too_long %d status %d got %zu\n",
                     sizes[k], too_long, st, got); fails++;
             }
-            d2k_qc_close(c); close(server);
+            d2s_qc_close(c); close(server);
         }
     }
     /* Раунд 1: сбои чтения ТЕЛА тоже называют причину (после двоеточия не пусто). */
@@ -641,12 +641,12 @@ int main(void) {
         };
         for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
             fixture f = {bad[i].reply, 0, 64, bad[i].eof_err, 0};
-            d2k_ver_result r = {0}; char err[200] = "";
-            r.level = D2K_VER_HANDSHAKE;
+            d2s_ver_result r = {0}; char err[200] = "";
+            r.level = D2S_VER_HANDSHAKE;
             request_complete_page(fixture_read, fixture_write, &f, "example.com",
                 0, NULL, 1000, 0, &r, err, sizeof err);
             const char *colon = strstr(r.reason, "байт): ");
-            if (r.level == D2K_VER_APPLICATION || !colon || colon[strlen("байт): ")] == '\0' ||
+            if (r.level == D2S_VER_APPLICATION || !colon || colon[strlen("байт): ")] == '\0' ||
                 !strstr(r.reason, bad[i].needle) ||
                 r.local_limit != (strstr(bad[i].needle, "предел") != NULL)) {
                 fprintf(stderr, "body failure reason %zu: [%s] local %d\n", i, r.reason, r.local_limit); fails++;
@@ -670,11 +670,11 @@ int main(void) {
         size_t frags[] = {1, 7, 1460, sizeof early};
         for (size_t k = 0; k < 4; k++) {
             fixture f = {early, 0, frags[k], 0, 0};
-            d2k_ver_result r = {0}; char err[200] = "";
-            r.level = D2K_VER_HANDSHAKE;
+            d2s_ver_result r = {0}; char err[200] = "";
+            r.level = D2S_VER_HANDSHAKE;
             request_complete_page(fixture_read, fixture_write, &f, "example.com",
                 2, NULL, 1000, 0, &r, err, sizeof err);
-            if (r.level != D2K_VER_APPLICATION || r.status != 200 || !r.body_complete) {
+            if (r.level != D2S_VER_APPLICATION || r.status != 200 || !r.body_complete) {
                 fprintf(stderr, "1xx then long final, fragment %zu: level %d (%s)\n",
                     frags[k], r.level, r.reason); fails++;
             }

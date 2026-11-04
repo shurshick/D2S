@@ -47,12 +47,12 @@ Session/Plan/wire, что пробная и постоянная установ�
 ## Регрессы и равенство исполнения
 
 - Первоначальный policy-регресс до правки: make exit 2, 17 CHECK
-  (`/tmp/d2k-http-conflict-red.log`). Дополнительные регрессы области NAME и
+  (`/tmp/d2s-http-conflict-red.log`). Дополнительные регрессы области NAME и
   alias сначала дали по 2 CHECK. CHECK накапливает ошибки, не прерывает тест.
 - Окончательные тесты отдельно свежескомпилированы с `httpsearch.c` из
   `c5c6950`, без checkout и старого объектника этого модуля: search — 25
   CHECK, live — 2, runtime — 6; все три бинарника exit 1 после успешной
-  сборки. Логи `/tmp/d2k-http-conflict-baseline-test_http*-{build,run}.log`.
+  сборки. Логи `/tmp/d2s-http-conflict-baseline-test_http*-{build,run}.log`.
 - `test_http_live`: настоящий Session исполняет два запроса; наблюдатель
   получает полный первый 200, затем портал. Событие проходит production
   encoder, Unix control socket, decoder и HTTP controller. Точная установка
@@ -76,16 +76,16 @@ Session/Plan/wire, что пробная и постоянная установ�
 - `make -C core check` — exit 0 на окончательном коде, включая новый fault
   regression, production release arm64/mipsel, probe-plan (0 mismatches),
   UDP runtime (130 случаев, 19 вопросов, 0 failures), HTTP runtime/live.
-  Лог: `/tmp/d2k-http-conflict-core-check-final.log`. Предшествующий полный
+  Лог: `/tmp/d2s-http-conflict-core-check-final.log`. Предшествующий полный
   прогон также завершился, не прерывался; после последней правки выполнен
   этот новый полный запуск.
 - `make -C detect check` — exit 0;
-  `/tmp/d2k-http-conflict-detect-check.log`.
+  `/tmp/d2s-http-conflict-detect-check.log`.
 - `make -C datapath check` — exit 0;
-  `/tmp/d2k-http-conflict-datapath-check.log`.
+  `/tmp/d2s-http-conflict-datapath-check.log`.
 - `make -C core san-httpsearch`, `san-http-live`,
   `san-http-compare-failure` — exit 0, ASan/UBSan.
-  Логи `/tmp/d2k-http-conflict-san-{search-final2,live-final2,compare}.log`.
+  Логи `/tmp/d2s-http-conflict-san-{search-final2,live-final2,compare}.log`.
   Новый fault regression имеет отдельную sanitizer-цель и включён в `san`.
 - `git diff --check` и `git diff --cached --check` — чисто.
   В коммит входят только исходники, тесты и этот разбор. Два dirty arm64
@@ -93,7 +93,7 @@ Session/Plan/wire, что пробная и постоянная установ�
 
 ## Границы и приёмка поля
 
-История отрицательных свидетельств пока живёт только в процессе d2kc;
+История отрицательных свидетельств пока живёт только в процессе d2sc;
 она не сериализована. Перезапуск может её потерять. Нет отдельной адресной
 области постоянного HTTP-плана и протокола доказанного пересмотра этой
 истории после изменения пути. Это явные ограничения, а не завершённая

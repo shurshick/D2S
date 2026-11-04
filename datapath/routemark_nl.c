@@ -10,14 +10,14 @@
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
 
-#include "d2k_routemark.h"
+#include "d2s_routemark.h"
 
 typedef int (*dump_parse)(void *out, size_t cap, size_t *n, const uint8_t *buf,
                           size_t len, int32_t *kerr);
 
 static int parse_rules(void *out, size_t cap, size_t *n, const uint8_t *buf,
                        size_t len, int32_t *kerr) {
-    return d2k_routemark_parse(out, cap, n, buf, len, kerr);
+    return d2s_routemark_parse(out, cap, n, buf, len, kerr);
 }
 
 
@@ -58,12 +58,12 @@ static int dump(int fd, const uint8_t *req, size_t rl, const char *what,
     return -1;
 }
 
-static int dump_rules(int fd, uint8_t family, uint32_t seq, d2k_fwsel *sel,
+static int dump_rules(int fd, uint8_t family, uint32_t seq, d2s_fwsel *sel,
                       size_t *n, char *err, size_t errcap) {
     uint8_t req[64];
-    size_t rl = d2k_routemark_request(req, sizeof req, family, seq);
+    size_t rl = d2s_routemark_request(req, sizeof req, family, seq);
     return dump(fd, req, rl, family == 10 ? "RTM_GETRULE v6" : "RTM_GETRULE",
-                parse_rules, sel, D2K_ROUTEMARK_MAX, n, err, errcap);
+                parse_rules, sel, D2S_ROUTEMARK_MAX, n, err, errcap);
 }
 
 /* One RTM_GETROUTE lookup (review I-A: never a dump of every table).
@@ -73,7 +73,7 @@ static int lookup_route(int fd, uint8_t family, uint32_t seq, uint32_t *oifs,
                         size_t *n, char *err, size_t errcap) {
     const char *what = family == 10 ? "маршрут IPv6" : "маршрут IPv4";
     uint8_t req[64];
-    size_t rl = d2k_routemark_lookup_request(req, sizeof req, family, seq);
+    size_t rl = d2s_routemark_lookup_request(req, sizeof req, family, seq);
     struct sockaddr_nl to;
     memset(&to, 0, sizeof to);
     to.nl_family = AF_NETLINK;
@@ -90,7 +90,7 @@ static int lookup_route(int fd, uint8_t family, uint32_t seq, uint32_t *oifs,
             return -1;
         }
         int32_t kerr = 0;
-        int rc = d2k_routemark_lookup_parse(oifs, D2K_ROUTEMARK_OIF_MAX, n, buf,
+        int rc = d2s_routemark_lookup_parse(oifs, D2S_ROUTEMARK_OIF_MAX, n, buf,
                                             (size_t)got, &kerr);
         if (rc == 1) { return *n ? 0 : 2; }
         if (rc == 2) { *n = 0; return 3; }
@@ -127,16 +127,16 @@ static int dump_socket(char *err, size_t errcap) {
     return fd;
 }
 
-int d2k_routemark_load(d2k_routemark *r, d2k_routemark_status *st,
+int d2s_routemark_load(d2s_routemark *r, d2s_routemark_status *st,
                        int *routes4_ok, int *routes6_ok,
                        char *err, size_t errcap) {
-    d2k_routemark_status local;
+    d2s_routemark_status local;
     if (!st) { st = &local; }
     memset(st, 0, sizeof *st);
     if (routes4_ok) { *routes4_ok = 0; }
     if (routes6_ok) { *routes6_ok = 0; }
-    d2k_fwsel v4[D2K_ROUTEMARK_MAX], v6[D2K_ROUTEMARK_MAX];
-    uint32_t o4[D2K_ROUTEMARK_OIF_MAX], o6[D2K_ROUTEMARK_OIF_MAX];
+    d2s_fwsel v4[D2S_ROUTEMARK_MAX], v6[D2S_ROUTEMARK_MAX];
+    uint32_t o4[D2S_ROUTEMARK_OIF_MAX], o6[D2S_ROUTEMARK_OIF_MAX];
     size_t n4 = 0, n6 = 0, no4 = 0, no6 = 0;
     char e[4][128];
     int ok[4] = {0, 0, 0, 0};
@@ -159,13 +159,13 @@ int d2k_routemark_load(d2k_routemark *r, d2k_routemark_status *st,
         if (rc < 0) { close(fd); fd = -1; }
     }
     if (fd >= 0) { close(fd); }
-    int changed = d2k_routemark_merge(r, v4, n4, ok[0], v6, n6, ok[1], st) == 1;
+    int changed = d2s_routemark_merge(r, v4, n4, ok[0], v6, n6, ok[1], st) == 1;
     /* A route that names no device: no device gate for that family (the
        mark gate only) rather than gating everything (review minor). */
-    changed |= rr[2] == 2 ? d2k_routemark_clear_oifs(r, 2)
-                          : d2k_routemark_set_oifs(r, 2, o4, no4, ok[2]);
-    changed |= rr[3] == 2 ? d2k_routemark_clear_oifs(r, 10)
-                          : d2k_routemark_set_oifs(r, 10, o6, no6, ok[3]);
+    changed |= rr[2] == 2 ? d2s_routemark_clear_oifs(r, 2)
+                          : d2s_routemark_set_oifs(r, 2, o4, no4, ok[2]);
+    changed |= rr[3] == 2 ? d2s_routemark_clear_oifs(r, 10)
+                          : d2s_routemark_set_oifs(r, 10, o6, no6, ok[3]);
     if (routes4_ok) { *routes4_ok = rr[2] == 2 ? 2 : ok[2]; }
     if (routes6_ok) { *routes6_ok = rr[3] == 2 ? 2 : ok[3]; }
     /* The first failure names the problem. */
@@ -176,7 +176,7 @@ int d2k_routemark_load(d2k_routemark *r, d2k_routemark_status *st,
     return changed;
 }
 
-int d2k_routemark_watch_open(char *err, size_t errcap) {
+int d2s_routemark_watch_open(char *err, size_t errcap) {
     int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_CLOEXEC | SOCK_NONBLOCK, NETLINK_ROUTE);
     if (fd < 0) {
         snprintf(err, errcap, "rtnetlink (уведомления): %s", strerror(errno));
@@ -208,15 +208,15 @@ int d2k_routemark_watch_open(char *err, size_t errcap) {
     return fd;
 }
 
-int d2k_routemark_watch_drain(int fd) {
+int d2s_routemark_watch_drain(int fd) {
     static uint8_t buf[8192];
     int any = 0;
     /* Bounded per wake: a notification storm (route lists loading) must not
        hold the packet loop; what is left is read on the next wake. */
-    for (int reads = 0; reads < D2K_ROUTEMARK_WATCH_READS; reads++) {
+    for (int reads = 0; reads < D2S_ROUTEMARK_WATCH_READS; reads++) {
         ssize_t got = recv(fd, buf, sizeof buf, MSG_DONTWAIT);
         if (got > 0) {
-            if (!any) { any = d2k_routemark_watch_relevant(buf, (size_t)got); }
+            if (!any) { any = d2s_routemark_watch_relevant(buf, (size_t)got); }
             continue;
         }
         if (got < 0 && errno == EINTR) { continue; }

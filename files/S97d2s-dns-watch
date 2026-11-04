@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+umask 077
+PATH=/opt/sbin:/opt/bin:/sbin:/bin:/usr/sbin:/usr/bin
+export PATH
+. /opt/d2s/d2s-lan.sh
+BIN=/opt/sbin/d2s-dns-watch
+PID=/opt/d2s/run/d2s-dns-watch.pid
+IFACES=/opt/d2s/run/d2s-dns-watch.interfaces
+OUTPUT=/tmp/d2s/whatsapp-media-observed.txt
+running() {
+    [ -r "$PID" ] || return 1
+    pid=$(cat "$PID")
+    case "$pid" in ''|*[!0-9]*) return 1;; esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = d2s-dns-watch ]
+}
+stop() {
+    if running; then
+        start-stop-daemon -K -q -p "$PID"
+        for attempt in 1 2 3; do running || break; sleep 1; done
+        running && return 1
+    fi
+    rm -f "$PID" "$IFACES"
+    return 0
+}
+start() {
+    entries=$(d2s_lan_ifaces) || { stop; return 1; }
+    interfaces=$(printf '%s\n' "$entries" | tr '\n' ',' | sed 's/,$//')
+    [ -n "$interfaces" ] || return 1
+    if running; then
+        [ "$(cat "$IFACES" 2>/dev/null)" != "$interfaces" ] || return 0
+        stop
+    fi
+    mkdir -p /tmp/d2s /opt/d2s/run /opt/d2s/log
+    chmod 0700 /tmp/d2s
+    start-stop-daemon -S -b -m -p "$PID" -x "$BIN" -- --interfaces "$interfaces" --output "$OUTPUT" >> /opt/d2s/log/dns-watch.log 2>&1
+    printf '%s\n' "$interfaces" > "$IFACES"
+    sleep 1
+    running
+}
+case "${1:-}" in
+    start|refresh) start;;
+    stop) stop;;
+    restart) stop; start;;
+    status) running && echo 'LAN DNS media observer running' || { echo 'LAN DNS media observer stopped'; exit 1; };;
+    *) echo 'usage: start|stop|restart|refresh|status' >&2; exit 2;;
+esac

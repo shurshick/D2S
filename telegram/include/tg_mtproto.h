@@ -1,5 +1,5 @@
-#ifndef D2K_TG_MTPROTO_H
-#define D2K_TG_MTPROTO_H
+#ifndef D2S_TG_MTPROTO_H
+#define D2S_TG_MTPROTO_H
 
 #include <stddef.h>
 #include <stdint.h>

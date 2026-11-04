@@ -22,11 +22,11 @@ const payload = {
     ], boxes:[]
   }
 };
-// D2K_PREVIEW_STATUS=file.json — снятый /api/status; поиски демо-набора подмешиваются к нему.
-if (process.env.D2K_PREVIEW_STATUS) {
-  const captured = JSON.parse(fs.readFileSync(process.env.D2K_PREVIEW_STATUS, 'utf8'));
+// D2S_PREVIEW_STATUS=file.json — снятый /api/status; поиски демо-набора подмешиваются к нему.
+if (process.env.D2S_PREVIEW_STATUS) {
+  const captured = JSON.parse(fs.readFileSync(process.env.D2S_PREVIEW_STATUS, 'utf8'));
   payload.snapshot = { ...captured.snapshot, preview: true };
-  payload.knowledge = { ...captured.knowledge, searches: process.env.D2K_PREVIEW_NO_SEARCHES ? [] : payload.knowledge.searches };
+  payload.knowledge = { ...captured.knowledge, searches: process.env.D2S_PREVIEW_NO_SEARCHES ? [] : payload.knowledge.searches };
 }
 const actions = [];
 const server=http.createServer((req,res)=>{
@@ -61,4 +61,4 @@ const server=http.createServer((req,res)=>{
     res.end(data);
   });
 });
-server.listen(Number(process.env.D2K_PREVIEW_PORT)||55941,'127.0.0.1',()=>console.log('Preview (simulated API only): http://127.0.0.1:55941'));
+server.listen(Number(process.env.D2S_PREVIEW_PORT)||55941,'127.0.0.1',()=>console.log('Preview (simulated API only): http://127.0.0.1:55941'));
