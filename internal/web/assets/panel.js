@@ -1586,7 +1586,7 @@
     var open = function () {
       if (!crate.open) { if (Motion.on()) crateToggle(crate); else crate.open = true; }
       if (Motion.on()) {
-        var sig = global.getComputedStyle(doc.documentElement).getPropertyValue("--signal").trim() || "#e8470f";
+        var sig = global.getComputedStyle(doc.documentElement).getPropertyValue("--signal").trim() || "#6b5ce7";
         Motion.g.fromTo(crate, { boxShadow: "0 0 0 4px " + sig }, { boxShadow: "0 0 0 0px transparent", duration: 1.4, ease: "power2.out", clearProps: "boxShadow" });
       }
       var lid = crate.querySelector(".crate-lid");
@@ -1914,7 +1914,7 @@
   function tunnelScene(doc) {
     var root = el(doc, "div", "tg-flow");
     var top = el(doc, "div", "tg-flow-top");
-    var title = el(doc, "h1", "tg-flow-title");
+    var title = el(doc, "h3", "tg-flow-title");
     var lamp = el(doc, "span", "tg-flow-lamp");
     lamp.setAttribute("data-tg-state-lamp", "");
     lamp.setAttribute("aria-hidden", "true");
@@ -1930,7 +1930,7 @@
     canvas.width = 900;
     canvas.height = 420;
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "Схема: клиент, d2o, маршруты, дата-центры Telegram");
+    canvas.setAttribute("aria-label", "Схема: клиент, D2S, маршруты, дата-центры Telegram");
     stage.appendChild(canvas);
     var caption = el(doc, "p", "tg-flow-caption", "Прокси устанавливает соединение");
     caption.id = "tg-flow-caption";
