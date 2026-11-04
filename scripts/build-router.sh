@@ -20,4 +20,5 @@ for ARCH in $ARCHES; do
             COMMIT="$COMMIT" BUILT="$BUILT" DIRTY="$DIRTY" RELEASE_ID="${RELEASE_ID:-dev}" VERSION="${VERSION:-0.1.0-mvp}"
     done
     ARCH="$ARCH" ZIG="$BUILD_ZIG" OUT="$OUT" sh "$ROOT/scripts/build-openssl-tg.sh"
+    ARCH="$ARCH" ZIG="$BUILD_ZIG" OUT="$OUT" sh "$ROOT/scripts/build-d2s-extras.sh"
 done

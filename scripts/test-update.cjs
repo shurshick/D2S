@@ -51,6 +51,10 @@ function release(id, { installOk = true, pid = live } = {}) {
 printf '%s\\n' "$0" > "${tmp}/installer-path"
 printf '%s\\n' "$D2K_RELEASE_ID" > "${dir}/release-id"
 printf 'binary ${id}\\n' > "${sbin}/d2kd"
+printf 'resolver ${id}\\n' > "${sbin}/d2o-resolver"
+printf 'observer ${id}\\n' > "${sbin}/d2o-dns-watch"
+printf 'fetch ${id}\\n' > "${sbin}/d2kfetch"
+printf 'helper ${id}\\n' > "${dir}/d2k-lan.sh"
 printf 'panel ${id}\\n' > "${dir}/panel/index.html"
 echo ${pid} > "${dir}/run/d2kd.pid"; echo ${pid} > "${dir}/run/d2k.pid"
 exit ${installOk ? 0 : 1}
@@ -113,6 +117,10 @@ try {
   assert.equal(s.last_ok, false); assert.equal(s.bad_release, 'r3'); assert.equal(s.current, 'r2');
   assert.equal(read(path.join(sbin, 'd2kd')), 'binary r2\n');
   assert.equal(read(path.join(dir, 'panel/index.html')), 'panel r2\n');
+  assert.equal(read(path.join(sbin, 'd2o-resolver')), 'resolver r2\n');
+  assert.equal(read(path.join(sbin, 'd2o-dns-watch')), 'observer r2\n');
+  assert.equal(read(path.join(sbin, 'd2kfetch')), 'fetch r2\n');
+  assert.equal(read(path.join(dir, 'd2k-lan.sh')), 'helper r2\n');
   assert.deepEqual(read(initLog).trim().split('\n'), ['stop', 'start']);
   assert(!fs.existsSync(path.join(dir, '.update/previous.tar')));
 
@@ -197,7 +205,25 @@ try {
   assert.equal(state().check_ok, true);
   assert.match(read(gateLog), /latest\.json/, 'попытка через проводник была и при его отказе');
   assert.equal(spawnSync('/bin/sh', [updater, 'check'], { env: { ...env, D2K_GATE: '' }, encoding: 'utf8' }).status, 0);
-  console.log('d2k-update: signature, install, health rollback, bad release, toggle, VPS gate: PASS');
+  // Exercise signed archive installation at both edges of the night window.
+  // Downloads finishing after 04:00 must not replace the current runtime.
+  {
+    const clock = path.join(tmp, 'boundary-clock'); fs.mkdirSync(clock);
+    const hour = path.join(tmp, 'boundary-hour');
+    fs.writeFileSync(path.join(clock, 'date'),
+      `#!/bin/sh\n[ "$1" = +%H ] && exec cat "${hour}"\nexec /bin/date "$@"\n`, { mode: 0o755 });
+    const boundaryEnv = { ...env, D2K_STUB_PATH: `${clock}:${stub}` };
+    for (const [h, allowed] of [['01', false], ['02', true], ['03', true], ['04', false]]) {
+      const before = state().current;
+      const id = 'night-' + h;
+      release(id); fs.writeFileSync(hour, h + '\n');
+      const result = spawnSync('/bin/sh', [updater, 'install', 'night'], { env: boundaryEnv, encoding: 'utf8' });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(state().current, allowed ? id : before, `night window at ${h}:00`);
+      if (!allowed) assert.match(state().last_message, /окно закончилось/);
+    }
+  }
+  console.log('d2s-update: signature, install, health rollback, bad release, toggle, night boundaries 02-04: PASS');
 } finally {
   try { process.kill(Number(live)); } catch (_) {}
   if (!process.env.KEEP) fs.rmSync(tmp, { recursive: true, force: true }); else console.log(tmp);

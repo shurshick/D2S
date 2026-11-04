@@ -80,7 +80,8 @@ static int known_key(const char *key) {
         "TG_CF_WORKER_DOMAIN",
         /* Читает files/S99d2k (разгрузка PPE на Keenetic); панели значение
            не нужно, но ключ законный и пишется установщиком. */
-        "D2K_PPE_DEOFFLOAD"
+        "D2K_PPE_DEOFFLOAD", "D2K_PPE_TCP_PORTS", "D2K_PPE_UDP_PORTS",
+        "AUTOUPDATE", "D2K_REPO", "D2K_RELAY_URL", "KEENETIC_POLICY"
     };
     for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
         if (strcmp(key, keys[i]) == 0) { return 1; }

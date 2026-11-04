@@ -6,15 +6,11 @@ const PORTRAIT_WIDTH = 420, COMPACT_WIDTH = 600;
 const CLI = [70, 210], HUB = [300, 210], COL = [720, 210];
 const GX = [465, 500, 535, 570, 605], GN = ["DNS", "TCP", "TLS", "WS", "MTP"];
 const COOL = 30000;
-const COLORS = {
-  sig: [232, 71, 15], ok: [143, 220, 178], bad: [255, 150, 123],
-  mute: [193, 189, 175], ink: [246, 243, 235], rule: [101, 100, 87], warn: [224, 176, 80],
-};
 const ROUTES = [
-  ["direct_wss", "Прямой WSS", 62, COLORS.ok],
-  ["cloudflare_worker", "Cloudflare Worker", 148, COLORS.sig],
-  ["cloudflare_proxy", "Прокси Cloudflare", 272, COLORS.sig],
-  ["tcp_passthrough", "Прямой TCP · диагностика", 358, COLORS.warn],
+  ["direct_wss", "Прямой WSS", 62, "ok"],
+  ["cloudflare_worker", "Cloudflare Worker", 148, "sig"],
+  ["cloudflare_proxy", "Прокси Cloudflare", 272, "sig"],
+  ["tcp_passthrough", "Прямой TCP · диагностика", 358, "warn"],
 ];
 const LANE_INDEX = new Map(ROUTES.map((route, index) => [route[0], index]));
 const GATE_BY_STAGE = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4 };
@@ -25,6 +21,29 @@ const EVENT_WINDOW = { connecting: 1100, connected: 300, selected: 900, failed: 
   cancelled: 600, cooldown: 600, first_binary_response: 1100 };
 
 const rgba = (color, alpha) => `rgba(${color[0] | 0},${color[1] | 0},${color[2] | 0},${alpha})`;
+// Canvas and HTML share the same semantic theme tokens. Resolve them once at
+// mount; the renderer must not carry an independent visual theme.
+function flowPalette(root) {
+  const style = global.getComputedStyle(root);
+  function rgb(token, fallback) {
+    const value = style.getPropertyValue(token).trim();
+    if (/^#[0-9a-f]{6}$/i.test(value)) {
+      return [1, 3, 5].map(at => parseInt(value.slice(at, at + 2), 16));
+    }
+    const components = value.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i);
+    return components ? components.slice(1, 4).map(Number) : fallback;
+  }
+  return {
+    background: rgb("--tg-flow-background", [247, 249, 253]),
+    sig: rgb("--tg-flow-accent", [107, 92, 231]),
+    ok: rgb("--tg-flow-direct", [19, 126, 103]),
+    bad: rgb("--tg-flow-failure", [191, 59, 85]),
+    mute: rgb("--tg-flow-muted", [85, 98, 122]),
+    ink: rgb("--tg-flow-text", [32, 44, 67]),
+    rule: rgb("--tg-flow-line", [185, 197, 216]),
+    warn: rgb("--tg-flow-tcp", [148, 97, 11]),
+  };
+}
 const cubic = (a, b, c, d, count) => {
   const points = [];
   for (let index = 1; index <= count; index += 1) {
@@ -71,7 +90,11 @@ function mountTelegramFlow(canvas) {
   const context = canvas.getContext("2d", { alpha: false });
   if (!context || !api) throw new Error("Сцена Telegram недоступна");
   const root = canvas.closest(".tg-flow");
-  const lanes = ROUTES.map(makeLane);
+  const COLORS = flowPalette(root);
+  const reduceMotion = global.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
+  const lanes = ROUTES.map((route, index) => makeLane([
+    route[0], route[1], route[2], COLORS[route[3]],
+  ], index));
   const dcs = Array.from({ length: 5 }, () => ({ count: 0, media: 0, confirmed: 0, ping: 0 }));
   const sessions = new Map(), cursors = new Map(), previousTraffic = new Map();
   const parts = [], sparks = [], ripples = [], spikes = [];
@@ -189,6 +212,7 @@ function mountTelegramFlow(canvas) {
   function readTraffic(snapshot) {
     if (!snapshot) return;
     const deltas = api.collectConfirmedTrafficDeltas(previousTraffic, snapshot.active_sessions);
+    if (reduceMotion?.matches) return;
     deltas.forEach((delta, deltaIndex) => {
       const lane = lanes[delta.laneIndex];
       if (!lane) return;
@@ -247,7 +271,7 @@ function mountTelegramFlow(canvas) {
       || "Сейчас нет активных маршрутов";
     const confirmed = view.state !== "stale"
       && view.sessions.some(session => session.telegram_response_seen === true);
-    canvas.setAttribute("aria-label", `Схема соединений: Клиент → d2o. `
+    canvas.setAttribute("aria-label", `Схема соединений: Клиент → D2S. `
       + (confirmed ? "Ответ Telegram подтверждён." : "Ответ Telegram не подтверждён.")
       + ` ${description}. ${view.caption}`);
     canvas.dataset.state = view.state;
@@ -277,7 +301,7 @@ function mountTelegramFlow(canvas) {
     setRouteState(snapshot);
     updateAccessibility();
     if (stale) { stopLoop(); draw(); }
-    else if (!inView || document.hidden) draw();
+    else if (reduceMotion?.matches || !inView || document.hidden) draw();
     else startLoop();
     return view;
   }
@@ -294,7 +318,7 @@ function mountTelegramFlow(canvas) {
     const portrait = canvasWidth < PORTRAIT_WIDTH;
     const scale = Math.max(1, (portrait ? H : W) / canvasWidth * 0.85);
     context.font = `600 ${size * scale}px Onest,system-ui,sans-serif`;
-    context.textAlign = align || "center"; context.fillStyle = rgba(color, alpha);
+    context.textAlign = align || "center"; context.fillStyle = rgba(color, Math.max(0.72, alpha));
     if (portrait) {
       context.save(); context.translate(x, y); context.rotate(-Math.PI / 2);
       context.fillText(value, 0, 0); context.restore();
@@ -318,7 +342,7 @@ function mountTelegramFlow(canvas) {
     const t = now / 1000;
     setSceneTransform();
     context.globalCompositeOperation = "source-over";
-    context.fillStyle = "#171813"; context.fillRect(0, 0, W, H);
+    context.fillStyle = rgba(COLORS.background, 1); context.fillRect(0, 0, W, H);
     const color = statusColor(), portrait = canvasWidth < PORTRAIT_WIDTH, compact = canvasWidth < COMPACT_WIDTH;
 
     context.beginPath(); context.moveTo(CLI[0] + 30, 210);
@@ -394,7 +418,7 @@ function mountTelegramFlow(canvas) {
         const left = (lane.coolUntil - now) / COOL;
         const pulse = Math.max(0, 1 - (now - lane.failT) / 700);
         const skip = Math.max(0, 1 - (now - lane.skipT) / 600);
-        context.save(); context.translate(540, lane.y); context.fillStyle = "#171813";
+        context.save(); context.translate(540, lane.y); context.fillStyle = rgba(COLORS.background, 1);
         context.beginPath(); context.arc(0, 0, 13, 0, Math.PI * 2); context.fill();
         context.strokeStyle = rgba(COLORS.bad, 0.18); context.lineWidth = 2.5;
         context.beginPath(); context.arc(0, 0, 13, 0, Math.PI * 2); context.stroke();
@@ -481,7 +505,7 @@ function mountTelegramFlow(canvas) {
     });
 
     context.beginPath(); context.arc(CLI[0], CLI[1], 28, 0, Math.PI * 2);
-    context.fillStyle = "#171813"; context.fill(); context.lineWidth = 2.5;
+    context.fillStyle = rgba(COLORS.background, 1); context.fill(); context.lineWidth = 2.5;
     context.strokeStyle = rgba(COLORS.sig, 0.45 + 0.55 * client.pulse);
     context.shadowColor = rgba(COLORS.sig, 1); context.shadowBlur = 14 * client.pulse;
     context.stroke(); context.shadowBlur = 0; context.strokeStyle = rgba(COLORS.ink, 0.85);
@@ -499,13 +523,13 @@ function mountTelegramFlow(canvas) {
       const angle = hub.angle + index * Math.PI / 3;
       context[index ? "lineTo" : "moveTo"](31 * Math.cos(angle), 31 * Math.sin(angle));
     }
-    context.closePath(); context.fillStyle = "#171813"; context.fill(); context.lineWidth = 2.8;
+    context.closePath(); context.fillStyle = rgba(COLORS.background, 1); context.fill(); context.lineWidth = 2.8;
     context.strokeStyle = rgba(color, 0.95); context.shadowColor = rgba(color, 1);
     context.shadowBlur = 6 + 10 * hub.pulse; context.stroke(); context.shadowBlur = 0;
     context.beginPath(); context.arc(0, 0, 5 + 2 * hub.pulse, 0, Math.PI * 2);
     context.fillStyle = rgba(COLORS.ink, 0.95); context.fill(); context.restore();
     Array.from(sessions.values()).forEach((item, index) => {
-      const orbit = index % 2, angle = item.seed + t * (orbit ? -0.68 : 0.5)
+      const orbit = index % 2, angle = item.seed + t * (reduceMotion?.matches ? 0 : (orbit ? -0.68 : 0.5))
         + index * 2.399, radius = 45 + orbit * 8;
       const x = hubX + radius * Math.cos(angle), y = hubY + radius * Math.sin(angle);
       let tint = COLORS.mute, alpha = 0.4, dotRadius = 2.4;
@@ -519,13 +543,13 @@ function mountTelegramFlow(canvas) {
       if (item.responseSeen) { context.shadowColor = rgba(tint, 1); context.shadowBlur = 6; }
       context.fill(); context.shadowBlur = 0;
     });
-    text("d2o", hubX, hubY + 86, 12, COLORS.ink, 0.75);
+    text("D2S", hubX, hubY + 86, 12, COLORS.ink, 0.9);
     setSceneTransform();
   }
 
   function animate(delta) {
     hub.pulse *= Math.exp(-delta * 2.4); client.pulse *= Math.exp(-delta * 2.2);
-    hub.angle += delta * (0.12 + 0.25 * hub.pulse);
+    if (!reduceMotion?.matches) hub.angle += delta * (0.12 + 0.25 * hub.pulse);
     for (const lane of lanes) { lane.selected = Number(lane.counts.selected) || 0;
       lane.connecting = (Number(lane.counts.connecting) || 0) + (Number(lane.counts.race) || 0); }
     for (const item of sessions.values()) for (const key of Object.keys(item.tries)) {
@@ -582,14 +606,12 @@ function mountTelegramFlow(canvas) {
 
   function frame(timestamp) {
     frameId = 0;
-    if (destroyed || view.state === "stale" || !inView || document.hidden) return;
+    if (destroyed || view.state === "stale" || !inView || document.hidden || reduceMotion?.matches) return;
     const delta = Math.min(0.05, Math.max(0, (timestamp - lastFrame) / 1000));
     lastFrame = timestamp; now += delta * 1000; animate(delta); draw(); startLoop();
   }
   function startLoop() {
-    // This canvas is live proxy telemetry; keep it animated independently of
-    // the browser's reduced-motion preference.
-    if (!destroyed && view.state !== "stale" && !frameId && inView && !document.hidden)
+    if (!destroyed && view.state !== "stale" && !frameId && inView && !document.hidden && !reduceMotion?.matches)
       frameId = global.requestAnimationFrame(frame);
   }
   function stopLoop() { if (frameId) global.cancelAnimationFrame(frameId); frameId = 0; }
@@ -607,21 +629,30 @@ function mountTelegramFlow(canvas) {
   }
   function onVisibility() { if (document.hidden) stopLoop(); else startLoop(); }
   function onIntersection(entries) { inView = Boolean(entries[0]?.isIntersecting); inView ? startLoop() : stopLoop(); }
+  function onMotionChange() { if (reduceMotion?.matches) stopLoop(); else startLoop(); draw(); }
   const resizeObserver = typeof global.ResizeObserver === "function" ? new global.ResizeObserver(resize) : null;
   const intersectionObserver = typeof global.IntersectionObserver === "function"
     ? new global.IntersectionObserver(onIntersection, { rootMargin: "80px" }) : null;
   resizeObserver?.observe(canvas); intersectionObserver?.observe(canvas);
   global.addEventListener("resize", resize, { passive: true });
   document.addEventListener("visibilitychange", onVisibility);
+  reduceMotion?.addEventListener("change", onMotionChange);
   resize();
 
   return {
     update,
-    attach() { if (!destroyed && canvas.isConnected) resize(); },
+    attach() {
+      if (!destroyed && canvas.isConnected) {
+        const palette = flowPalette(root);
+        Object.keys(COLORS).forEach(key => COLORS[key].splice(0, 3, ...palette[key]));
+        resize();
+      }
+    },
     destroy() {
       if (destroyed) return;
       destroyed = true; stopLoop(); resizeObserver?.disconnect(); intersectionObserver?.disconnect();
       global.removeEventListener("resize", resize); document.removeEventListener("visibilitychange", onVisibility);
+      reduceMotion?.removeEventListener("change", onMotionChange);
       cursors.clear(); sessions.clear(); previousTraffic.clear(); parts.length = 0;
       sparks.length = 0; ripples.length = 0; spikes.length = 0;
     },

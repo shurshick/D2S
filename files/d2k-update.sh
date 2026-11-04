@@ -5,7 +5,7 @@
 #   install  поставить последний выпуск: проверка, копия текущих файлов,
 #            установщик из выпуска, минута проверки служб; успех — копия
 #            удаляется (остаётся только новая версия), отказ — возвращается
-#   run      фоновый цикл: раз в сутки в 03:00–04:59 проверка, при
+#   run      фоновый цикл: раз в сутки в 02:00–03:59 проверка, при
 #            AUTOUPDATE=1 — установка
 #   auto on|off  включить или выключить ночную установку
 #
@@ -21,14 +21,21 @@ CONF=$DIR/config
 AUTOUPDATE=1
 # shellcheck disable=SC1090
 [ ! -r "$CONF" ] || . "$CONF"
-REPO=${D2K_REPO:-t0fox/d2o}
+REPO=${D2K_REPO:-shurshick/D2S}
 DOWNLOAD=${D2K_UPDATE_DOWNLOAD:-https://github.com/$REPO/releases/download}
 LATEST=${D2K_UPDATE_LATEST:-https://github.com/$REPO/releases/latest/download}
-KEY=${D2K_UPDATE_KEY:-MCowBQYDK2VwAyEA2Pxc0karhBR0bvHAaqpuq2m2Z4p1s+NBRf9Vz3xI7nE=}
+KEY=${D2K_UPDATE_KEY:-MCowBQYDK2VwAyEAvPw6qlJSGGZ9tFA6gZ3X7CP+cwtUdJJYh11/ZdskuAo=}
 INIT=${D2K_INIT:-/opt/etc/init.d/S99d2k}
 SBIN=${D2K_SBIN:-/opt/sbin}
 NDM_HOOK=${D2K_NDM_HOOK:-/opt/etc/ndm/netfilter.d/001-d2k.sh}
 ROOT=${D2K_FS_ROOT:-}
+RESOLVER_INIT=${D2K_RESOLVER_INIT:-/opt/etc/init.d/S96d2o-resolver}
+OBSERVER_INIT=${D2K_OBSERVER_INIT:-/opt/etc/init.d/S97d2o-dns-watch}
+extra_start() {
+    for extra_init in "$RESOLVER_INIT" "$OBSERVER_INIT"; do
+        [ ! -x "$extra_init" ] || "$extra_init" start >> "$LOG" 2>&1 || return 1
+    done
+}
 STATE=$DIR/state/update.json
 WORK=$DIR/.update
 # OpenWrt без USB-накопителя: /opt — каталог корневой ФС, то есть флеш.
@@ -127,7 +134,7 @@ do_check() {
 
 # Файлы, которые меняет установщик. Состояние, журнал и каталог знаний — нет.
 installed_paths() {
-    for p in "$SBIN/d2kd" "$SBIN/d2kc" "$SBIN/d2kpanel" "$SBIN/d2ktg" "$INIT" "$NDM_HOOK" \
+    for p in "$RESOLVER_INIT" "$OBSERVER_INIT" "$SBIN/d2o-resolver" "$SBIN/d2o-dns-watch" "$SBIN/d2kfetch" "$SBIN/d2kd" "$SBIN/d2kc" "$SBIN/d2kpanel" "$SBIN/d2ktg" "$INIT" "$NDM_HOOK" \
              "$DIR/config" "$DIR/release-id" "$DIR/release-arch" "$DIR/panel" "$DIR/files"; do
         [ ! -e "$ROOT$p" ] || printf '%s\n' "${p#/}"
     done
@@ -147,6 +154,9 @@ healthy() {
         p=$(cat "$DIR/run/d2k-panel.pid" 2>/dev/null) || return 1
         kill -0 "$p" 2>/dev/null || return 1
     fi
+    for service in "$RESOLVER_INIT" "$OBSERVER_INIT"; do
+        [ ! -x "$service" ] || "$service" status >> "$LOG" 2>&1 || return 1
+    done
     return 0
 }
 
@@ -195,6 +205,11 @@ install_release() {
         finish false "$rid" "архив выпуска $rid не распаковался"; return 1
     fi
 
+    # Downloads may run past 04:00. Recheck before touching the installed release.
+    if [ "$1" = night ] && ! night_window; then
+        finish false "$rid" "ночное окно закончилось; установка отложена до следующей ночи"
+        return 0
+    fi
     # Копия того, что заменит установщик, — до первой замены.
     rm -f "$WORK/previous.tar"
     # shellcheck disable=SC2046  # список путей без пробелов, нарочно словами
@@ -209,8 +224,10 @@ install_release() {
         return 0
     fi
     log "выпуск $rid не прошёл проверку — возвращаю ${prev:-прежнюю версию}"
+    "$OBSERVER_INIT" stop >> "$LOG" 2>&1 || true
+    "$RESOLVER_INIT" stop >> "$LOG" 2>&1 || true
     "$INIT" stop >> "$LOG" 2>&1 || true
-    if tar -xf "$WORK/previous.tar" -C "${ROOT:-/}" && "$INIT" start >> "$LOG" 2>&1; then
+    if tar -xf "$WORK/previous.tar" -C "${ROOT:-/}" && extra_start && "$INIT" start >> "$LOG" 2>&1; then
         rm -f "$WORK/previous.tar"
         finish false "$rid" "выпуск $rid не прошёл проверку; возвращена прежняя версия" "$rid"
     else
@@ -219,12 +236,15 @@ install_release() {
     return 1
 }
 
-# Ночной цикл: один раз за сутки в окне 03:00–04:59.
+night_window() {
+    case "$(date +%H)" in 02|03) return 0 ;; *) return 1 ;; esac
+}
+# Ночной цикл: один раз за сутки в окне 02:00–03:59.
 run() {
     trap 'exit 0' INT TERM HUP
     while :; do
-        hour=$(date +%H); day=$(date +%Y%m%d)
-        if [ "$hour" = 03 ] || [ "$hour" = 04 ]; then
+        day=$(date +%Y%m%d)
+        if night_window; then
             if [ "$(cat "$WORK/night" 2>/dev/null)" != "$day" ]; then
                 mkdir -p "$WORK"; echo "$day" > "$WORK/night"
                 # Тумблер меняет config, а цикл живёт с запуска службы:
@@ -235,7 +255,7 @@ run() {
                 if [ "$AUTOUPDATE" = 1 ]; then
                     # Отдельной сессией: установщик останавливает службу,
                     # а с ней и этот цикл.
-                    start-stop-daemon -S -b -x "$0" -- install
+                    start-stop-daemon -S -b -x "$0" -- install night
                 else
                     do_check || true
                 fi

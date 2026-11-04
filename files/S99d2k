@@ -1377,6 +1377,9 @@ start() {
     start_engine || return $?
     telegram_start || say "Telegram tunnel не поднят; D2K продолжает работу независимо"
     start_panel
+    for extra_init in /opt/etc/init.d/S96d2o-resolver /opt/etc/init.d/S97d2o-dns-watch; do
+        [ ! -x "$extra_init" ] || "$extra_init" start || say "дополнительная DNS-служба не запущена; основной движок продолжает работу"
+    done
     if [ -x "$DNS_SCHEDULER" ] && ! running "$DNS_SCHED_PID"; then
         spawn_daemon -S -b -m -p "$DNS_SCHED_PID" -x "$DNS_SCHEDULER" -- run \
             || say "планировщик Instagram DNS не запустился — повторы вручную"
@@ -1514,6 +1517,9 @@ engine_stop() {
 }
 
 stop() {
+    for extra_init in /opt/etc/init.d/S97d2o-dns-watch /opt/etc/init.d/S96d2o-resolver; do
+        [ ! -x "$extra_init" ] || "$extra_init" stop || return 1
+    done
     stop_pidfile "$DNS_SCHED_PID" || return 1
     stop_pidfile "$UPD_PID" || return 1
     telegram_stop || return 1
@@ -1558,7 +1564,7 @@ status() {
     else
         echo "  очередь $QUEUE_NUM: НЕ привязана"
     fi
-    [ -x "$BIN" ] && "$BIN" version 2>/dev/null | sed 's/^/  /'
+    [ -x "$BIN" ] && "$BIN" --version 2>/dev/null | sed 's/^/  /'
 }
 
 # NDM периодически сносит чужие правила. Сторож есть: событийный хук

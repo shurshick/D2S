@@ -1,4 +1,4 @@
-/* D2K — локальная панель. Состояние движка, управление службами и обновления.
+/* D2S — локальная панель. Состояние движка, управление службами и обновления.
    Данные из сети попадают в DOM исключительно через textContent. */
 (function (global) {
   "use strict";
@@ -208,7 +208,7 @@
       m.tone = "live"; m.lamp = "live";
       m.headline = ["Идёт ", count(m.hunting, "поиск", "поиска", "поисков")];
       m.state = "Движок работает, идёт подбор";
-      m.lede = "D2K подтвердил блокировку и сам подбирает обход в протоколе, где она встретилась. Делать ничего не нужно." +
+      m.lede = "D2S подтвердил блокировку и сам подбирает обход в протоколе, где она встретилась. Делать ничего не нужно." +
         (m.queued.length ? " Замеряется " + (m.hunting - m.queued.length) + ", " + m.queued.length + " " +
           plural(m.queued.length, "ждёт", "ждут", "ждут") + " свободного слота замера." : "");
     } else {
@@ -586,7 +586,7 @@
     if (!(pending && /^auto-/.test(pending.action))) auto.checked = s.auto !== false;
     auto.disabled = absent || !!action || !!pending;
     var schedule = absent ? "Станет доступно, когда автообновление будет подключено" :
-      "Ставит новые выпуски в 03:00–05:00 по времени роутера" + (s.auto === false ? " · выключено: ночью только проверка" : "");
+      "Ставит новые выпуски в 02:00–04:00 по времени роутера" + (s.auto === false ? " · выключено: ночью только проверка" : "");
     write("update-schedule", schedule);
     var result = !absent && num(s.last_utc) > 0 && str(s.last_message) ?
       "Последний результат: " + str(s.last_message) + " · " + localTime(num(s.last_utc) * 1000) : "";
@@ -651,7 +651,7 @@
       text.__d2kKey = stateKey;
       text.replaceChildren(doc.createTextNode(m.state), el(doc, "small", "", m.stateDetail));
     }
-    doc.title = (m.hunting ? "● " : "") + "D2K — " + m.state;
+    doc.title = (m.hunting ? "● " : "") + "D2S — " + m.state;
     this.renderActions();
   };
 
@@ -1586,7 +1586,7 @@
     var open = function () {
       if (!crate.open) { if (Motion.on()) crateToggle(crate); else crate.open = true; }
       if (Motion.on()) {
-        var sig = global.getComputedStyle(doc.documentElement).getPropertyValue("--signal").trim() || "#e8470f";
+        var sig = global.getComputedStyle(doc.documentElement).getPropertyValue("--signal").trim() || "#6b5ce7";
         Motion.g.fromTo(crate, { boxShadow: "0 0 0 4px " + sig }, { boxShadow: "0 0 0 0px transparent", duration: 1.4, ease: "power2.out", clearProps: "boxShadow" });
       }
       var lid = crate.querySelector(".crate-lid");
@@ -1620,7 +1620,7 @@
       if (!m.boxes.length) {
         var e = el(doc, "p", "empty");
         add(e, el(doc, "b", "", "Каталог пуст. "),
-          "Коробка появится, когда D2K подтвердит блокировку, измерит её поведение и найдёт обход. Начальных списков нет — всё узнаётся по живому трафику.");
+          "Коробка появится, когда D2S подтвердит блокировку, измерит её поведение и найдёт обход. Начальных списков нет — всё узнаётся по живому трафику.");
         return [e];
       }
       var out = [];
@@ -1914,7 +1914,7 @@
   function tunnelScene(doc) {
     var root = el(doc, "div", "tg-flow");
     var top = el(doc, "div", "tg-flow-top");
-    var title = el(doc, "h1", "tg-flow-title");
+    var title = el(doc, "h3", "tg-flow-title");
     var lamp = el(doc, "span", "tg-flow-lamp");
     lamp.setAttribute("data-tg-state-lamp", "");
     lamp.setAttribute("aria-hidden", "true");
@@ -1930,7 +1930,7 @@
     canvas.width = 900;
     canvas.height = 420;
     canvas.setAttribute("role", "img");
-    canvas.setAttribute("aria-label", "Схема: клиент, d2o, маршруты, дата-центры Telegram");
+    canvas.setAttribute("aria-label", "Схема: клиент, D2S, маршруты, дата-центры Telegram");
     stage.appendChild(canvas);
     var caption = el(doc, "p", "tg-flow-caption", "Прокси устанавливает соединение");
     caption.id = "tg-flow-caption";
@@ -2117,7 +2117,7 @@
     if (redrawn) this.drawStages();
     col.replaceChildren();
     add(col,
-      el(doc, "span", "", "D2K " + str(snap.version) + (snap.dirty ? " (изменённая сборка)" : "")),
+      el(doc, "span", "", "D2S " + str(snap.version) + (snap.dirty ? " (изменённая сборка)" : "")),
       snap.commit ? el(doc, "span", "mono", str(snap.commit).slice(0, 12)) : null,
       parseTime(snap.built) ? el(doc, "span", "", "собран " + localTime(parseTime(snap.built))) : null,
       parseTime(snap.taken) ? el(doc, "span", "", "снимок " + localTime(parseTime(snap.taken))) : null);
@@ -2191,7 +2191,7 @@
     marker.__placed = true;
   };
 
-  /* Знак D2K: линия обхода прорисовывается один раз, препятствие садится на место. */
+  /* Знак D2S: линия обхода прорисовывается один раз, препятствие садится на место. */
   App.prototype.drawMark = function () {
     if (!Motion.on()) return;
     var d = this.doc;

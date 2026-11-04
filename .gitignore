@@ -15,7 +15,7 @@ spike/bench/results/
 # установку целиком в контейнере. Это испытательный образец, не артефакт
 # выпуска: выпуск собирает свой d2ktg сам.
 builds/*
-!builds/d2ktg-linux-*
+# D2S: all binaries are release artifacts; none are committed.
 /build/
 /telegram/build/
 /panel/d2kpanel
@@ -94,3 +94,8 @@ __pycache__/
 /core/test_diagnostics
 /core/test_diagnostics_runtime
 /panel/test_diagnostics
+
+*.private.pem
+release-out/
+/.impeccable/
+*.dSYM/

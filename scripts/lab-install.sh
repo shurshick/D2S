@@ -134,6 +134,10 @@ cp telegram/build-lab/d2ktg "$REL/builds/d2ktg-linux-$ARCH"
 make -s -C panel clean >/dev/null
 make -s -C panel d2kpanel
 cp panel/d2kpanel "$REL/builds/d2kpanel-linux-$ARCH"
+cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2o-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
+cc -O2 -std=c11 -o "$REL/builds/d2o-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
+cp files/d2k-lan.sh files/d2k-meta-dns-core.sh files/d2k-meta-dns-library.sh files/d2k-meta-dns-scheduler-core.sh files/d2k-whatsapp-media.sh files/S96d2o-resolver files/S97d2o-dns-watch "$REL/files/"
+
 cp internal/web/assets/index.html internal/web/assets/panel.css internal/web/assets/panel.js internal/web/assets/telegram-flow.js internal/web/assets/telegram-flow-prototype.js internal/web/assets/diagnostics.js internal/web/assets/gsap.js "$REL/internal/web/assets/"
 cp internal/web/assets/favicon.svg "$REL/internal/web/assets/"
 mkdir -p "$REL/internal/web/assets/fonts"
@@ -392,6 +396,10 @@ PID_BEFORE=$(cat "$DIR/run/d2kd.pid")
 make -s -C panel clean >/dev/null
 make -s -C panel d2kpanel CFLAGS="-O1 -std=c11 -Wall -Wextra -Werror -D_POSIX_C_SOURCE=200809L"
 cp panel/d2kpanel "$REL/builds/d2kpanel-linux-$ARCH"
+cc -O2 -std=c11 -Itelegram/include -o "$REL/builds/d2o-resolver-linux-$ARCH" resolver-local/local-resolver.c telegram/src/identity.c telegram/src/net.c -lssl -lcrypto
+cc -O2 -std=c11 -o "$REL/builds/d2o-dns-watch-linux-$ARCH" resolver-local/dns-media-watch.c
+cp files/d2k-lan.sh files/d2k-meta-dns-core.sh files/d2k-meta-dns-library.sh files/d2k-meta-dns-scheduler-core.sh files/d2k-whatsapp-media.sh files/S96d2o-resolver files/S97d2o-dns-watch "$REL/files/"
+
 SHA_NEW=$(sha "$REL/builds/d2kpanel-linux-$ARCH")
 [ "$SHA_NEW" != "$(sha /opt/sbin/d2kpanel)" ] || fail "новая сборка побайтно совпала со старой — переход версии не проверить"
 

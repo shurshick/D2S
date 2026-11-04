@@ -13,7 +13,7 @@
 #     собственный установщик с D2K_LOCAL.
 set -eu
 
-REPO=${D2K_REPO:-t0fox/d2o}
+REPO=${D2K_REPO:-shurshick/D2S}
 REF=${D2K_REF:-main}
 BASE=${D2K_BASE:-https://raw.githubusercontent.com/$REPO/$REF}
 
@@ -35,7 +35,7 @@ SOURCE=${D2K_SOURCE:-release}
 # Совпадение ключа с переменной репозитория сторожит .github/workflows/release.yml.
 LATEST=${D2K_UPDATE_LATEST:-https://github.com/$REPO/releases/latest/download}
 DOWNLOAD=${D2K_UPDATE_DOWNLOAD:-https://github.com/$REPO/releases/download}
-KEY=${D2K_UPDATE_KEY:-MCowBQYDK2VwAyEA2Pxc0karhBR0bvHAaqpuq2m2Z4p1s+NBRf9Vz3xI7nE=}
+KEY=${D2K_UPDATE_KEY:-MCowBQYDK2VwAyEAvPw6qlJSGGZ9tFA6gZ3X7CP+cwtUdJJYh11/ZdskuAo=}
 
 DIR=/opt/d2k
 SBIN=/opt/sbin
@@ -302,11 +302,11 @@ TMP=$(mktemp -d /tmp/d2k-install.XXXXXX) || die "не создать време�
 # Замер d2kfetch для всех девяти арок: максимум 386 КиБ (mips64el).
 # Старый комплект занимал 7635 КиБ на самой тяжёлой арке (mips64el; mips и
 # mipsel — 7470 и 7477). С новым инструментом остаётся около 950 КиБ запаса.
-TMP_NEED_KB=9000
+TMP_NEED_KB=14000
 # Установка выпуска держит в /tmp распакованный архив и поверх него раскладку
 # комплекта, которую делает установщик ИЗ архива. Архив удаляется сразу после
 # распаковки; запас учитывает d2kfetch и изменения контроллера.
-TMP_RELEASE_NEED_KB=18000
+TMP_RELEASE_NEED_KB=32000
 # Оба числа сторожит scripts/test-install-manifest.sh: он измеряет и
 # раскладку, и дерево выпуска и отвергает число ниже замера.
 need_kb=$TMP_NEED_KB
@@ -496,6 +496,15 @@ fetch "builds/d2kc-linux-$ARCH" "$TMP/d2kc"
 fetch "builds/d2kfetch-linux-$ARCH" "$TMP/d2kfetch"
 fetch "builds/d2kd-linux-$ARCH" "$TMP/d2kd"
 fetch "builds/d2ktg-linux-$ARCH" "$TMP/d2ktg"
+fetch "files/d2k-lan.sh" "$TMP/d2k-lan.sh"
+fetch "files/d2k-meta-dns-core.sh" "$TMP/d2k-meta-dns-core.sh"
+fetch "files/d2k-meta-dns-library.sh" "$TMP/d2k-meta-dns-library.sh"
+fetch "files/d2k-meta-dns-scheduler-core.sh" "$TMP/d2k-meta-dns-scheduler-core.sh"
+fetch "files/d2k-whatsapp-media.sh" "$TMP/d2k-whatsapp-media.sh"
+fetch "files/S96d2o-resolver" "$TMP/S96d2o-resolver"
+fetch "files/S97d2o-dns-watch" "$TMP/S97d2o-dns-watch"
+fetch "builds/d2o-resolver-linux-$ARCH" "$TMP/d2o-resolver"
+fetch "builds/d2o-dns-watch-linux-$ARCH" "$TMP/d2o-dns-watch"
 fetch "files/S99d2k"            "$TMP/S99d2k"
 fetch "files/config"            "$TMP/config"
 fetch "files/d2k-fw-heal.sh"    "$TMP/d2k-fw-heal.sh"
@@ -531,6 +540,10 @@ chmod +x "$TMP/d2kpanel" "$TMP/d2kc" "$TMP/d2kfetch" "$TMP/d2kd" "$TMP/d2ktg" \
          "$TMP/d2k-instagram-dns.sh" "$TMP/d2k-instagram-dns-scheduler.sh"
 
 # Проверка ДО замены: запускается ли то, что скачалось, и та ли это арка.
+for bin in d2o-resolver d2o-dns-watch; do
+    chmod 0755 "$TMP/$bin"
+    "$TMP/$bin" --version >/dev/null || die "не запускается $bin — прежняя версия не изменена"
+done
 PANEL_VERSION=$("$TMP/d2kpanel" --version 2>/dev/null) || die "скачанный d2kpanel не запускается на этой системе"
 case "$PANEL_VERSION" in
     *features=telegram-control*) ;;
@@ -613,6 +626,9 @@ fi
 prepare_openwrt_hook
 
 # --- остановка прежней версии --------------------------------------------
+for extra_init in /opt/etc/init.d/S97d2o-dns-watch /opt/etc/init.d/S96d2o-resolver; do
+    [ ! -x "$extra_init" ] || "$extra_init" stop || die "не остановилась дополнительная служба"
+done
 if [ -x "$INIT" ]; then
     say "останавливаю прежнюю версию"
     "$INIT" stop || say "прежняя версия остановилась с ошибкой — продолжаю"
@@ -720,6 +736,11 @@ if [ "$REPO" != necronicle/d2k ]; then
     install_data_atomic "$TMP/config.repo" "$DIR/config" ||
         die "не сохранить источник обновлений"
 fi
+if ! grep -q '^D2K_RELAY_URL=' "$DIR/config"; then
+    printf '
+D2K_RELAY_URL=http://127.0.0.1:9083/resolve
+' >> "$DIR/config"
+fi
 # В старой конфигурации могут оставаться relay-учётные данные. Сохраняем их
 # при переходе и ограничиваем чтение файла root даже при обновлении.
 chmod 0600 "$DIR/config" || die "не защитить права конфигурации"
@@ -741,7 +762,7 @@ case "$TG_MODE_CURRENT" in
     local) ;;
     *) die "неизвестное значение TG_MODE в $DIR/config" ;;
 esac
-# Instagram/WhatsApp DNS pins come from d2k's own C resolver on the VPS.
+# WhatsApp DNS pins come from the loopback-only local C resolver.
 # Checking 18 names can wait on silent edges, so the installer does not run it.
 # A success younger than a day is kept: a release must not send the whole
 # fleet to /resolve at once. An older mark (or one without its time, from an
@@ -765,6 +786,22 @@ say "далее — ежедневно в 01:00–04:59 (своя минута �
 rm -f "$SBIN/d2k"
 
 # --- запуск и проверка ---------------------------------------------------
+# D2S additions are staged before replacing any running component.
+install_atomic "$TMP/d2k-lan.sh" "$DIR/d2k-lan.sh"
+install_atomic "$TMP/d2k-meta-dns-core.sh" "$DIR/d2k-meta-dns-core.sh"
+install_atomic "$TMP/d2k-meta-dns-library.sh" "$DIR/d2k-meta-dns-library.sh"
+install_atomic "$TMP/d2k-meta-dns-scheduler-core.sh" "$DIR/d2k-meta-dns-scheduler-core.sh"
+install_atomic "$TMP/d2k-whatsapp-media.sh" "$DIR/d2k-whatsapp-media.sh"
+for bin in d2o-resolver d2o-dns-watch; do
+    install_atomic "$TMP/$bin" "$SBIN/$bin"
+done
+install_atomic "$TMP/S96d2o-resolver" /opt/etc/init.d/S96d2o-resolver
+install_atomic "$TMP/S97d2o-dns-watch" /opt/etc/init.d/S97d2o-dns-watch
+if [ -f /opt/etc/ndm/netfilter.d/001-d2o-lab.sh ] && grep -q d2k-fw-heal /opt/etc/ndm/netfilter.d/001-d2o-lab.sh; then
+    rm -f /opt/etc/ndm/netfilter.d/001-d2o-lab.sh
+fi
+/opt/etc/init.d/S96d2o-resolver start || say "предупреждение: локальный DNS-помощник не запущен"
+/opt/etc/init.d/S97d2o-dns-watch start || say "предупреждение: наблюдатель DNS не запущен"
 say "запуск"
 "$INIT" start || die "служба не запустилась"
 
@@ -799,7 +836,7 @@ fi
 if [ "${AUTOUPDATE:-$(sed -n 's/^AUTOUPDATE=//p' "$DIR/config" | tail -n 1)}" = 0 ]; then
     say "автообновление выключено (AUTOUPDATE=0); включается в панели"
 else
-    say "автообновление: новые подписанные выпуски ставятся ночью 03:00–05:00; кнопка и тумблер — в панели"
+    say "автообновление: новые подписанные выпуски ставятся ночью 02:00–04:00; кнопка и тумблер — в панели"
 fi
 
 install_openwrt_hook || say "предупреждение: автозапуск OpenWrt не включён; установка/обновление завершено, проверьте $OPENWRT_INIT и rc.common"

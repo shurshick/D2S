@@ -9,7 +9,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 BUILDS=${1:?каталог сборок}
 OUT=${2:?каталог выпуска}
 : "${RELEASE_ID:?RELEASE_ID}"
-case "$RELEASE_ID" in d2o-*) ;; *) echo "плохой RELEASE_ID" >&2; exit 1 ;; esac
+case "$RELEASE_ID" in d2s-*) ;; *) echo "плохой RELEASE_ID" >&2; exit 1 ;; esac
 case "$RELEASE_ID" in *[!A-Za-z0-9._-]*) echo "плохой RELEASE_ID" >&2; exit 1 ;; esac
 ARCHES=${ARCHES:-"arm64 arm mipsel mips mips64el amd64 x86 ppc64 riscv64"}
 VERSION=${VERSION:-$RELEASE_ID}
@@ -25,7 +25,7 @@ assets=
 for arch in $ARCHES; do
     tree="$STAGE/$arch"
     mkdir -p "$tree/builds" "$tree/scripts"
-    for bin in d2kd d2kc d2kfetch d2kpanel d2ktg; do
+    for bin in d2kd d2kc d2kfetch d2kpanel d2ktg d2o-resolver d2o-dns-watch; do
         test -s "$BUILDS/$bin-linux-$arch" || { echo "нет $BUILDS/$bin-linux-$arch" >&2; exit 1; }
         cp "$BUILDS/$bin-linux-$arch" "$tree/builds/"
     done

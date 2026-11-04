@@ -1,6 +1,7 @@
 # Конфигурация d2k. Файл принадлежит владельцу: установщик его не
 # перезаписывает при обновлении.
 SCHEMA=1
+AUTOUPDATE=1
 MODE=apply
 PANEL_LISTEN=127.0.0.1:8090
 STATE_DIR=/opt/d2k/state
@@ -18,3 +19,6 @@ MARK=0x2d
 TG_ENABLED=1
 TG_MODE=local
 # TG_PORT=1443
+
+D2K_REPO=shurshick/D2S
+D2K_RELAY_URL=http://127.0.0.1:9083/resolve

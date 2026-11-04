@@ -533,7 +533,19 @@ static const char *const meta_hosts[]={
 };
 
 /* The certificate name that authenticates host, or NULL outside the list. */
+static int meta_media_host(const char *host) {
+    static const char suffix[] = ".cdn.whatsapp.net";
+    size_t n = strlen(host), s = sizeof(suffix) - 1;
+    if (n <= s + 6 || n > 63 + s || strncmp(host, "media-", 6) != 0 ||
+        strcmp(host + n - s, suffix) != 0) return 0;
+    for (size_t i = 6; i < n - s; ++i)
+        if (!((host[i] >= 'a' && host[i] <= 'z') ||
+              (host[i] >= '0' && host[i] <= '9') || host[i] == '-')) return 0;
+    return host[n - s - 1] != '-';
+}
+
 static const char *meta_verify_name(const char *host) {
+    if (meta_media_host(host)) return host;
     for(size_t i=0;i<sizeof(meta_hosts)/sizeof(meta_hosts[0]);i++){
         if(strcmp(host,meta_hosts[i])!=0)continue;
         /* This DNS alias is not covered by *.instagram.com; authenticate its
@@ -732,7 +744,7 @@ int main(int argc,char **argv) {
     int offline = d2k_runtime_offline(argc, argv, "d2ktg", offline_self_check);
     if (offline >= 0) return offline;
     const char *config="/opt/d2k/config",*log_path=NULL;
-    if(argc==2&&strcmp(argv[1],"--version")==0){puts(TG_BUILD " features=instagram-ip-probe,meta-hosts-v3,telegram-local-tcp-epoll,mtproto-respq,mtproto-auth,mtproto-v2,mtproto-help-config,mtproto-gzip-config,mtproto-wss-probe release=" D2K_RELEASE_ID);return 0;}
+    if(argc==2&&strcmp(argv[1],"--version")==0){puts(TG_BUILD " features=instagram-ip-probe,meta-hosts-v3,meta-media-hosts-v1,telegram-local-tcp-epoll,mtproto-respq,mtproto-auth,mtproto-v2,mtproto-help-config,mtproto-gzip-config,mtproto-wss-probe release=" D2K_RELEASE_ID);return 0;}
     if(argc==5&&strcmp(argv[1],"--check-instagram-ip")==0)return check_instagram_ip(argv[2],argv[3],argv[4]);
     if((argc==4||argc==5)&&strcmp(argv[1],"--check-telegram-dc")==0)return check_telegram_dc(argv[2],argv[3],argc==5?argv[4]:NULL);
     if((argc==4||argc==5)&&strcmp(argv[1],"--discover-telegram-dc")==0)return discover_telegram_dc(argv[2],argv[3],argc==5?argv[4]:NULL);

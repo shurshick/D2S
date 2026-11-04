@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.bin -text
+*.woff2 -text
+*.png -text
+*.webp -text
+*.jpg -text

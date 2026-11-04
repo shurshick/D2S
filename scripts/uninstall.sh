@@ -44,6 +44,12 @@ if [ -f "$DNS_SCHED_PID" ]; then
         n=$((n + 1))
     done
 fi
+for extra_init in "$PREFIX/etc/init.d/S97d2o-dns-watch" "$PREFIX/etc/init.d/S96d2o-resolver"; do
+    [ ! -x "$extra_init" ] || "$extra_init" stop || exit 1
+done
+if [ -x "$DIR/d2k-whatsapp-media.sh" ]; then
+    "$DIR/d2k-whatsapp-media.sh" remove || { say "не удалось снять свои медиазаписи; удаление остановлено"; exit 1; }
+fi
 if [ -x "$DIR/d2k-instagram-dns.sh" ]; then
     say "снимаю свои DNS-записи Instagram/WhatsApp"
     "$DIR/d2k-instagram-dns.sh" remove || {
@@ -183,6 +189,9 @@ say "правила сняты"
 # Хук NDM снимается ПЕРВЫМ: оставленный, он будет звать сторожа, которого уже
 # нет, на каждое изменение netfilter — мусор в журнале на ровном месте.
 rm -f "$PREFIX/etc/ndm/netfilter.d/001-d2k.sh"
+rm -f "$PREFIX/etc/init.d/S96d2o-resolver" "$PREFIX/etc/init.d/S97d2o-dns-watch" "$SBIN/d2o-resolver" "$SBIN/d2o-dns-watch"
+rm -f "$DIR/d2k-lan.sh" "$DIR/d2k-meta-dns-core.sh" "$DIR/d2k-meta-dns-library.sh" "$DIR/d2k-meta-dns-scheduler-core.sh" "$DIR/d2k-whatsapp-media.sh"
+rm -f /tmp/d2k/whatsapp-media-observed.txt
 rm -f "$PREFIX/etc/init.d/S99d2k" "$PREFIX/etc/init.d/S98d2k-update" "$SBIN/d2k" "$SBIN/d2kpanel" "$SBIN/d2kc" "$SBIN/d2kfetch" "$SBIN/d2kd" "$SBIN/d2ktg" "$SBIN/d2khttp"
 # Remove only d2kc snapshots explicitly named as D2K pre-install/work backups.
 # These were created during router development and are not user configuration.
