@@ -736,7 +736,7 @@ int d2s_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
         return -1;
     }
 
-    const uint8_t magic[4] = { 'D', '2', 'K', 'P' };
+    const uint8_t magic[4] = { 'D', '2', 'S', 'P' };
     put(&w, magic, 4);
     put_u16(&w, p.schema);
     put_u16(&w, p.minexec);

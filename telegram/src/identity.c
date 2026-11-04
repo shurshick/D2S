@@ -12,7 +12,7 @@
 #include <unistd.h>
 
 #define ID_FILE_LEN 88u
-static const uint8_t id_magic[8] = {'D','2','K','T','G','I','D','1'};
+static const uint8_t id_magic[8] = {'D','2','S','T','G','I','D','1'};
 static const char hex_digits[] = "0123456789abcdef";
 
 static int read_all(int fd, uint8_t *buf, size_t len) {

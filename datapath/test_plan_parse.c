@@ -19,7 +19,7 @@ static int fails;
 
 /* Минимальный правильный план: заголовок и одна запись ORDER. */
 static const uint8_t good[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
     0x01, 0x03, 0x00, 0x01, 0x00
 };
 
@@ -39,7 +39,7 @@ int main(void) {
     CHECK(loads(good, sizeof good), "правильный план не загрузился");
 
     {
-        uint8_t b[] = {'D','2','K','P',0,1,0,7,0,0,0,2,
+        uint8_t b[] = {'D','2','S','P',0,1,0,7,0,0,0,2,
                        0,2,0,2,17,2, 1,12,0,1,1};
         for (unsigned shape=1;shape<=4;shape++) {
             b[22]=(uint8_t)shape;
@@ -60,7 +60,7 @@ int main(void) {
     /* REC_QSPLIT (0x010f): разрез ClientHello на кадры CRYPTO (задача 40),
        исполнитель 10, только UDP, без фрагментации и удлинения. */
     {
-        uint8_t b[] = {'D','2','K','P',0,1,0,10,0,0,0,3,
+        uint8_t b[] = {'D','2','S','P',0,1,0,10,0,0,0,3,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,15,0,1,1};
         CHECK(loads(b,sizeof b), "quicsplit plan rejected");
         b[7]=9; CHECK(!loads(b,sizeof b), "quicsplit requires executor 10");
@@ -69,20 +69,20 @@ int main(void) {
         b[27]=1; b[16]=6; CHECK(!loads(b,sizeof b), "quicsplit accepted for TCP");
         b[16]=17; b[22]=1; CHECK(!loads(b,sizeof b), "quicsplit with reverse order accepted");
         b[22]=0;
-        uint8_t d[] = {'D','2','K','P',0,1,0,10,0,0,0,4,
+        uint8_t d[] = {'D','2','S','P',0,1,0,10,0,0,0,4,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,15,0,1,1, 1,15,0,1,1};
         CHECK(!loads(d,sizeof d), "repeated quicsplit accepted");
-        uint8_t f[] = {'D','2','K','P',0,1,0,10,0,0,0,4,
+        uint8_t f[] = {'D','2','S','P',0,1,0,10,0,0,0,4,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,15,0,1,1, 1,12,0,1,1};
         CHECK(!loads(f,sizeof f), "quicsplit with ipfrag accepted");
-        uint8_t u[] = {'D','2','K','P',0,1,0,10,0,0,0,4,
+        uint8_t u[] = {'D','2','S','P',0,1,0,10,0,0,0,4,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,15,0,1,1, 1,14,0,2,0,100};
         CHECK(!loads(u,sizeof u), "quicsplit with udplen accepted (combination never measured)");
     }
 
     /* REC_UDPLEN (0x010e): удлинение датаграммы, исполнитель 9, только UDP. */
     {
-        uint8_t b[] = {'D','2','K','P',0,1,0,9,0,0,0,3,
+        uint8_t b[] = {'D','2','S','P',0,1,0,9,0,0,0,3,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,14,0,2,0,100};
         CHECK(loads(b,sizeof b), "udplen plan rejected");
         b[7]=8; CHECK(!loads(b,sizeof b), "udplen requires executor 9");
@@ -91,19 +91,19 @@ int main(void) {
         b[16]=0; CHECK(!loads(b,sizeof b), "udplen without transport accepted");
         b[16]=17; b[22]=1; CHECK(!loads(b,sizeof b), "udplen with reverse order accepted");
         b[22]=0;
-        uint8_t s[] = {'D','2','K','P',0,1,0,9,0,0,0,3,
+        uint8_t s[] = {'D','2','S','P',0,1,0,9,0,0,0,3,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,14,0,1,100};
         CHECK(!loads(s,sizeof s), "one-byte udplen record accepted");
-        uint8_t d[] = {'D','2','K','P',0,1,0,9,0,0,0,4,
+        uint8_t d[] = {'D','2','S','P',0,1,0,9,0,0,0,4,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,14,0,2,0,100, 1,14,0,2,0,100};
         CHECK(!loads(d,sizeof d), "repeated udplen accepted");
-        uint8_t f[] = {'D','2','K','P',0,1,0,9,0,0,0,4,
+        uint8_t f[] = {'D','2','S','P',0,1,0,9,0,0,0,4,
                        0,2,0,2,17,2, 1,3,0,1,0, 1,14,0,2,0,100, 1,12,0,1,1};
         CHECK(!loads(f,sizeof f), "udplen with ipfrag accepted (donor drop precedes udplen)");
     }
 
     {
-        uint8_t b[] = {'D','2','K','P',0,1,0,4,0,0,0,2,
+        uint8_t b[] = {'D','2','S','P',0,1,0,4,0,0,0,2,
                        0,2,0,2,6,1, 1,9,0,1,D2S_WIRE_DETECT_TCP};
         CHECK(loads(b, sizeof b), "detect wire profile rejected");
         b[7] = 3;
@@ -117,7 +117,7 @@ int main(void) {
     }
 
     {
-        uint8_t b[] = {'D','2','K','P',0,1,0,5,0,0,0,2,
+        uint8_t b[] = {'D','2','S','P',0,1,0,5,0,0,0,2,
                        0,2,0,2,6,1, 1,10,0,0,0};
         CHECK(loads(b, sizeof b - 1), "complete TLS input guard rejected");
         b[7] = 4;
@@ -132,7 +132,7 @@ int main(void) {
 
     /* New measured-context records: validate length, value and minexec. */
     for (unsigned code = 6; code <= 8; code++) {
-        uint8_t b[34] = {'D','2','K','P',0,1,0,3,0,0,0,2,0,2,0,2,6,1,1,0,0,0};
+        uint8_t b[34] = {'D','2','S','P',0,1,0,3,0,0,0,2,0,2,0,2,6,1,1,0,0,0};
         size_t len = code == 6 ? 12 : 4;
         b[19] = (uint8_t)code; b[21] = (uint8_t)len; b[25] = 100;
         CHECK(loads(b, 22 + len), "valid measured record rejected");
@@ -166,11 +166,11 @@ int main(void) {
      * бы только в сборщике. */
     {
         static const uint8_t pace_ok[] = {
-            'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+            'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
             0x01, 0x05, 0x00, 0x04, 0x00, 0x00, 0x2E, 0xE0   /* 12000 мкс */
         };
         static const uint8_t pace_short[] = {
-            'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+            'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
             0x01, 0x05, 0x00, 0x02, 0x2E, 0xE0
         };
         CHECK(loads(pace_ok, sizeof pace_ok), "правильный разнос во времени не принят");

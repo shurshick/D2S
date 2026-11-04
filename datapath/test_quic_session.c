@@ -98,7 +98,7 @@ static int journal_code_seen(const d2s_session *s, int kind, uint8_t code) {
  * — фальшивка целиком до или вместо неё, и это именно та фигура, которую
  * этот план описывает. */
 static const uint8_t plan_bytes[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x00, 0, 0, 0, 0,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00,
@@ -117,7 +117,7 @@ static const uint8_t plan_bytes[] = {
  * на поиске, который не мог сойтись. На роутере владельца 13.09.2026 таких
  * отказов набралось 221 за день. */
 static const uint8_t plan_tcp_declared[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
     0x00, 0x02, 0x00, 0x02, 0x06, 0x01,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x00, 0, 0, 0, 0,
@@ -137,7 +137,7 @@ static const uint8_t plan_tcp_declared[] = {
  * датаграмму" ниже), а не тихо нарезать датаграмму на два непонятных
  * половинных огрызка. */
 static const uint8_t plan_split[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
     0x01, 0x00, 0x00, 0x04, 0x00, 0x00, 0x02, 0x58,
 };
 
@@ -149,7 +149,7 @@ static const uint8_t plan_split[] = {
  * применил план целиком. Это дословно требование брифа задачи 4 про
  * контракт отказа d2s_wire_build_udp. */
 static const uint8_t plan_badsum[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x01, 0, 0, 0, 0,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00,
@@ -160,7 +160,7 @@ static const uint8_t plan_badsum[] = {
 /* Одна фальшивка, D2S_RESULT_MAX+1 повторов: отказ целиком,
  * а не тихое обрезание до вместимости результата. */
 static const uint8_t plan_too_many_repeats[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
     0x00, 0x10, 0x00, 0x03, 0x00, 0x01, 0xAA,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, D2S_RESULT_MAX + 1, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
@@ -917,7 +917,7 @@ static void test_quic_original_after_fakes(void) {
  * Повтор Initial после завершённого исполнения идёт нетронутым, как у любого
  * плана QUIC. */
 static const uint8_t plan_qsplit[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 10, 0, 0, 0, 3,
+    'D', '2', 'S', 'P', 0, 1, 0, 10, 0, 0, 0, 3,
     0x00, 0x02, 0x00, 0x02, 17, 2,
     0x01, 0x03, 0x00, 0x01, 0x00,
     0x01, 0x0f, 0x00, 0x01, 0x01
@@ -1085,7 +1085,7 @@ static size_t count_kind_name(const d2s_session *s, uint8_t kind, const char *na
  * транспорт 17, прикладной протокол 3 («voice» в тексте плана). Ровно такой
  * план собирает контроллер (d2s_voice_plan). */
 static const uint8_t plan_voice_declared[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
     0x00, 0x02, 0x00, 0x02, 0x11, 0x03,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x00, 0, 0, 0, 0,
@@ -1605,7 +1605,7 @@ static unsigned frag_u16(const uint8_t *p) {return (unsigned)p[0]*256+p[1];}
 static void test_fragments(void) {
     d2s_nat_fn saved=d2s_nat_hook;d2s_nat_hook=frag_nat;
     for(int fake=0;fake<2;fake++)for(int shape=1;shape<=4;shape++) {
-        uint8_t tlv[128]={'D','2','K','P',0,1,0,7,0,0,0,2,
+        uint8_t tlv[128]={'D','2','S','P',0,1,0,7,0,0,0,2,
                           0,2,0,2,17,2,1,12,0,1,0};
         tlv[22]=(uint8_t)shape;size_t tn=23;
         if(fake) {memcpy(tlv+tn,plan_bytes+12,sizeof plan_bytes-12);
@@ -2082,17 +2082,17 @@ static void test_quic_oneway_block(void) {
  * снимается — иначе перепроверить имя было бы нечем. Молчание потока, которое
  * мы устроили сами, подозрением не становится. */
 static const uint8_t plan_deny[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
     0x00, 0x02, 0x00, 0x02, 17, 2,
     0x01, 0x10, 0x00, 0x01, 0x01,
 };
 static const uint8_t plan_deny_tcp[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
     0x00, 0x02, 0x00, 0x02, 6, 1,
     0x01, 0x10, 0x00, 0x01, 0x01,
 };
 static const uint8_t plan_deny_old[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 10, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 10, 0, 0, 0, 2,
     0x00, 0x02, 0x00, 0x02, 17, 2,
     0x01, 0x10, 0x00, 0x01, 0x01,
 };
@@ -2476,7 +2476,7 @@ int main(void) {
         d2s_nat_family_fn saved6 = d2s_nat_family_hook;
         d2s_nat_family_hook = frag_nat6;
         for (int shape = 1; shape <= 4; shape++) {
-            uint8_t tlv[] = {'D','2','K','P',0,1,0,7,0,0,0,2,
+            uint8_t tlv[] = {'D','2','S','P',0,1,0,7,0,0,0,2,
                             0,2,0,2,17,2,1,12,0,1,0};
             tlv[22] = (uint8_t)shape;
             s6 = d2s_session_new(32, 32); p6 = NULL;

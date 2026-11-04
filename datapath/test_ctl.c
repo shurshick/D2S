@@ -182,7 +182,7 @@ static size_t set_name_body(uint8_t *body, const char *name,
    команд ниже (заполнение таблицы и проверка давности) — раньше жил внутри
    первого, локальной static-переменной. */
 static const uint8_t tiny[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
     0x01, 0x03, 0x00, 0x01, 0x00
 };
 
@@ -197,7 +197,7 @@ static const uint8_t want_id[16] = {
     0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF
 };
 static const uint8_t plan_with_id[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
     0x00, 0x01, 0x00, 0x10,
     0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7,
     0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF,
@@ -489,12 +489,12 @@ static void test_set_https(void) {
     /* SET_NAME формы HTTP (v11, шаг 4): только план протокола http. */
     {
         static const uint8_t http_plan[] = {
-            'D', '2', 'K', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
+            'D', '2', 'S', 'P', 0, 1, 0, 11, 0, 0, 0, 2,
             0x00, 0x02, 0x00, 0x02, 6, 4,                  /* proto tcp http */
             0x01, 0x00, 0x00, 0x04, 0x00, 0x05, 0x00, 0x00 /* split sni_middle */
         };
         static const uint8_t tls_plan[] = {
-            'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
+            'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
             0x00, 0x02, 0x00, 0x02, 6, 1,
             0x01, 0x00, 0x00, 0x04, 0x00, 0x05, 0x00, 0x00
         };

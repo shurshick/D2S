@@ -63,7 +63,7 @@ static size_t journal_kind(const d2s_session *s, uint8_t kind, uint8_t code) {
 /* Объявленный голосом план (тот же, что plan_voice_declared в
    test_quic_session.c): REC_PROTO транспорт 17, протокол voice. */
 static const uint8_t plan_voice[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
     0x00, 0x02, 0x00, 0x02, 0x11, 0x03,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x00, 0, 0, 0, 0,

@@ -79,7 +79,7 @@ static const d2s_jrn_entry *last_of_kind(const d2s_session *s, uint8_t kind) {
 /* Тот же план плюс защита от чужого сброса. minexec=2: защита появилась во
    второй версии исполнителя, и план обязан это объявлять. */
 static const uint8_t plan_guard[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 2, 0, 0, 0, 5,
+    'D', '2', 'S', 'P', 0, 1, 0, 2, 0, 0, 0, 5,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x01, 0, 0, 0, 0,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00,
@@ -90,7 +90,7 @@ static const uint8_t plan_guard[] = {
 
 /* План: одна фальшивка перед куском, две копии с паузой 78 мс. */
 static const uint8_t plan_bytes[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 4,
     0x00, 0x10, 0x00, 0x05, 0x00, 0x01, 0xDE, 0xAD, 0xBE,
     0x00, 0x11, 0x00, 0x08, 0x00, 0x01, 0x03, 0x01, 0, 0, 0, 0,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x01, 0x02, 0x00,
@@ -109,7 +109,7 @@ static const uint8_t want_send_id[16] = {
     0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF
 };
 static const uint8_t plan_with_send_id[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 5,
     0x00, 0x01, 0x00, 0x10,
     0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
     0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
@@ -126,7 +126,7 @@ static const uint8_t plan_with_send_id[] = {
  * отказа: только у такого плана «оригинал уже не наш» вообще возможно.
  * Записей шесть: ID, PAYLOAD, POISON, FAKE, ORDER, PACE. */
 static const uint8_t plan_owns_payload[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 6,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 6,
     0x00, 0x01, 0x00, 0x10,
     0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xC6, 0xC7,
     0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE, 0xCF,
@@ -144,7 +144,7 @@ static const uint8_t plan_owns_payload[] = {
  * REC_FAKE (payload_id=1, poison_id=0, placement=PLACE_BEFORE,
  * gap_us=0). */
 static const uint8_t plan_too_many_repeats[] = {
-    'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
+    'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 2,
     0x00, 0x10, 0x00, 0x03, 0x00, 0x01, 0xAA,
     0x01, 0x01, 0x00, 0x0A, 0x00, 0x01, 0x00, 0x00, D2S_RESULT_MAX + 1, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
@@ -2069,7 +2069,7 @@ int main(void) {
         }
         /* План с входом по имени: такой и ставится цели в поле. */
         static const uint8_t named_plan[] = {
-            'D','2','K','P', 0,1, 0,5, 0,0, 0,5,
+            'D','2','S','P', 0,1, 0,5, 0,0, 0,5,
             0,2, 0,2, 6,1,                 /* TCP/TLS */
             1,10, 0,0,                     /* input tls-sni */
             1,0, 0,4, 0,5, 0,0,            /* split sni_middle */
@@ -2128,7 +2128,7 @@ int main(void) {
      * проверялся отказ исполнителя, а не подбор формы. */
     {
         static const uint8_t anchored_plan[] = {
-            'D','2','K','P', 0,1, 0,5, 0,0, 0,5,
+            'D','2','S','P', 0,1, 0,5, 0,0, 0,5,
             0,2, 0,2, 6,1,                 /* TCP/TLS */
             1,10, 0,0,                     /* input tls-sni */
             1,0, 0,4, 0,5, 0,0,            /* split sni_middle */
@@ -2272,7 +2272,7 @@ int main(void) {
     /* Segmented measured fake: 7 * ceil(4096/1400) + truth = 22 packets.
      * Check the real session output and an all-or-nothing small-buffer refusal. */
     {
-        uint8_t tlv[4200] = {'D','2','K','P',0,1,0,3,0,0,0,5,0,2,0,2,6,1};
+        uint8_t tlv[4200] = {'D','2','S','P',0,1,0,3,0,0,0,5,0,2,0,2,6,1};
         size_t z = 18;
         wr16(tlv + z, 0x0010); wr16(tlv + z + 2, 4098); wr16(tlv + z + 4, 1);
         memset(tlv + z + 6, 0x0f, 4096); z += 4102;
@@ -2851,7 +2851,7 @@ int main(void) {
                завершившаяся на ХВОСТЕ, разрешением послать пересобранное
                приветствие не является: голова уже ушла на провод. */
             static const uint8_t strict_plan[] = {
-                'D','2','K','P', 0,1, 0,5, 0,0, 0,8,
+                'D','2','S','P', 0,1, 0,5, 0,0, 0,8,
                 0,2, 0,2, 6,1,                 /* TCP/TLS */
                 1,10, 0,0,                     /* input tls-sni */
                 1,0, 0,4, 0,0, 0,1,           /* split payload_start+1 */

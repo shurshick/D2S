@@ -1180,7 +1180,7 @@ int main(void) {
            datapath/test_ctl.c: 'D''2''K''P' схема=1 минисполн=1 флаги=0
            записей=1, запись ORDER (тип 0x0103, длина 1, значение 0). */
         static const uint8_t tiny[] = {
-            'D', '2', 'K', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
+            'D', '2', 'S', 'P', 0, 1, 0, 1, 0, 0, 0, 1,
             0x01, 0x03, 0x00, 0x01, 0x00
         };
         char tiny_hex[2 * sizeof tiny + 1];
