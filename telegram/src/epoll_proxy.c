@@ -685,6 +685,34 @@ static void route_failure_record(proxy_connection *connection,
     connection->route_failure_recorded = 1;
 }
 
+static void route_health_cooldown_at(proxy_connection *connection,
+                                     uint32_t stage) {
+    if (!connection) return;
+    if (connection->route_health_index >= 0) {
+        route_health *health = &connection->server->route_health[
+            (size_t)connection->route_health_index];
+        if (health->used) {
+            uint64_t now = monotonic_ms();
+            health->cooldown_until_ms = now + TG_ROUTE_HEALTH_COOLDOWN_MS;
+            health->last_failure_ms = now;
+            health->last_failure_stage = stage;
+        }
+    }
+    route_failure_record(connection, connection->route_kind, stage);
+}
+
+static void route_health_failed_at(proxy_connection *connection,
+                                   uint32_t stage) {
+    if (!connection) return;
+    if (connection->route_health_index >= 0) {
+        route_health *health = &connection->server->route_health[
+            (size_t)connection->route_health_index];
+        if (health->used && health->failures != UINT64_MAX)
+            ++health->failures;
+    }
+    route_health_cooldown_at(connection, stage);
+}
+
 static void route_health_failed(proxy_connection *connection) {
     if (!connection) return;
     uint32_t stage;
@@ -700,18 +728,7 @@ static void route_health_failed(proxy_connection *connection) {
     } else {
         stage = TG_EPOLL_FAILURE_SETUP;
     }
-    if (connection->route_health_index >= 0) {
-        route_health *health = &connection->server->route_health[
-            (size_t)connection->route_health_index];
-        if (health->used) {
-            if (health->failures != UINT64_MAX) ++health->failures;
-            uint64_t now = monotonic_ms();
-            health->cooldown_until_ms = now + TG_ROUTE_HEALTH_COOLDOWN_MS;
-            health->last_failure_ms = now;
-            health->last_failure_stage = stage;
-        }
-    }
-    route_failure_record(connection, connection->route_kind, stage);
+    route_health_failed_at(connection, stage);
 }
 
 static size_t route_worker_count(const tg_epoll_proxy *server);
@@ -736,7 +753,6 @@ static int route_health_preferred_step(const tg_epoll_proxy *server,
             health->dc_id != connection->route_dc_id ||
             health->is_media != connection->route_is_media ||
             !health->last_success_ms || now < health->last_success_ms ||
-            now - health->last_success_ms > 120000u ||
             health->original.port != target->port ||
             health->cooldown_until_ms > now ||
             health->last_failure_ms > health->last_success_ms ||
@@ -803,6 +819,19 @@ static void route_plan_prioritize(tg_route_plan *plan,
             plan->steps[0] = selected;
         }
         return;
+    }
+}
+
+static void route_plan_prioritize_kind(tg_route_plan *plan,
+                                       tg_route_kind kind) {
+    size_t front = 0;
+    for (size_t i = 0; i < plan->count; ++i) {
+        if (plan->steps[i].kind != kind) continue;
+        tg_route_step selected = plan->steps[i];
+        if (i > front)
+            memmove(&plan->steps[front + 1u], &plan->steps[front],
+                    (i - front) * sizeof(plan->steps[0]));
+        plan->steps[front++] = selected;
     }
 }
 
@@ -1102,8 +1131,11 @@ static void hedge_cancel_candidates(proxy_connection *connection) {
 
 static int setup_route_attempt(proxy_connection *connection,
                                const tg_route_step *step,
-                               tg_listener_destination *target) {
+                               tg_listener_destination *target,
+                               int *dns_failure, int *cooldown) {
     tg_epoll_proxy *server = connection->server;
+    if (dns_failure) *dns_failure = 0;
+    if (cooldown) *cooldown = 0;
     connection->route_kind = step->kind;
     connection->packet_framing = 1;
     connection->wss_subprotocol = 1;
@@ -1128,10 +1160,18 @@ static int setup_route_attempt(proxy_connection *connection,
             domain = hostname;
         }
         if (!domain) return -1;
-        int resolve_status = resolve_route_domain(server, domain, target);
-        if (resolve_status != 0) return resolve_status;
         if (strlen(domain) >= sizeof(connection->tls_hostname)) return -1;
         memcpy(connection->tls_hostname, domain, strlen(domain) + 1u);
+        int health_index = route_health_get(server, connection, 0);
+        if (health_index >= 0 &&
+            server->route_health[health_index].cooldown_until_ms >
+                monotonic_ms()) {
+            if (cooldown) *cooldown = 1;
+            return 2;
+        }
+        int resolve_status = resolve_route_domain(server, domain, target);
+        if (resolve_status < 0 && dns_failure) *dns_failure = 1;
+        if (resolve_status != 0) return resolve_status;
         if (step->kind == TG_ROUTE_CF_WORKER) {
             connection->packet_framing = 0;
             connection->wss_subprotocol = 0;
@@ -1188,7 +1228,14 @@ static int start_next_route(proxy_connection *connection) {
         }
         tg_listener_destination target;
         memset(&target, 0, sizeof(target));
-        int setup_status = setup_route_attempt(connection, &step, &target);
+        int dns_failure = 0, route_cooldown = 0;
+        int setup_status = setup_route_attempt(connection, &step, &target,
+                                               &dns_failure, &route_cooldown);
+        if (route_cooldown) {
+            route_session_event(connection, step.kind,
+                                TG_ROUTE_SESSION_COOLDOWN);
+            continue;
+        }
         if (setup_status == 1) {
             uint64_t now = monotonic_ms();
             if (!retrying_dns) {
@@ -1210,9 +1257,21 @@ static int start_next_route(proxy_connection *connection) {
             (server->config.enforce_self_dial &&
              tg_listener_is_self_dial_addr(&target, server->listen_ports,
                                            server->config.listen_port_count))) {
-            route_failure_record(connection, step.kind,
-                step.kind == TG_ROUTE_DIRECT_WSS
-                    ? TG_EPOLL_FAILURE_SETUP : TG_EPOLL_FAILURE_DNS);
+            if (dns_failure) {
+                connection->route_health_index =
+                    route_health_get(server, connection, 1);
+                if (connection->route_health_index >= 0)
+                    route_health_cooldown_at(connection,
+                                             TG_EPOLL_FAILURE_DNS);
+                else
+                    route_failure_record(connection, step.kind,
+                                         TG_EPOLL_FAILURE_DNS);
+                connection->route_health_index = -1;
+            } else {
+                route_failure_record(connection, step.kind,
+                    step.kind == TG_ROUTE_DIRECT_WSS
+                        ? TG_EPOLL_FAILURE_SETUP : TG_EPOLL_FAILURE_DNS);
+            }
             route_session_event(connection, step.kind,
                                 TG_ROUTE_SESSION_FAILED);
             continue;
@@ -1299,19 +1358,38 @@ static int hedge_launch_next(proxy_connection *parent) {
         candidate->wss_proto = parent->wss_proto;
         memcpy(candidate->handshake, parent->handshake,
                sizeof(candidate->handshake));
+        int dns_failure = 0, route_cooldown = 0;
         int setup_status = setup_route_attempt(candidate, &step,
-                                &candidate->upstream_target);
+            &candidate->upstream_target, &dns_failure, &route_cooldown);
         if (setup_status == 1) {
             --parent->route_index;
             free(candidate);
             return 0;
+        }
+        if (route_cooldown) {
+            route_session_event(parent, step.kind,
+                                TG_ROUTE_SESSION_COOLDOWN);
+            free(candidate);
+            continue;
         }
         if (setup_status != 0 ||
             (server->config.enforce_self_dial &&
              tg_listener_is_self_dial_addr(&candidate->upstream_target,
                                            server->listen_ports,
                                            server->config.listen_port_count))) {
-            route_failure_record(candidate, step.kind, TG_EPOLL_FAILURE_SETUP);
+            if (dns_failure) {
+                candidate->route_health_index =
+                    route_health_get(server, candidate, 1);
+                if (candidate->route_health_index >= 0)
+                    route_health_cooldown_at(candidate,
+                                             TG_EPOLL_FAILURE_DNS);
+                else
+                    route_failure_record(candidate, step.kind,
+                                         TG_EPOLL_FAILURE_DNS);
+            } else {
+                route_failure_record(candidate, step.kind,
+                                     TG_EPOLL_FAILURE_SETUP);
+            }
             route_session_event(candidate, step.kind,
                                 TG_ROUTE_SESSION_FAILED);
             free(candidate);
@@ -1614,8 +1692,15 @@ static int route_after_handshake(proxy_connection *connection) {
                              TG_EPOLL_FAILURE_ROUTE_UNAVAILABLE);
         return -1;
     }
-    if (policy == TG_WS_ROUTING_ADAPTIVE && have_preferred)
-        route_plan_prioritize(&connection->route_plan, &preferred);
+    if (policy == TG_WS_ROUTING_ADAPTIVE) {
+        if (have_preferred) {
+            route_plan_prioritize(&connection->route_plan, &preferred);
+        } else {
+            /* Try every configured CF Proxy variant before slow direct WSS. */
+            route_plan_prioritize_kind(&connection->route_plan,
+                                       TG_ROUTE_CF_PROXY);
+        }
+    }
     uint32_t hedge_limit = server->config.routing_config
         ? server->config.routing_config->ws_hedge_limit : 0;
     if (policy == TG_WS_ROUTING_HEDGED && hedge_limit > 0 &&
