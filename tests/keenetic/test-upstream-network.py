@@ -6,6 +6,8 @@ manifest=json.loads((Path(__file__).with_name("upstream-network.json")).read_tex
 def original_namespace(data):
     data=data.replace(b"d2s",b"d2k").replace(b"D2S",b"D2K")
     data=data.replace(b"buf[*pos + 2] = 'S'",b"buf[*pos + 2] = 'K'")
+    data=data.replace(b"b[n++]='S';",b"b[n++]='K';")
+    data=data.replace(b"'D''2''S''P'",b"'D''2''K''P'")
     data=data.replace(b"cpath[o++] = 's';",b"cpath[o++] = 'k';")
     return re.sub(rb"('D',\s*'2',\s*)'S'",rb"\1'K'",data)
 for name,expected in manifest.items():

@@ -636,7 +636,7 @@ static void test_quicsplit(void) {
 static size_t pinned_plan(uint8_t *b, unsigned total, unsigned sni_off,
                           unsigned sni_len, unsigned split_at) {
     size_t n = 0;
-    b[n++]='D';b[n++]='2';b[n++]='K';b[n++]='P';
+    b[n++]='D';b[n++]='2';b[n++]='S';b[n++]='P';
     put16(b,&n,1); put16(b,&n,5); put16(b,&n,0); put16(b,&n,5);
     uint8_t proto[2]={6,1}; putrec(b,&n,0x0002,proto,2);
     uint8_t inp[12]={(uint8_t)(total>>24),(uint8_t)(total>>16),(uint8_t)(total>>8),(uint8_t)total,
