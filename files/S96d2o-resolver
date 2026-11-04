@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+PATH=/opt/sbin:/opt/bin:/sbin:/bin:/usr/sbin:/usr/bin
+export PATH
+BIN=/opt/sbin/d2o-resolver
+PID=/opt/d2k/run/d2o-resolver.pid
+LOG=/opt/d2k/log/resolver.log
+running() {
+    [ -r "$PID" ] || return 1
+    pid=$(cat "$PID")
+    case "$pid" in ''|*[!0-9]*) return 1;; esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = d2o-resolver ]
+}
+start() {
+    if running; then return 0; fi
+    mkdir -p /opt/d2k/run /opt/d2k/log
+    start-stop-daemon -S -b -m -p "$PID" -x "$BIN" -- --port 9083 >> "$LOG" 2>&1
+    for attempt in 1 2 3 4 5; do
+        if curl -fsS --noproxy '*' --connect-timeout 1 --max-time 2 http://127.0.0.1:9083/health >/dev/null; then
+            echo 'Local resolver ready on loopback'; return 0
+        fi
+        sleep 1
+    done
+    echo 'Local resolver did not become ready' >&2
+    return 1
+}
+stop() {
+    if running; then
+        start-stop-daemon -K -q -p "$PID"
+        for attempt in 1 2 3 4 5; do
+            running || break
+            sleep 1
+        done
+        running && return 1
+    fi
+    rm -f "$PID"
+    return 0
+}
+case "${1:-}" in
+    start) start;;
+    stop) stop;;
+    restart) stop; start;;
+    status) running && echo 'local resolver running' || { echo 'local resolver stopped'; exit 1; };;
+    *) echo 'usage: start|stop|restart|status' >&2; exit 2;;
+esac

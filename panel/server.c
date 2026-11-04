@@ -1,0 +1,1480 @@
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
+#include "server.h"
+#include "../runtime/d2k_diagnostics_files.h"
+
+#include <errno.h>
+#include <ctype.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdarg.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/un.h>
+#include <time.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define REQUEST_MAX (32u * 1024u)
+#define BODY_MAX (1024u * 1024u)
+#define TELEGRAM_STATS_MAX 131072u
+#ifndef D2K_PANEL_HEADER_TIMEOUT_MS
+#define D2K_PANEL_HEADER_TIMEOUT_MS 5000
+#endif
+#ifndef D2K_PANEL_RESPONSE_TIMEOUT_MS
+#define D2K_PANEL_RESPONSE_TIMEOUT_MS 5000
+#endif
+#ifndef D2K_PANEL_ACTION_TIMEOUT_MS
+#define D2K_PANEL_ACTION_TIMEOUT_MS 60000
+#endif
+
+static pid_t action_pid;
+static const char *action_state = "idle";
+
+static long long monotonic_ms(void) {
+    struct timespec t;
+    if (clock_gettime(CLOCK_MONOTONIC, &t) != 0) return 0;
+    return (long long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+void d2k_panel_control_tick(void) {
+    if (!action_pid) return;
+    int status;
+    pid_t r = waitpid(action_pid, &status, WNOHANG);
+    if (r == 0 || (r < 0 && errno == EINTR)) return;
+    action_pid = 0;
+    action_state = r < 0 || !WIFEXITED(status) ? "failed" :
+        WEXITSTATUS(status) == 124 ? "timeout" :
+        WEXITSTATUS(status) == 0 ? "done" : "failed";
+}
+
+int d2k_panel_ignore_sigpipe(void) {
+    struct sigaction action;
+    memset(&action, 0, sizeof action);
+    action.sa_handler = SIG_IGN;
+    if (sigemptyset(&action.sa_mask) != 0) { return -1; }
+    return sigaction(SIGPIPE, &action, NULL);
+}
+
+typedef struct { const char *p, *end; unsigned depth; } json_reader;
+
+static void json_ws(json_reader *r) {
+    while (r->p < r->end && (*r->p == ' ' || *r->p == '\t' ||
+                              *r->p == '\r' || *r->p == '\n')) { r->p++; }
+}
+
+static int json_string(json_reader *r) {
+    if (r->p >= r->end || *r->p++ != '"') { return -1; }
+    while (r->p < r->end) {
+        unsigned char c = (unsigned char)*r->p++;
+        if (c == '"') { return 0; }
+        if (c < 0x20) { return -1; }
+        if (c != '\\') { continue; }
+        if (r->p >= r->end) { return -1; }
+        c = (unsigned char)*r->p++;
+        if (c == '"' || c == '\\' || c == '/' || c == 'b' || c == 'f' ||
+            c == 'n' || c == 'r' || c == 't') { continue; }
+        if (c != 'u' || r->end - r->p < 4) { return -1; }
+        for (int i = 0; i < 4; i++) {
+            unsigned char h = (unsigned char)*r->p++;
+            if (!((h >= '0' && h <= '9') || (h >= 'a' && h <= 'f') ||
+                  (h >= 'A' && h <= 'F'))) { return -1; }
+        }
+    }
+    return -1;
+}
+
+static int json_value(json_reader *r);
+
+static int json_compound(json_reader *r, char open, char close, int object) {
+    if (++r->depth > 64 || r->p >= r->end || *r->p++ != open) {
+        r->depth--;
+        return -1;
+    }
+    json_ws(r);
+    if (r->p < r->end && *r->p == close) { r->p++; r->depth--; return 0; }
+    for (;;) {
+        if (object) {
+            if (json_string(r) != 0) { r->depth--; return -1; }
+            json_ws(r);
+            if (r->p >= r->end || *r->p++ != ':') { r->depth--; return -1; }
+            json_ws(r);
+        }
+        if (json_value(r) != 0) { r->depth--; return -1; }
+        json_ws(r);
+        if (r->p >= r->end) { r->depth--; return -1; }
+        char c = *r->p++;
+        if (c == close) { r->depth--; return 0; }
+        if (c != ',') { r->depth--; return -1; }
+        json_ws(r);
+    }
+}
+
+static int json_number(json_reader *r) {
+    const char *p = r->p;
+    if (p < r->end && *p == '-') { p++; }
+    if (p >= r->end) { return -1; }
+    if (*p == '0') { p++; }
+    else {
+        if (*p < '1' || *p > '9') { return -1; }
+        do { p++; } while (p < r->end && *p >= '0' && *p <= '9');
+    }
+    if (p < r->end && *p == '.') {
+        p++;
+        if (p >= r->end || *p < '0' || *p > '9') { return -1; }
+        do { p++; } while (p < r->end && *p >= '0' && *p <= '9');
+    }
+    if (p < r->end && (*p == 'e' || *p == 'E')) {
+        p++;
+        if (p < r->end && (*p == '+' || *p == '-')) { p++; }
+        if (p >= r->end || *p < '0' || *p > '9') { return -1; }
+        do { p++; } while (p < r->end && *p >= '0' && *p <= '9');
+    }
+    r->p = p;
+    return 0;
+}
+
+static int json_value(json_reader *r) {
+    json_ws(r);
+    if (r->p >= r->end) { return -1; }
+    switch (*r->p) {
+    case '"': return json_string(r);
+    case '{': return json_compound(r, '{', '}', 1);
+    case '[': return json_compound(r, '[', ']', 0);
+    case 't': if (r->end - r->p >= 4 && memcmp(r->p, "true", 4) == 0) { r->p += 4; return 0; } return -1;
+    case 'f': if (r->end - r->p >= 5 && memcmp(r->p, "false", 5) == 0) { r->p += 5; return 0; } return -1;
+    case 'n': if (r->end - r->p >= 4 && memcmp(r->p, "null", 4) == 0) { r->p += 4; return 0; } return -1;
+    default: return json_number(r);
+    }
+}
+
+static int json_valid_object(const char *p, const char *end) {
+    json_reader r = { .p = p, .end = end, .depth = 0 };
+    json_ws(&r);
+    if (r.p >= r.end || *r.p != '{' || json_value(&r) != 0) { return 0; }
+    json_ws(&r);
+    return r.p == r.end;
+}
+
+static int json_top_value(const char *json, const char *wanted,
+                          const char **value, size_t *value_len) {
+    json_reader r = { .p = json, .end = json + strlen(json), .depth = 0 };
+    json_ws(&r);
+    if (r.p >= r.end || *r.p++ != '{') { return 0; }
+    json_ws(&r);
+    while (r.p < r.end && *r.p != '}') {
+        const char *key_start = r.p;
+        if (json_string(&r) != 0) { return 0; }
+        size_t key_len = (size_t)(r.p - key_start);
+        json_ws(&r);
+        if (r.p >= r.end || *r.p++ != ':') { return 0; }
+        json_ws(&r);
+        const char *value_start = r.p;
+        int match = strlen(wanted) + 2 == key_len && key_start[0] == '"' &&
+                    key_start[key_len - 1] == '"' &&
+                    memcmp(key_start + 1, wanted, strlen(wanted)) == 0;
+        if (json_value(&r) != 0) { return 0; }
+        if (match) {
+            *value = value_start;
+            *value_len = (size_t)(r.p - value_start);
+            return 1;
+        }
+        json_ws(&r);
+        if (r.p >= r.end || *r.p == '}') { break; }
+        if (*r.p++ != ',') { return 0; }
+        json_ws(&r);
+    }
+    return 0;
+}
+
+static int json_top_true(const char *json, const char *key) {
+    const char *value;
+    size_t len;
+    return json_top_value(json, key, &value, &len) && len == 4 &&
+           memcmp(value, "true", 4) == 0;
+}
+
+static int json_top_nonempty_string(const char *json, const char *key) {
+    const char *value;
+    size_t len;
+    return json_top_value(json, key, &value, &len) && len > 2 &&
+           value[0] == '"' && value[len - 1] == '"';
+}
+
+static int pid_path_running(const char *path, time_t *started_at) {
+    if (started_at) { *started_at = 0; }
+    if (!path || !path[0]) { return 1; }
+    FILE *f = fopen(path, "r");
+    if (!f) { return 0; }
+    struct stat st;
+    int have_stat = fstat(fileno(f), &st) == 0 && S_ISREG(st.st_mode);
+    char line[32];
+    int ok = fgets(line, sizeof line, f) != NULL;
+    fclose(f);
+    if (!ok || !have_stat) { return 0; }
+    char *end = NULL;
+    errno = 0;
+    long value = strtol(line, &end, 10);
+    if (errno || value <= 1 || value > 4194304L || !end) { return 0; }
+    while (*end == ' ' || *end == '\t' || *end == '\r' || *end == '\n') { end++; }
+    if (*end) { return 0; }
+    int running = kill((pid_t)value, 0) == 0 || errno == EPERM;
+    if (running && started_at) { *started_at = st.st_mtime; }
+    return running;
+}
+
+static int engine_pid_running(const d2k_panel_config *cfg, time_t *started_at) {
+    return pid_path_running(cfg ? cfg->engine_pid_path : NULL, started_at);
+}
+
+static int controller_pid_running(const d2k_panel_config *cfg) {
+    return pid_path_running(cfg ? cfg->controller_pid_path : NULL, NULL);
+}
+
+static int write_all(int fd, const void *buf, size_t len, long long deadline) {
+    const char *p = buf;
+    while (len > 0) {
+        long long remaining = deadline - monotonic_ms();
+        if (remaining <= 0) { errno = ETIMEDOUT; return -1; }
+        struct pollfd ready = { .fd = fd, .events = POLLOUT };
+        int rc = poll(&ready, 1, (int)remaining);
+        if (rc < 0 && errno == EINTR) { continue; }
+        if (rc == 0) { errno = ETIMEDOUT; return -1; }
+        if (rc < 0) { return -1; }
+        ssize_t n = write(fd, p, len);
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) { continue; }
+        if (n <= 0) { return -1; }
+        p += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+/* extra — дополнительные строки заголовка, каждая с завершающим \r\n. */
+static int response_ex(int fd, int code, const char *reason, const char *type,
+                       const char *extra, const char *body, size_t len) {
+    char hdr[1024];
+    int n = snprintf(hdr, sizeof hdr,
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: %s\r\n"
+        "Content-Length: %zu\r\n"
+        "%s"
+        "Connection: close\r\n"
+        "Content-Security-Policy: default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\n"
+        "X-Content-Type-Options: nosniff\r\n"
+        "Referrer-Policy: no-referrer\r\n\r\n",
+        code, reason, type, len, extra ? extra : "");
+    if (n < 0 || (size_t)n >= sizeof hdr) { return -1; }
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) { return -1; }
+    /* One deadline covers headers and body, including repeated partial writes. */
+    const long long deadline = monotonic_ms() + D2K_PANEL_RESPONSE_TIMEOUT_MS;
+    int rc = write_all(fd, hdr, (size_t)n, deadline);
+    if (rc == 0 && len) { rc = write_all(fd, body, len, deadline); }
+    int saved_errno = errno;
+    int restored = fcntl(fd, F_SETFL, flags);
+    if (rc != 0) { errno = saved_errno; return rc; }
+    return restored == 0 ? 0 : -1;
+}
+
+static int response(int fd, int code, const char *reason, const char *type,
+                    const char *body, size_t len) {
+    return response_ex(fd, code, reason, type, NULL, body, len);
+}
+
+static int header_value(const char *req, const char *wanted,
+                        const char **value, size_t *value_len) {
+    const char *line = strstr(req, "\r\n");
+    if (!line) { return 0; }
+    line += 2;
+    while (*line && !(line[0] == '\r' && line[1] == '\n')) {
+        const char *end = strstr(line, "\r\n");
+        if (!end) { return 0; }
+        const char *colon = memchr(line, ':', (size_t)(end - line));
+        if (colon && (size_t)(colon - line) == strlen(wanted) &&
+            strncasecmp(line, wanted, strlen(wanted)) == 0) {
+            const char *start = colon + 1;
+            while (start < end && (*start == ' ' || *start == '\t')) { start++; }
+            const char *finish = end;
+            while (finish > start && (finish[-1] == ' ' || finish[-1] == '\t')) { finish--; }
+            *value = start;
+            *value_len = (size_t)(finish - start);
+            return 1;
+        }
+        line = end + 2;
+    }
+    return 0;
+}
+
+int d2k_panel_same_origin(const char *req) {
+  const char *host = NULL, *origin = NULL;
+  size_t host_len = 0, origin_len = 0;
+  if (!header_value(req, "Host", &host, &host_len) ||
+      !header_value(req, "Origin", &origin, &origin_len) || origin_len < 7 ||
+      memcmp(origin, "http://", 7) != 0) {
+    return 0;
+  }
+  const char *authority = origin + 7;
+  size_t authority_len = origin_len - 7;
+  return host_len == authority_len && memcmp(host, authority, host_len) == 0;
+}
+
+static int run_service_action(const d2k_panel_config *cfg, const char *action, int client) {
+    if (!cfg || !cfg->service_path || !cfg->service_path[0]) { return -1; }
+    d2k_panel_control_tick();
+    if (action_pid) return 1;
+    pid_t pid = fork();
+    if (pid < 0) { return -1; }
+    if (pid == 0) {
+        close(client);
+        if (cfg->listener_fd > 2) close(cfg->listener_fd);
+        signal(SIGTERM, SIG_DFL); signal(SIGINT, SIG_DFL);
+        pid_t worker = fork();
+        if (worker < 0) _exit(125);
+        if (worker == 0) {
+            if (setpgid(0, 0) != 0) _exit(125);
+            execl(cfg->service_path, cfg->service_path, action, (char *)NULL);
+            _exit(127);
+        }
+        (void)setpgid(worker, worker);
+        long long deadline = monotonic_ms() + D2K_PANEL_ACTION_TIMEOUT_MS;
+        int status = 0, timed_out = 0;
+        for (;;) {
+            pid_t r = waitpid(worker, &status, WNOHANG);
+            if (r == worker) {
+                if (timed_out) { (void)kill(-worker, SIGKILL); _exit(124); }
+                _exit(WIFEXITED(status) ? WEXITSTATUS(status) : 125);
+            }
+            if (r < 0 && errno != EINTR) _exit(125);
+            if (monotonic_ms() >= deadline) {
+                if (!timed_out) {
+                    timed_out = 1;
+                    (void)kill(-worker, SIGTERM);
+                    deadline = monotonic_ms() + 1000;
+                } else {
+                    (void)kill(-worker, SIGKILL);
+                    while (waitpid(worker, &status, 0) < 0 && errno == EINTR) {}
+                    _exit(124);
+                }
+            }
+            struct timespec pause = { .tv_nsec = 20000000 };
+            (void)nanosleep(&pause, NULL);
+        }
+    }
+    action_pid = pid;
+    action_state = "running";
+    return 0;
+}
+
+static void telegram_config_flags(const d2k_panel_config *cfg,int *enabled,int *configured) {
+    *enabled=0;*configured=0;
+    if(!cfg||!cfg->config_path)return;
+    FILE *f=fopen(cfg->config_path,"r");if(!f)return;
+    char line[2048];int mode_seen=0,local_mode=0,mode_valid=1;
+    while(fgets(line,sizeof(line),f)) {
+        char *p=line;while(*p==' '||*p=='\t')p++;
+        if(*p=='#'||!*p)continue;
+        char *eq=strchr(p,'=');if(!eq)continue;*eq++='\0';
+        char *end=p+strlen(p);while(end>p&&(end[-1]==' '||end[-1]=='\t'||end[-1]=='\r'||end[-1]=='\n'))*--end='\0';
+        while(*eq==' '||*eq=='\t')eq++;
+        end=eq+strlen(eq);while(end>eq&&(end[-1]==' '||end[-1]=='\t'||end[-1]=='\r'||end[-1]=='\n'))*--end='\0';
+        if(*eq=='\''||*eq=='"') {
+            char quote=*eq;
+            if(end-eq<2||end[-1]!=quote){*configured=0;fclose(f);return;}
+            *--end='\0';eq++;
+            if(strchr(eq,quote)){*configured=0;fclose(f);return;}
+        }
+        if(strcmp(p,"TG_ENABLED")==0)*enabled=strcmp(eq,"1")==0||strcmp(eq,"yes")==0;
+        else if(strcmp(p,"TG_MODE")==0) {
+            if(mode_seen)mode_valid=0;
+            mode_seen=1;
+            if(strcmp(eq,"local")==0)local_mode=1;
+            else mode_valid=0;
+        }
+    }
+    fclose(f);*configured=mode_valid&&mode_seen&&local_mode;
+}
+
+static void telegram_status_value(const d2k_panel_config *cfg,int enabled,int configured,int *running,char out[24]) {
+    *running=cfg&&cfg->telegram_pid_path?pid_path_running(cfg->telegram_pid_path,NULL):0;
+    const char *fallback=!configured?"not_configured":(!enabled||!*running?"stopped":"connecting");
+    if(!configured||!enabled||!*running){snprintf(out,24,"%s",fallback);return;}
+    int fd=cfg&&cfg->telegram_status_path?
+        open(cfg->telegram_status_path,O_RDONLY|O_CLOEXEC|O_NOFOLLOW):-1;
+    if(fd<0){snprintf(out,24,"%s",fallback);return;}
+    char buf[64];ssize_t n=read(fd,buf,sizeof(buf)-1);close(fd);
+    if(n<=0){snprintf(out,24,"%s",fallback);return;}buf[n]='\0';
+    char *end=buf+strlen(buf);while(end>buf&&(end[-1]=='\r'||end[-1]=='\n'||end[-1]==' '||end[-1]=='\t'))*--end='\0';
+    if(strcmp(buf,"connected")==0||strcmp(buf,"connecting")==0||strcmp(buf,"local")==0||strcmp(buf,"stopped")==0||strcmp(buf,"not_configured")==0)
+        snprintf(out,24,"%.23s",buf);
+    else snprintf(out,24,"%s",fallback);
+}
+
+static int telegram_stats_number(const char *json, const char *key,
+                                 char out[21]) {
+    const char *value = NULL;
+    size_t length = 0;
+    if (!json_top_value(json, key, &value, &length) || !length || length > 20)
+        return -1;
+    if (length > 1 && value[0] == '0') return -1;
+    for (size_t i = 0; i < length; i++)
+        if (value[i] < '0' || value[i] > '9') return -1;
+    memcpy(out, value, length);
+    out[length] = '\0';
+    return 0;
+}
+
+static int telegram_stats_optional_number(const char *json, const char *key,
+                                         char out[21]) {
+    const char *value = NULL;
+    size_t length = 0;
+    if (!json_top_value(json, key, &value, &length)) {
+        memcpy(out, "0", 2);
+        return 0;
+    }
+    return telegram_stats_number(json, key, out);
+}
+
+static void telegram_stats_value(const d2k_panel_config *cfg,
+                                 char out[TELEGRAM_STATS_MAX]) {
+    snprintf(out, TELEGRAM_STATS_MAX, "null");
+    if (!cfg || !cfg->telegram_stats_path) return;
+    struct sockaddr_un address;
+    memset(&address, 0, sizeof(address));
+    size_t path_length = strlen(cfg->telegram_stats_path);
+    if (!path_length || path_length >= sizeof(address.sun_path)) return;
+    address.sun_family = AF_UNIX;
+    memcpy(address.sun_path, cfg->telegram_stats_path, path_length + 1);
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) return;
+    int flags = fcntl(fd, F_GETFL);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        close(fd);
+        return;
+    }
+    int connected = connect(fd, (struct sockaddr *)&address, sizeof(address));
+    if (connected != 0 && errno != EINPROGRESS && errno != EAGAIN &&
+        errno != EWOULDBLOCK) {
+        close(fd);
+        return;
+    }
+    long long deadline = monotonic_ms() + 1250;
+    if (connected != 0) {
+        struct pollfd ready = {.fd = fd, .events = POLLOUT};
+        int remaining = (int)(deadline - monotonic_ms());
+        int rc = remaining > 0 ? poll(&ready, 1, remaining) : 0;
+        int error = 0;
+        socklen_t error_length = sizeof(error);
+        if (rc <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &error,
+                                  &error_length) != 0 || error) {
+            close(fd);
+            return;
+        }
+    }
+
+    char raw[TELEGRAM_STATS_MAX];
+    size_t used = 0;
+    int complete = 0;
+    while (monotonic_ms() < deadline) {
+        struct pollfd ready = {.fd = fd, .events = POLLIN};
+        int remaining = (int)(deadline - monotonic_ms());
+        int rc = poll(&ready, 1, remaining);
+        if (rc < 0 && errno == EINTR) continue;
+        if (rc <= 0 || (ready.revents & (POLLERR | POLLNVAL))) break;
+        if (used >= sizeof(raw) - 1) break;
+        ssize_t n = read(fd, raw + used, sizeof(raw) - 1 - used);
+        if (n > 0) {
+            used += (size_t)n;
+            continue;
+        }
+        if (n == 0) { complete = 1; break; }
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
+        break;
+    }
+    close(fd);
+    if (!complete || !used) return;
+    raw[used] = '\0';
+    if (!json_valid_object(raw, raw + used)) return;
+    char active[21], maximum[21], started[21], accepted[21];
+    char from_client[21], from_upstream[21];
+    char wss_attempts[21], wss_failures[21], wss_responses[21], cf_responses[21];
+    char success_dc[21], success_route[21], success_latency[21], success_age[21];
+    char failure_dc[21], failure_route[21], failure_stage[21], failure_age[21];
+    if (telegram_stats_number(raw, "active_connections", active) != 0 ||
+        telegram_stats_number(raw, "max_connections", maximum) != 0 ||
+        telegram_stats_number(raw, "connections_started", started) != 0 ||
+        telegram_stats_number(raw, "bytes_from_clients", from_client) != 0 ||
+        telegram_stats_number(raw, "bytes_from_upstreams", from_upstream) != 0 ||
+        telegram_stats_number(raw, "wss_attempts", wss_attempts) != 0 ||
+        telegram_stats_number(raw, "wss_failures", wss_failures) != 0 ||
+        telegram_stats_number(raw, "wss_responses", wss_responses) != 0 ||
+        telegram_stats_number(raw, "cf_wss_responses", cf_responses) != 0 ||
+        telegram_stats_optional_number(raw, "last_success_dc", success_dc) != 0 ||
+        telegram_stats_optional_number(raw, "last_success_route", success_route) != 0 ||
+        telegram_stats_optional_number(raw, "last_success_latency_ms", success_latency) != 0 ||
+        telegram_stats_optional_number(raw, "last_success_age_ms", success_age) != 0 ||
+        telegram_stats_optional_number(raw, "last_failure_dc", failure_dc) != 0 ||
+        telegram_stats_optional_number(raw, "last_failure_route", failure_route) != 0 ||
+        telegram_stats_optional_number(raw, "last_failure_stage", failure_stage) != 0 ||
+        telegram_stats_optional_number(raw, "last_failure_age_ms", failure_age) != 0)
+        return;
+    const char *sessions = NULL, *truncated = NULL;
+    size_t sessions_len = 0, truncated_len = 0;
+    if (!json_top_value(raw, "active_sessions", &sessions, &sessions_len) ||
+        sessions_len < 2 || sessions[0] != '[' ||
+        !json_top_value(raw, "route_sessions_truncated", &truncated,
+                        &truncated_len) ||
+        !((truncated_len == 4 && memcmp(truncated, "true", 4) == 0) ||
+          (truncated_len == 5 && memcmp(truncated, "false", 5) == 0)) ||
+        telegram_stats_number(raw, "process_started_at", started) != 0 ||
+        telegram_stats_number(raw, "accepted_connections", accepted) != 0)
+        return;
+    if (used >= TELEGRAM_STATS_MAX) return;
+    memcpy(out, raw, used + 1);
+}
+
+enum { TG_WORKER_MAX = 8, TG_WORKER_DOMAIN_MAX = 253, TG_WORKER_BODY_MAX = 4096 };
+typedef char tg_worker_domain[TG_WORKER_DOMAIN_MAX + 1];
+
+static int worker_domain_normalize(const char *input, size_t length,
+                                   int allow_url, tg_worker_domain output) {
+    while (length && isspace((unsigned char)*input)) { input++; length--; }
+    while (length && isspace((unsigned char)input[length - 1])) length--;
+    if (allow_url && length >= 7 && strncasecmp(input, "http://", 7) == 0) {
+        input += 7; length -= 7;
+    } else if (allow_url && length >= 8 &&
+               strncasecmp(input, "https://", 8) == 0) {
+        input += 8; length -= 8;
+    }
+    size_t host_length = 0;
+    while (host_length < length && input[host_length] != '/' &&
+           input[host_length] != '?' && input[host_length] != '#')
+        host_length++;
+    if (!allow_url && host_length != length) return -1;
+    length = host_length;
+    if (!length || length > TG_WORKER_DOMAIN_MAX) return -1;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)input[i];
+        if (!(isalnum(c) || c == '-' || c == '.')) return -1;
+        output[i] = (char)tolower(c);
+    }
+    output[length] = '\0';
+    size_t label_start = 0, labels = 0;
+    int tld_has_alpha = 0;
+    for (size_t i = 0; i <= length; ++i) {
+        if (i < length && output[i] != '.') continue;
+        size_t label_length = i - label_start;
+        if (!label_length || label_length > 63 || output[label_start] == '-' ||
+            output[i - 1] == '-') return -1;
+        labels++;
+        if (i == length) {
+            if (label_length < 2) return -1;
+            for (size_t j = label_start; j < i; ++j)
+                if (isalpha((unsigned char)output[j])) tld_has_alpha = 1;
+        }
+        label_start = i + 1;
+    }
+    return labels >= 2 && tld_has_alpha ? 0 : -1;
+}
+
+static int worker_domain_add(tg_worker_domain domains[TG_WORKER_MAX],
+                             size_t *count, const char *value, size_t length,
+                             int allow_url) {
+    tg_worker_domain normalized;
+    if (worker_domain_normalize(value, length, allow_url, normalized) != 0)
+        return -1;
+    for (size_t i = 0; i < *count; ++i)
+        if (strcmp(domains[i], normalized) == 0) return 0;
+    if (*count >= TG_WORKER_MAX) return -1;
+    memcpy(domains[(*count)++], normalized, strlen(normalized) + 1);
+    return 0;
+}
+
+static int worker_line(const char *line, size_t length) {
+    size_t start = 0, end = length;
+    while (start < end && (line[start] == ' ' || line[start] == '\t')) start++;
+    if (start == end || line[start] == '#') return 0;
+    const char *equal = memchr(line + start, '=', end - start);
+    if (!equal) return 0;
+    end = (size_t)(equal - line);
+    while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t')) end--;
+    static const char key[] = "TG_CF_WORKER_DOMAIN";
+    return end - start == sizeof key - 1 &&
+           memcmp(line + start, key, sizeof key - 1) == 0;
+}
+
+static int worker_domains_from_config(const char *path,
+                                      tg_worker_domain domains[TG_WORKER_MAX],
+                                      size_t *count) {
+    *count = 0;
+    if (!path) return -1;
+    int fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return -1;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uint64_t)st.st_size > BODY_MAX) { close(fd); return -1; }
+    size_t length = (size_t)st.st_size;
+    char *contents = malloc(length + 1);
+    if (!contents) { close(fd); return -1; }
+    size_t used = 0;
+    while (used < length) {
+        ssize_t n = read(fd, contents + used, length - used);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { free(contents); close(fd); return -1; }
+        used += (size_t)n;
+    }
+    close(fd);
+    contents[used] = '\0';
+    if (memchr(contents, '\0', used)) { free(contents); return -1; }
+    size_t offset = 0;
+    while (offset < used) {
+        size_t end = offset;
+        while (end < used && contents[end] != '\n') end++;
+        size_t line_end = end;
+        if (line_end > offset && contents[line_end - 1] == '\r') line_end--;
+        if (worker_line(contents + offset, line_end - offset)) {
+            const char *equal = memchr(contents + offset, '=', line_end - offset);
+            const char *value = equal + 1;
+            size_t value_len = (size_t)((contents + line_end) - value);
+            while (value_len && (*value == ' ' || *value == '\t')) { value++; value_len--; }
+            while (value_len && (value[value_len - 1] == ' ' || value[value_len - 1] == '\t')) value_len--;
+            if (value_len >= 2 && ((*value == '\'' && value[value_len - 1] == '\'') ||
+                                   (*value == '"' && value[value_len - 1] == '"'))) {
+                value++; value_len -= 2;
+            }
+            *count = 0;
+            size_t item = 0;
+            for (size_t i = 0; i <= value_len; ++i) {
+                if (i != value_len && value[i] != ',') continue;
+                if (i > item && worker_domain_add(domains, count, value + item,
+                                                  i - item, 1) != 0) {
+                    free(contents); return -1;
+                }
+                item = i + 1;
+            }
+        }
+        offset = end < used ? end + 1 : used;
+    }
+    free(contents);
+    return 0;
+}
+
+static int worker_domains_from_json(const char *json, size_t length,
+                                    tg_worker_domain domains[TG_WORKER_MAX],
+                                    size_t *count) {
+    if (!json_valid_object(json, json + length)) return -1;
+    char *copy = malloc(length + 1);
+    if (!copy) return -1;
+    memcpy(copy, json, length); copy[length] = '\0';
+    const char *value = NULL;
+    size_t value_len = 0;
+    if (!json_top_value(copy, "domains", &value, &value_len)) {
+        free(copy); return -1;
+    }
+    const char *p = value, *end = value + value_len;
+    json_reader reader = { .p = p, .end = end, .depth = 0 };
+    json_ws(&reader);
+    if (reader.p >= reader.end || *reader.p++ != '[') { free(copy); return -1; }
+    *count = 0;
+    json_ws(&reader);
+    if (reader.p < reader.end && *reader.p == ']') reader.p++;
+    else for (;;) {
+        json_ws(&reader);
+        if (reader.p >= reader.end || *reader.p++ != '"') { free(copy); return -1; }
+        const char *start = reader.p;
+        while (reader.p < reader.end && *reader.p != '"') {
+            unsigned char c = (unsigned char)*reader.p++;
+            if (c == '\\' || c >= 0x80) { free(copy); return -1; }
+        }
+        if (reader.p >= reader.end || worker_domain_add(domains, count, start,
+                (size_t)(reader.p - start), 0) != 0) { free(copy); return -1; }
+        reader.p++;
+        json_ws(&reader);
+        if (reader.p >= reader.end) { free(copy); return -1; }
+        if (*reader.p == ']') { reader.p++; break; }
+        if (*reader.p++ != ',') { free(copy); return -1; }
+    }
+    json_ws(&reader);
+    int ok = reader.p == reader.end;
+    free(copy);
+    return ok ? 0 : -1;
+}
+
+static int worker_config_write(const char *path,
+                               tg_worker_domain domains[TG_WORKER_MAX],
+                               size_t count) {
+    int input = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (input < 0) return -1;
+    struct stat st;
+    if (fstat(input, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uint64_t)st.st_size > BODY_MAX) { close(input); return -1; }
+    size_t length = (size_t)st.st_size;
+    char *source = malloc(length + 1);
+    size_t extra = TG_WORKER_MAX * (TG_WORKER_DOMAIN_MAX + 1) + 64;
+    if (!source) { close(input); return -1; }
+    size_t used = 0;
+    while (used < length) {
+        ssize_t n = read(input, source + used, length - used);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { free(source); close(input); return -1; }
+        used += (size_t)n;
+    }
+    close(input);
+    source[used] = '\0';
+    if (memchr(source, '\0', used)) { free(source); return -1; }
+    char *output = malloc(length + extra);
+    if (!output) { free(source); return -1; }
+    size_t written = 0, offset = 0;
+    while (offset < used) {
+        size_t end = offset;
+        while (end < used && source[end] != '\n') end++;
+        size_t line_length = end - offset;
+        if (line_length && source[offset + line_length - 1] == '\r') line_length--;
+        if (!worker_line(source + offset, line_length)) {
+            size_t full = (end < used ? end + 1 : end) - offset;
+            memcpy(output + written, source + offset, full);
+            written += full;
+        }
+        offset = end < used ? end + 1 : used;
+    }
+    if (count) {
+        if (written && output[written - 1] != '\n') output[written++] = '\n';
+        written += (size_t)snprintf(output + written, length + extra - written,
+                                    "TG_CF_WORKER_DOMAIN=");
+        for (size_t i = 0; i < count; ++i) {
+            if (i) output[written++] = ',';
+            size_t n = strlen(domains[i]);
+            memcpy(output + written, domains[i], n); written += n;
+        }
+        output[written++] = '\n';
+    }
+    size_t path_len = strlen(path);
+    char *temporary = malloc(path_len + sizeof ".workers.XXXXXX");
+    if (!temporary) { free(output); free(source); return -1; }
+    (void)snprintf(temporary, path_len + sizeof ".workers.XXXXXX",
+                   "%s.workers.XXXXXX", path);
+    int out = mkstemp(temporary);
+    int rc = -1;
+    if (out >= 0) {
+        int failed = fchmod(out, st.st_mode & 0777) != 0;
+        size_t sent = 0;
+        while (!failed && sent < written) {
+            ssize_t n = write(out, output + sent, written - sent);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) { failed = 1; break; }
+            sent += (size_t)n;
+        }
+        if (!failed && fsync(out) != 0) failed = 1;
+        if (close(out) != 0) failed = 1;
+        if (!failed && rename(temporary, path) == 0) rc = 0;
+        else unlink(temporary);
+    }
+    free(temporary); free(output); free(source);
+    return rc;
+}
+
+static int worker_request_body(int fd, const char *req, size_t used,
+                               char body[TG_WORKER_BODY_MAX + 1],
+                               size_t *body_len) {
+    const char *transfer = NULL, *length = NULL;
+    size_t transfer_len = 0, length_len = 0;
+    if (header_value(req, "Transfer-Encoding", &transfer, &transfer_len) ||
+        !header_value(req, "Content-Length", &length, &length_len) ||
+        !length_len || length_len > 4) return -1;
+    size_t expected = 0;
+    for (size_t i = 0; i < length_len; ++i) {
+        if (length[i] < '0' || length[i] > '9') return -1;
+        expected = expected * 10 + (size_t)(length[i] - '0');
+    }
+    if (!expected || expected > TG_WORKER_BODY_MAX) return -1;
+    const char *headers_end = strstr(req, "\r\n\r\n");
+    if (!headers_end) return -1;
+    size_t offset = (size_t)(headers_end + 4 - req);
+    size_t received = used > offset ? used - offset : 0;
+    if (received > expected) return -1;
+    if (received) memcpy(body, req + offset, received);
+    long long deadline = monotonic_ms() + D2K_PANEL_HEADER_TIMEOUT_MS;
+    while (received < expected) {
+        long long remaining = deadline - monotonic_ms();
+        if (remaining <= 0) return -1;
+        struct pollfd ready = { .fd = fd, .events = POLLIN };
+        int rc = poll(&ready, 1, (int)remaining);
+        if (rc < 0 && errno == EINTR) continue;
+        if (rc <= 0 || (ready.revents & (POLLERR | POLLNVAL))) return -1;
+        ssize_t n = read(fd, body + received, expected - received);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        received += (size_t)n;
+    }
+    body[received] = '\0';
+    *body_len = received;
+    return 0;
+}
+
+static int api_telegram_workers(int fd, const d2k_panel_config *cfg,
+                                const char *req, size_t used,
+                                const char *method) {
+    static const char json_type[] = "application/json; charset=utf-8";
+    if (!cfg || !cfg->config_path) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Файл конфигурации недоступен\"}";
+        return response(fd, 503, "Service Unavailable", json_type, body, sizeof body - 1);
+    }
+    tg_worker_domain domains[TG_WORKER_MAX] = {{0}};
+    size_t count = 0;
+    if (strcmp(method, "GET") == 0) {
+        if (worker_domains_from_config(cfg->config_path, domains, &count) != 0) {
+            static const char body[] = "{\"ok\":false,\"message\":\"Не удалось прочитать настройки Workers\"}";
+            return response(fd, 500, "Config Error", json_type, body, sizeof body - 1);
+        }
+        char body[2304];
+        size_t body_len = 0;
+        int n = snprintf(body, sizeof body, "{\"domains\":[");
+        if (n < 0 || (size_t)n >= sizeof body) return -1;
+        body_len = (size_t)n;
+        for (size_t i = 0; i < count; ++i) {
+            n = snprintf(body + body_len, sizeof body - body_len,
+                         "%s\"%s\"", i ? "," : "", domains[i]);
+            if (n < 0 || (size_t)n >= sizeof body - body_len) return -1;
+            body_len += (size_t)n;
+        }
+        n = snprintf(body + body_len, sizeof body - body_len, "]}");
+        if (n < 0 || (size_t)n >= sizeof body - body_len) return -1;
+        body_len += (size_t)n;
+        return response(fd, 200, "OK", json_type, body, body_len);
+    }
+    if (strcmp(method, "POST") != 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Метод не поддерживается\"}";
+        return response(fd, 405, "Method Not Allowed", json_type, body, sizeof body - 1);
+    }
+    if (!cfg->control_enabled || !d2k_panel_same_origin(req)) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Изменять настройки можно только с этой панели\"}";
+        return response(fd, 403, "Forbidden", json_type, body, sizeof body - 1);
+    }
+    const char *content_type = NULL;
+    size_t content_type_len = 0;
+    if (!header_value(req, "Content-Type", &content_type, &content_type_len) ||
+        content_type_len < 16 || strncasecmp(content_type, "application/json", 16) != 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Ожидается JSON со списком доменов\"}";
+        return response(fd, 415, "Unsupported Media Type", json_type, body, sizeof body - 1);
+    }
+    char request_body[TG_WORKER_BODY_MAX + 1];
+    size_t request_len = 0;
+    if (worker_request_body(fd, req, used, request_body, &request_len) != 0 ||
+        worker_domains_from_json(request_body, request_len, domains, &count) != 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Проверьте домены: до 8 имён без URL и пути\"}";
+        return response(fd, 400, "Bad Request", json_type, body, sizeof body - 1);
+    }
+    d2k_panel_control_tick();
+    if (action_pid) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Дождитесь завершения текущей команды\"}";
+        return response(fd, 409, "Conflict", json_type, body, sizeof body - 1);
+    }
+    if (worker_config_write(cfg->config_path, domains, count) != 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Не удалось сохранить настройки Workers\"}";
+        return response(fd, 500, "Config Error", json_type, body, sizeof body - 1);
+    }
+    int started = run_service_action(cfg, "telegram-restart", fd);
+    if (started != 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Настройки сохранены, но C11 не удалось перезапустить\"}";
+        return response(fd, started > 0 ? 409 : 500,
+                        started > 0 ? "Conflict" : "Service Error",
+                        json_type, body, sizeof body - 1);
+    }
+    static const char body[] = "{\"ok\":true,\"message\":\"Настройки сохранены, C11 перезапускается\"}";
+    return response(fd, 202, "Accepted", json_type, body, sizeof body - 1);
+}
+
+static int api_control(int fd, const d2k_panel_config *cfg, const char *req,
+                       const char *path) {
+    static const struct { const char *path; const char *command; const char *label; } actions[] = {
+        { "/api/control/start", "engine-start", "Запуск движка" },
+        { "/api/control/stop", "engine-stop", "Остановка движка" },
+        { "/api/control/restart", "engine-restart", "Перезапуск движка" },
+        { "/api/control/reapply", "reapply", "Восстановление правил" },
+        /* Необратимая операция. Подтверждение спрашивает панель диалогом
+           (internal/web/assets/panel.js, CONFIRM): здесь его проверять нечем —
+           POST приходит один и тот же, подтверждён он или нет. Защита та же,
+           что у остальных команд: control_enabled и единый источник. */
+        { "/api/control/clear-found", "clear-found", "Очистка подобранного" },
+        { "/api/control/telegram-enable", "telegram-enable", "Включение Telegram-туннеля" },
+        { "/api/control/telegram-disable", "telegram-disable", "Отключение Telegram-туннеля" },
+        { "/api/control/update-check", "update-check", "Проверка обновлений" },
+        { "/api/control/update-install", "update-install", "Установка обновления" },
+        { "/api/control/update-auto-on", "update-auto-on", "Включение автообновления" },
+        { "/api/control/update-auto-off", "update-auto-off", "Выключение автообновления" },
+    };
+    const char *command = NULL, *label = NULL;
+    for (size_t i = 0; i < sizeof actions / sizeof actions[0]; i++) {
+        if (strcmp(path, actions[i].path) == 0) {
+            command = actions[i].command;
+            label = actions[i].label;
+            break;
+        }
+    }
+    if (!command) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Неизвестная операция\"}";
+        return response(fd, 404, "Not Found", "application/json; charset=utf-8",
+                        body, sizeof body - 1);
+    }
+    if (!cfg || !cfg->control_enabled || !d2k_panel_same_origin(req)) {
+      static const char body[] = "{\"ok\":false,\"message\":\"Управление "
+                                 "разрешено только с этой панели\"}";
+      return response(fd, 403, "Forbidden", "application/json; charset=utf-8",
+                      body, sizeof body - 1);
+    }
+    if ((strcmp(command, "engine-start") == 0 ||
+         strcmp(command, "engine-restart") == 0) &&
+        cfg->mode && strcmp(cfg->mode, "off") == 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"В config задан MODE=off; сначала измените режим движка\"}";
+        return response(fd, 409, "Conflict", "application/json; charset=utf-8",
+                        body, sizeof body - 1);
+    }
+    if(strcmp(command,"telegram-enable")==0) {
+        int enabled=0,configured=0;telegram_config_flags(cfg,&enabled,&configured);(void)enabled;
+        if(!configured) {
+            static const char body[]="{\"ok\":false,\"message\":\"Укажите TG_MODE=local в конфигурации Telegram\"}";
+            return response(fd,409,"Conflict","application/json; charset=utf-8",body,sizeof body-1);
+        }
+    }
+    const char *transfer = NULL;
+    size_t transfer_len = 0;
+    if (header_value(req, "Transfer-Encoding", &transfer, &transfer_len)) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Тело запроса запрещено\"}";
+        return response(fd, 400, "Bad Request", "application/json; charset=utf-8",
+                        body, sizeof body - 1);
+    }
+    const char *length = NULL;
+    size_t length_len = 0;
+    if (header_value(req, "Content-Length", &length, &length_len) &&
+        !(length_len == 1 && length[0] == '0')) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Тело запроса запрещено\"}";
+        return response(fd, 400, "Bad Request", "application/json; charset=utf-8",
+                        body, sizeof body - 1);
+    }
+    int started = run_service_action(cfg, command, fd);
+    if (started > 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Предыдущая команда ещё выполняется\"}";
+        return response(fd, 409, "Conflict", "application/json; charset=utf-8", body, sizeof body - 1);
+    }
+    if (started < 0) {
+        static const char body[] = "{\"ok\":false,\"message\":\"Команда службы завершилась ошибкой\"}";
+        return response(fd, 500, "Service Error", "application/json; charset=utf-8",
+                        body, sizeof body - 1);
+    }
+    char body[256];
+    int n = snprintf(body, sizeof body, "{\"ok\":true,\"action\":\"%s\",\"message\":\"Команда запущена\"}", label);
+    if (n < 0 || (size_t)n >= sizeof body) { return -1; }
+    return response(fd, 202, "Accepted", "application/json; charset=utf-8", body, (size_t)n);
+}
+
+/* Состояние автообновления — файл d2k-update.sh, отдаётся как есть: его
+   пишет только эта утилита, атомарно и целиком. */
+static int api_update(int fd, const d2k_panel_config *cfg) {
+    static const char json[] = "application/json; charset=utf-8";
+    if (!cfg || !cfg->updater_path || access(cfg->updater_path, X_OK) != 0) {
+        static const char body[] = "{\"absent\":true}";
+        return response(fd, 200, "OK", json, body, sizeof body - 1);
+    }
+    char body[16384];
+    size_t n = 0;
+    int in = cfg->update_state_path ?
+        open(cfg->update_state_path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW) : -1;
+    if (in >= 0) {
+        for (;;) {
+            ssize_t k = read(in, body + n, sizeof body - n);
+            if (k < 0 && errno == EINTR) continue;
+            if (k <= 0) break;
+            n += (size_t)k;
+            if (n == sizeof body) { n = 0; break; }
+        }
+        close(in);
+    }
+    while (n && (body[n - 1] == '\n' || body[n - 1] == '\r')) n--;
+    if (n < 2 || body[0] != '{' || body[n - 1] != '}') {
+        static const char never[] = "{\"never\":true}";
+        return response(fd, 200, "OK", json, never, sizeof never - 1);
+    }
+    return response(fd, 200, "OK", json, body, n);
+}
+
+static int read_request(int fd, char *buf, size_t cap, size_t *used) {
+    *used = 0;
+    const long long deadline = monotonic_ms() + D2K_PANEL_HEADER_TIMEOUT_MS;
+    while (*used + 1 < cap) {
+        long long remaining = deadline - monotonic_ms();
+        if (remaining <= 0) { return -2; }
+        struct pollfd ready = { .fd = fd, .events = POLLIN };
+        int rc = poll(&ready, 1, (int)remaining);
+        if (rc < 0 && errno == EINTR) { continue; }
+        if (rc == 0) { return -2; }
+        if (rc < 0) { return -1; }
+        ssize_t n = read(fd, buf + *used, cap - *used - 1);
+        if (n < 0 && errno == EINTR) { continue; }
+        if (n < 0) { return -1; }
+        if (n == 0) { break; }
+        *used += (size_t)n;
+        buf[*used] = '\0';
+        if (strstr(buf, "\r\n\r\n")) { return 0; }
+    }
+    return *used + 1 >= cap ? 1 : -1;
+}
+
+static int json_object_file(const char *path, char **out, size_t *out_len) {
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) { return -1; }
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 1 ||
+        (uint64_t)st.st_size > BODY_MAX) {
+        close(fd);
+        return -1;
+    }
+    size_t cap = (size_t)st.st_size;
+    char *buf = malloc(cap + 1);
+    if (!buf) { close(fd); return -1; }
+    size_t nread = 0;
+    while (nread < cap) {
+        ssize_t n = read(fd, buf + nread, cap - nread);
+        if (n < 0 && errno == EINTR) { continue; }
+        if (n <= 0) { free(buf); close(fd); return -1; }
+        nread += (size_t)n;
+    }
+    close(fd);
+    buf[nread] = '\0';
+    char *p = buf;
+    char *end = buf + nread;
+    if (!json_valid_object(p, end)) { free(buf); return -1; }
+    *out = buf;
+    *out_len = nread;
+    return 0;
+}
+
+typedef struct {
+    char *p;
+    size_t len, cap;
+    int failed;
+} panel_buf;
+
+static void buf_add(panel_buf *b, const char *s, size_t n) {
+    if (b->failed || n > b->cap - b->len - 1) { b->failed = 1; return; }
+    memcpy(b->p + b->len, s, n);
+    b->len += n;
+    b->p[b->len] = '\0';
+}
+
+static void buf_puts(panel_buf *b, const char *s) { buf_add(b, s, strlen(s)); }
+
+static void buf_printf(panel_buf *b, const char *fmt, ...) {
+    if (b->failed) { return; }
+    va_list ap, cp;
+    va_start(ap, fmt);
+    va_copy(cp, ap);
+    int n = vsnprintf(NULL, 0, fmt, cp);
+    va_end(cp);
+    if (n < 0 || (size_t)n > b->cap - b->len - 1) {
+        b->failed = 1;
+        va_end(ap);
+        return;
+    }
+    (void)vsnprintf(b->p + b->len, b->cap - b->len, fmt, ap);
+    b->len += (size_t)n;
+    va_end(ap);
+}
+
+static void buf_json_string(panel_buf *b, const char *s) {
+    const unsigned char *p = (const unsigned char *)(s ? s : "");
+    buf_puts(b, "\"");
+    for (; *p && !b->failed; p++) {
+        char esc[7];
+        if (*p == '"' || *p == '\\') {
+            esc[0] = '\\'; esc[1] = (char)*p;
+            buf_add(b, esc, 2);
+        } else if (*p < 0x20) {
+            (void)snprintf(esc, sizeof esc, "\\u%04x", (unsigned)*p);
+            buf_add(b, esc, 6);
+        } else {
+            buf_add(b, (const char *)p, 1);
+        }
+    }
+    buf_puts(b, "\"");
+}
+
+/* Cache validator for catalog content, not a security/authentication token. */
+static int catalog_revision(const char *json, char out[17]) {
+    const char *keys[] = { "boxes", "groups" };
+    uint64_t hash = UINT64_C(14695981039346656037);
+    int found = 0;
+    for (size_t k = 0; k < 2; ++k) {
+        const char *value = NULL; size_t len = 0;
+        int present = json_top_value(json, keys[k], &value, &len);
+        hash ^= k + 1; hash *= UINT64_C(1099511628211);
+        hash ^= (uint64_t)len; hash *= UINT64_C(1099511628211);
+        if (!present) continue;
+        found = 1;
+        for (size_t i = 0; i < len; ++i) {
+            hash ^= (unsigned char)value[i]; hash *= UINT64_C(1099511628211);
+        }
+    }
+    snprintf(out, 17, "%016llx", (unsigned long long)hash);
+    return found;
+}
+
+static void buf_live_knowledge(panel_buf *b, const char *json, size_t len,
+                               int effective_linked, int slim) {
+    struct replacement { size_t offset, len; const char *text; } parts[3];
+    const char *keys[] = { "linked", "boxes", "groups" };
+    size_t count = 0;
+    for (size_t k = 0; k < 3; ++k) {
+        if (k && !slim) continue;
+        const char *value = NULL; size_t value_len = 0;
+        if (!json_top_value(json, keys[k], &value, &value_len) ||
+            value < json || (size_t)(value - json) > len ||
+            value_len > len - (size_t)(value - json)) continue;
+        struct replacement part = { (size_t)(value - json), value_len,
+                                     k ? "null" : (effective_linked ? "true" : "false") };
+        size_t i = count++;
+        while (i && parts[i - 1].offset > part.offset) { parts[i] = parts[i - 1]; --i; }
+        parts[i] = part;
+    }
+    size_t offset = 0;
+    for (size_t i = 0; i < count; ++i) {
+        buf_add(b, json + offset, parts[i].offset - offset);
+        buf_puts(b, parts[i].text);
+        offset = parts[i].offset + parts[i].len;
+    }
+    buf_add(b, json + offset, len - offset);
+}
+
+static void append_stage(panel_buf *b, const char *key, const char *title,
+                         int built, const char *detail, int comma) {
+    if (comma) { buf_puts(b, ","); }
+    buf_puts(b, "{\"key\":"); buf_json_string(b, key);
+    buf_puts(b, ",\"title\":"); buf_json_string(b, title);
+    buf_printf(b, ",\"built\":%s,\"detail\":", built ? "true" : "false");
+    buf_json_string(b, detail);
+    buf_puts(b, "}");
+}
+
+static void append_snapshot(panel_buf *b, const d2k_panel_config *cfg,
+                            int linked, int have_catalog, int live_fresh,
+                            int engine_running, int controller_running) {
+    time_t now = time(NULL);
+    struct tm tmv;
+    char now_iso[32], started_iso[32];
+    if (gmtime_r(&now, &tmv)) { strftime(now_iso, sizeof now_iso, "%Y-%m-%dT%H:%M:%SZ", &tmv); }
+    else { snprintf(now_iso, sizeof now_iso, "1970-01-01T00:00:00Z"); }
+    long long started = cfg ? cfg->started_epoch : 0;
+    time_t started_t = (time_t)started;
+    if (started > 0 && gmtime_r(&started_t, &tmv)) {
+        strftime(started_iso, sizeof started_iso, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    } else { snprintf(started_iso, sizeof started_iso, "0001-01-01T00:00:00Z"); }
+    long long uptime = started > 0 && (long long)now > started ? (long long)now - started : 0;
+    const char *cfg_path = cfg && cfg->config_path ? cfg->config_path : "/opt/d2k/config";
+    const char *state_dir = cfg && cfg->state_dir ? cfg->state_dir : "/opt/d2k/state";
+    const char *state_note = cfg && cfg->state_dir_note ? cfg->state_dir_note : "неизвестно";
+    const char *mode = cfg && cfg->mode ? cfg->mode : "observe";
+    const char *panel_listen = cfg && cfg->panel_listen ? cfg->panel_listen : "127.0.0.1:8090";
+    int queue = cfg ? cfg->queue_num : 2000;
+    int telegram_enabled=0,telegram_configured=0,telegram_running=0;char telegram_status[24];
+    char telegram_stats[TELEGRAM_STATS_MAX];
+    telegram_config_flags(cfg,&telegram_enabled,&telegram_configured);
+    telegram_status_value(cfg,telegram_enabled,telegram_configured,&telegram_running,telegram_status);
+    telegram_stats_value(cfg,telegram_stats);
+    buf_puts(b, "{\"taken\":"); buf_json_string(b, now_iso);
+    buf_puts(b, ",\"version\":"); buf_json_string(b, cfg ? cfg->version : "dev");
+    buf_puts(b, ",\"commit\":"); buf_json_string(b, cfg ? cfg->commit : "");
+    buf_puts(b, ",\"built\":"); buf_json_string(b, cfg ? cfg->built : "");
+    buf_printf(b, ",\"dirty\":%s,\"config_path\":", cfg && cfg->dirty ? "true" : "false");
+    buf_json_string(b, cfg_path);
+    buf_printf(b, ",\"config_exists\":%s,\"mode\":", cfg && cfg->config_exists ? "true" : "false");
+    buf_json_string(b, mode);
+    buf_puts(b, ",\"panel_listen\":"); buf_json_string(b, panel_listen);
+    buf_printf(b, ",\"controls_enabled\":%s", cfg && cfg->control_enabled ? "true" : "false");
+    d2k_panel_control_tick();
+    buf_puts(b, ",\"control_state\":"); buf_json_string(b, action_state);
+    buf_printf(b, ",\"catalog_available\":%s", have_catalog ? "true" : "false");
+    buf_printf(b, ",\"live_fresh\":%s", live_fresh ? "true" : "false");
+    buf_printf(b, ",\"engine_running\":%s", engine_running ? "true" : "false");
+    buf_printf(b, ",\"controller_running\":%s", controller_running ? "true" : "false");
+    buf_printf(b, ",\"telegram_enabled\":%s,\"telegram_configured\":%s,\"telegram_running\":%s,\"telegram_status\":",
+               telegram_enabled?"true":"false",telegram_configured?"true":"false",telegram_running?"true":"false");
+    buf_json_string(b,telegram_status);
+    buf_puts(b, ",\"telegram_stats\":");
+    buf_puts(b, telegram_stats);
+    buf_puts(b, ",\"state_dir\":"); buf_json_string(b, state_dir);
+    buf_puts(b, ",\"state_dir_note\":"); buf_json_string(b, state_note);
+    buf_printf(b, ",\"queue_num\":%d,\"unknown_keys\":[", queue);
+    for (size_t i = 0; cfg && i < cfg->unknown_key_count; i++) {
+        if (i) { buf_puts(b, ","); }
+        buf_json_string(b, cfg->unknown_keys ? cfg->unknown_keys[i] : "");
+    }
+    buf_puts(b, "],\"started_at\":");
+    buf_json_string(b, started_iso);
+    buf_printf(b, ",\"uptime_seconds\":%lld,\"stages\":[", uptime);
+    append_stage(b, "config", "Конфигурация", 1,
+                 cfg && cfg->config_exists ? "Прочитана из конфигурационного файла." :
+                 "Файла конфигурации нет, действуют умолчания.", 0);
+    append_stage(b, "capture", "Чтение пакетов", linked,
+                 linked ? "Очередь ядра открыта, пакеты читаются: контроллер получает события датапата." :
+                          "Контроллер не подключён к датапату — сказать, читаются ли пакеты, нечем.", 1);
+    append_stage(b, "flow", "Состояние потоков", linked,
+                 linked ? "Датапат ведёт учёт соединений и сообщает о подозрениях." :
+                          "Контроллер не подключён к датапату.", 1);
+    append_stage(b, "plan", "Исполнение планов", linked,
+                 linked ? "Планы ставятся датапату и исполняются на живых соединениях." :
+                          "Контроллер не подключён к датапату: применяется ли обход, отсюда не видно.", 1);
+    char boxes_detail[512];
+    if (have_catalog) {
+        snprintf(boxes_detail, sizeof boxes_detail, "Каталог открыт: изученные коробки и цели доступны.");
+    } else { snprintf(boxes_detail, sizeof boxes_detail, "Каталог не открыт."); }
+    append_stage(b, "boxes", "Каталог коробок", have_catalog, boxes_detail, 1);
+    append_stage(b, "panel", "Панель", 1, "Показывает этот снимок.", 1);
+    buf_puts(b, "],\"absent\":[");
+    append_stage(b, "outages", "Здоровье наблюдения", 0,
+                 "Нечем: сколько пакетов не дошло до очереди, снаружи не измеряется.", 0);
+    if (!linked) {
+        append_stage(b, "traffic", "Наблюдаемый трафик", 0,
+                     "Нечем: контроллер не подключён к датапату. Это не «ноль соединений», а отсутствие измерения.", 1);
+    }
+    buf_puts(b, "]}");
+}
+
+static int api_status(int fd, const d2k_panel_config *cfg, const char *query) {
+    char *live = NULL;
+    size_t live_len = 0;
+    if (cfg && cfg->live_path && json_object_file(cfg->live_path, &live, &live_len) == 0) {
+        size_t cap = live_len + TELEGRAM_STATS_MAX + 16384;
+        char *body = malloc(cap);
+        if (!body) { free(live); return -1; }
+        panel_buf b = { .p = body, .len = 0, .cap = cap, .failed = 0 };
+        buf_puts(&b, "{\"snapshot\":");
+        time_t now = time(NULL);
+        struct stat live_stat;
+        time_t engine_started_at = 0;
+        int engine_running = engine_pid_running(cfg, &engine_started_at);
+        int controller_running = controller_pid_running(cfg);
+        int live_fresh = cfg->live_path && stat(cfg->live_path, &live_stat) == 0 &&
+            S_ISREG(live_stat.st_mode) &&
+            (!engine_started_at || live_stat.st_mtime >= engine_started_at) &&
+            (live_stat.st_mtime > now ? live_stat.st_mtime - now <= 5 :
+                                         now - live_stat.st_mtime <= 15);
+        int linked = json_top_true(live, "linked") && live_fresh &&
+                     engine_running && controller_running;
+        int have_catalog = json_top_nonempty_string(live, "catalog_at");
+        append_snapshot(&b, cfg, linked, have_catalog, live_fresh,
+                        engine_running, controller_running);
+        buf_puts(&b, ",\"knowledge\":");
+        char revision[17];
+        int have_revision = catalog_revision(live, revision);
+        int unchanged = have_revision && query &&
+            strncmp(query, "catalog_revision=", 17) == 0 &&
+            strcmp(query + 17, revision) == 0;
+        buf_live_knowledge(&b, live, live_len, linked, unchanged);
+        if (have_revision) {
+            buf_printf(&b, ",\"catalog_revision\":\"%s\",\"catalog_unchanged\":%s",
+                       revision, unchanged ? "true" : "false");
+        }
+        buf_puts(&b, "}");
+        if (b.failed) { free(body); free(live); return -1; }
+        int rc = response(fd, 200, "OK", "application/json; charset=utf-8",
+                          body, b.len);
+        free(body);
+        free(live);
+        return rc;
+    }
+    static const char unavailable_knowledge[] =
+        "{\"linked\":false,\"link_note\":\"движок не отдаёт состояние\","
+        "\"catalog_at\":\"\",\"boxes\":[],\"searches\":[],\"targets\":0,"
+        "\"confirms\":0,\"probes_used\":0,\"client_unfit\":0}";
+    size_t cap = TELEGRAM_STATS_MAX + 16384;
+    char *body = malloc(cap);
+    if (!body) { return -1; }
+    panel_buf b = { .p = body, .len = 0, .cap = cap, .failed = 0 };
+    buf_puts(&b, "{\"snapshot\":");
+    append_snapshot(&b, cfg, 0, 0, 0, engine_pid_running(cfg, NULL),
+                    controller_pid_running(cfg));
+    buf_puts(&b, ",\"knowledge\":");
+    buf_puts(&b, unavailable_knowledge);
+    buf_puts(&b, "}");
+    int rc = b.failed ? -1 : response(fd, 200, "OK", "application/json; charset=utf-8", body, b.len);
+    free(body);
+    return rc;
+}
+
+/* Статика отдаётся с ETag из размера и времени изменения и всегда
+   перепроверяется (no-cache): после обновления панели браузер не держит
+   старый файл, а неизменённый получает ответ 304 без тела. */
+static int static_file(int fd, const d2k_panel_config *cfg, const char *req,
+                       const char *name, const char *type) {
+    if (!cfg || !cfg->asset_dir) {
+        return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
+    }
+    int dirfd = open(cfg->asset_dir, O_RDONLY | O_CLOEXEC | O_DIRECTORY | O_NOFOLLOW);
+    if (dirfd < 0) {
+        return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
+    }
+    int in = openat(dirfd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    close(dirfd);
+    if (in < 0) {
+        return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
+    }
+    struct stat st;
+    if (fstat(in, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size < 0 ||
+        (uint64_t)st.st_size > BODY_MAX) {
+        close(in);
+        return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
+    }
+    char etag[64], extra[128];
+    snprintf(etag, sizeof etag, "\"%llx-%llx\"",
+             (unsigned long long)st.st_size, (unsigned long long)st.st_mtime);
+    snprintf(extra, sizeof extra, "Cache-Control: no-cache\r\nETag: %s\r\n", etag);
+    const char *inm = NULL;
+    size_t inm_len = 0;
+    if (req && header_value(req, "If-None-Match", &inm, &inm_len) &&
+        inm_len == strlen(etag) && memcmp(inm, etag, inm_len) == 0) {
+        close(in);
+        return response_ex(fd, 304, "Not Modified", type, extra, NULL, 0);
+    }
+    size_t cap = (size_t)st.st_size;
+    char *body = malloc(cap ? cap : 1);
+    if (!body) { close(in); return -1; }
+    size_t got = 0;
+    while (got < cap) {
+        ssize_t nr = read(in, body + got, cap - got);
+        if (nr < 0 && errno == EINTR) { continue; }
+        if (nr <= 0) { free(body); close(in); return -1; }
+        got += (size_t)nr;
+    }
+    close(in);
+    int rc = response_ex(fd, 200, "OK", type, extra, body, cap);
+    free(body);
+    return rc;
+}
+
+static int diagnostic_response(int fd,int code,const char *reason,const char *type,const char *body,size_t len) {
+    return response_ex(fd,code,reason,type,"Cache-Control: no-store\r\n",body,len);
+}
+static int api_diagnostics(int fd,const d2k_panel_config *cfg,const char *req,
+                           const char *method,const char *action) {
+    const char *dir=cfg&&cfg->diagnostics_dir?cfg->diagnostics_dir:D2K_DIAG_DIR;
+    if(!strcmp(method,"POST")) {
+        if(!cfg||!cfg->control_enabled||!d2k_panel_same_origin(req))
+            return diagnostic_response(fd,403,"Forbidden","application/json","{\"error\":\"требуется запрос с того же источника\"}",sizeof "{\"error\":\"требуется запрос с того же источника\"}"-1);
+        if(strcmp(action,"enable")&&strcmp(action,"disable"))
+            return diagnostic_response(fd,400,"Bad Request","application/json","{}",2);
+        if(d2k_diag_toggle(dir,!strcmp(action,"enable")))
+            return diagnostic_response(fd,500,"Internal Server Error","application/json","{\"error\":\"не удалось изменить состояние диагностики\"}",sizeof "{\"error\":\"не удалось изменить состояние диагностики\"}"-1);
+        const char *body=d2k_diag_enabled(dir)?"{\"enabled\":true}":"{\"enabled\":false}";
+        return diagnostic_response(fd,200,"OK","application/json",body,strlen(body));
+    }
+    if(strcmp(method,"GET"))return diagnostic_response(fd,405,"Method Not Allowed","text/plain","",0);
+    if(!d2k_diag_enabled(dir))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":false}",17);
+    if(!strcmp(action,"status"))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":true}",16);
+    char path[512];struct stat st;
+    if(d2k_diag_path(path,sizeof path,dir,"report.json"))return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
+    int in=open(path,O_RDONLY|O_NOFOLLOW);
+    if(in<0)return diagnostic_response(fd,503,"Service Unavailable","application/json","{\"enabled\":true,\"pending\":true}",31);
+    if(fstat(in,&st)||!S_ISREG(st.st_mode)||st.st_size<0||(uint64_t)st.st_size>D2K_DIAG_REPORT_MAX) {
+        close(in);return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
+    }
+    size_t len=(size_t)st.st_size,off=0;char *body=malloc(len+1);
+    if(!body){close(in);return diagnostic_response(fd,503,"Service Unavailable","text/plain","",0);}
+    while(off<len){ssize_t n=read(in,body+off,len-off);if(n<0&&errno==EINTR)continue;if(n<=0)break;off+=(size_t)n;}
+    close(in);
+    int rc=off==len?response_ex(fd,200,"OK","application/json; charset=utf-8",
+        !strcmp(action,"download")?"Cache-Control: no-store\r\nContent-Disposition: attachment; filename=\"d2k-diagnostics.json\"\r\n":"Cache-Control: no-store\r\n",body,len):
+        diagnostic_response(fd,503,"Service Unavailable","text/plain","",0);
+    free(body);return rc;
+}
+
+int d2k_panel_handle_fd(int fd, const d2k_panel_config *cfg) {
+    char req[REQUEST_MAX + 1];
+    size_t used = 0;
+    int rr = read_request(fd, req, sizeof req, &used);
+    if (rr != 0) {
+        if (rr == -2) {
+            static const char timed_out[] = "request timeout\n";
+            return response(fd, 408, "Request Timeout", "text/plain; charset=utf-8",
+                            timed_out, sizeof timed_out - 1);
+        }
+        static const char too_large[] = "request too large\n";
+        static const char bad_request[] = "bad request\n";
+        return response(fd, rr > 0 ? 431 : 400,
+                        rr > 0 ? "Request Header Fields Too Large" : "Bad Request",
+                        "text/plain; charset=utf-8",
+                        rr > 0 ? too_large : bad_request,
+                        rr > 0 ? sizeof too_large - 1 : sizeof bad_request - 1);
+    }
+    char method[8], path[256], version[16];
+    if (sscanf(req, "%7s %255s %15s", method, path, version) != 3 ||
+        (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0)) {
+        return response(fd, 400, "Bad Request", "text/plain; charset=utf-8", "bad request\n", 12);
+    }
+    char *query = strchr(path, '?');
+    if (query) { *query++ = '\0'; }
+    if (strcmp(path, "/api/telegram/workers") == 0) {
+        if (strcmp(method, "GET") != 0 && strcmp(method, "POST") != 0) {
+            return response(fd, 405, "Method Not Allowed", "text/plain; charset=utf-8",
+                            "method not allowed\n", 19);
+        }
+        return api_telegram_workers(fd, cfg, req, used, method);
+    }
+    if (!strcmp(path,"/api/diagnostics"))
+        return api_diagnostics(fd,cfg,req,method,query?query:"status");
+    if (strcmp(path, "/api/update") == 0) {
+        if (strcmp(method, "GET") != 0) {
+            return response(fd, 405, "Method Not Allowed", "text/plain; charset=utf-8",
+                            "method not allowed\n", 19);
+        }
+        return api_update(fd, cfg);
+    }
+    if (strncmp(path, "/api/control/", sizeof "/api/control/" - 1) == 0) {
+        if (strcmp(method, "POST") != 0) {
+            return response(fd, 405, "Method Not Allowed", "text/plain; charset=utf-8",
+                            "method not allowed\n", 19);
+        }
+        return api_control(fd, cfg, req, path);
+    }
+    if (strcmp(method, "GET") != 0) {
+        return response(fd, 405, "Method Not Allowed", "text/plain; charset=utf-8", "method not allowed\n", 19);
+    }
+    if (strcmp(path, "/api/status") == 0) { return api_status(fd, cfg, query); }
+    if (strcmp(path, "/") == 0) {
+        return static_file(fd, cfg, req, "index.html", "text/html; charset=utf-8");
+    }
+    if (strcmp(path, "/assets/favicon.svg") == 0) {
+        return static_file(fd, cfg, req, "favicon.svg", "image/svg+xml");
+    }
+    if (strcmp(path, "/assets/panel.css") == 0) {
+        return static_file(fd, cfg, req, "panel.css", "text/css; charset=utf-8");
+    }
+    if (!strcmp(path,"/assets/diagnostics.js"))
+        return static_file(fd,cfg,req,"diagnostics.js","application/javascript; charset=utf-8");
+    if (strcmp(path, "/assets/panel.js") == 0) {
+        return static_file(fd, cfg, req, "panel.js", "application/javascript; charset=utf-8");
+    }
+    if (strcmp(path, "/assets/telegram-flow.js") == 0) {
+        return static_file(fd, cfg, req, "telegram-flow.js", "application/javascript; charset=utf-8");
+    }
+    if (strcmp(path, "/assets/telegram-flow-prototype.js") == 0) {
+        return static_file(fd, cfg, req, "telegram-flow-prototype.js", "application/javascript; charset=utf-8");
+    }
+    if (strcmp(path, "/assets/gsap.js") == 0) {
+        return static_file(fd, cfg, req, "gsap.js", "application/javascript; charset=utf-8");
+    }
+    if (strcmp(path, "/assets/onest.woff2") == 0) {
+        return static_file(fd, cfg, req, "fonts/onest.woff2", "font/woff2");
+    }
+    if (strcmp(path, "/assets/jbmono.woff2") == 0) {
+        return static_file(fd, cfg, req, "fonts/jbmono.woff2", "font/woff2");
+    }
+    (void)used;
+    return response(fd, 404, "Not Found", "text/plain; charset=utf-8", "not found\n", 10);
+}

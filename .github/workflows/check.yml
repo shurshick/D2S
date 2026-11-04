@@ -1,0 +1,25 @@
+name: D2S checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev zlib1g-dev
+      - name: Shell and JavaScript syntax
+        run: |
+          while IFS= read -r file; do
+            if head -n 1 "$file" | grep -q bash; then bash -n "$file"; else sh -n "$file"; fi
+          done < <(find files scripts -type f -name '*.sh')
+          sh -n install.sh
+          sh -n files/S99d2k
+          sh -n files/S96d2o-resolver
+          sh -n files/S97d2o-dns-watch
+          node --check internal/web/assets/panel.js
+      - run: node scripts/test-update.cjs
+      - run: make -C panel test test-js
+      - run: |
+          cc -O1 -g -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -o /tmp/d2s-dns-test resolver-local/test-dns-media-watch.c
+          /tmp/d2s-dns-test

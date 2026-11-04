@@ -1,0 +1,93 @@
+name: D2S release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, for example 0.1.1 (without prefix)'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, arm, mipsel]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: '[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]'
+      - name: Install pinned compiler and build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libssl-dev zlib1g-dev qemu-user
+          python3 -m pip install --target "$RUNNER_TEMP/zig" ziglang==0.16.0
+          echo "ZIG=$RUNNER_TEMP/zig/ziglang/zig" >> "$GITHUB_ENV"
+      - name: Test local components and signed updater
+        run: |
+          node scripts/test-update.cjs
+          cc -O2 -std=c11 -Wall -Wextra -Werror -pedantic -o "$RUNNER_TEMP/dns-test" resolver-local/test-dns-media-watch.c
+          "$RUNNER_TEMP/dns-test"
+          make -C panel test test-js
+      - name: Build complete router package
+        env:
+          ARCHES: ${{ matrix.arch }}
+          RELEASE_ID: d2s-v${{ inputs.version }}
+          VERSION: ${{ inputs.version }}
+          JOBS: '4'
+        run: sh scripts/build-router.sh
+      - name: Execute binaries under QEMU
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          case "$ARCH" in arm64) QEMU=qemu-aarch64;; arm) QEMU=qemu-arm;; mipsel) QEMU=qemu-mipsel;; esac
+          "$QEMU" "builds/d2kd-linux-$ARCH" --help
+          "$QEMU" "builds/d2kc-linux-$ARCH" version
+          "$QEMU" "builds/d2kpanel-linux-$ARCH" --version
+          "$QEMU" "builds/d2ktg-linux-$ARCH" --version
+          "$QEMU" "builds/d2o-resolver-linux-$ARCH" --version
+          "$QEMU" "builds/d2o-dns-watch-linux-$ARCH" --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.arch }}
+          path: builds/*-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: builds
+          merge-multiple: true
+      - name: Package and sign immutable release
+        env:
+          RELEASE_ID: d2s-v${{ inputs.version }}
+          VERSION: ${{ inputs.version }}
+          ARCHES: arm64 arm mipsel
+          D2S_SIGNING_KEY: ${{ secrets.D2S_ED25519_PRIVATE_KEY }}
+        run: |
+          test -n "$D2S_SIGNING_KEY"
+          sh scripts/package-release.sh builds release-out
+          umask 077
+          key="$RUNNER_TEMP/d2s-release.pem"
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$D2S_SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -inkey "$key" -rawin -in release-out/latest.json -out release-out/latest.json.sig
+          openssl pkeyutl -verify -pubin -inkey docs/d2s-release-public.pem -rawin -in release-out/latest.json -sigfile release-out/latest.json.sig
+          (cd release-out && sha256sum d2k-*.tar.gz latest.json latest.json.sig > SHA256SUMS)
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: d2s-v${{ inputs.version }}
+        run: |
+          gh release create "$TAG" release-out/* --target "$GITHUB_SHA" --title "D2S ${{ inputs.version }}" --notes-file docs/release-notes.md --latest
