@@ -1587,7 +1587,7 @@ status() {
     else
         echo "  очередь $QUEUE_NUM: НЕ привязана"
     fi
-    [ -x "$BIN" ] && "$BIN" version 2>/dev/null | sed 's/^/  /'
+    [ -x "$BIN" ] && "$BIN" --version 2>/dev/null | sed 's/^/  /'
 }
 
 # NDM периодически сносит чужие правила. Сторож есть: событийный хук
