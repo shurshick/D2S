@@ -36,3 +36,5 @@
 На стенде установлен keenetic-doq (S56doqd, 5354 TCP/UDP). После перехода на официальный подписанный пакет d2s-v0.2.0 проверка updater завершилась last_ok=true; основной движок, Telegram, resolver и наблюдатель живы. NFQUEUE привязана, PPE: 8/8 IPv4 и 8/8 IPv6. Старых ссылок d2k_lan4 / D2O_TG_LAB / d2o_tg_lab4 в iptables нет. DNS youtube.com через стенд отвечает.
 
 Изолированные проверки: firewall bookkeeping S99, nft/iptables Telegram, updater (подпись/rollback/окно 02–04), семь сценариев LAN discovery, пять сценариев Meta media, 12 HTTP resolver сценариев и hostile DNS parser — PASS. Telegram и panel test/test-js — PASS. Datapath check и detect check — PASS. Все 21 бинарник ARM64/ARMv7/MIPSel запускаются под QEMU, архивы прошли проверку SHA-256/состава/RAM и Ed25519. Другие физические архитектуры не проверены.
+
+Полный `make -C core check ZIG=...` завершился успешно, включая группы scheduler, cross-link ARM64/MIPSel/MIPS, QUIC/HTTP runtime и диагностику. GitHub D2S checks и release 41878701902 завершены успешно.
