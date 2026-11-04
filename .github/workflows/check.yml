@@ -19,6 +19,7 @@ jobs:
           sh -n files/S97d2o-dns-watch
           node --check internal/web/assets/panel.js
       - run: node scripts/test-update.cjs
+      - run: sh scripts/check-d2s-extras.sh
       - run: make -C panel test test-js
       - run: |
           cc -O1 -g -std=c11 -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -o /tmp/d2s-dns-test resolver-local/test-dns-media-watch.c

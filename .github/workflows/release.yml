@@ -30,6 +30,7 @@ jobs:
       - name: Test local components and signed updater
         run: |
           node scripts/test-update.cjs
+          sh scripts/check-d2s-extras.sh
           cc -O2 -std=c11 -Wall -Wextra -Werror -pedantic -o "$RUNNER_TEMP/dns-test" resolver-local/test-dns-media-watch.c
           "$RUNNER_TEMP/dns-test"
           make -C panel test test-js
@@ -78,6 +79,7 @@ jobs:
         run: |
           test -n "$D2S_SIGNING_KEY"
           sh scripts/package-release.sh builds release-out
+          python3 scripts/test-d2s-package.py release-out
           umask 077
           key="$RUNNER_TEMP/d2s-release.pem"
           trap 'rm -f "$key"' EXIT
