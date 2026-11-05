@@ -103,6 +103,19 @@ async function main(){
   await until('document.querySelectorAll(".search").length===2','C API must populate the live searches');
   await evaluate('document.fonts.ready');
   assert.equal(await evaluate('document.fonts.check("700 24px Onest")'),true,'C CSP must load the bundled text face');
+  // The selected background must follow rows that wrap after fonts/badges load.
+  await wait(200);
+  await evaluate('document.querySelectorAll(".index > a").forEach(a=>a.removeAttribute("aria-current"));document.querySelector(".index a[data-nav=updates]").setAttribute("aria-current","true");window.dispatchEvent(new Event("resize"))');
+  const markerAligned='(()=>{const m=document.querySelector(".index-marker").getBoundingClientRect(),a=document.querySelector(".index a[aria-current=true]").getBoundingClientRect();return Math.max(Math.abs(m.x-a.x),Math.abs(m.y-a.y),Math.abs(m.width-a.width),Math.abs(m.height-a.height))<1})()';
+  await until(markerAligned,'initial selected marker aligns');
+  await evaluate('document.querySelector(".index a[data-nav=boxes] span").style.fontSize="22px"');
+  await wait(100);
+  await until(markerAligned,'selected marker follows a preceding row wrapping without viewport resize');
+  await evaluate('document.querySelector(".index a[data-nav=boxes] span").style.removeProperty("font-size")');
+  await until(markerAligned,'selected marker follows the row shrinking again');
+  if(process.env.D2S_NAV_ONLY){console.log('Navigation marker follows content geometry PASS');return;}
+  await evaluate('document.querySelectorAll(".index > a").forEach(a=>a.removeAttribute("aria-current"));document.querySelector(".index a[data-nav=now]").setAttribute("aria-current","true");window.dispatchEvent(new Event("resize"))');
+  await evaluate('window.scrollTo(0,0)');
   try {
    await until('document.querySelector("#telegram-body .tg-flow-canvas")','C11 route canvas mounts from live stats');
   } catch(error) {

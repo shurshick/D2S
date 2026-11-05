@@ -2321,6 +2321,23 @@
     };
     win.addEventListener("scroll", onScroll, { passive: true });
     win.addEventListener("resize", function () { onScroll(); self.moveMarker(true); });
+    /* Fonts and live badges can wrap a preceding row without resizing the
+       fixed sidebar. Follow link geometry, not only the window size. */
+    var markerPending = false;
+    var alignMarker = function () {
+      if (markerPending) return;
+      markerPending = true;
+      win.requestAnimationFrame(function () {
+        markerPending = false;
+        self.moveMarker(true);
+      });
+    };
+    if (win.ResizeObserver) {
+      this.navResizeObserver = new win.ResizeObserver(alignMarker);
+      var items = nav.querySelectorAll("a[data-nav]");
+      for (var i = 0; i < items.length; i++) this.navResizeObserver.observe(items[i]);
+    }
+    if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(alignMarker);
     onScroll();
   };
 
@@ -2331,7 +2348,7 @@
     if (!cur) { marker.style.opacity = "0"; return; }
     var box = { x: cur.offsetLeft, y: cur.offsetTop, width: cur.offsetWidth, height: cur.offsetHeight, opacity: 1 };
     if (Motion.on() && !instant && marker.__placed) Motion.g.to(marker, Object.assign({ duration: 0.45, ease: "power3.out" }, box));
-    else if (Motion.g) Motion.g.set(marker, box);
+    else if (Motion.g) { Motion.g.killTweensOf(marker); Motion.g.set(marker, box); }
     else { marker.style.transform = "translate(" + box.x + "px," + box.y + "px)"; marker.style.width = box.width + "px"; marker.style.height = box.height + "px"; marker.style.opacity = "1"; }
     marker.__placed = true;
   };
