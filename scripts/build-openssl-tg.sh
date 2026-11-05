@@ -23,6 +23,19 @@ command -v git >/dev/null 2>&1 || { echo "git is required to fetch pinned OpenSS
 mkdir -p "$(dirname -- "$SRC_DIR")" "$PREFIX"
 mkdir -p "$ROOT/build/telegram" "$OBJ_DIR" "$ZLIB_PREFIX" "$ZLIB_OBJ_DIR" "$OUT"
 
+# Only installed static libraries are reused. The recipe and target must match exactly.
+CRYPTO_KEY=$( { cat "$ROOT/scripts/build-openssl-tg.sh" "$ROOT/scripts/build-target.sh"; printf '%s\n' "$ARCH" "$TARGET" "$TARGET_FLAGS" "$SSL_TARGET" "${CFLAGS-}" "${CPPFLAGS-}" "${LDFLAGS-}"; "$ZIG" version; } | sha256sum | cut -d' ' -f1)
+CRYPTO_STAMP=$PREFIX/.d2s-crypto-build-key
+crypto_complete() {
+    [ -s "$PREFIX/include/openssl/ssl.h" ] && [ -s "$PREFIX/include/openssl/evp.h" ] &&
+    [ -s "$ZLIB_PREFIX/include/zlib.h" ] && [ -s "$ZLIB_PREFIX/lib/libz.a" ] &&
+    { { [ -s "$PREFIX/lib/libcrypto.a" ] && [ -s "$PREFIX/lib/libssl.a" ]; } ||
+      { [ -s "$PREFIX/lib64/libcrypto.a" ] && [ -s "$PREFIX/lib64/libssl.a" ]; }; }
+}
+if [ "${D2S_CRYPTO_CACHE:-0}" = 1 ] && [ "$(cat "$CRYPTO_STAMP" 2>/dev/null)" = "$CRYPTO_KEY" ] && crypto_complete; then
+    echo "D2S: reuse OpenSSL/zlib for $ARCH (recipe $CRYPTO_KEY)"
+else
+    rm -f "$CRYPTO_STAMP"
 if [ ! -d "$ZLIB_SRC_DIR/.git" ]; then
     git init "$ZLIB_SRC_DIR"
     git -C "$ZLIB_SRC_DIR" remote add origin https://github.com/madler/zlib.git
@@ -93,6 +106,8 @@ AR="$ZIG ar" RANLIB="$ZIG ranlib" \
 make -j "$JOBS" build_libs
 make install_sw
 
+fi
+
 SMOKE="$ROOT/telegram/test_openssl_link.c"
 LIBDIR="$PREFIX/lib"
 [ -d "$LIBDIR" ] || LIBDIR="$PREFIX/lib64"
@@ -103,6 +118,11 @@ LIBDIR="$PREFIX/lib"
     -o "$ROOT/build/telegram/openssl-link-smoke-$ARCH" "$SMOKE" \
     -lssl -lcrypto -ldl -pthread
 file "$ROOT/build/telegram/openssl-link-smoke-$ARCH"
+if [ "${D2S_CRYPTO_CACHE:-0}" = 1 ]; then
+    printf '%s\n' "$CRYPTO_KEY" > "$CRYPTO_STAMP.new.$$"
+    mv -f "$CRYPTO_STAMP.new.$$" "$CRYPTO_STAMP"
+fi
+
 
 # The router runtime is the local MTProto proxy. Keep its source list explicit
 # so relay registration and tunnelling code cannot enter the router binary.

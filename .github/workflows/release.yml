@@ -6,10 +6,33 @@ on:
         description: 'Version, for example 0.1.1 (without prefix)'
         required: true
         type: string
+      clean_build:
+        description: 'Rebuild crypto libraries without a cache'
+        type: boolean
+        default: false
 permissions:
   contents: read
+  actions: read
 jobs:
+  plan:
+    name: Checked release source
+    timeout-minutes: 5
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require successful CI for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/require-ci.py
+      - id: source
+        run: echo "sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
   build:
+    name: Build runtime (${{ matrix.arch }})
+    timeout-minutes: 30
+    needs: plan
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -27,35 +50,24 @@ jobs:
           sudo apt-get install -y libssl-dev zlib1g-dev qemu-user
           python3 -m pip install --target "$RUNNER_TEMP/zig" ziglang==0.16.0
           echo "ZIG=$RUNNER_TEMP/zig/ziglang/zig" >> "$GITHUB_ENV"
-      - name: Test local components and signed updater
+      - name: Verify release source namespace
         run: |
           python3 tests/keenetic/test-upstream-network.py
           python3 scripts/test-namespace.py
-          sh scripts/test-s99-firewall-stub.sh
-          sh scripts/test-tg-firewall-nft.sh
-          node scripts/test-update.cjs
-          sh scripts/check-d2s-extras.sh
-          make -C telegram test
-          cc -O2 -std=c11 -Wall -Wextra -Werror -pedantic -o "$RUNNER_TEMP/dns-test" resolver-local/test-dns-media-watch.c
-          "$RUNNER_TEMP/dns-test"
-          make -C panel test test-js
-      - name: Clean-install bootstrap contracts
-        if: matrix.arch == 'arm64'
-        run: |
-          node scripts/test-install-release.cjs
-          node scripts/test-install-openwrt.cjs
-      - name: Full core, datapath and detect regression gate
-        if: matrix.arch == 'arm64'
-        run: |
-          make -C core check ZIG="$ZIG"
-          make -C datapath check ZIG="$ZIG"
-          make -C detect check
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        if: inputs.clean_build != true
+        with:
+          path: |
+            build/telegram/openssl-${{ matrix.arch }}
+            build/telegram/zlib-${{ matrix.arch }}
+          key: d2s-crypto-v1-${{ runner.os }}-${{ matrix.arch }}-zig016-${{ hashFiles('scripts/build-openssl-tg.sh', 'scripts/build-target.sh', '.github/workflows/release.yml') }}
       - name: Build complete router package
         env:
           ARCHES: ${{ matrix.arch }}
           RELEASE_ID: d2s-v${{ inputs.version }}
           VERSION: ${{ inputs.version }}
           JOBS: '4'
+          D2S_CRYPTO_CACHE: ${{ inputs.clean_build && '0' || '1' }}
         run: sh scripts/build-router.sh
       - name: Execute binaries under QEMU
         env:
@@ -69,6 +81,7 @@ jobs:
           "$QEMU" "builds/d2stg-linux-$ARCH" --version
           "$QEMU" "builds/d2s-resolver-linux-$ARCH" --version
           "$QEMU" "builds/d2s-dns-watch-linux-$ARCH" --version
+          "$QEMU" "build/telegram/openssl-link-smoke-$ARCH"
       - uses: actions/upload-artifact@v4
         with:
           name: runtime-${{ matrix.arch }}
@@ -76,7 +89,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   publish:
-    needs: build
+    timeout-minutes: 10
+    needs: [plan, build]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -105,6 +119,13 @@ jobs:
           openssl pkeyutl -sign -inkey "$key" -rawin -in release-out/latest.json -out release-out/latest.json.sig
           openssl pkeyutl -verify -pubin -inkey docs/d2s-release-public.pem -rawin -in release-out/latest.json -sigfile release-out/latest.json.sig
           (cd release-out && sha256sum d2s-*.tar.gz latest.json latest.json.sig > SHA256SUMS)
+      - name: Refuse a superseded release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          [ "$current" = "$SOURCE_SHA" ] || { echo 'main changed while building; keep artifacts and release the newer checked commit.' >&2; exit 1; }
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}

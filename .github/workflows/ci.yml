@@ -1,4 +1,4 @@
-name: CI
+name: D2S extended audit
 
 # Pipeline order follows the usual industry rule: cheap checks first, and every
 # expensive stage waits for them (fail fast).
@@ -19,11 +19,6 @@ name: CI
 # и запускается только вручную.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE']
-  pull_request:
-    paths-ignore: ['**/*.md', 'docs/**', 'LICENSE']
   workflow_dispatch:
 
 # Least privilege: read the code, nothing else.
