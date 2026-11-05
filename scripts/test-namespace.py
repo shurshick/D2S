@@ -7,7 +7,7 @@ for directory in ("core","datapath","detect","runtime","panel","telegram","inter
         if any(x in p.parts for x in ("build",".git")): continue
         text=p.read_text(encoding="utf8")
         text=re.sub(r"https?://[^\s]+","",text)
-        assert not re.search(r"d2k|D2K",text),str(p)
+        assert not re.search(r"d2k",text,re.IGNORECASE),str(p)
 print("D2S runtime namespace: PASS")
 
 for p in (root/"datapath/testdata").glob("*.tlv"):

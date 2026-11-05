@@ -1,0 +1,96 @@
+{
+  "id": "UPSTREAM-PANEL-20261105-1cc424e",
+  "method": "pinned git diff and three-way merge; REA tool unavailable",
+  "source": "1cc424ea75a3860701d76075231a067174384b5a",
+  "base": "fd4e262",
+  "excluded": [
+    "D2K_HANDOFF.md",
+    ".playwright/cli.config.json"
+  ],
+  "files": [
+    {
+      "path": "internal/web/assets/panel.css",
+      "conflict": true,
+      "source_sha256": "3cfc8ee7af124234e022fb3b57a6f5070910bc5010b44acdcb01a18ea5ae932d",
+      "before_sha256": "342221e8ec73d1c62a7af41983c38d7310b787005e9b3e49a0ae82bc985fe109",
+      "integrated_sha256": "29e1d024d2b8c3860f68d0641c16a9022f5a3bd4a1d8172883c4af9b8e1951ed"
+    },
+    {
+      "path": "internal/web/assets/panel.js",
+      "conflict": false,
+      "source_sha256": "1433a29f38037f3eab931d7386435f3fde3b759aeb039629ffa4bba7d0bd785a",
+      "before_sha256": "812f50a571a2feeda8f3b1f5c93f8957f55c9f75b1e759a87fa91af9ae406127",
+      "integrated_sha256": "c479e80dd07ddff19ff368f6e00885b65190e37660636894e65c149f6f0a25f9"
+    },
+    {
+      "path": "internal/web/assets/telegram-flow.js",
+      "conflict": false,
+      "source_sha256": "c0a49515d274086b6c0a42a1f72c93a28666df1c521d57ff17091ae5edced57e",
+      "before_sha256": "6dccb8e1e6a33fc0cac879a4929ad29ec6c79b275b1302a53f37d950dac25700",
+      "integrated_sha256": "9f69deb66a04f68cc50fa1da3e4ef8e8ee6b5f895608d05827a49ea62ff00c26"
+    },
+    {
+      "path": "panel/test_browser.cjs",
+      "conflict": false,
+      "source_sha256": "6e2ffc7e2c4c3449f8fc6be9d5261ccfc7e71088319575e22fcb0ed80daa72d7",
+      "before_sha256": "065af51b62d300a4b74c09010919adcf34b1eaa039274a21169595fcdc5d4f51",
+      "integrated_sha256": "50aad107009b0218d5b217d3092770fc52cd672813e4a9a983dbff666d2e6906"
+    },
+    {
+      "path": "panel/test_poll.cjs",
+      "conflict": false,
+      "source_sha256": "05250f701fe31b2e1e7df9e3991c5462075c1856c54a7b13b515120f8f3a1a57",
+      "before_sha256": "95a1cf6b71ee0190fe877b54d1e062c70bfda11e01016226963465fbebf8fe6b",
+      "integrated_sha256": "05250f701fe31b2e1e7df9e3991c5462075c1856c54a7b13b515120f8f3a1a57"
+    },
+    {
+      "path": "panel/test_server.c",
+      "conflict": false,
+      "source_sha256": "89334183d53783fcec1695d50a17008e8c1d3f5f591f95bb119326cbe9384ad9",
+      "before_sha256": "4fee3937aa9baf521095be1fe6f5ec627e13db699435a772114edd7c927d812e",
+      "integrated_sha256": "89334183d53783fcec1695d50a17008e8c1d3f5f591f95bb119326cbe9384ad9"
+    },
+    {
+      "path": "panel/test_telegram_flow.cjs",
+      "conflict": false,
+      "source_sha256": "5dc816b04679da9911ff95b4a1ed964295b485de3f7854771ce6b9b362606319",
+      "before_sha256": "93b114d2889c681200cf1a2fcecf96b923865339a0e91b0546cb77f9d574f5b4",
+      "integrated_sha256": "5dc816b04679da9911ff95b4a1ed964295b485de3f7854771ce6b9b362606319"
+    },
+    {
+      "path": "panel/test_ui.cjs",
+      "conflict": false,
+      "source_sha256": "fe8be26323a1656c154cb0434c37f839405922331616b7cd43111c9247d2d90f",
+      "before_sha256": "a661392326bb63577a7b7d5f81e3c70d95f80e29216593275fb129c0217c12b1",
+      "integrated_sha256": "fe8be26323a1656c154cb0434c37f839405922331616b7cd43111c9247d2d90f"
+    },
+    {
+      "path": "telegram/include/tg_route_plan.h",
+      "conflict": false,
+      "source_sha256": "f3c464fe9fe6d5e51aa1f99814164b6f1c244781bdbc945959f366e261bbccdb",
+      "before_sha256": "0685c884ecc440243b1b6135de3b09a13e33a58e87bbe789524b5372918eb57d",
+      "integrated_sha256": "f3c464fe9fe6d5e51aa1f99814164b6f1c244781bdbc945959f366e261bbccdb"
+    },
+    {
+      "path": "telegram/src/epoll_proxy.c",
+      "conflict": false,
+      "source_sha256": "ca254035966eb6ce5ba3fa4797924ef8c6d2a14c8dcf2f0ba7be98664dfe766d",
+      "before_sha256": "8274101eaaae2311db99e45152ecdd35af227b922faaf2be64c2f018a97166ca",
+      "integrated_sha256": "ca254035966eb6ce5ba3fa4797924ef8c6d2a14c8dcf2f0ba7be98664dfe766d"
+    },
+    {
+      "path": "telegram/test_epoll_proxy.c",
+      "conflict": false,
+      "source_sha256": "2bc5469eb12d52dbab9a7da7ef9616a844762a6284910b8aed4fc5257cceb6e9",
+      "before_sha256": "03d52dd9992ceb3f5d92b74268db4aa6ff9f49a0bf402c074c1ba142449cf87f",
+      "integrated_sha256": "2bc5469eb12d52dbab9a7da7ef9616a844762a6284910b8aed4fc5257cceb6e9"
+    }
+  ],
+  "resolution": "CSS conflicts resolved with D2S semantic palette; existing D2S search-card stacking preserved",
+  "d2s_adaptations": [
+    "Explicit-empty box filtering without catalog mutation; unknown target count is not zero",
+    "Family ownership links follow visible box changes",
+    "D2S JavaScript API names and theme-aware canvas assertions",
+    "44px engine controls; sidebar and mobile navigation use their actual D2S geometry"
+  ]
+}

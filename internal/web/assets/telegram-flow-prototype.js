@@ -86,7 +86,7 @@ function makeLane(route, index) {
 }
 
 function mountTelegramFlow(canvas) {
-  const api = global.D2kTelegramFlow;
+  const api = global.D2STelegramFlow;
   const context = canvas.getContext("2d", { alpha: false });
   if (!context || !api) throw new Error("Сцена Telegram недоступна");
   const root = canvas.closest(".tg-flow");
@@ -663,5 +663,5 @@ function ease(progress) {
   return progress < 0.5 ? 4 * progress ** 3 : 1 - ((-2 * progress + 2) ** 3) / 2;
 }
 
-global.D2kTelegramPrototype = { mountTelegramFlow };
+global.D2STelegramPrototype = { mountTelegramFlow };
 })(typeof window !== "undefined" ? window : globalThis);
