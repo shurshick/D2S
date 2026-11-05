@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-SCHEDULER=$ROOT/files/d2s-instagram-dns-scheduler.sh
+SCHEDULER=$ROOT/files/d2s-meta-dns-scheduler-core.sh
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT HUP INT TERM
 

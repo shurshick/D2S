@@ -659,6 +659,7 @@ typedef struct {
     int        report_closed;
     int64_t    report_admitted_ms; /* -1 until scheduler time is known */
     int64_t    report_queue_ms;
+    int64_t    classify_ms, contact_ms, verify_ms; /* worker wall time, not CPU */
     int        local_error; /* запуск рабочего потока не удался */
 
     /* ГОЛОС/АДРЕСНЫЙ UDP: поток, к которому применился приём, и наблюдения.
@@ -2646,7 +2647,7 @@ static void sched_quic_progress(const char *question, int probes) {
     d2s_sched_progress_note(question, probes, 0);
 }
 
-static void *worker_run(void *vp) {
+static void *worker_body(void *vp) {
     worker_arg *a = (worker_arg *)vp;
     d2s_sched *s = a->s;
     task *t = a->t;
@@ -3153,6 +3154,27 @@ static void *worker_run(void *vp) {
     ssize_t ignored = write(s->wake[1], "w", 1);
     (void)ignored;
     return NULL;
+}
+
+static void *worker_run(void *vp) {
+    worker_arg *a = vp;
+    d2s_sched *s = a->s;
+    task *t = a->t;
+    task_job job = t->job;
+    struct timespec begin, end;
+    int timed = clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
+    void *result = worker_body(vp); /* owns/frees worker_arg */
+    if (timed && clock_gettime(CLOCK_MONOTONIC, &end) == 0) {
+        int64_t ns = (int64_t)(end.tv_sec - begin.tv_sec) * 1000000000 +
+                     end.tv_nsec - begin.tv_nsec;
+        int64_t elapsed = ns > 0 ? ns / 1000000 : 0;
+        pthread_mutex_lock(&s->mu);
+        if (job == JOB_CLASSIFY) t->classify_ms += elapsed;
+        else if (job == JOB_CONTACT) t->contact_ms += elapsed;
+        else if (job == JOB_VERIFY) t->verify_ms += elapsed;
+        pthread_mutex_unlock(&s->mu);
+    }
+    return result;
 }
 
 static void contact_close(task *t);
@@ -5851,6 +5873,44 @@ static void wake_loop(d2s_sched *s) {
 }
 
 int d2s_sched_wake_fd(const d2s_sched *s) { return s ? s->wake[0] : -1; }
+
+int d2s_sched_wait_ms(const d2s_sched *s, int64_t now_ms, int ceiling_ms) {
+    if (ceiling_ms <= 0) return 0;
+    if (!s) return ceiling_ms;
+    int wait = ceiling_ms;
+#define EARLIEST(at) do { \
+    int64_t left = (at) > now_ms ? (at) - now_ms : 0; \
+    if (left < wait) wait = (int)left; \
+} while (0)
+    size_t active = measurements_in_flight(s), queued = queued_measurements(s);
+    /* Sampling is useful while research has demand. Idle maintenance keeps
+       the caller's original cadence, with no extra wakeups on a quiet LAN. */
+    if (active || queued)
+        EARLIEST(s->cpu_tried ? s->cpu_try_ms + SCHED_CPU_SAMPLE_MS : now_ms);
+    if (queued && active < s->meas_limit)
+        EARLIEST(s->measure_start_seen ? s->last_measure_start_ms + SCHED_START_GAP_MS : now_ms);
+    for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
+        const task *t = &s->tasks[i];
+        switch (t->state) {
+        case T_TRIAL_SETTLE:
+            EARLIEST(t->trial_acked ? now_ms : t->trial_until_ms); break;
+        case T_VERIFY_WAIT:
+            EARLIEST(t->ver_ok ? now_ms : t->ver_until_ms); break;
+        case T_PROPS_WAIT:
+            EARLIEST(t->prop_until_ms); break;
+        case T_PLANNING:
+            /* A local allocation/send refusal is retried by maintenance,
+               not by an immediate ready-state loop. RX delays are explicit. */
+            if (t->rx_retry_after_ms) EARLIEST(t->rx_retry_after_ms);
+            break;
+        case T_RESTING:
+            EARLIEST(t->rest_until_ms); break;
+        default: break;
+        }
+    }
+#undef EARLIEST
+    return wait;
+}
 
 size_t d2s_sched_active(const d2s_sched *s) {
     if (!s) { return 0; }
@@ -8715,6 +8775,7 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
     }
     pthread_mutex_lock(&s->mu);
     int measured = t->ask_probes;
+    int64_t classify_ms=t->classify_ms, contact_ms=t->contact_ms, verify_ms=t->verify_ms;
     pthread_mutex_unlock(&s->mu);
     int64_t elapsed = t->report_admitted_ms >= 0 && now_ms >= t->report_admitted_ms
         ? now_ms - t->report_admitted_ms : -1;
@@ -8736,17 +8797,19 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
         d2s_diag_event e={.id=t->report_id,.target=t->name,.protocol=proto,
             .family=t->family,.trigger=t->trigger_code,.outcome=outcome,.reason=reason,
             .elapsed_ms=elapsed,.queue_ms=queued,.probe_units=(int64_t)t->probes+measured,
-            .ip=t->ip,.path=path,.kind=t->by_addr?"addr":"name",.shape=t->trigger_shape};
+            .ip=t->ip,.path=path,.kind=t->by_addr?"addr":"name",.shape=t->trigger_shape,
+            .classify_ms=classify_ms,.contact_ms=contact_ms,.verify_ms=verify_ms};
         s->diagnostic(s->diagnostic_ctx,&e);
     }
     if (!s->say_fn) return;
     snprintf(line, sizeof line,
         "итог поиска: search=%llu target=%s protocol=%s family=%u "
         "outcome=%s path=%s probe_units=%lld accounting=scheduler "
-        "elapsed_ms=%lld queue_ms=%lld live=unknown",
+        "elapsed_ms=%lld queue_ms=%lld live=unknown classify_ms=%lld contact_ms=%lld verify_ms=%lld",
         (unsigned long long)t->report_id, t->name, proto,
         (unsigned)t->family, outcome, path, (long long)t->probes + measured,
-        (long long)elapsed, (long long)queued);
+        (long long)elapsed, (long long)queued,
+        (long long)classify_ms,(long long)contact_ms,(long long)verify_ms);
     s->say_fn(s->say_ctx, line);
 }
 
@@ -11513,6 +11576,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                        "план может быть предложен повторно", t->name, SCHED_TRIED_MAX);
             }
             if (now_ms < t->rx_retry_after_ms) continue;
+            t->rx_retry_after_ms = 0;
             int inst = install_next(s, t);
             if (inst == -2) {
                 /* ЛОКАЛЬНЫЙ ОТКАЗ, А НЕ «ПЛАНЫ КОНЧИЛИСЬ» (0010, R1). Порт для
@@ -11558,6 +11622,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                         t->rx_phase = 0;
                         say(s, "по %s следующие свои подтверждённые планы до полного замера: %zu",
                             t->name, more);
+                        wake_loop(s);
                         moved++;
                         continue;
                     }

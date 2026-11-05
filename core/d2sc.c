@@ -707,6 +707,7 @@ int main(int argc, char **argv) {
         int64_t t = now_ms();
         int wait = (int)(TICK_MS - (t - last_tick));
         if (wait < 0) { wait = 0; }
+        wait = d2s_sched_wait_ms(s, t, wait);
         if (d2s_sched_sync_pending(s)) {
             /* Пока проход по каталогу не закончен, круг цикла не ждёт: каждая
                порция обязана идти сразу за чтением событий. */
@@ -830,7 +831,9 @@ int main(int argc, char **argv) {
         int more = d2s_sched_sync_step(s);
 
         t = now_ms();
-        if (more || t - last_tick >= TICK_MS || (pr > 0 && (pfd[1].revents & POLLIN))) {
+        if (more || pr == 0 || t - last_tick >= TICK_MS ||
+            d2s_sched_wait_ms(s, t, TICK_MS) == 0 ||
+            (pr > 0 && (pfd[1].revents & POLLIN))) {
             diagnostic_tick(s,t);
             d2s_sched_tick(s, t);
             last_tick = t;

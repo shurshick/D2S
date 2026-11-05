@@ -18,6 +18,7 @@ static const char *const pidfiles[PROCESS_COUNT]={"d2s.pid","d2sd.pid","d2s-pane
 typedef struct {long pid;int64_t rss,hwm,anon,threads;} proc_mem;
 typedef struct {
     uint64_t id; int64_t at,elapsed,queued,units;unsigned family,trigger,shape;
+    int64_t classify_ms,contact_ms,verify_ms;
     char target[256],protocol[16],outcome[32],reason[256],ip[48],path[16],kind[8];
 } event;
 typedef struct {
@@ -63,6 +64,7 @@ void d2s_diag_record(d2s_diag *d,const d2s_diag_event *v) {
     event *e=&d->events[d->event_total++%EVENTS];memset(e,0,sizeof *e);
     e->at=(int64_t)time(NULL);e->id=v->id;e->elapsed=v->elapsed_ms;e->queued=v->queue_ms;
     e->units=v->probe_units;e->family=v->family;e->trigger=v->trigger;e->shape=v->shape;
+    e->classify_ms=v->classify_ms;e->contact_ms=v->contact_ms;e->verify_ms=v->verify_ms;
     copy(e->ip,sizeof e->ip,v->ip);copy(e->path,sizeof e->path,v->path);copy(e->kind,sizeof e->kind,v->kind);
     copy(e->target,sizeof e->target,v->target);copy(e->protocol,sizeof e->protocol,v->protocol);
     copy(e->outcome,sizeof e->outcome,v->outcome);copy(e->reason,sizeof e->reason,v->reason);
@@ -197,6 +199,9 @@ int d2s_diag_write(const d2s_diag *d,FILE *f) {
         fprintf(f,"{\"id\":%llu,\"at\":%lld,\"family\":%u,\"trigger\":%u,\"elapsed_ms\":",
           (unsigned long long)e->id,(long long)e->at,e->family,e->trigger);
         number(f,e->elapsed);fputs(",\"queue_ms\":",f);number(f,e->queued);
+        fputs(",\"classify_ms\":",f);number(f,e->classify_ms);
+        fputs(",\"contact_ms\":",f);number(f,e->contact_ms);
+        fputs(",\"verify_ms\":",f);number(f,e->verify_ms);
         fputs(",\"probe_units\":",f);number(f,e->units);fputs(",\"target\":",f);
         js(f,e->target);
         fputs(",\"ip\":",f);js(f,e->ip);fputs(",\"path\":",f);js(f,e->path);fputs(",\"kind\":",f);js(f,e->kind);

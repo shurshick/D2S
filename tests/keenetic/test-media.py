@@ -27,9 +27,12 @@ elif command.startswith('no ip host '):
  (r/'ndm').write_text(''.join(line for line in (r/'ndm').read_text().splitlines(keepends=True) if line.strip()!=target))
 else: sys.exit(2)
 '''
-        probe='#!/bin/sh\n[ "${FAIL_CERT:-0}" != 1 ]\n'
+        probe='#!/bin/sh\nprintf "%s %s\\n" "$2" "$3" >> "$FIXTURE/probes"\n[ "${FAIL_CERT:-0}" != 1 ] && [ "$2" != "${FAIL_HOST:-}" ]\n'
         for name,text in [('ndmc',ndmc),('d2stg',probe)]:
             p=self.root/'bin'/name;p.write_text(text);p.chmod(0o755)
+        date=self.root/'bin/date'
+        date.write_text('#!/bin/sh\nif [ "$1" = +%s ] && [ -n "${FAKE_NOW:-}" ]; then echo "$FAKE_NOW"; else exec /bin/date "$@"; fi\n')
+        date.chmod(0o755)
     def tearDown(self): self.tmp.cleanup()
     def call(self,command='refresh',**env):
         return subprocess.run(['sh',str(work/'d2s-whatsapp-media.sh'),command],env=dict(self.env,**env),capture_output=True,text=True)
@@ -66,4 +69,30 @@ else: sys.exit(2)
         (self.root/'state/whatsapp-ip-hosts.tsv').write_text('web.whatsapp.com 57.144.250.32\n')
         self.assertNotEqual(self.call(FAIL_CERT='1').returncode,0)
         self.assertEqual((self.root/'ndm').read_text(),before)
+    def test_new_name_does_not_reprobe_valid_pairs(self):
+        self.assertEqual(self.call().returncode,0)
+        (self.root/'probes').write_text('')
+        (self.root/'log/d2sd.log').write_text('name=media-otp1-1.cdn.whatsapp.net\nname=media-arn2-1.cdn.whatsapp.net\n')
+        p=self.call();self.assertEqual(p.returncode,0,p.stderr)
+        calls=(self.root/'probes').read_text()
+        self.assertNotIn('media-otp1-1',calls)
+        self.assertEqual(calls.count('media-arn2-1'),2)
+    def test_partial_failure_keeps_successful_cache_and_tries_other_names(self):
+        bad='media-aaa-1.cdn.whatsapp.net';good='media-zzz-1.cdn.whatsapp.net'
+        (self.root/'log/d2sd.log').write_text(f'name={bad}\nname={good}\n')
+        p=self.call(FAIL_HOST=bad);self.assertNotEqual(p.returncode,0)
+        self.assertIn(good,(self.root/'ndm').read_text())
+        (self.root/'probes').write_text('')
+        self.assertNotEqual(self.call(FAIL_HOST=bad).returncode,0)
+        self.assertEqual((self.root/'probes').read_text(),'')
+    def test_failure_cache_expires_and_success_cache_survives(self):
+        bad='media-aaa-1.cdn.whatsapp.net';good='media-zzz-1.cdn.whatsapp.net'
+        (self.root/'log/d2sd.log').write_text(f'name={bad}\nname={good}\n')
+        self.assertNotEqual(self.call(FAKE_NOW='1000',FAIL_HOST=bad).returncode,0)
+        (self.root/'probes').write_text('')
+        self.assertNotEqual(self.call(FAKE_NOW='1001').returncode,0)
+        self.assertEqual((self.root/'probes').read_text(),'')
+        p=self.call(FAKE_NOW='1031');self.assertEqual(p.returncode,0,p.stderr)
+        calls=(self.root/'probes').read_text()
+        self.assertNotIn(good,calls);self.assertEqual(calls.count(bad),2)
 unittest.main(verbosity=2)

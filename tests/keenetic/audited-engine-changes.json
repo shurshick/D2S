@@ -1,0 +1,26 @@
+{
+  "core/d2sc.c": {
+    "sha256": "4a63201e41d203f3341a60ffd390b9647ba3baaab132037c74092b8964a2eb24",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/diagnostics.c": {
+    "sha256": "2baf0e608f4939331d453292c795843f0be7cefd94619d600125b7fd3a3f1141",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_diagnostics.h": {
+    "sha256": "c546d3edf8feb0e9028d6a037e22ff9d56c03b5b9f2738cd73bc50735c8357c0",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_sched.h": {
+    "sha256": "1e968549d798f371747ec13db4e9c88aad7b18d9a01541eefc78dc94a3ad473f",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/sched.c": {
+    "sha256": "a066b4fdf24eecac940b9084ebbe1eccc330f39bb80a4ff4d06f04131fa4b728",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/test_diagnostics.c": {
+    "sha256": "f09bf0bcb8e5c95e842565368f7f6345ce7344d56c69e273475ccf84dd7ca5d8",
+    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  }
+}

@@ -148,6 +148,12 @@ case "${1:-run}" in
     tick) tick ;;
     run)
         while :; do
+            media_token=
+            media_watch=${D2S_MEDIA_WATCH_BIN:-/opt/sbin/d2s-dns-watch}
+            media_observed=${D2S_MEDIA_OBSERVED:-/tmp/d2s/whatsapp-media-observed.txt}
+            if [ -n "${D2S_MEDIA_HELPER:-}" ] && [ -x "$media_watch" ]; then
+                media_token=$("$media_watch" --media-token "$media_observed" 2>/dev/null) || media_token=
+            fi
             tick
             if [ -n "${D2S_MEDIA_HELPER:-}" ] && [ -x "$D2S_MEDIA_HELPER" ]; then
                 "$D2S_MEDIA_HELPER" refresh &
@@ -158,10 +164,21 @@ case "${1:-run}" in
             # Пауза — фоновым sleep и wait: trap на TERM срабатывает сразу, а
             # не после foreground-команды. Иначе остановка службы ждёт до
             # RUN_EVERY и добивает SIGKILL.
-            sleep "$RUN_EVERY" &
-            child_pid=$!
-            wait "$child_pid" || true
-            child_pid=
+            wait_rc=1
+            if [ -n "$media_token" ]; then
+                "$media_watch" --wait-media "$media_observed" "$RUN_EVERY" "$media_token" &
+                child_pid=$!
+                wait "$child_pid" && wait_rc=0 || wait_rc=$?
+                child_pid=
+            fi
+            # 124 is a normal periodic wake. Older binaries or unavailable
+            # inotify keep the former sleep cadence instead of spinning.
+            if [ "$wait_rc" != 0 ] && [ "$wait_rc" != 124 ]; then
+                sleep "$RUN_EVERY" &
+                child_pid=$!
+                wait "$child_pid" || true
+                child_pid=
+            fi
         done
         ;;
     *) echo "usage: $0 {run|tick}" >&2; exit 2 ;;

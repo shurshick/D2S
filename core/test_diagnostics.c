@@ -18,7 +18,8 @@ static char *report(d2s_diag *d) {
 int main(void) {
     d2s_diag *d=NULL;
     d2s_diag_counts c={0};
-    d2s_diag_event e={.target="a\".example",.protocol="quic",.outcome="failed",.reason="local\nerror"};
+    d2s_diag_event e={.target="a\".example",.protocol="quic",.outcome="failed",.reason="local\nerror",
+        .classify_ms=1234,.contact_ms=56,.verify_ms=789};
     assert(d2s_diag_bytes(d)==0);
     d2s_diag_record(d,&e);
     for(int round=0;round<10;round++) {
@@ -35,6 +36,7 @@ int main(void) {
         assert(fread(buf,1,(size_t)size,f)==(size_t)size);buf[size]=0;
         assert(strstr(buf,"a\\\".example")); assert(strstr(buf,"local\\nerror"));
         assert(strstr(buf,"\"rss_kib\":null"));
+        assert(strstr(buf,"\"classify_ms\":1234,\"contact_ms\":56,\"verify_ms\":789"));
         assert(!strstr(buf,"\"id\":935,")); assert(strstr(buf,"\"id\":936,"));
         free(buf);fclose(f);
         char full[256];memset(full,'"',sizeof full-1);full[255]=0;

@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <linux/filter.h>
 #include <linux/if_ether.h>
 #include <net/if.h>
@@ -15,8 +16,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/inotify.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <time.h>
 
 #define HOST_CAP 128
 #define NAME_CAP 256
@@ -58,6 +62,57 @@ static int packet_name(const uint8_t *p,size_t n,char name[NAME_CAP]) {
 }
 
 #ifndef D2O_WATCH_TEST
+/* Watch the directory: save_names replaces the file atomically. Comparing a
+ * token AFTER registering the watch also catches names added during refresh,
+ * before the scheduler started waiting. No polling subprocess every second. */
+static int media_token(const char *path,char out[128]) {
+    struct stat st;
+    if(lstat(path,&st)) {
+        if(errno!=ENOENT)return -1;
+        strcpy(out,"missing");return 0;
+    }
+    if(!S_ISREG(st.st_mode))return -1;
+    int n=snprintf(out,128,"%llu:%lld:%lld:%ld",(unsigned long long)st.st_ino,
+        (long long)st.st_size,(long long)st.st_mtime,st.st_mtim.tv_nsec);
+    return n>0 && n<128?0:-1;
+}
+static int64_t media_now_ms(void) {
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC,&ts))return -1;
+    return (int64_t)ts.tv_sec*1000+ts.tv_nsec/1000000;
+}
+static int wait_media(const char *path,const char *seconds,const char *expected) {
+    char *end=NULL,dir[4096],token[128];
+    unsigned long interval=strtoul(seconds,&end,10);
+    if(!*seconds || *end || !interval || interval>INT_MAX/1000 ||
+       path[0]!='/' || strlen(path)>=sizeof(dir))return 2;
+    strcpy(dir,path);
+    char *slash=strrchr(dir,'/');
+    if(!slash || !slash[1])return 2;
+    if(slash==dir)slash[1]=0;else *slash=0;
+    int fd=inotify_init1(IN_CLOEXEC|IN_NONBLOCK);
+    if(fd<0)return 1;
+    if(inotify_add_watch(fd,dir,IN_MOVED_TO|IN_CLOSE_WRITE|IN_DELETE|IN_DELETE_SELF|IN_MOVE_SELF)<0) {
+        close(fd);return 1;
+    }
+    int64_t now=media_now_ms(),until=now+(int64_t)interval*1000;
+    int rc=1;
+    while(now>=0) {
+        if(media_token(path,token))break;
+        if(strcmp(expected,token)){rc=0;break;}
+        if(now>=until){rc=124;break;}
+        struct pollfd event={.fd=fd,.events=POLLIN};
+        int ready=poll(&event,1,(int)(until-now));
+        if(ready<0 && errno==EINTR){now=media_now_ms();continue;}
+        if(ready<0 || (event.revents&(POLLERR|POLLHUP|POLLNVAL)))break;
+        if(ready>0) {
+            char events[4096];
+            if(read(fd,events,sizeof(events))<=0 && errno!=EAGAIN)break;
+        }
+        now=media_now_ms();
+    }
+    close(fd);return rc;
+}
 static volatile sig_atomic_t stopping;
 static void stop_watch(int sig) { (void)sig;stopping=1; }
 static int save_names(const char *path,char hosts[HOST_CAP][NAME_CAP],size_t count) {
@@ -74,6 +129,12 @@ static int save_names(const char *path,char hosts[HOST_CAP][NAME_CAP],size_t cou
     return 0;
 }
 int main(int argc,char **argv) {
+    if(argc==3 && !strcmp(argv[1],"--media-token")) {
+        char token[128];if(media_token(argv[2],token))return 1;
+        puts(token);return 0;
+    }
+    if(argc==5 && !strcmp(argv[1],"--wait-media"))
+        return wait_media(argv[2],argv[3],argv[4]);
     if(argc==2 && strcmp(argv[1],"--version")==0) {
         puts("d2s-dns-watch 0.1 LAN-query-only media-whatsapp-only");return 0;
     }

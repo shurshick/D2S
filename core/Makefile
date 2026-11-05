@@ -1348,6 +1348,13 @@ test-sched-quic-yield: test_sched_quic_yield
 	./test_sched_quic_yield
 check: test-sched-quic-yield
 TESTS += test_sched_quic_yield
+test_sched_timers: test_sched_timers.c sched.c $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(TEST_LDFLAGS)
+.PHONY: test-sched-timers
+test-sched-timers: test_sched_timers
+	./test_sched_timers
+check: test-sched-timers
+TESTS += test_sched_timers
 .PHONY: san-sched-quic-yield
 san: san-sched-quic-yield
 san-sched-quic-yield: hello_profiles.inc tcp1620_whitelist.inc

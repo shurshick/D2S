@@ -12,6 +12,28 @@ ca_bundle=${D2S_IP_CA_BUNDLE:-/opt/etc/ssl/certs/ca-certificates.crt}
 CHECK_STATE=$DIR/state/whatsapp-media-last-check
 NAMES=$DIR/state/whatsapp-media-names.txt
 POOL=$DIR/state/whatsapp-media-pool.txt
+CACHE=$DIR/state/whatsapp-media-pair-cache.tsv
+
+# Cache the exact certificate-checked pair, not the whole name list. A new
+# hostname must not invalidate other hosts. Failed probes get one scheduler
+# interval of rest; a failed host never discards successful work for siblings.
+media_edge_verified() {
+    _media_cached=$(awk -v h="$1" -v a="$2" -v t="$now" '
+        $1==h && $2==a && $4~/^[0-9]+$/ && t>=$4 &&
+        t-$4<($3=="ok"?21600:30) {print $3;exit}' "$CACHE" 2>/dev/null || true)
+    case "$_media_cached" in ok) return 0;; fail) return 1;; esac
+    _media_status=fail
+    if edge_verified "$1" "$2"; then _media_status=ok; fi
+    _media_tmp="$CACHE.new.$$"
+    if [ -r "$CACHE" ]; then
+        awk -v h="$1" -v a="$2" '$1!=h || $2!=a' "$CACHE" > "$_media_tmp"
+    else
+        : > "$_media_tmp"
+    fi
+    printf '%s %s %s %s\n' "$1" "$2" "$_media_status" "$now" >> "$_media_tmp"
+    mv -f "$_media_tmp" "$CACHE"
+    [ "$_media_status" = ok ]
+}
 
 media_names() {
     {
@@ -24,7 +46,7 @@ media_names() {
 names=$(media_names || true)
 HOSTS=$(printf '%s\n' "$names" | tr '\n' ' ')
 case "${1:-refresh}" in
-    remove) remove_owned; rm -f "$CHECK_STATE" "$NAMES" "$POOL"; exit 0 ;;
+    remove) remove_owned; rm -f "$CHECK_STATE" "$NAMES" "$POOL" "$CACHE"; exit 0 ;;
     refresh) ;;
     *) echo 'usage: refresh|remove' >&2; exit 2 ;;
 esac
@@ -38,12 +60,21 @@ candidates=$(awk 'NF==2 {print $2}' "$DIR/state/whatsapp-ip-hosts.tsv" 2>/dev/nu
 old_pool=$(cat "$POOL" 2>/dev/null || true)
 if [ "$old_names" = "$names" ] && [ "$old_pool" = "$candidates" ] && [ "$now" -ge "$last" ] && [ $((now-last)) -lt 21600 ]; then exit 0; fi
 ndm_config || exit 1
+if [ -r "$CACHE" ]; then
+    # Retain only the current bounded name/pool context, not a lifetime log.
+    awk -v hs="$HOSTS" -v ips="$candidates" 'BEGIN {
+        nh=split(hs,h);na=split(ips,a);for(i=1;i<=nh;i++)hosts[h[i]]=1;
+        for(i=1;i<=na;i++)pool[a[i]]=1
+    } $1 in hosts && $2 in pool {print}' "$CACHE" > "$CACHE.new.$$"
+    mv -f "$CACHE.new.$$" "$CACHE"
+fi
+failed=0
 for host in $names; do
     verified=0
     fresh_ips=
     for ip in $candidates; do
         is_meta_ip "$ip" || continue
-        if ! edge_verified "$host" "$ip"; then continue; fi
+        if ! media_edge_verified "$host" "$ip"; then continue; fi
         verified=$((verified+1))
         fresh_ips="$fresh_ips $ip"
         if record_exists "$host" "$ip"; then
@@ -63,7 +94,11 @@ for host in $names; do
         fi
         [ "$verified" -lt 2 ] || break
     done
-    [ "$verified" -gt 0 ] || { log "для $host не найден адрес с подходящим сертификатом"; exit 1; }
+    if [ "$verified" -eq 0 ]; then
+        log "для $host не найден адрес с подходящим сертификатом"
+        failed=1
+        continue
+    fi
     # Retire only our stale pairs, after replacement has passed verification.
     if [ -f "$MANIFEST" ]; then
         while read -r old_host old_ip extra; do
@@ -87,6 +122,7 @@ if [ -f "$MANIFEST" ]; then
     mv "$MANIFEST.new" "$MANIFEST"
 fi
 ndm_save_if_changed || exit 1
+[ "$failed" -eq 0 ] || exit 1
 printf '%s\n' "$names" > "$NAMES"
 printf '%s\n' "$candidates" > "$POOL"
 printf '%s\n' "$now" > "$CHECK_STATE"

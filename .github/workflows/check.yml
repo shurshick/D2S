@@ -28,6 +28,8 @@ jobs:
       - run: node scripts/test-install-openwrt.cjs
       - run: node scripts/test-update.cjs
       - run: sh scripts/check-d2s-extras.sh
+      - run: python3 tests/keenetic/test-media-wake.py
+      - run: sh scripts/test-instagram-dns-scheduler.sh
       - run: make -C telegram test
       - run: make -C panel test test-js
       - run: |

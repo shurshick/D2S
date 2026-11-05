@@ -363,6 +363,11 @@ int d2s_sched_event(d2s_sched *s, const d2s_ev *ev);
  * по событиям»). Возвращает число продвинутых задач. */
 int d2s_sched_tick(d2s_sched *s, int64_t now_ms);
 
+/* Earliest timed work, bounded by the caller's maintenance interval.
+ * Event-driven jobs still wake the controller through wake_fd. Never spins
+ * on a planning task whose last local allocation/send attempt failed. */
+int d2s_sched_wait_ms(const d2s_sched *s, int64_t now_ms, int ceiling_ms);
+
 /* Дескриптор, который цикл обязан держать в poll() рядом с link_fd: рабочий
  * поток, закончив сетевой оракул, будит им цикл. Без этого вердикт лежал бы до
  * следующего события датапата или тика, а это секунды на ровном месте. */

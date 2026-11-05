@@ -7,6 +7,7 @@
 typedef struct {
     uint64_t id;
     int64_t elapsed_ms, queue_ms, probe_units;
+    int64_t classify_ms, contact_ms, verify_ms;
     unsigned family, trigger, shape;
     const char *target, *protocol, *outcome, *reason, *ip, *path, *kind;
 } d2s_diag_event;
