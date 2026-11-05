@@ -177,6 +177,7 @@ static void print_json(const d2s_result *r)
             printf(",\n      \"delay_ms\": %d", o->delay_ms);
         }
         printf(",\n      \"pass\": %d,\n      \"fail\": %d", o->pass, o->fail);
+        printf(",\n      \"elapsed_ms\": %lld", (long long)o->elapsed_ms);
         if (o->err[0]) {
             printf(",\n      \"err\": ");
             print_json_str(o->err);
@@ -193,8 +194,9 @@ static void print_json(const d2s_result *r)
 static void print_progress(void *ctx, const d2s_obs *o)
 {
     int64_t *t0 = ctx;
-    fprintf(stderr, "  [%4ld с] %-28s прошло=%d не прошло=%d %s\n",
-            (long)((d2s_now_ms() - *t0) / 1000), o->probe, o->pass, o->fail, o->err);
+    fprintf(stderr, "  [%4ld с] %-28s прошло=%d не прошло=%d elapsed_ms=%lld %s\n",
+            (long)((d2s_now_ms() - *t0) / 1000), o->probe, o->pass, o->fail,
+            (long long)o->elapsed_ms, o->err);
     fflush(stderr);
 }
 

@@ -212,14 +212,20 @@ out:
  * времени (на rutracker.org прогон вырос с 4 до 39 секунд), но там за это
  * платит рантайм Go, а здесь пришлось бы заводить потоки ради одной функции.
  * Цена честная и названа: до полуминуты на заблокированной цели. */
+#ifndef D2S_RESPONSE_HANDSHAKE
+#define D2S_RESPONSE_HANDSHAKE d2s_resp_handshake12
+#endif
 static int count_handshakes(const char *host, const char *port, const char *sni,
-                            const d2s_opts *opt, int *unmeasured)
+                            const d2s_opts *opt, int *unmeasured,
+                            int until_pass, int *probes)
 {
     int i, done = 0;
     for (i = 0; i < opt->repeats; i++) {
-        int r = d2s_resp_handshake12(host, port, sni, opt);
+        int r = D2S_RESPONSE_HANDSHAKE(host, port, sni, opt);
+        (*probes)++;
         if (r > 0) {
             done++;
+            if (until_pass) break;
         } else if (r < 0) {
             (*unmeasured)++;
         }
@@ -293,9 +299,8 @@ void d2s_resp_decide(int target, int control, int unmeasured, int repeats,
     } else if (target == 0) {
         res->verdict = D2S_RESP_BLOCKED;
         snprintf(res->reason, sizeof(res->reason),
-                 "запрос проходит, а рукопожатие не завершается: с нейтральным именем на тот же "
-                 "адрес оно завершается каждый раз. Значит режут ОТВЕТ — сертификат в TLS 1.2 "
-                 "идёт открытым текстом");
+                 "запрос проходит, но целевое рукопожатие TLS 1.2 не завершается; "
+                 "с нейтральным именем на том же адресе оно завершилось — режут ответ");
     } else {
         res->verdict = D2S_RESP_FLAKY;
         snprintf(res->reason, sizeof(res->reason),
@@ -311,14 +316,22 @@ void d2s_probe_response(const char *host, const char *port, const char *sni,
                         const d2s_opts *opt, d2s_resp_result *res)
 {
     char neutral[64];
-    int target, control, unmeasured = 0;
+    int target, control;
 
     memset(res, 0, sizeof(*res));
-    target = count_handshakes(host, port, sni, opt, &unmeasured);
+    int64_t start = d2s_now_ms();
+    target = count_handshakes(host, port, sni, opt, &res->target_unmeasured, 0, &res->target_probes);
+    res->target_ms = d2s_now_ms() - start;
     /* Контроль ОБЯЗАН быть другим именем на том же адресе. Если бы мы взяли то
      * же самое, молчали бы оба, и «режут ответ» получилось бы из собственной
      * ошибки ввода. */
     d2s_neutral_sni(neutral, sizeof(neutral));
-    control = count_handshakes(host, port, neutral, opt, &unmeasured);
-    d2s_resp_decide(target, control, unmeasured, opt->repeats, res);
+    /* The decision only distinguishes control==0 from control>0. Keep all
+       target trials and all silent control trials; stop a proven control. */
+    start = d2s_now_ms();
+    control = count_handshakes(host, port, neutral, opt, &res->control_unmeasured, 1, &res->control_probes);
+    res->control_ms = d2s_now_ms() - start;
+    res->probes = res->target_probes + res->control_probes;
+    d2s_resp_decide(target, control, res->target_unmeasured + res->control_unmeasured,
+                    opt->repeats, res);
 }

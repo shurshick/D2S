@@ -69,6 +69,8 @@ static int g_ask = -1, g_rep;     /* текущий вопрос сырого с
 static int g_hs_calls;
 static int g_poison_calls;
 static int g_split_success, g_split_calls, g_split_gaps;
+static int g_split_long_calls;
+static const char *g_split_long_pattern;
 static int g_split_connect_failures, g_split_response_failures;
 
 static int pat_rc(const char *pat, int idx)
@@ -122,7 +124,14 @@ int fake_poison(const uint8_t *ip, uint8_t family, uint16_t port, const d2s_trig
         }
         if (g_split_response_failures > 0) { g_split_response_failures--; return 0; }
         if (p->gap_ms == 2) g_split_gaps |= 1;
-        if (p->gap_ms == 10) g_split_gaps |= 2;
+        if (p->gap_ms == 10) {
+            g_split_gaps |= 2; g_split_long_calls++;
+            if (g_split_long_pattern) {
+                int answer = pat_rc(g_split_long_pattern, g_split_long_calls - 1);
+                if (answer < 0) snprintf(err, errcap, "raw split: local send failure");
+                return answer;
+            }
+        }
         if (g_split_success < 0) snprintf(err, errcap, "raw split: local send failure");
         return g_split_success;
     }
@@ -968,7 +977,7 @@ static void test_split_uses_runtime(void) {
     d2s_result r;
     g_split_success = 1; g_split_calls = g_split_gaps = 0;
     run(&sc, &r);
-    CHECK(r.verdict == D2S_DV_WHOLE_PACKET && g_split_calls == 9 && g_split_gaps == 3,
+    CHECK(r.verdict == D2S_DV_WHOLE_PACKET && g_split_calls == 7 && g_split_gaps == 3,
           "split measurement bypassed the production packet runtime: verdict=%d calls=%d gaps=%d",
           r.verdict, g_split_calls, g_split_gaps);
     g_split_success = -1; g_split_calls = 0;
@@ -1056,16 +1065,61 @@ static void test_split_recovers_only_unsent_transport_failure(void) {
     g_split_connect_failures = 1; g_split_calls = 0;
     run(&sc, &after);
     CHECK(after.verdict == D2S_DV_WHOLE_PACKET && after.split_pos == before.split_pos &&
-          after.probes == before.probes + 2 && g_split_calls == 10,
+          after.probes == before.probes + 2 && g_split_calls == 8,
           "recovered classifier lost the measured split or entered fallback");
     g_split_success = 0;
 }
 
-int main(void)
+static void test_long_gap_stops_after_success(void)
 {
+    scenario sc = {"long-gap-positive", NULL, "-", NULL, "+", 0, NULL, 0, 0};
+    d2s_result r;
+    const char *patterns[] = {"+--", "-+-", "--+", "---", "e--"};
+    const int expected[] = {1, 2, 3, 3, 3};
+    for (int i = 0; i < 5; ++i) {
+        g_split_long_pattern = patterns[i];
+        g_split_success = 1; g_split_calls = g_split_long_calls = 0;
+        run(&sc, &r);
+        CHECK(r.verdict == (i == 4 ? D2S_DV_FLAKY : D2S_DV_WHOLE_PACKET),
+              "long-gap early answer changed the verdict for %s", patterns[i]);
+        if (i < 4) CHECK(r.reassembles == (i == 3 ? D2S_TRI_TRUE : D2S_TRI_FALSE),
+                         "long-gap changed the reassembly answer");
+        CHECK(g_split_long_calls == expected[i], "long-gap wrong repeats for %s: %d", patterns[i], g_split_long_calls);
+        const d2s_obs *o = find_obs(&r, "split-long");
+        CHECK(o && o->pass + o->fail == expected[i], "long-gap trace must count actual probes");
+    }
+    g_split_long_pattern = NULL;
+    g_split_success = 0;
+}
+
+static void test_observation_timing(void)
+{
+    d2s_result r = {0}; d2s_opts opt = {0};
+    d2s_obs *o = d2s_trace_add(&r, "timed-question");
+    d2s_sleep_ms(12);
+    d2s_obs_finish(&opt, o);
+    CHECK(o->elapsed_ms >= 10 && o->started_ms == 0, "question wall time not recorded");
+    int64_t elapsed = o->elapsed_ms;
+    d2s_obs_finish(&opt, o);
+    CHECK(o->elapsed_ms == elapsed, "finishing an observation changed its duration");
+    opt.seed_whole = 1; opt.seed_repeats = opt.repeats = 3; opt.seed_fail = 3;
+    d2s_trigger tr = {0};
+    d2s_tally t = measure("unused", "443", &tr, &opt, "whole", NULL, 0, 0, &r, 0);
+    o = &r.trace[r.ntrace - 1];
+    CHECK(t.fail == 3 && o->elapsed_ms == 0 && r.probes == 0,
+          "reused baseline was counted as a new timed network question");
+}
+
+int main(int argc, char **argv)
+{
+    if (argc == 2 && !strcmp(argv[1], "--long-gap-only")) {
+        srv_start(); test_long_gap_stops_after_success(); return fails ? 1 : 0;
+    }
     test_local_plan_error_is_not_a_property();
+    test_observation_timing();
     test_timestamp_questions_follow_client_profile();
     srv_start();
+    test_long_gap_stops_after_success();
     test_split_uses_runtime();
     test_split_recovers_only_unsent_transport_failure();
     bind_list_names();

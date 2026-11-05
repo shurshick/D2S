@@ -189,6 +189,7 @@ d2s_obs *d2s_trace_add(d2s_result *res, const char *probe)
     }
     o = &res->trace[res->ntrace++];
     memset(o, 0, sizeof(*o));
+    o->started_ms = d2s_now_ms();
     /* Копия с явной границей, а не snprintf: имя зонда приходит из разных
      * мест (гипотеза, свойство, собранный кандидат), длину его ни один
      * анализатор не выводит, и -Werror=format-truncation на mipsel-gcc
@@ -207,12 +208,18 @@ d2s_obs *d2s_trace_add(d2s_result *res, const char *probe)
  * все пять мест, где зонды заканчиваются, — иначе очередное место молча
  * осталось бы без строки, и «тишина в журнале» опять значила бы два разных
  * состояния. */
-static void obs_done(const d2s_opts *opt, const d2s_obs *o)
+void d2s_obs_finish(const d2s_opts *opt, d2s_obs *o)
 {
+    if (o->started_ms > 0) {
+        int64_t elapsed = d2s_now_ms() - o->started_ms;
+        o->elapsed_ms = elapsed > 0 ? elapsed : 0;
+        o->started_ms = 0;
+    }
     if (opt->on_obs) {
         opt->on_obs(opt->on_obs_ctx, o);
     }
 }
+
 
 void d2s_note(d2s_result *res, const char *fmt, ...)
 {
@@ -635,7 +642,8 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
         }
         obs->pass = t.pass;
         obs->fail = t.fail;
-        obs_done(opt, obs);
+        obs->started_ms = 0; /* this question was answered in an earlier phase */
+        d2s_obs_finish(opt, obs);
         return t;
     }
 
@@ -645,6 +653,7 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
             break;
         }
         char raw_peer[INET6_ADDRSTRLEN] = "";
+        int64_t probe_started = d2s_now_ms();
         rc = once_probe(host, port, tr, opt, cuts, ncuts, gap_ms, err, sizeof(err),
                         raw_peer, sizeof raw_peer);
         res->probes++;
@@ -654,9 +663,10 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
              * trial once. A second raw failure leaves the question unknown;
              * never retry a negative reply after sending the trigger. */
             d2s_obs *transport = d2s_trace_add(res, "transport:raw-connect");
+            transport->started_ms = probe_started;
             transport->fail = 1;
             snprintf(transport->err, sizeof transport->err, "%s", err);
-            obs_done(opt, transport);
+            d2s_obs_finish(opt, transport);
             if (!d2s_detect_stopped(&opt->cancel)) {
                 d2s_obs *control = d2s_trace_add(res, "transport:tcp-control");
                 int fd = dial_marked_mode(raw_peer, port, opt->timeout_ms, opt->mark,
@@ -667,16 +677,18 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
                     control->fail = 1;
                     snprintf(control->err, sizeof control->err, "%s", err);
                 }
-                obs_done(opt, control);
+                d2s_obs_finish(opt, control);
                 if (fd >= 0 && !d2s_detect_stopped(&opt->cancel)) {
+                    probe_started = d2s_now_ms();
                     rc = once_probe(raw_peer, port, tr, opt, cuts, ncuts, gap_ms, err, sizeof err,
                                     raw_peer, sizeof raw_peer);
                     res->probes++;
                     if (rc == D2S_RAW_CONNECT_TIMEOUT) {
                         transport = d2s_trace_add(res, "transport:raw-connect-retry");
+                        transport->started_ms = probe_started;
                         transport->fail = 1;
                         snprintf(transport->err, sizeof transport->err, "%s", err);
-                        obs_done(opt, transport);
+                        d2s_obs_finish(opt, transport);
                     }
                 }
             }
@@ -705,7 +717,7 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
     }
     obs->pass = t.pass;
     obs->fail = t.fail;
-    obs_done(opt, obs);
+    d2s_obs_finish(opt, obs);
     return t;
 }
 
@@ -848,7 +860,7 @@ static int raw_selftest(const uint8_t *ip, uint8_t family, uint16_t pnum,
             obs->fail++;
         }
     }
-    obs_done(opt, obs);
+    d2s_obs_finish(opt, obs);
     selftest_store(family, offer_ts, obs->pass > 0);
     return obs->pass > 0;
 }
@@ -930,7 +942,7 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
         d2s_obs *obs = d2s_trace_add(res, "raw-selftest:кэш");
         snprintf(obs->err, sizeof(obs->err),
                  "прошла %ld с назад в этом процессе, зондов не было", (long)(age / 1000));
-        obs_done(opt, obs);
+        d2s_obs_finish(opt, obs);
         res->raw_selftest_cached = 1;
     } else if (!raw_selftest(ip4, family, pnum, opt, res, d2s_trigger_offers_ts(tr))) {
         res->raw_usable = 0;
@@ -993,7 +1005,7 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
             }
             obs->pass = pass;
             obs->fail = done - pass;
-            obs_done(opt, obs);
+            d2s_obs_finish(opt, obs);
             if (raw_doubted(res) &&
             !raw_recheck(ip4, family, pnum, opt, res, &props0, d2s_trigger_offers_ts(tr))) {
                 return 0;
@@ -1052,7 +1064,7 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
                 break;
             }
         }
-        obs_done(opt, obs);
+        d2s_obs_finish(opt, obs);
         if (raw_doubted(res) &&
             !raw_recheck(ip4, family, pnum, opt, res, &props0, d2s_trigger_offers_ts(tr))) {
             return 0;
@@ -1223,7 +1235,23 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
         if (sni[0] != '\0') {
             d2s_probe_response(host, port, sni, opt, &res->response);
             res->has_response = 1;
-            res->probes += 2 * opt->repeats;
+            res->probes += res->response.probes;
+            d2s_obs *response_obs = d2s_trace_add(res, "response:target");
+            response_obs->pass = res->response.target;
+            response_obs->fail = res->response.target_probes - res->response.target;
+            response_obs->started_ms = 0;
+            response_obs->elapsed_ms = res->response.target_ms;
+            if (res->response.target_unmeasured)
+                snprintf(response_obs->err, sizeof response_obs->err, "response locally unmeasured: %d", res->response.target_unmeasured);
+            d2s_obs_finish(opt, response_obs);
+            response_obs = d2s_trace_add(res, "response:control");
+            response_obs->pass = res->response.control;
+            response_obs->fail = res->response.control_probes - res->response.control;
+            response_obs->started_ms = 0;
+            response_obs->elapsed_ms = res->response.control_ms;
+            if (res->response.control_unmeasured)
+                snprintf(response_obs->err, sizeof response_obs->err, "response locally unmeasured: %d", res->response.control_unmeasured);
+            d2s_obs_finish(opt, response_obs);
             if (res->response.verdict == D2S_RESP_BLOCKED) {
                 res->verdict = D2S_DV_RESPONSE;
                 snprintf(res->reason, sizeof(res->reason), "%s", res->response.reason);
@@ -1327,7 +1355,7 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
                 }
                 obs->fail++;
             }
-            obs_done(opt, obs);
+            d2s_obs_finish(opt, obs);
             if (observed && obs->pass == 0 && obs->fail == opt->repeats) {
                 res->verdict = D2S_DV_ADDRESS;
                 snprintf(res->reason, sizeof(res->reason),
@@ -1393,7 +1421,9 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
     /* 3. ЕСТЬ ЛИ БУФЕР ПЕРЕСБОРКИ. Тот же разрез, но с паузой в сотни
      * миллисекунд. Коробка без буфера ведёт себя так же; коробка с буфером и
      * таймаутом успевает склеить сегменты и снова опознать сигнатуру. */
-    lng = measure(host, port, tr, opt, "split-long", cut1, 1, opt->long_gap_ms, res, 0);
+    /* Only zero versus any success is used below. A second success cannot
+       change the answer; a wholly silent question still needs every repeat. */
+    lng = measure(host, port, tr, opt, "split-long", cut1, 1, opt->long_gap_ms, res, 1);
     if (lng.has_err) {
         res->verdict = D2S_DV_FLAKY;
         snprintf(res->reason, sizeof(res->reason), "ошибка замера разреза: %s", lng.err);

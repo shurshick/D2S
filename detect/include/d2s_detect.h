@@ -235,6 +235,8 @@ typedef struct {
     int  pass;
     int  fail;
     char err[160];
+    int64_t started_ms; /* monotonic; internal, zero after completion/reuse */
+    int64_t elapsed_ms; /* wall time, including network waits; not CPU */
 } d2s_obs;
 
 #define D2S_TRACE_MAX 512
@@ -254,6 +256,13 @@ typedef struct {
     char reason[320];
     int  target;
     int  control;
+    int  probes;
+    int  target_probes;
+    int  control_probes;
+    int  target_unmeasured;
+    int  control_unmeasured;
+    int64_t target_ms;
+    int64_t control_ms;
 } d2s_resp_result;
 
 const char *d2s_resp_name(d2s_resp_verdict v);
@@ -399,6 +408,8 @@ typedef struct {
     int  seed_fail;
     char seed_err[160];
 } d2s_opts;
+
+void d2s_obs_finish(const d2s_opts *opt, d2s_obs *obs);
 
 void d2s_opts_defaults(d2s_opts *o);
 int  d2s_opts_acceptable(const d2s_opts *o, const d2s_poison *p);

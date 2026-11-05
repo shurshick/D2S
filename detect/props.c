@@ -400,7 +400,7 @@ int d2s_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
         }
         obs->pass = pass;
         obs->fail = done - pass;
-        if (opt->on_obs) { opt->on_obs(opt->on_obs_ctx, obs); }
+        d2s_obs_finish(opt, obs);
         got = d2s_prop_majority(pass, opt->repeats);
         /* A local compile/apply/send refusal is not an answer from the box. */
         if (!local_err) apply_set(&res->props, pp[i].set, got, &p);
