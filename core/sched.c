@@ -7725,22 +7725,6 @@ static int is_voice_class(const char *name, uint8_t transport) {
     return transport == 17 && strcmp(name, D2S_LINK_VOICE_CLASS) == 0;
 }
 
-/* Telegram control/site traffic is routed through the separately managed VPS
-   tunnel. It must not become a D2S measurement target. Match the DNS label
-   boundary, so unrelated names such as nottelegram.org remain eligible. */
-static int is_telegram_tunnel_domain(const char *name) {
-    static const char domain[] = "telegram.org";
-    size_t name_len = strlen(name);
-    const size_t domain_len = sizeof domain - 1;
-    if (name_len == domain_len) {
-        return strcasecmp(name, domain) == 0;
-    }
-    if (name_len <= domain_len || name[name_len - domain_len - 1] != '.') {
-        return 0;
-    }
-    return strcasecmp(name + name_len - domain_len, domain) == 0;
-}
-
 static int clean_handshake_recent(d2s_sched *s, const char *name, const d2s_ev *ev);
 static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
     if (!replayed && s->suspect_events < UINT64_MAX) { s->suspect_events++; }
@@ -7802,11 +7786,6 @@ static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
         /* Имени нет — искать не по чему. Это не отказ: датапат подозревает
            поток, а не имя, и поток без приветствия (или с приветствием, уже
            вытесненным из кольца) законно бывает. */
-        return 0;
-    }
-    if (is_telegram_tunnel_domain(name)) {
-        say(s, "по %s замер не запускаю: домен обслуживается Telegram VPS-туннелем",
-            name);
         return 0;
     }
     if (!strcasecmp(name, SCHED_DECOY)) {

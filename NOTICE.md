@@ -8,3 +8,7 @@ D2S — форк [necronicle/d2k](https://github.com/necronicle/d2k) и [t0fox/d
 ревизия `1cc424ea75a3860701d76075231a067174384b5a` (изменения после
 `fd4e262`). Оформление D2S сохранено. Область переноса и проверки:
 [docs/field/2026-11-05-telegram-panel.md](docs/field/2026-11-05-telegram-panel.md).
+
+Исправление Telegram Web — собственное изменение D2S: разделение TLS/MTProto,
+допуск сайтов Telegram к обычному подбору и исключение собственных проб из
+исходящего MTProto-перехвата. Границы и проверки: [docs/telegram-web.md](docs/telegram-web.md).

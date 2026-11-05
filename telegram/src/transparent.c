@@ -109,8 +109,22 @@ int tg_transparent_select_route(
     tg_mtproto_init parsed;
     int used_official_secret = 0;
     if (parse_client_handshake(policy, original, handshake, &parsed,
-                               &used_official_secret) != 0)
-        return -1;
+                               &used_official_secret) != 0) {
+        /* HTTPS shares Telegram address ranges with MTProto. Preserve the
+         * browser's TLS stream, including SNI and certificate verification.
+         * This identifies the first plaintext TLS record, not a completed
+         * handshake. Full TLS validation remains with client and server.
+         * A valid Obfuscated2/secret handshake always takes priority above. */
+        unsigned record_len = ((unsigned)handshake[3] << 8) | handshake[4];
+        if (original->port != 443 || handshake[0] != 0x16 ||
+            handshake[1] != 3 || handshake[2] < 1 || handshake[2] > 3 ||
+            !record_len || record_len > 16384 || handshake[5] != 1)
+            return -1;
+        memset(selection, 0, sizeof(*selection));
+        selection->upstream = *original;
+        selection->tls_passthrough = 1;
+        return 0;
+    }
     int64_t now = (int64_t)time(NULL);
     tg_dc_endpoint endpoint = {0};
     tg_dc_map_source source;

@@ -288,6 +288,18 @@ static int select_pending_test_route(
     return 0;
 }
 
+static int select_https_test_route(
+    void *opaque, const tg_listener_destination *original,
+    const uint8_t handshake[TG_MTPROTO_HANDSHAKE_LEN],
+    tg_epoll_route_selection *selection) {
+    proxy_fixture *fixture = opaque;
+    assert(original->port == 443 && handshake[0] == 0x16);
+    ++fixture->routes;
+    selection->upstream = fixture->upstream;
+    selection->tls_passthrough = 1;
+    return 0;
+}
+
 static int create_listener(uint16_t *port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     assert(fd >= 0);
@@ -950,6 +962,76 @@ static void test_epoll_bridge_preserves_handshake_and_half_close(void) {
     close(listener);
     close(upstream_listener);
     assert(pthread_join(echo_thread, NULL) == 0);
+}
+
+static void test_https_passthrough_keeps_bytes_and_mtproto_stats_separate(void) {
+    size_t fds = count_open_fds();
+    uint16_t upstream_port, listen_port;
+    int upstream_listener = create_listener(&upstream_port);
+    int listener = create_listener(&listen_port);
+    pthread_t echo_thread;
+    assert(pthread_create(&echo_thread, NULL, echo_server, &upstream_listener) == 0);
+    proxy_fixture fixture = {0};
+    set_ipv4(&fixture.original, "149.154.167.99", 443);
+    set_ipv4(&fixture.upstream, "127.0.0.1", upstream_port);
+    tg_config routing = {.ws_routing = TG_WS_ROUTING_HEDGED};
+    tg_epoll_proxy_config config = {
+        .listener_fd = listener, .queue_bytes = 4096,
+        .memory_budget_bytes = 1024u * 1024u, .configured_max_connections = 4,
+        .handshake_timeout_ms = 1000, .idle_timeout_ms = 1000,
+        .routing_config = &routing, .original_destination = original_destination,
+        .select_route = select_https_test_route, .context = &fixture,
+    };
+    tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
+    assert(proxy);
+    int client = connect_to_listener(listen_port);
+    uint8_t expected[8192], received[sizeof expected];
+    for (size_t i = 0; i < sizeof expected; ++i) expected[i] = (uint8_t)i;
+    memcpy(expected, (uint8_t[]){0x16, 3, 1, 0, 128, 1}, 6);
+    assert(send(client, expected, 17, 0) == 17);
+    step_many(proxy, 3);
+    assert(fixture.routes == 0); /* A fragmented prefix is retained. */
+    assert(send(client, expected + 17, sizeof expected - 17, 0) ==
+           (ssize_t)(sizeof expected - 17));
+    size_t used = 0;
+    for (unsigned i = 0; i < 2000 && used < sizeof received; ++i) {
+        step_many(proxy, 1);
+        ssize_t n = recv(client, received + used, sizeof received - used, MSG_DONTWAIT);
+        if (n < 0) { assert(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR); continue; }
+        assert(n > 0);
+        used += (size_t)n;
+    }
+    assert(used == sizeof expected && memcmp(received, expected, sizeof expected) == 0);
+    assert(fixture.routes == 1 && tg_epoll_proxy_active_connections(proxy) == 1);
+    tg_epoll_proxy_stats stats;
+    assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
+    assert(stats.https_connections == 1 && stats.active_connections == 0 &&
+           stats.active_sessions_count == 0 && !stats.route_sessions_truncated);
+    assert(stats.wss_attempts == 0 && stats.wss_responses == 0 &&
+           stats.last_success_dc == 0 && stats.last_failure_stage == 0);
+    assert(shutdown(client, SHUT_WR) == 0);
+    step_many(proxy, 100);
+    close(client);
+    assert(pthread_join(echo_thread, NULL) == 0);
+    assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
+    assert(stats.https_connections == 0 && stats.active_connections == 0);
+    tg_epoll_proxy_destroy(proxy);
+    close(listener); close(upstream_listener);
+
+    /* An HTTPS connect failure must not poison MTProto route health. */
+    listener = create_listener(&listen_port);
+    int closed = create_listener(&upstream_port); close(closed);
+    set_ipv4(&fixture.upstream, "127.0.0.1", upstream_port);
+    config.listener_fd = listener;
+    proxy = tg_epoll_proxy_create(&config); assert(proxy);
+    client = connect_to_listener(listen_port);
+    assert(send(client, expected, 64, 0) == 64);
+    step_many(proxy, 30);
+    assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
+    assert(stats.https_connections == 0 && stats.active_connections == 0 &&
+           stats.wss_attempts == 0 && stats.last_failure_stage == 0);
+    close(client); tg_epoll_proxy_destroy(proxy); close(listener);
+    assert(count_open_fds() == fds);
 }
 
 static void test_epoll_many_concurrent_tcp_clients(void) {
@@ -3021,6 +3103,7 @@ static void test_epoll_certificate_failure_keeps_diagnostic_tcp(void) {
 int main(void) {
     (void)signal(SIGPIPE, SIG_IGN);
     test_epoll_bridge_preserves_handshake_and_half_close();
+    test_https_passthrough_keeps_bytes_and_mtproto_stats_separate();
     test_epoll_many_concurrent_tcp_clients();
     test_pending_tcp_connect_expires_before_idle_timeout();
     test_read_only_stats_socket();

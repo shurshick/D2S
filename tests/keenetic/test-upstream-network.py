@@ -16,7 +16,8 @@ for name,expected in manifest.items():
     data=(root/name).read_bytes()
     if name in audited:
         record=audited[name]
-        assert record["reason"].startswith("docs/performance-stage1.md"),name+" has no audit explanation"
+        explanation=record["reason"].split("#",1)[0]
+        assert explanation in ("docs/performance-stage1.md","docs/telegram-web.md") and (root/explanation).is_file(),name+" has no audit explanation"
         assert hashlib.sha256(data).hexdigest()==record["sha256"],name+" differs from its reviewed D2S change"
     else:
         assert hashlib.sha256(original_namespace(data.replace(b"bb5131a8",b"680fbe00") if name == "core/test_probe_plan.c" else data)).hexdigest()==expected,name+" differs from t0fox/d2o fd4e262"

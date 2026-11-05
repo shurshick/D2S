@@ -153,6 +153,12 @@ fi
 # а правила остаться.
 # Старое имя D2S тоже снимается: установка прошлой версии могла оставить его.
 for fw_tool in iptables ip6tables; do
+# The helper may already be missing; never leave its owned output jump behind.
+while "$fw_tool" -t nat -D OUTPUT -p tcp -j D2S_TG_OUT 2>/dev/null; do :; done
+if "$fw_tool" -t nat -n -L D2S_TG_OUT >/dev/null 2>&1; then
+    "$fw_tool" -t nat -F D2S_TG_OUT 2>/dev/null || true
+    "$fw_tool" -t nat -X D2S_TG_OUT 2>/dev/null || true
+fi
 while "$fw_tool" -t nat -D PREROUTING -j D2S_HTTP 2>/dev/null; do :; done
 if "$fw_tool" -t nat -n -L D2S_HTTP >/dev/null 2>&1; then
     "$fw_tool" -t nat -F D2S_HTTP 2>/dev/null || true

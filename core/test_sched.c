@@ -2142,6 +2142,7 @@ int main(int argc, char **argv) {
     int partial_only = argc == 2 && strcmp(argv[1], "--rx-partial-only") == 0;
     int rx_only = partial_only || (argc == 2 && strcmp(argv[1], "--rx-volume-only") == 0);
     int rst_only = argc == 2 && strcmp(argv[1], "--rst-only") == 0;
+    int telegram_only = argc == 2 && strcmp(argv[1], "--telegram-https-only") == 0;
     int admission_only = argc == 2 && strcmp(argv[1], "--admission-only") == 0;
     int question_only = argc == 2 && strcmp(argv[1], "--question-only") == 0;
     int shape_only = argc == 2 && strcmp(argv[1], "--shape-only") == 0;
@@ -2155,8 +2156,8 @@ int main(int argc, char **argv) {
     int client_tcp_only = argc == 2 && strcmp(argv[1], "--client-tcp-only") == 0;
     int ech_only = argc == 2 && strcmp(argv[1], "--ech-only") == 0;
     int clean_hs_only = argc == 2 && strcmp(argv[1], "--clean-hs-multi-client-only") == 0;
-    if (argc > 1 && !voice_only && !rx_only && !rst_only && !admission_only && !question_only && !shape_only && !groups_only && !retire_only && !recheck_only && !lifecycle_only && !own_first_only && !measured_only && !unfit_only && !client_tcp_only && !ech_only && !clean_hs_only) {
-        fprintf(stderr, "usage: test_sched [--voice-only|--rst-only|--admission-only|--question-only|--retire-only|--recheck-only|--lifecycle-only|--own-first-only|--measured-only|--ech-only|--clean-hs-multi-client-only]\n");
+    if (argc > 1 && !telegram_only && !voice_only && !rx_only && !rst_only && !admission_only && !question_only && !shape_only && !groups_only && !retire_only && !recheck_only && !lifecycle_only && !own_first_only && !measured_only && !unfit_only && !client_tcp_only && !ech_only && !clean_hs_only) {
+        fprintf(stderr, "usage: test_sched [--telegram-https-only|--voice-only|--rst-only|--admission-only|--question-only|--retire-only|--recheck-only|--lifecycle-only|--own-first-only|--measured-only|--ech-only|--clean-hs-multi-client-only]\n");
         return 2;
     }
     /* Real default verifier, before replacing hooks: the Plan is scoped to
@@ -2676,6 +2677,7 @@ int main(int argc, char **argv) {
         d2s_catalog_free(&empty);
     }
     if (voice_only) { goto voice_only_run; }
+    if (telegram_only) { goto telegram_only_run; }
     if (admission_only) { goto admission_only_run; }
 
     /* ECH OFFER: GREASE ОТДЕЛЬНО ОТ НАСТОЯЩЕГО (задача 41).
@@ -5182,39 +5184,37 @@ admission_only_run:
         return 0;
     }
 
-    /* --- подозрение по TCP идёт в дерево вердиктов --------------------- */
+telegram_only_run:
+    /* HTTPS names are measured in their observed protocol. There is no VPS
+       tunnel handling all telegram.org websites in the local-proxy setup. */
     {
-        static const struct {
-            const char *name;
-            int excluded;
-        } cases[] = {
-            { "telegram.org", 1 },
-            { "core.telegram.org", 1 },
-            { "WEB.TELEGRAM.ORG", 1 },
-            { "nottelegram.org", 0 },
+        static const char *cases[] = {
+            "telegram.org", "core.telegram.org", "WEB.TELEGRAM.ORG", "nottelegram.org"
         };
         for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
             d2s_catalog empty = {0};
             d2s_sched *s = d2s_sched_new(&empty, sv[0], 0x2d);
             uint16_t port = (uint16_t)(40600 + i);
             tcp_calls = quic_calls = 0;
-            d2s_ev h = ev_hello(6, port, cases[i].name);
+            tcp_answer = D2S_V_OPAQUE;
+            d2s_ev h = ev_hello(6, port, cases[i]);
             d2s_sched_event(s, &h);
+            settle(s);
+            CHECK(tcp_calls == 0 && quic_calls == 0, "имя само запустило подбор без подозрения");
             d2s_ev su = ev_suspect(6, port);
             int rc = d2s_sched_event(s, &su);
-            if (cases[i].excluded) {
-                CHECK(rc == 0, "telegram.org попал в очередь замеров");
-                settle(s);
-                CHECK(tcp_calls == 0 && quic_calls == 0,
-                      "telegram.org запустил сетевое измерение");
-            } else {
-                CHECK(rc == 1, "похожий, но посторонний домен исключён ошибочно");
-                settle(s);
-                CHECK(tcp_calls == 1, "посторонний домен перестал измеряться");
-            }
+            CHECK(rc == 1, "HTTPS Telegram ошибочно оставлен без замера из-за имени");
+            settle(s);
+            CHECK(tcp_calls == 1, "подозрение HTTPS не прошло обычный прямой замер");
             d2s_sched_free(s);
             d2s_catalog_free(&empty);
         }
+    }
+    if (telegram_only) {
+        close(sv[0]); close(sv[1]);
+        if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }
+        puts("Telegram HTTPS admission: PASS");
+        return 0;
     }
 
     /* --- имя с чистым рукопожатием без плана не идёт в замер по RST ------

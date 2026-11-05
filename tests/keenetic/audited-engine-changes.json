@@ -16,11 +16,19 @@
     "reason": "docs/performance-stage1.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "a066b4fdf24eecac940b9084ebbe1eccc330f39bb80a4ff4d06f04131fa4b728",
-    "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+    "sha256": "e3e6d1e5a20cf8036237edfadf9d9bae83337d6794207620c6ce37f186fd75ca",
+    "reason": "docs/telegram-web.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
     "sha256": "f09bf0bcb8e5c95e842565368f7f6345ce7344d56c69e273475ccf84dd7ca5d8",
     "reason": "docs/performance-stage1.md#reviewed-engine-changes"
+  },
+  "core/test_sched.c": {
+    "sha256": "b8afd775769b05cbf0a82b5e696cfd5e24376c120d3929f473282f90e9f1034c",
+    "reason": "docs/telegram-web.md#reviewed-engine-changes"
+  },
+  "files/d2s-tg-firewall.sh": {
+    "sha256": "bf837ea8776de86668b344bcfe755aa72fd600a66cd3a530ffcf2be9b892f70e",
+    "reason": "docs/telegram-web.md#reviewed-engine-changes"
   }
 }

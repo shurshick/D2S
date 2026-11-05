@@ -252,7 +252,8 @@ int tg_stats_socket_serve(tg_stats_socket *server,
         int n = tg_epoll_proxy_get_stats(proxy, &stats);
         size_t used = 0;
         int length = n == 0 ? snprintf(response, sizeof(response),
-            "{\"active_connections\":%zu,", stats.active_connections) : -1;
+            "{\"active_connections\":%zu,\"https_connections\":%zu,",
+            stats.active_connections, stats.https_connections) : -1;
         if (length > 0 && (size_t)length < sizeof(response)) {
             used = (size_t)length;
             if (append_active_sessions(response, sizeof(response), &used,

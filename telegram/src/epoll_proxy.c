@@ -103,6 +103,7 @@ struct proxy_connection {
     int ws_pump_ready;
     int splitter_ready;
     int direct_wss;
+    int tls_passthrough;
     int packet_framing;
     int wss_subprotocol;
     uint32_t route_dc_id;
@@ -170,6 +171,7 @@ struct tg_epoll_proxy {
     uint16_t listen_ports[TG_EPOLL_MAX_LISTEN_PORTS];
     size_t max_connections;
     size_t active_connections;
+    size_t https_connections;
     size_t tracked_sessions;
     size_t max_wss_connections;
     size_t active_wss_connections;
@@ -585,6 +587,8 @@ static void connection_close(proxy_connection *connection) {
     while (*link && *link != connection) link = &(*link)->next;
     if (*link == connection) *link = connection->next;
     if (server->active_connections) --server->active_connections;
+    if (connection->tls_passthrough && server->https_connections)
+        --server->https_connections;
     if (connection->route_session_tracked && server->tracked_sessions)
         --server->tracked_sessions;
     connection->retired_next = server->retired;
@@ -672,7 +676,7 @@ static int route_health_get(tg_epoll_proxy *server,
 
 static void route_failure_record(proxy_connection *connection,
                                  tg_route_kind kind, uint32_t stage) {
-    if (!connection) return;
+    if (!connection || connection->tls_passthrough) return;
     connection->route_failure_stage = (uint8_t)stage;
     uint64_t now = monotonic_ms();
     tg_epoll_proxy *server = connection->server;
@@ -1650,6 +1654,24 @@ static int route_after_handshake(proxy_connection *connection) {
                                        server->config.listen_port_count)))
         return -1;
     connection->upstream_target = *upstream;
+    if (selection.tls_passthrough) {
+        /* HTTPS must not enter WSS/CF route selection or claim an MTProto
+         * response/failure. Reuse the bounded, marked, half-close-aware raw
+         * TCP forwarding path. Generic DPI processing still sees this TLS. */
+        connection->tls_passthrough = 1;
+        ++server->https_connections;
+        if (connection->route_session_tracked) {
+            connection->route_session_tracked = 0;
+            if (server->tracked_sessions) --server->tracked_sessions;
+        }
+        if (queue_append_grow(connection, &connection->to_upstream,
+                              connection->handshake, connection->handshake_len,
+                              server->config.queue_bytes) != 0 ||
+            begin_upstream(connection, upstream) != 0)
+            return -1;
+        connection->handshake_done = 1;
+        return 0;
+    }
     connection->direct_wss = 0;
     size_t worker_count = 0, cf_count = 0;
     tg_ws_routing_policy policy = TG_WS_ROUTING_ADAPTIVE;
@@ -2862,7 +2884,8 @@ int tg_epoll_proxy_get_stats(const tg_epoll_proxy *server,
     uint64_t now = monotonic_ms();
     out->monotonic_time_ms = now;
     out->route_cooldown_ms = TG_ROUTE_HEALTH_COOLDOWN_MS;
-    out->active_connections = server->active_connections;
+    out->active_connections = server->active_connections - server->https_connections;
+    out->https_connections = server->https_connections;
     out->process_started_at = server->process_started_at;
     out->accepted_connections = server->connections_started;
     for (const proxy_connection *connection = server->connections; connection;
@@ -2883,7 +2906,7 @@ int tg_epoll_proxy_get_stats(const tg_epoll_proxy *server,
         out->active_sessions[j] = value;
     }
     out->route_sessions_truncated =
-        server->active_connections > out->active_sessions_count;
+        out->active_connections > out->active_sessions_count;
     out->max_connections = server->max_connections;
     out->active_wss_connections = server->active_wss_connections;
     out->max_wss_connections = server->max_wss_connections;

@@ -93,7 +93,9 @@ typedef struct {
 } tg_route_cooldown;
 
 typedef struct {
+    /* Pending/MTProto sessions shown by the MTProto route panel. */
     size_t active_connections;
+    size_t https_connections;
     uint64_t process_started_at;
     uint64_t accepted_connections;
     size_t active_sessions_count;
@@ -149,6 +151,8 @@ typedef struct {
     int is_media;
     tg_mtproto_proto proto;
     int tcp_only;
+    /* Already restricted by original-destination policy; no MTProto routes. */
+    int tls_passthrough;
 } tg_epoll_route_selection;
 
 typedef int (*tg_epoll_select_route_fn)(

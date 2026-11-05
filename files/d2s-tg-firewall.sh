@@ -8,11 +8,83 @@ PORT=1443
 TCP_PORTS="443 5222"
 OUTBOUND_MARK=0x31
 OUTBOUND_COMMENT=d2s-tg-outbound
+OUTPUT_CHAIN=D2S_TG_OUT
+ENGINE_MARKS=
 CIDRS4="149.154.160.0/20 91.108.4.0/22 91.108.8.0/22 91.108.12.0/22 91.108.16.0/22 91.108.20.0/22 91.108.56.0/22 91.105.192.0/23 95.161.64.0/20 185.76.151.0/24"
 CIDRS6="2001:67c:4e8::/48 2001:b28:f23c::/47 2001:b28:f23f::/48 2a0a:f280:203::/48"
 
 ipt() { iptables -w "$@" 2>/dev/null || iptables "$@" 2>/dev/null; }
 ip6t() { ip6tables -w "$@" 2>/dev/null || ip6tables "$@" 2>/dev/null; }
+
+# Read only literal numeric marks, never execute a router configuration here.
+# The watchdog and uninstall also invoke this helper outside S99d2s.
+load_engine_marks() {
+    conf=${D2S_CONFIG:-/opt/d2s/config}
+    ENGINE_MARKS=
+    for pair in MARK:0x2d PROBE_MARK:0x2e MEASURE_MARK:0x2f; do
+        key=${pair%%:*}; value=
+        if [ -r "$conf" ]; then
+            value=$(sed -n "s/^[[:space:]]*$key=//p" "$conf" | tail -n 1 | sed 's/[[:space:]]*#.*$//' | tr -d "\"'[:space:]")
+        fi
+        [ -n "$value" ] || value=${pair#*:}
+        case "$value" in
+            0x*|0X*) digits=${value#??}; case "$digits" in ''|*[!0-9a-fA-F]*) return 1 ;; esac ;;
+            *) case "$value" in ''|*[!0-9]*) return 1 ;; esac ;;
+        esac
+        number=$(printf '%u' "$value" 2>/dev/null) || return 1
+        awk -v n="$number" 'BEGIN { exit !(n <= 4294967295) }' || return 1
+        canonical=$(printf '0x%x' "$number") || return 1
+        case " $ENGINE_MARKS $OUTBOUND_MARK " in
+            *" $canonical "*) ;;
+            *) ENGINE_MARKS="$ENGINE_MARKS $canonical" ;;
+        esac
+    done
+}
+
+# Only the owned OUTPUT chain changes. PREROUTING still intercepts LAN
+# clients exactly as before; router probes retain their real target/tuple.
+ensure_output() {
+    fw=$1; setname=$2; healthy=1; expected=2
+    "$fw" -t nat -n -L "$OUTPUT_CHAIN" >/dev/null ||
+        "$fw" -t nat -N "$OUTPUT_CHAIN" || return 1
+    for mark in $ENGINE_MARKS "$OUTBOUND_MARK"; do
+        expected=$((expected + 1))
+        "$fw" -t nat -C "$OUTPUT_CHAIN" -m mark --mark "$mark" -j RETURN || healthy=0
+    done
+    for port in $TCP_PORTS; do
+        "$fw" -t nat -C "$OUTPUT_CHAIN" -p tcp --dport "$port" -m set --match-set "$setname" dst -j REDIRECT --to-port "$PORT" || healthy=0
+    done
+    rules=$("$fw" -t nat -S "$OUTPUT_CHAIN" | grep -c '^-A ' || true)
+    [ "$rules" = "$expected" ] || healthy=0
+    if [ "$healthy" != 1 ]; then
+        "$fw" -t nat -F "$OUTPUT_CHAIN" || return 1
+        for mark in $ENGINE_MARKS "$OUTBOUND_MARK"; do
+            "$fw" -t nat -A "$OUTPUT_CHAIN" -m mark --mark "$mark" -j RETURN || return 1
+        done
+        for port in $TCP_PORTS; do
+            "$fw" -t nat -A "$OUTPUT_CHAIN" -p tcp --dport "$port" -m set --match-set "$setname" dst -j REDIRECT --to-port "$PORT" || return 1
+        done
+    fi
+    "$fw" -t nat -C OUTPUT -p tcp -j "$OUTPUT_CHAIN" ||
+        "$fw" -t nat -I OUTPUT 1 -p tcp -j "$OUTPUT_CHAIN" || return 1
+    # Remove the exact legacy rules, otherwise probes would hit them after RETURN.
+    for port in $TCP_PORTS; do
+        while "$fw" -t nat -C OUTPUT -p tcp --dport "$port" -m set --match-set "$setname" dst -j REDIRECT --to-port "$PORT"; do
+            "$fw" -t nat -D OUTPUT -p tcp --dport "$port" -m set --match-set "$setname" dst -j REDIRECT --to-port "$PORT" || return 1
+        done
+    done
+}
+
+stop_output() {
+    fw=$1
+    while "$fw" -t nat -C OUTPUT -p tcp -j "$OUTPUT_CHAIN"; do
+        "$fw" -t nat -D OUTPUT -p tcp -j "$OUTPUT_CHAIN" || break
+    done
+    if "$fw" -t nat -n -L "$OUTPUT_CHAIN" >/dev/null; then
+        "$fw" -t nat -F "$OUTPUT_CHAIN" || return 1
+        "$fw" -t nat -X "$OUTPUT_CHAIN" || return 1
+    fi
+}
 
 # OpenWrt (25.12 без iptables вовсе): своя таблица nft, тот же выбор, что у
 # S99d2s — он экспортирует D2S_FW; удаление зовёт без него, тогда по системе.
@@ -47,7 +119,7 @@ table inet $NFT_TABLE {
 	}
 	chain out {
 		type nat hook output priority -101; policy accept;
-		meta mark $OUTBOUND_MARK return
+		$(for mark in $ENGINE_MARKS "$OUTBOUND_MARK"; do printf "meta mark %s return\n\t\t" "$mark"; done)
 		$(nft_redirects)
 	}
 }
@@ -60,8 +132,10 @@ nft_installed() {
     for port in $TCP_PORTS; do
         [ "$(printf '%s\n' "$listed" | grep -cF "tcp dport $port redirect to :$PORT")" -eq 4 ] || return 1
     done
-    [ "$(printf '%s\n' "$listed" | grep -c "meta mark $OUTBOUND_MARK return")" -eq 1 ] &&
-        [ "$(printf '%s\n' "$listed" | grep -c 'reject with tcp reset')" -eq 0 ]
+    for mark in $ENGINE_MARKS "$OUTBOUND_MARK"; do
+        [ "$(printf '%s\n' "$listed" | grep -c "meta mark $mark return")" -eq 1 ] || return 1
+    done
+    [ "$(printf '%s\n' "$listed" | grep -c 'reject with tcp reset')" -eq 0 ]
 }
 
 nft_up() {
@@ -86,12 +160,13 @@ ensure4() {
     ipset create "$SET4" hash:net -exist 2>/dev/null || return 1
     for c in $CIDRS4; do ipset add "$SET4" "$c" -exist 2>/dev/null || return 1; done
     for port in $TCP_PORTS; do
-        for chain in PREROUTING OUTPUT; do
+        for chain in PREROUTING; do
             ipt -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET4" dst -j REDIRECT --to-port "$PORT" ||
                 ipt -t nat -I "$chain" 1 -p tcp --dport "$port" -m set --match-set "$SET4" dst -j REDIRECT --to-port "$PORT" || return 1
             ipt -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET4" dst -j REDIRECT --to-port "$PORT" || return 1
         done
     done
+    ensure_output ipt "$SET4" || return 1
     ipt -t nat -C OUTPUT -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN ||
         ipt -t nat -I OUTPUT 1 -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN || return 1
     ipt -t nat -C OUTPUT -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN || return 1
@@ -110,12 +185,13 @@ ensure6() {
     ipset create "$SET6" hash:net family inet6 -exist 2>/dev/null || return 0
     for c in $CIDRS6; do ipset add "$SET6" "$c" -exist 2>/dev/null || return 0; done
     for port in $TCP_PORTS; do
-        for chain in PREROUTING OUTPUT; do
+        for chain in PREROUTING; do
             ip6t -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET6" dst -j REDIRECT --to-port "$PORT" ||
                 ip6t -t nat -I "$chain" 1 -p tcp --dport "$port" -m set --match-set "$SET6" dst -j REDIRECT --to-port "$PORT" || return 1
             ip6t -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET6" dst -j REDIRECT --to-port "$PORT" || return 1
         done
     done
+    ensure_output ip6t "$SET6" || return 1
     ip6t -t nat -C OUTPUT -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN ||
         ip6t -t nat -I OUTPUT 1 -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN || return 1
     ip6t -t nat -C OUTPUT -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN || return 1
@@ -148,6 +224,7 @@ heal() {
 # времён Entware. Без iptables здесь нечего делать.
 ipt_stop() {
     command -v iptables >/dev/null 2>&1 || return 0
+    stop_output ipt || return 1
     for port in $TCP_PORTS; do
         for chain in PREROUTING OUTPUT; do
             while ipt -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET4" dst -j REDIRECT --to-port "$PORT"; do
@@ -159,6 +236,7 @@ ipt_stop() {
         ipt -t nat -D OUTPUT -m mark --mark "$OUTBOUND_MARK" -m comment --comment "$OUTBOUND_COMMENT" -j RETURN || break
     done
     if command -v ip6tables >/dev/null 2>&1; then
+        stop_output ip6t || return 1
         for port in $TCP_PORTS; do
             for chain in PREROUTING OUTPUT; do
                 while ip6t -t nat -C "$chain" -p tcp --dport "$port" -m set --match-set "$SET6" dst -j REDIRECT --to-port "$PORT"; do
@@ -185,8 +263,8 @@ stop() {
 }
 
 case "${1:-}" in
-    start) start ;;
-    heal) heal ;;
+    start) load_engine_marks && start ;;
+    heal) load_engine_marks && heal ;;
     stop) stop ;;
     *) echo "usage: $0 {start|heal|stop}" >&2; exit 2 ;;
 esac

@@ -46,7 +46,7 @@ printf "DISTRIB_ID='OpenWrt'\n" > "$TMP/openwrt_release"
 tg() {
     bindir=$1; shift
     env PATH="$bindir:/usr/bin:/bin" NFT_STATE="$TMP/nft" IPT_LOG="$TMP/ipt.log" \
-        D2S_OPENWRT_RELEASE="$TMP/openwrt_release" "$@"
+        D2S_OPENWRT_RELEASE="$TMP/openwrt_release" D2S_CONFIG="$TMP/config" "$@"
 }
 table() { cat "$TMP/nft/inet_d2s_tg" 2>/dev/null; }
 
@@ -59,6 +59,9 @@ want 'set tg6 { type ipv6_addr; flags interval; elements = { 2001:67c:4e8::/48, 
 want 'type nat hook prerouting priority dstnat - 1; policy accept;'
 want 'type nat hook output priority -101; policy accept;'
 want 'meta mark 0x31 return'
+want 'meta mark 0x2d return'
+want 'meta mark 0x2e return'
+want 'meta mark 0x2f return'
 want 'ip daddr @tg4 tcp dport 443 redirect to :1443'
 want 'ip daddr @tg4 tcp dport 5222 redirect to :1443'
 want 'ip6 daddr @tg6 tcp dport 443 redirect to :1443'
@@ -132,10 +135,15 @@ case "$op" in
         chain=$1; shift
         grep -Fqx -- "$table $chain $*" "$state" 2>/dev/null
         ;;
-    -I)
+    -I|-A)
         chain=$1; shift
         [ "${1:-}" = "1" ] && shift
-        printf '%s %s %s\n' "$table" "$chain" "$*" >> "$state"
+        if [ "$op" = -I ]; then
+            { printf '%s %s %s\n' "$table" "$chain" "$*"; cat "$state" 2>/dev/null || true; } > "$state.tmp"
+            mv "$state.tmp" "$state"
+        else
+            printf '%s %s %s\n' "$table" "$chain" "$*" >> "$state"
+        fi
         ;;
     -D)
         chain=$1; shift
@@ -143,6 +151,18 @@ case "$op" in
         grep -Fvx -- "$table $chain $*" "$state" > "$state.tmp" || true
         mv "$state.tmp" "$state"
         ;;
+    -N)
+        grep -Fqx "$table $1" "$state.chains" 2>/dev/null && exit 1
+        printf '%s %s\n' "$table" "$1" >> "$state.chains" ;;
+    -n)
+        [ "$1" = -L ] && grep -Fqx "$table $2" "$state.chains" 2>/dev/null ;;
+    -S)
+        awk -v tab="$table" -v chain="$1" '$1==tab && $2==chain { $1=""; $2=""; sub(/^  /, ""); print "-A " chain " " $0 }' "$state" 2>/dev/null ;;
+    -F)
+        awk -v tab="$table" -v chain="$1" '!($1==tab && $2==chain)' "$state" > "$state.tmp" && mv "$state.tmp" "$state" ;;
+    -X)
+        grep -Fvx "$table $1" "$state.chains" > "$state.tmp" || true
+        mv "$state.tmp" "$state.chains" ;;
     *) exit 1 ;;
 esac
 EOF
@@ -161,9 +181,18 @@ EOF
 chmod +x "$TMP/iptablesok/ipset" "$TMP/iptablesok/conntrack"
 tg_iptables() {
     env PATH="$TMP/iptablesok:/usr/bin:/bin" IPT_STATE="$TMP/iptables-state" \
-        IPT_LOG="$TMP/ipt-ok.log" D2S_OPENWRT_RELEASE="$TMP/no-openwrt" "$@"
+        IPT_LOG="$TMP/ipt-ok.log" D2S_CONFIG="$TMP/config" D2S_OPENWRT_RELEASE="$TMP/no-openwrt" "$@"
 }
 : > "$TMP/ipt-ok.log"
+# Existing unrelated OUTPUT rules and all legacy redirects must survive or
+# migrate according to ownership, not according to their position.
+for tool in iptables ip6tables; do
+    setname=d2s_tg_dc; [ "$tool" != ip6tables ] || setname=d2s_tg_dc6
+    printf 'nat OUTPUT -p tcp --dport 12345 -j RETURN\n' > "$TMP/iptables-state/$tool"
+    for port in 443 5222; do
+        printf 'nat OUTPUT -p tcp --dport %s -m set --match-set %s dst -j REDIRECT --to-port 1443\n' "$port" "$setname" >> "$TMP/iptables-state/$tool"
+    done
+done
 tg_iptables sh "$TGFW" start || fail "не удалось запустить legacy iptables"
 grep -q 'ip6tables -w -t nat -I PREROUTING 1 -p tcp --dport 443 -m set --match-set d2s_tg_dc6 dst -j REDIRECT --to-port 1443' "$TMP/ipt-ok.log" \
     || fail "legacy-правила не перенаправляют IPv6-трафик Telegram"
@@ -172,9 +201,54 @@ grep -q 'ip6tables -w -t nat -I OUTPUT 1 -m mark --mark 0x31 -m comment --commen
 ! grep -q -- '-j REJECT' "$TMP/iptables-state/ip6tables" || fail "legacy-правила всё ещё отклоняют IPv6"
 [ "$(grep -c 'REDIRECT --to-port 1443' "$TMP/iptables-state/iptables")" -eq 4 ] || fail "не хватает перенаправлений IPv4 для legacy-правил"
 [ "$(grep -c 'REDIRECT --to-port 1443' "$TMP/iptables-state/ip6tables")" -eq 4 ] || fail "не хватает перенаправлений IPv6 для legacy-правил"
+# Interpret the stored generic netfilter rules: this tests packet behavior,
+# not the choice of an implementation-specific chain name.
+cat > "$TMP/route.py" <<'PY'
+import pathlib,shlex,sys
+base=pathlib.Path(sys.argv[1]); marks=[int(x,0) for x in sys.argv[2:]]
+for tool in ['iptables','ip6tables']:
+    chains={}
+    for line in (base/tool).read_text().splitlines():
+        table,chain,*rule=shlex.split(line)
+        if table=='nat':chains.setdefault(chain,[]).append(rule)
+    def walk(chain,mark,port=443,tg=True,proto='tcp'):
+        for r in chains.get(chain,[]):
+            if '-p' in r and r[r.index('-p')+1]!=proto:continue
+            if '--dport' in r and int(r[r.index('--dport')+1])!=port:continue
+            if '--match-set' in r and not tg:continue
+            if '--mark' in r and int(r[r.index('--mark')+1],0)!=mark:continue
+            target=r[r.index('-j')+1]
+            if target=='RETURN':return None
+            if target=='REDIRECT':return target
+            verdict=walk(target,mark,port,tg,proto)
+            if verdict:return verdict
+        return None
+    for mark in marks+[0x31]:
+        assert walk('OUTPUT',mark) is None,(tool,mark,'own probe recaptured')
+        assert walk('PREROUTING',mark)=='REDIRECT',(tool,'LAN selection changed')
+    assert walk('OUTPUT',0)=='REDIRECT' and walk('OUTPUT',0,5222)=='REDIRECT'
+    assert walk('OUTPUT',0,tg=False) is None and walk('OUTPUT',0,proto='udp') is None
+PY
+python3 "$TMP/route.py" "$TMP/iptables-state" 0x2d 0x2e 0x2f
+: > "$TMP/ipt-ok.log"
+tg_iptables sh "$TGFW" heal || fail "healthy legacy heal"
+! grep -Eq ' -(F|I|A|D|N) ' "$TMP/ipt-ok.log" || fail "healthy chain unnecessarily rewritten"
+# Lost rule and changed configuration must rebuild only the owned chain.
+for tool in iptables ip6tables; do
+    sed '/--mark 0x2f -j RETURN/d' "$TMP/iptables-state/$tool" > "$TMP/x" && mv "$TMP/x" "$TMP/iptables-state/$tool"
+done
+tg_iptables sh "$TGFW" heal || fail "probe return recovery"
+python3 "$TMP/route.py" "$TMP/iptables-state" 0x2d 0x2e 0x2f
+printf 'MARK="0x77" # configured mark\nPROBE_MARK=120\nMEASURE_MARK=0X79\n' > "$TMP/config"
+tg_iptables sh "$TGFW" heal || fail "configured probe marks"
+python3 "$TMP/route.py" "$TMP/iptables-state" 0x77 0x78 0x79
+printf 'MARK=$(touch %s/not-executed)\n' "$TMP" > "$TMP/config"
+if tg_iptables sh "$TGFW" heal; then fail "nonliteral mark accepted"; fi
+[ ! -e "$TMP/not-executed" ] || fail "configuration was executed"
+ok "own probes bypass interception, ordinary/LAN traffic remains selected; heal and custom marks work"
 tg_iptables sh "$TGFW" stop || fail "не удалось остановить legacy iptables"
-[ ! -s "$TMP/iptables-state/iptables" ] || fail "после остановки остались перенаправления Telegram IPv4"
-[ ! -s "$TMP/iptables-state/ip6tables" ] || fail "после остановки остались перенаправления Telegram IPv6"
+[ "$(cat "$TMP/iptables-state/iptables")" = "nat OUTPUT -p tcp --dport 12345 -j RETURN" ] || fail "IPv4 cleanup touched a foreign rule or left owned rules"
+[ "$(cat "$TMP/iptables-state/ip6tables")" = "nat OUTPUT -p tcp --dport 12345 -j RETURN" ] || fail "IPv6 cleanup touched a foreign rule or left owned rules"
 ok "legacy iptables перенаправляет IPv4/IPv6 и корректно удаляет правила"
 
 # Keenetic: no openwrt_release — iptables as before, nft never called.

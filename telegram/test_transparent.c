@@ -70,7 +70,7 @@ static void test_known_dc_is_validated_and_target_is_preserved(void) {
     assert(tg_transparent_select_route(&policy, &original, handshake,
                                        &selected) == 0);
     assert(selected.dc_id == 4 && !selected.is_media && !selected.tcp_only);
-    assert(selected.proto == TG_MTPROTO_INTERMEDIATE);
+    assert(selected.proto == TG_MTPROTO_INTERMEDIATE && !selected.tls_passthrough);
 }
 
 static void test_policy_rejects_wrong_port_cidr_and_unlisted_dc(void) {
@@ -212,7 +212,42 @@ static void test_exact_tcpo_secret_is_used_for_original_destination_only(void) {
                                         &upstream) != 0);
 }
 
+/* A browser ClientHello is not an Obfuscated2 handshake. It must retain
+ * the exact HTTPS destination, without granting arbitrary TCP passthrough. */
+static void test_https_client_hello_preserves_original_target(void) {
+    uint8_t hello[TG_MTPROTO_HANDSHAKE_LEN] = {0x16, 3, 1, 0, 128, 1, 0, 0, 124, 3, 3};
+    const uint16_t ports[] = {443, 5222};
+    const char *cidrs[] = {"149.154.160.0/20", "2001:67c:4e8::/48"};
+    tg_transparent_policy policy = {
+        .allowed_ports = ports, .allowed_port_count = 2,
+        .allowed_cidrs = cidrs, .allowed_cidr_count = 2,
+    };
+    tg_listener_destination original, upstream;
+    destination(&original, "149.154.167.99", 443);
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) == 0);
+    tg_epoll_route_selection selected = {0};
+    assert(tg_transparent_select_route(&policy, &original, hello, &selected) == 0);
+    assert(selected.tls_passthrough && !selected.dc_id && !selected.proto);
+    assert(upstream.family == original.family && upstream.port == original.port &&
+           memcmp(upstream.address, original.address, 4) == 0);
+    original.family = AF_INET6;
+    assert(inet_pton(AF_INET6, "2001:67c:4e8:f004::9", original.address) == 1);
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) == 0);
+    assert(upstream.family == original.family && upstream.port == 443 &&
+           memcmp(upstream.address, original.address, 16) == 0);
+    destination(&original, "149.154.167.99", 5222);
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) != 0);
+    destination(&original, "192.0.2.7", 443);
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) != 0);
+    destination(&original, "149.154.167.99", 443);
+    hello[5] = 2; /* A ServerHello cannot initiate the client route. */
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) != 0);
+    memset(hello, 0, sizeof hello);
+    assert(tg_transparent_select_target(&policy, &original, hello, &upstream) != 0);
+}
+
 int main(void) {
+    test_https_client_hello_preserves_original_target();
     test_known_dc_is_validated_and_target_is_preserved();
     test_policy_rejects_wrong_port_cidr_and_unlisted_dc();
     test_unmapped_direct_route_preserves_exact_original_target();
