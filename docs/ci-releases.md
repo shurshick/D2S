@@ -31,3 +31,13 @@ actionlint 1.7.12: все три workflow прошли статическую п
 Первый CI после смены схемы прогревает кэш. Изменение движка, toolchain или рецепта тоже потребует длинной проверки; публикация уже проверенного коммита её не повторяет.
 
 Справочник GitHub: [dependency caching](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching), [workflow runs API](https://docs.github.com/en/rest/actions/workflow-runs).
+
+
+## Подтверждение в GitHub
+
+- Первый новый CI, run [41971677826](https://github.com/shurshick/D2S/actions/runs/41971677826): success, полный engine-прогон и сохранение кэша. Engine job: 05:04:32–05:27:02 UTC, 22 мин 30 с.
+- Повтор того же коммита, run [41974109117](https://github.com/shurshick/D2S/actions/runs/41974109117): engine job success за 22 с (05:27:22–05:27:44 UTC), Full engine regression suite = skipped по совпавшей успешной записи. Быстрые проверки остаются обязательными.
+- Release gate проверен на реальном API: SHA 7b10fe0af429a5b0f7febbb62e56c9d47c0f79b3 допущен только после успешного push CI.
+- Реальное изменение рецепта crypto-сборки отвергло прежний кэш, вызвало пересборку и прошло QEMU smoke. После теста рецепт восстановлен; тестовые бинарники не устанавливались на роутер.
+
+Это ускорение повторной проверки неизменённого движка, а не обещание 22-секундного полного релиза. Изменённый движок/тесты/платформа и холодный кэш по-прежнему требуют полного набора.
