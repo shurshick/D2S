@@ -415,7 +415,7 @@ int main(void)
     progress_reset();
     r = measure_base(0, 2, "");
     CHECK(r.base_blocked && r.verdict == D2S_V_INCONCLUSIVE && r.probes == 2);
-    CHECK(seen_name[0] == '\0' && seen.no_raw == 1);
+    CHECK(seen_name[0] == '\0' && seen.no_raw == 1 && seen.parallel_base == 1);
     CHECK(seen.mark == 0x2d && seen.repeats == 2 && seen.control.len == 3);
     CHECK(base_stop_before == 0 && base_stop_other == 0 && base_stop_after == 1);
     /* Базовый вопрос тоже отдаёт ход, не теряя своей остановки на "whole". */

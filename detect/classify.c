@@ -612,6 +612,92 @@ typedef struct {
  * которого решает ОДИН проход (контроль: «ответил ли хоть раз»): дальнейшие
  * повторы его уже не изменят. База и разрез идут все повторы — их исход
  * различает «ни разу», «частично» и «всегда». */
+typedef struct whole_trial {
+    const char *host, *port;
+    const d2s_trigger *trigger;
+    const d2s_opts *opt;
+    int index, ran, rc;
+    char err[160];
+} whole_trial;
+
+#ifndef D2S_BASELINE_PROBE
+static int whole_probe(whole_trial *trial)
+{
+    char peer[INET6_ADDRSTRLEN] = "";
+    return once_probe(trial->host, trial->port, trial->trigger, trial->opt,
+                      NULL, 0, 0, trial->err, sizeof trial->err, peer, sizeof peer);
+}
+#define D2S_BASELINE_PROBE whole_probe
+#endif
+
+static void *whole_run(void *arg)
+{
+    whole_trial *trial = arg;
+    /* Cancellation is checked by the owning worker before launch and after
+       joins. Kernel whole probes have no gap/raw callback; do not invoke
+       the caller's potentially stateful callback on a child thread. */
+    trial->ran = 1;
+    trial->rc = D2S_BASELINE_PROBE(trial);
+    return NULL;
+}
+
+#ifndef D2S_BASELINE_CREATE
+#define D2S_BASELINE_CREATE pthread_create
+#endif
+
+static d2s_tally measure_whole(const char *host, const char *port,
+                               const d2s_trigger *tr, const d2s_opts *opt,
+                               d2s_result *res, d2s_obs *obs)
+{
+    d2s_tally tally = {0};
+    for (int base = 0; base < opt->repeats;) {
+        whole_trial trials[3];
+        pthread_t threads[2];
+        int count = opt->repeats - base, created = 0;
+        if (count > 3) count = 3;
+        for (int i = 0; i < count; ++i) {
+            whole_trial trial = {host, port, tr, opt, base + i, 0, 0, ""};
+            trials[i] = trial;
+        }
+        /* The existing measurement worker handles one trial. At most two
+           temporary workers cover the rest, not other questions or plans. */
+        for (int i = 0; i < count - 1; ++i) {
+            if (d2s_detect_stopped(&opt->cancel)) break;
+            if (D2S_BASELINE_CREATE(&threads[i], NULL, whole_run, &trials[i])) break;
+            created++;
+        }
+        if (created == count - 1 && !d2s_detect_stopped(&opt->cancel))
+            whole_run(&trials[count - 1]);
+        for (int i = 0; i < created; ++i) (void)pthread_join(threads[i], NULL);
+        /* Resource refusal is not a network result: only unfinished trials
+           fall back to serial work. Never replay an already issued trial. */
+        for (int i = created; i < count; ++i) {
+            if (!trials[i].ran && !d2s_detect_stopped(&opt->cancel)) whole_run(&trials[i]);
+        }
+        /* Preserve trial order for the first local error, independently of
+           completion order. No observation callback runs on child workers. */
+        for (int i = 0; i < count; ++i) {
+            whole_trial *trial = &trials[i];
+            if (!trial->ran) continue;
+            res->probes++;
+            if (trial->rc > 0) tally.pass++;
+            else {
+                tally.fail++;
+                if (trial->rc < 0 && !tally.has_err) {
+                    tally.has_err = 1;
+                    snprintf(tally.err, sizeof tally.err, "%s", trial->err);
+                    snprintf(obs->err, sizeof obs->err, "%s", trial->err);
+                }
+            }
+        }
+        base += count;
+        if (d2s_detect_stopped(&opt->cancel)) break;
+    }
+    obs->pass = tally.pass; obs->fail = tally.fail;
+    d2s_obs_finish(opt, obs);
+    return tally;
+}
+
 static d2s_tally measure(const char *host, const char *port, const d2s_trigger *tr,
                          const d2s_opts *opt, const char *name,
                          const int *cuts, int ncuts, int gap_ms, d2s_result *res,
@@ -646,6 +732,11 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
         d2s_obs_finish(opt, obs);
         return t;
     }
+
+    uint8_t numeric[16];
+    if (opt->parallel_base && !until_pass && ncuts == 0 && !strcmp(name, "whole") &&
+        (inet_pton(AF_INET, host, numeric) == 1 || inet_pton(AF_INET6, host, numeric) == 1))
+        return measure_whole(host, port, tr, opt, res, obs);
 
     for (i = 0; i < opt->repeats; i++) {
         int rc;

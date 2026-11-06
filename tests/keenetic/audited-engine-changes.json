@@ -28,16 +28,16 @@
     "reason": "docs/telegram-web.md#reviewed-engine-changes"
   },
   "detect/classify.c": {
-    "sha256": "b61494d8c3a3e46dbc1882ae102cce4474a5ed979546df8ed0afa57e18e8b0ba",
-    "reason": "docs/performance-stage2.md#reviewed-engine-changes"
+    "sha256": "0bf9761f154ecd70a31e09842b2160e0c268eaf38d55d083a4a0f8ab9705a8e8",
+    "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/include/d2s_detect.h": {
-    "sha256": "7d0e87a237f4c2fc083ed8a170e420beacce9b64cb5cdd87f28af4ee2c0331c8",
-    "reason": "docs/performance-stage2.md#reviewed-engine-changes"
+    "sha256": "5a14d2c32d6a0e6360cfd8855efa4a646a35463fb85b723c1b34e87ec2cb5f7d",
+    "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/main.c": {
-    "sha256": "70a64ecb52e0275be5fba84498070f66fe6b74a323425991aeba33eea9ba717e",
-    "reason": "docs/performance-stage2.md#reviewed-engine-changes"
+    "sha256": "aa45afc5526f4abdf73b40970199953cfb706355a8d9fcc70750c9b9423d6ad2",
+    "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/props.c": {
     "sha256": "8fd13df0ea42f6d2db7e4791022dc84ecb383f3346ebdd75eaefdb6ed841f932",
@@ -54,5 +54,13 @@
   "files/d2s-tg-firewall.sh": {
     "sha256": "bf837ea8776de86668b344bcfe755aa72fd600a66cd3a530ffcf2be9b892f70e",
     "reason": "docs/telegram-web.md#reviewed-engine-changes"
+  },
+  "detect/bridge.c": {
+    "sha256": "483a5ba5bfb88edb9330acacee103bce83b1c9aeb3e4897d4f0e57e2c635f5a0",
+    "reason": "docs/performance-stage3.md#reviewed-engine-changes"
+  },
+  "detect/test_bridge.c": {
+    "sha256": "28b24b17ae3f67b74678f5b38d7a43737485e29f79f11baf9351a905e55f2961",
+    "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   }
 }

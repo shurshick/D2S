@@ -592,6 +592,7 @@ d2s_vres d2s_detect_sched_tcp_base(const char *ip, uint16_t port,
     }
     tr.name[0] = '\0';
     opt.no_raw = 1;
+    opt.parallel_base = 1;
     bc.task_stop = stop;
     bc.base_done = 0;
     opt.cancel.fn = base_stop;

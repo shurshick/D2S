@@ -67,6 +67,9 @@ test_tree: test_tree.c $(OBJ) $(SHARED_OBJ) $(HDR)
 test_repeats: test_repeats.c classify.c props.c poison.o trigger.o response.o raw.o $(SHARED_OBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_repeats.c poison.o trigger.o response.o raw.o $(SHARED_OBJ) $(LDFLAGS) -lpthread
 
+test_parallel_base: test_parallel_base.c classify.c props.o poison.o trigger.o response.o raw.o $(SHARED_OBJ) $(HDR)
+	$(CC) $(CFLAGS) -o $@ test_parallel_base.c props.o poison.o trigger.o response.o raw.o $(SHARED_OBJ) $(LDFLAGS) -lpthread
+
 test_bridge: test_bridge.c bridge.o poison.o $(SHARED_OBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_bridge.c bridge.o poison.o $(SHARED_OBJ) $(LDFLAGS) -lpthread
 
@@ -88,7 +91,7 @@ bridge.o: bridge.c $(HDR) ../core/include/d2s_arm.h ../core/include/d2s_verdict.
 test_raw6_live: test_raw6_live.c $(OBJ) $(SHARED_OBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ $< $(OBJ) $(SHARED_OBJ) $(LDFLAGS) $(LDLIBS)
 
-check: d2s-detect test_port test_tree test_repeats test_bridge test_threads test_raw test_response test_response_repeats
+check: d2s-detect test_port test_tree test_repeats test_bridge test_threads test_raw test_response test_response_repeats test_parallel_base
 	@# Отправка в сокет — только через d2s_send_nosig: SIGPIPE на мёртвом пире
 	@# воспроизводится гонкой, поэтому места вызова закреплены ещё и статически.
 	@if grep -nE '(^|[^_[:alnum:]])send\(' classify.c response.c | grep -v 'return send(fd, buf, len, flags)'; then \
@@ -101,6 +104,7 @@ check: d2s-detect test_port test_tree test_repeats test_bridge test_threads test
 	./test_raw
 	./test_response
 	./test_response_repeats
+	./test_parallel_base
 
 # Кросс-проверка: Linux-ветка сырого слоя на маке не компилируется вовсе,
 # и без неё опечатка там доехала бы до роутера незамеченной.
@@ -147,7 +151,7 @@ cross:
 	fi
 
 clean:
-	rm -f *.o d2s-detect test_port test_tree test_repeats test_bridge test_threads test_raw test_response test_response_repeats
+	rm -f *.o d2s-detect test_port test_tree test_repeats test_bridge test_threads test_raw test_response test_response_repeats test_parallel_base
 
 FORCE:
 

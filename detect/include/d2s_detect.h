@@ -352,6 +352,9 @@ typedef struct {
     int  joint_budget_ms;
     int  cross_check_tls12;
     int  no_raw;
+    /* Opt-in, numeric TCP baseline only. Callbacks remain on the owning
+       measurement worker; at most three complete trials form one batch. */
+    int  parallel_base;
     int  control_vouched;
     /* Метка SO_MARK для ВСЕХ сокетов прогона — и обычных, и сырых. Ноль
      * означает «взять D2S_BYPASS_MARK», а не «не метить»: непомеченный зонд
