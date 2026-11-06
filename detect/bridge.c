@@ -341,6 +341,7 @@ static d2s_vres sched_tcp(const char *ip, uint16_t port,
         snprintf(opt.seed_err, sizeof(opt.seed_err), "%s", seed->err);
     }
     int seeded_whole = opt.seed_whole;
+    opt.early_split = seed && seed->early_split;
     opt.on_obs = progress_seen;
     opt.on_obs_ctx = &seeded_whole;
     unplannable refused;
@@ -366,13 +367,15 @@ static d2s_vres sched_tcp(const char *ip, uint16_t port,
     out.split_gap_us = (uint32_t)opt.write_gap_ms * 1000u;
     snprintf(out.reason, sizeof(out.reason), "%.*s", (int)sizeof(out.reason) - 1, res.reason);
     out.split_pos = res.split_pos;
+    out.split_measured = res.split_measured;
     out.probes = res.probes;
     /* Socket-only split diagnostics remain useful on unsupported hosts, but
        cannot arm a packet program that the measurement never executed. */
-    if ((res.verdict == D2S_DV_PREFIX || res.verdict == D2S_DV_WHOLE_PACKET) &&
+    if ((res.split_measured || res.verdict == D2S_DV_PREFIX || res.verdict == D2S_DV_WHOLE_PACKET) &&
         d2s_raw_dial_count() == res.raw_dial_base) {
         out.verdict = D2S_V_FLAKY;
         out.split_pos = 0;
+        out.split_measured = 0;
         snprintf(out.reason, sizeof out.reason,
                  "разрез проверен только записями сокета — общий пакетный исполнитель не участвовал");
         return out;

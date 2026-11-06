@@ -1044,6 +1044,14 @@ test_sched: test_sched.c $(SCHED_TEST_OBJ) $(HDR)
 
 test_sched_summary: test_sched_summary.c sched.c $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(HDR)
 	$(CC) $(CFLAGS) -o $@ $< $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(TEST_LDFLAGS)
+
+TESTS += test_sched_algorithms
+check: test-sched-algorithms
+.PHONY: test-sched-algorithms
+test_sched_algorithms: test_sched_algorithms.c sched.c $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(TEST_LDFLAGS)
+test-sched-algorithms: test_sched_algorithms
+	./test_sched_algorithms
 .PHONY: test-sched-summary
 test-sched-summary: test_sched_summary
 	./test_sched_summary

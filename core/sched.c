@@ -862,6 +862,7 @@ typedef struct {
     int        researched;     /* whether this target has had a direct measurement */
     int        search_started; /* classifier/voice measurement started, even at zero probes */
     int        cached_measure_valid; /* preserve measured candidates after box-plan reuse */
+    int        split_pending, split_detailed; /* one early cut, then full research */
     uint8_t    trigger_code;   /* signal that admitted this measurement; cooldown key */
     /* Задача 50, раунд 2: обрыв QUIC после рукопожатия воспроизведён своим
        запросом (прогон с arm.data_cut вернул OPAQUE). Неудача такой задачи
@@ -3029,6 +3030,12 @@ static void *worker_body(void *vp) {
     /* Ответ базового вопроса (задача 32) — только тем же входом. */
     const d2s_base_seed *seed = t->seed_use && t->seed.valid &&
         t->seed_input == seed_input_of(trig.bytes, trig.len, t->ip, t->port) ? &t->seed : NULL;
+    d2s_base_seed run_seed;
+    if (seed && t->transport == 6) {
+        run_seed = *seed;
+        run_seed.early_split = !t->split_detailed;
+        seed = &run_seed;
+    }
     if (t->transport == 17) {
         /* Original Run owns both diagnosis and askArms, BEFORE properties,
            with one residual-aware address pool. Never restart search here. */
@@ -5124,6 +5131,7 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
     t->n_plans = 0;
     t->fb_queue = 0;
     t->search_owned = r->owns_search;
+    t->split_pending = r->split_measured && !t->split_detailed;
     t->arm_hash = 0;
     t->arm_path[0] = '\0';
     memset(t->plan_boxes, 0, sizeof t->plan_boxes);
@@ -5430,7 +5438,7 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
     if (r->owns_search) {
         /* PREFIX/WHOLE are found solutions too: the source measured a
          * forward split at split_pos with write_gap_ms. No poison search. */
-        if (!r->have_arm && (v == D2S_V_PREFIX || v == D2S_V_WHOLE) &&
+        if (!r->have_arm && (r->split_measured || v == D2S_V_PREFIX || v == D2S_V_WHOLE) &&
             r->split_pos > 0 && (size_t)r->split_pos < t->trig_len) {
             if (d2s_tcp_split_plan(t->trig_len, (unsigned)r->split_pos, r->split_gap_us,
                                    s->send_cap, t->plans[0], sizeof t->plans[0]) == 0) {
@@ -5459,6 +5467,25 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
         t->n_plans += d2s_compose(&t->props, sh, SCHED_DECOY, s->send_cap,
                                   t->plans + t->n_plans, cap - t->n_plans);
     }
+}
+
+/* An early cut failed (including local refusal): resume the full classifier
+   once, without turning an incomplete diagnosis into exhausted knowledge. */
+static int resume_split_detail(d2s_sched *s, task *t, int64_t now_ms) {
+    if (!t->split_pending || t->split_detailed) return 0;
+    trial_retire(s, t);
+    ver_close(t);
+    t->split_pending = 0;
+    t->split_detailed = 1;
+    t->researched = 1;
+    t->cached_measure_valid = 0;
+    t->exec_refused = t->exec_probed = 0;
+    t->n_plans = t->n_known = t->next_plan = 0;
+    t->box_id[0] = '\0';
+    t->state = T_ASKING;
+    say(s, "по %s ранний разрез не подтверждён — продолжаю подробный замер", t->name);
+    if (start_worker(s, t, JOB_CLASSIFY) != 0) task_fail(s, t, now_ms);
+    return 1;
 }
 
 /* --------------------------------------------------------------------
@@ -11014,7 +11041,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                              "прямой ответ не подтвердил прикладной успех; прямой замер не подтверждён");
                 }
             }
-            if (!verdict_proves_block(r.verdict) && !volume_proven && !t->ech_trial) {
+            if (!verdict_proves_block(r.verdict) && !r.split_measured && !volume_proven && !t->ech_trial) {
                 say(s, "по %s прямой замер не подтвердил блокировку (%s: %s) — "
                        "подбор и применение обхода не запускаю",
                     t->name, verdict_name(r.verdict), r.reason);
@@ -11058,7 +11085,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             {
                 /* Volume fingerprint is installed by make_plans before its
                    catalog lookup; do not match the earlier generic reset. */
-                size_t known = volume_proven || t->ech_trial ? 0 : known_plans(s, t);
+                size_t known = volume_proven || t->ech_trial || r.split_measured ? 0 : known_plans(s, t);
                 if (known > 0) {
                     t->res = r;
                     /* Поиск принадлежит замеру и в этой ветке (задача 37):
@@ -11106,6 +11133,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                 prop_finish(s, t);
             }
             verdict_to_plans(s, t, &r);
+            if (!t->n_plans && resume_split_detail(s, t, now_ms)) { moved++; continue; }
             /* ДЛИТЕЛЬНОСТЬ И ЦЕНА — В ТОЙ ЖЕ СТРОКЕ, ЧТО И ВЕРДИКТ.
                Без них «поиск идёт» в журнале ничем не отличается от «поиск
                завис», и разобраться можно только с секундомером у чужого
@@ -11757,6 +11785,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                     moved++;
                     continue;
                 }
+                if (resume_split_detail(s, t, now_ms)) { moved++; continue; }
                 if (t->exec_refused > 0 && t->exec_probed == 0) {
                     /* Задача 19: ни один кандидат не дошёл до провода —
                        все отвергнуты исполнителем. Это не блокировка и не

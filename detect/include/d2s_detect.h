@@ -286,6 +286,7 @@ typedef struct {
     int  trigger_len;
     int  boundary;    /* первая позиция разреза, которая УЖЕ не проходит */
     int  split_pos;   /* рекомендуемая позиция разреза */
+    int  split_measured; /* a working cut, without an inferred DPI class */
     d2s_tri reassembles;
     char strategy[1024];
 
@@ -355,6 +356,7 @@ typedef struct {
     /* Opt-in, numeric TCP baseline only. Callbacks remain on the owning
        measurement worker; at most three complete trials form one batch. */
     int  parallel_base;
+    int  early_split; /* controller may verify a measured cut before diagnosis */
     int  control_vouched;
     /* Метка SO_MARK для ВСЕХ сокетов прогона — и обычных, и сырых. Ноль
      * означает «взять D2S_BYPASS_MARK», а не «не метить»: непомеченный зонд

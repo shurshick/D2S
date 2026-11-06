@@ -591,6 +591,23 @@ int main(void)
             CHECK(rc < 0 && ack_calls == 0);
         }
     }
+    {
+        uint8_t hello[] = {0x16, 0x03};
+        d2s_hello tr = {hello, sizeof hello, NULL, 0, 0, 0}, none = {0};
+        d2s_base_seed seed = {0}; seed.early_split = 1;
+        memset(&answer, 0, sizeof answer);
+        answer.verdict = D2S_DV_INCONCLUSIVE;
+        answer.split_measured = 1; answer.split_pos = 1;
+        dialled = 1;
+        d2s_vres r = d2s_detect_sched_tcp_seeded("192.0.2.1", 443, tr, none,
+            0x2d, 3, 0, 0, NULL, &seed);
+        CHECK(seen.early_split && r.split_measured && r.split_pos == 1 &&
+              r.verdict == D2S_V_INCONCLUSIVE && r.owns_search);
+        dialled = 0;
+        r = d2s_detect_sched_tcp_seeded("192.0.2.1", 443, tr, none,
+            0x2d, 3, 0, 0, NULL, &seed);
+        CHECK(!r.split_measured && !r.split_pos && r.verdict == D2S_V_FLAKY);
+    }
     if (failures) { return 1; }
     puts("bridge: scheduler adapter contracts passed");
     return 0;

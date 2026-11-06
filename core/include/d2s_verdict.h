@@ -258,12 +258,14 @@ typedef struct {
     uint32_t rtt_ms;
     uint8_t  ttl_in;
     int      direct_asked, direct_err, direct_marked;
+    int      early_split; /* request only; not evidence contained in the seed */
 } d2s_base_seed;
 
 typedef struct {
     d2s_verdict verdict;
     char        reason[D2S_REASON_MAX]; /* заполняется ВСЕГДА и по-человечески — иначе вердикт нечитаем */
     int         split_pos;   /* точка разреза для D2S_V_PREFIX; 0, если разрез не предлагается */
+    int         split_measured; /* cut proved; classification deliberately incomplete */
     int         probes;      /* сколько опытов всего задействовал прогон (сумма по всем вопросам) */
     int         marked;      /* 1 — метка запрошена И подтверждена на каждом опыте прогона */
     /* НАЙДЕННОЕ ПЛЕЧО. Заполняется измерителем, который не только называет

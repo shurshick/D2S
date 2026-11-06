@@ -1509,6 +1509,17 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
         goto done;
     }
 
+    if (opt->early_split) {
+        /* The measured cut is a candidate, not a fingerprint. Its full
+           protocol/data verification belongs to the controller. */
+        res->verdict = D2S_DV_INCONCLUSIVE;
+        res->split_measured = 1;
+        res->split_pos = 1;
+        snprintf(res->reason, sizeof res->reason,
+                 "разрез после первого байта прошёл; тип блокировки пока не уточнялся");
+        goto done;
+    }
+
     /* 3. ЕСТЬ ЛИ БУФЕР ПЕРЕСБОРКИ. Тот же разрез, но с паузой в сотни
      * миллисекунд. Коробка без буфера ведёт себя так же; коробка с буфером и
      * таймаутом успевает склеить сегменты и снова опознать сигнатуру. */

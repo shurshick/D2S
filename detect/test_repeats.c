@@ -235,6 +235,7 @@ typedef struct {
 
 /* Фильтр находок, как plannable_hit в bridge.c: NULL — берётся любая. */
 static int (*g_accept)(const d2s_poison *p, void *ctx);
+static int g_early_split;
 
 static void run(const scenario *s, d2s_result *res)
 {
@@ -246,6 +247,7 @@ static void run(const scenario *s, d2s_result *res)
     opt.timeout_ms = 400;
     opt.write_gap_ms = 2;
     opt.long_gap_ms = 10;
+    opt.early_split = g_early_split;
     opt.control_vouched = s->vouched;
     if(g_timeout_seed) {
         opt.seed_whole=1; opt.seed_repeats=3; opt.seed_fail=3;
@@ -1092,6 +1094,32 @@ static void test_long_gap_stops_after_success(void)
     g_split_success = 0;
 }
 
+static void test_early_split_is_not_a_diagnosis(void)
+{
+    scenario sc = {"early-split", NULL, "-", NULL, "+", 0, NULL, 0, 0};
+    d2s_result r;
+    g_early_split = 1; g_split_success = 1;
+    g_split_calls = g_split_long_calls = 0;
+    run(&sc, &r);
+    CHECK(r.split_measured && r.split_pos == 1 && r.verdict == D2S_DV_INCONCLUSIVE,
+          "working cut did not return before detailed diagnosis");
+    CHECK(r.reassembles == D2S_TRI_UNSET && !r.boundary && !r.has_response,
+          "early split invented unmeasured properties");
+    CHECK(g_split_calls == 3 && g_split_long_calls == 0 && !find_obs(&r, "split-long"),
+          "early split ran questions that cannot change the candidate");
+    g_early_split = 0; g_split_calls = 0;
+    run(&sc, &r);
+    CHECK(!r.split_measured && r.verdict == D2S_DV_WHOLE_PACKET && g_split_calls > 3,
+          "detailed retry lost the complete original classifier");
+    g_early_split = 1; g_split_success = -1;
+    run(&sc, &r);
+    CHECK(!r.split_measured, "local refusal became a working split");
+    g_split_success = 0;
+    run(&sc, &r);
+    CHECK(!r.split_measured, "failed split became a solution");
+    g_early_split = 0;
+}
+
 static void test_observation_timing(void)
 {
     d2s_result r = {0}; d2s_opts opt = {0};
@@ -1112,6 +1140,9 @@ static void test_observation_timing(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--early-split-only")) {
+        srv_start(); test_early_split_is_not_a_diagnosis(); return fails ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--long-gap-only")) {
         srv_start(); test_long_gap_stops_after_success(); return fails ? 1 : 0;
     }
@@ -1119,6 +1150,7 @@ int main(int argc, char **argv)
     test_observation_timing();
     test_timestamp_questions_follow_client_profile();
     srv_start();
+    test_early_split_is_not_a_diagnosis();
     test_long_gap_stops_after_success();
     test_split_uses_runtime();
     test_split_recovers_only_unsent_transport_failure();
