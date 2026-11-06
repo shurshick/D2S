@@ -1,6 +1,7 @@
 /* Idle-only maintenance, included after the ordinary scheduler helpers.
  * Uses their exact-port installation, worker, executor and APPLIED receipts.
  * No ordinary repair/fallback/family-negative state machine is entered. */
+#include <limits.h>
 void d2s_sched_optimize(d2s_sched *s,int enabled) { if(s)s->optimize=!!enabled; }
 
 static d2s_cat_binding *minimize_source(d2s_sched *s,const task *t,
@@ -118,7 +119,7 @@ static int minimize_proven(d2s_sched *s,task *t,int64_t now_ms) {
     plan_quality_record(s,t,1,now_ms);
     int64_t second=t->last_verify_ms;t->last_verify_ms=t->min_first_ms;
     plan_quality_record(s,t,1,now_ms);t->last_verify_ms=second;
-    if(b)for(size_t i=0;i<b->n_plans;i++)if(!strcmp(b->plans[i].id,id) && b->plans[i].successes<2)b->plans[i].successes=2;
+    if(b)for(size_t i=0;i<b->n_plans;i++)if(!strcmp(b->plans[i].id,id) && b->plans[i].successes<INT_MAX)b->plans[i].successes++;
     s->cat->revision++;s->sync_pending=1;
     say(s,"по %s упрощённый план %s прошёл два полных независимых испытания; старый оставлен в каталоге",t->name,id);
     trial_retire(s,t);ver_close(t);

@@ -150,6 +150,31 @@ int d2s_tcp_split_plan(size_t trigger_len, unsigned split, uint32_t gap_us,
     return n > 0 && (size_t)n < cap ? 0 : -1;
 }
 
+static int fake_layout_plan(const d2s_arm *a,const d2s_arm_input *in,
+    size_t send_cap,char *buf,size_t cap) {
+    if(a->fake_layout<1 || a->fake_layout>2 || !a->decoy_hello || !in->decoy_len ||
+       !in->sni_off || in->sni_len<2 || a->seqovl || a->seqovl_hello ||
+       a->between || a->disorder || a->disorder_pos || a->split_pos || a->oob ||
+       a->ttl || a->autottl || a->tcpts || a->tcpts_up || a->ipidzero ||
+       (!a->badsum && !a->md5 && !a->seq_out))return -1;
+    unsigned seg=d2s_arm_segment(send_cap);if(!seg)return -1;
+    if(a->fake_layout==1 && in->sni_off+in->sni_len/2>=in->decoy_len)return -1;
+    const uint8_t *bytes=in->decoy;size_t n=in->decoy_len,at=0,len=0,pos=0;
+    if(a->fake_layout==2) {
+        if(d2s_hello_sni(bytes,n,&at,&len) || !len || len>255)return -1;
+        bytes+=at;n=len;
+    }
+    if(append_fmt(buf,cap,&pos,"d2s-plan 1 15\nid 00000000000000000000000000000000\n"
+        "proto tcp tls\nwire detect-tcp-v1\ninput tls-sni\nsegment %u\nfakelayout %u\npayload 1 ",seg,a->fake_layout) ||
+       append_hex(buf,cap,&pos,bytes,n) || append_fmt(buf,cap,&pos,"\npoison 1%s%s%s\n",
+           a->badsum?" badsum":"",a->md5?" md5":"",a->seq_out?" seqshift=-66000":"") ||
+       append_fmt(buf,cap,&pos,"fake payload=1 poison=1 repeats=%u gap_us=%u place=before\n",
+           a->repeats?a->repeats:1,a->gap_ms*1000u))return -1;
+    return a->fake_layout==1
+        ?append_fmt(buf,cap,&pos,"split sni_middle +0\norder reverse\n")
+        :append_fmt(buf,cap,&pos,"split sni_start +0\nsplit sni_middle +0\nsplit sni_end +0\norder forward\n");
+}
+
 int d2s_arm_plan_measured_cap(const d2s_arm *a, const d2s_arm_input *in,
                               size_t send_cap, char *buf, size_t cap) {
     if (!a || !in || !buf || !cap) { return -1; }
@@ -158,6 +183,7 @@ int d2s_arm_plan_measured_cap(const d2s_arm *a, const d2s_arm_input *in,
         in->decoy_len > sizeof in->decoy || in->sni_off > in->trigger_len ||
         in->sni_len > in->trigger_len - in->sni_off || a->repeats > 255 ||
         a->ttl > 255 || a->gap_ms > UINT32_MAX / 1000u) { return -1; }
+    if(a->fake_layout)return fake_layout_plan(a,in,send_cap,buf,cap);
     if (a->split_pos && !a->badsum && !a->md5 && !a->repeats && !a->ttl &&
         !a->seq_out && !a->decoy_hello && !a->tcpts && !a->ipidzero &&
         !a->disorder && !a->disorder_pos && !a->between && !a->seqovl &&

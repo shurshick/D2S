@@ -259,12 +259,13 @@ static void apply_set(d2s_dprops *pr, prop_set s, int ok, const d2s_poison *p)
 
 /* runProperties задаёт вопросы и заполняет вектор. Возвращает первую
  * гипотезу, которая сама по себе сработала, если такая была. */
-int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
-    const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit)
+static int run_arm_questions(const uint8_t *ip,uint8_t family,uint16_t port,
+    const d2s_trigger *tr,const d2s_opts *opt,d2s_result *res,d2s_poison *hit,
+    const d2s_arm *bank,size_t count,const char *prefix)
 {
-    for (size_t i = 0; opt->learned && i < opt->nlearned; i++) {
+    for (size_t i = 0; bank && i < count; i++) {
         if (d2s_detect_stopped(&opt->cancel)) break;
-        const d2s_arm *a = &opt->learned[i];
+        const d2s_arm *a = &bank[i];
         int valid = 1;
 #define D2S_RECIPE_BOUND(field,lo,hi) \
         if ((int64_t)a->field < (int64_t)(lo) || (int64_t)a->field > (int64_t)(hi)) valid = 0;
@@ -273,11 +274,12 @@ int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
         if (!valid || !d2s_recipe_nonempty(a) ||
             ((a->tcpts || a->tcpts_up) && !d2s_trigger_offers_ts(tr))) continue;
         d2s_poison p = {0};
-        snprintf(p.name, sizeof p.name, "learned-%zu", i);
+        snprintf(p.name, sizeof p.name, "%s-%zu",prefix,i);
         p.ttl=a->ttl; p.autottl=a->autottl; p.autottl_delta=a->autottl_delta;
         p.autottl_min=a->autottl_min; p.autottl_max=a->autottl_max;
         p.badsum=a->badsum; p.md5=a->md5; p.decoy_hello=a->decoy_hello;
         p.disorder=a->disorder; p.disorder_pos=a->disorder_pos;
+        p.fake_layout=(int)a->fake_layout;
         p.tcp_ts=a->tcpts; p.tcp_ts_up=a->tcpts_up; p.ip_id_zero=a->ipidzero;
         p.gap_ms=a->gap_ms; p.oob=a->oob; p.fake_between=a->between;
         p.repeats=a->repeats; p.seqovl_exact=a->seqovl_hello;
@@ -314,6 +316,21 @@ int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
         }
     }
     return 0;
+}
+
+int d2s_run_learned_family(const uint8_t *ip,uint8_t family,uint16_t port,
+    const d2s_trigger *tr,const d2s_opts *opt,d2s_result *res,d2s_poison *hit) {
+    return run_arm_questions(ip,family,port,tr,opt,res,hit,opt->learned,opt->nlearned,"learned");
+}
+
+int d2s_run_precise_family(const uint8_t *ip,uint8_t family,uint16_t port,
+    const d2s_trigger *tr,const d2s_opts *opt,d2s_result *res,d2s_poison *hit) {
+    if(!tr || tr->sni_off<=0 || tr->sni_len<2)return 0;
+    const d2s_arm bank[]={
+        {.fake_layout=1,.badsum=1,.decoy_hello=1,.repeats=1},
+        {.fake_layout=2,.badsum=1,.decoy_hello=1,.repeats=1}
+    };
+    return run_arm_questions(ip,family,port,tr,opt,res,hit,bank,2,"precise");
 }
 
 int d2s_run_properties(const uint8_t ip4[4], uint16_t port,

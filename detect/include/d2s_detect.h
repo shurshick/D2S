@@ -166,6 +166,7 @@ typedef struct {
     const uint8_t *decoy;  /* готовые байты приманки */
     size_t  decoy_len;
     int     disorder;      /* слать сегменты НЕ ПО ПОРЯДКУ */
+    int     fake_layout;   /* own measured per-piece / SNI-window fake program */
     int     disorder_pos;  /* одиночный абсолютный разрез для reverse-disorder */
     int     tcp_ts;        /* метка времени со сдвигом назад */
     int     tcp_ts_up;     /* и поднять её в начало опций (tcp_ts_up) */
@@ -439,6 +440,8 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
                       d2s_opts *opt, d2s_result *res);
 int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
     const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit);
+int d2s_run_precise_family(const uint8_t *ip,uint8_t family,uint16_t port,
+    const d2s_trigger *tr,const d2s_opts *opt,d2s_result *res,d2s_poison *hit);
 
 /* --- сырой слой (raw.c) ------------------------------------------------- */
 

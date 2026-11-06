@@ -48,7 +48,8 @@ enum {
        REC_POISON: старый исполнитель обязан отказаться громко, а не исполнить
        план без autottl — он поставил бы фальшивку с нашим константным TTL,
        то есть другое воздействие. Гейт — minexec 13. */
-    REC_AUTOTTL   = 0x0111
+    REC_AUTOTTL   = 0x0111,
+    REC_FAKE_LAYOUT = 0x0112
 };
 
 /* Якоря семантических позиций. */
@@ -124,6 +125,7 @@ struct d2s_plan {
     uint8_t  proto;
     uint8_t  order;
     uint8_t  guards;
+    uint8_t  fake_layout;
     uint32_t input_len, input_sni_off, input_sni_len;
     uint32_t settle_us;
     uint32_t segment_size;

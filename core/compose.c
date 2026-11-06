@@ -1467,7 +1467,7 @@ int d2s_arm_plan(const d2s_arm *arm, d2s_shape shape, const char *decoy,
     if (!buf || cap == 0 || !arm) { return -1; }
     a = *arm;
     /* MD5 is expressed only by the measured/raw wire builder. */
-    if (a.md5) { return -1; }
+    if (a.md5 || a.fake_layout) { return -1; }
     /* Сегмент — под предел канала (d2s_arm_segment, поле 22.10.2026): при
        обычном канале прежние 1400, при узком — короче, а не отказ. */
     unsigned seg = d2s_arm_segment(send_cap);

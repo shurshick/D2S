@@ -78,6 +78,11 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
                 fail(err, errlen, "udplen требует minexec=9 и ненулевого прироста"); return -1;
             }
             break;
+        case REC_FAKE_LAYOUT:
+            if(ln!=1 || b[off]<1 || b[off]>2 || rd16(b+6)<15) {
+                fail(err,errlen,"fakelayout needs executor15 and form1/2");return -1;
+            }
+            break;
         case REC_QSPLIT:
             /* minexec=10: старый исполнитель записи не знает и выпустил бы
                Initial целым — то есть не то, что мерили. Форма одна. */
@@ -314,6 +319,29 @@ static int check_refs(const d2s_plan *p, char *err, size_t errlen) {
         fail(err, errlen, "неизвестный порядок посылки");
         return -1;
     }
+    if(p->fake_layout) {
+        if(p->transport!=6 || p->proto!=1 || !p->input_tls || !p->wire_profile ||
+           p->n_fakes!=1 || !p->n_splits || p->n_seqovls || p->oob_enabled ||
+           p->ipfrag || p->qsplit || p->qdeny || p->udplen || p->settle_us || p->delay_us ||
+           p->fakes[0].placement || p->fakes[0].tls_mod ||
+           (p->fake_layout==1 && p->order!=ORDER_REVERSE) ||
+           (p->fake_layout==2 && (p->order!=ORDER_FORWARD || p->n_splits!=3))) {
+            fail(err,errlen,"fakelayout requires dedicated TCP/TLS program");return -1;
+        }
+        const struct d2s_poison *po=d2s_find_poison(p,p->fakes[0].poison_id);
+        const struct d2s_payload *pl=d2s_find_payload(p,p->fakes[0].payload_id);
+        if(!po || !pl || !pl->len || (!(po->flags&(D2S_POISON_BADSUM|D2S_POISON_MD5)) && po->seq_shift!=-66000) ||
+           (p->fake_layout==2 && pl->len>255)) {
+            fail(err,errlen,"fakelayout needs server-discard fooling and a bounded pattern");return -1;
+        }
+        if(p->fake_layout==2) {
+            unsigned anchors=0;
+            for(size_t i=0;i<p->n_splits;i++)if(!p->splits[i].offset)
+                anchors|=p->splits[i].anchor==ANCHOR_SNI_START?1:
+                    p->splits[i].anchor==ANCHOR_SNI_MIDDLE?2:p->splits[i].anchor==ANCHOR_SNI_END?4:0;
+            if(anchors!=7) { fail(err,errlen,"host fakelayout requires exact SNI cuts");return -1; }
+        }
+    }
 
     /* Перекрытий больше одного не бывает: приставка у первого куска одна.
        Отказ, а не молчаливое взятие первого — план, часть которого не
@@ -423,6 +451,9 @@ int d2s_plan_load(const uint8_t *buf, size_t len,
             }
             p->udplen = rd16(v);
             break;
+        case REC_FAKE_LAYOUT:
+            if(p->fake_layout) { d2s_plan_free(p);fail(err,errlen,"duplicate fakelayout");return -1; }
+            p->fake_layout=v[0];break;
         case REC_QSPLIT:
             if (p->qsplit) {
                 d2s_plan_free(p); fail(err, errlen, "повторная запись quicsplit"); return -1;
@@ -572,8 +603,10 @@ void d2s_plan_nominal_cost(const d2s_plan *p, uint32_t *fakes, uint32_t *delay_u
         delay = (uint64_t)p->delay_us + p->settle_us;
         for (size_t i = 0; i < p->n_fakes; i++) {
             const struct d2s_fake *f = &p->fakes[i];
-            copies += f->repeats;
-            if (f->repeats) delay += (uint64_t)(f->repeats - 1u) * f->gap_us;
+            uint64_t groups=p->fake_layout==1?p->n_splits+1:p->fake_layout==2?2:1;
+            uint64_t reps=f->repeats?f->repeats:1;
+            copies += reps*groups;
+            delay += (reps-1u)*f->gap_us*groups;
         }
         delay += (uint64_t)p->pace_us * (p->n_splits + (copies != 0));
     }

@@ -11,7 +11,7 @@
  X(disorder_pos,0,D2S_ARM_TRIGGER_MAX) X(between,0,1) X(ttl,0,255) \
  X(autottl,0,1) X(autottl_delta,-128,127) X(autottl_min,0,255) X(autottl_max,0,255) \
  X(seq_out,0,1) X(decoy_hello,0,1) X(md5,0,1) X(tcpts,0,1) \
- X(tcpts_up,0,1) X(ipidzero,0,1) X(oob,0,1) X(split_pos,0,D2S_ARM_TRIGGER_MAX)
+ X(tcpts_up,0,1) X(ipidzero,0,1) X(oob,0,1) X(split_pos,0,D2S_ARM_TRIGGER_MAX) X(fake_layout,0,2)
 
 static inline int d2s_recipe_same(const d2s_arm *a, const d2s_arm *b) {
     if (!a || !b) return 0;
@@ -22,6 +22,6 @@ static inline int d2s_recipe_same(const d2s_arm *a, const d2s_arm *b) {
 }
 static inline int d2s_recipe_nonempty(const d2s_arm *a) {
     return a && (a->seqovl || a->seqovl_hello || a->disorder || a->split_pos ||
-        a->badsum || a->md5 || a->tcpts || a->seq_out || a->repeats || a->oob);
+        a->badsum || a->md5 || a->tcpts || a->seq_out || a->repeats || a->oob || a->fake_layout);
 }
 #endif

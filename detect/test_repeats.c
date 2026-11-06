@@ -238,6 +238,7 @@ static int (*g_accept)(const d2s_poison *p, void *ctx);
 static int g_early_split;
 static const d2s_arm *g_learned;
 static size_t g_nlearned;
+static int g_named;
 
 static void run(const scenario *s, d2s_result *res)
 {
@@ -280,6 +281,7 @@ static void run(const scenario *s, d2s_result *res)
     snprintf(t.name, sizeof t.name, "test");
     memcpy(t.payload, PAY, sizeof(PAY) - 1);
     t.len = sizeof(PAY) - 1;
+    if(g_named) { t.sni_off=2;t.sni_len=3; }
     t.accept = D2S_ACCEPT_ANY;
 
     g_script = s->script;
@@ -1189,8 +1191,36 @@ static void test_observation_timing(void)
           "reused baseline was counted as a new timed network question");
 }
 
+static void test_precise_methods(void) {
+    const script_ent answers[]={{"precise-0","-"},{"precise-1","+"},{NULL,NULL}};
+    scenario sc={"precise",answers,"-",NULL,"+",0,NULL,1,0};
+    d2s_result r;g_named=1;run(&sc,&r);
+    CHECK(r.has_hit && !strcmp(r.path,"приём") && r.hit.fake_layout==2,
+        "new precise method was not measured after ordinary composition");
+    CHECK(r.props.reassembles==D2S_TRI_UNSET && r.props.validates_checksum==D2S_TRI_UNSET,
+        "compound fake layout invented individual DPI properties");
+    d2s_arm arm;char why[160];
+    CHECK(!d2s_arm_from_poison(&r.hit,&arm,why,sizeof why) && arm.fake_layout==2 && arm.badsum,
+        "precise method lost its measured program during conversion");
+    const script_ent failed[]={{"precise-0","-"},{"precise-1","-"},{"badsum-x2-g80","+"},{NULL,NULL}};
+    sc.script=failed;run(&sc,&r);
+    CHECK(r.has_hit && !strcmp(r.path,"перебор") && !strcmp(r.hit.name,"badsum-x2-g80"),
+        "new method miss suppressed original fallback");
+    const script_ent local[]={{"precise-0","e"},{"precise-1","e"},{"badsum-x2-g80","+"},{NULL,NULL}};
+    sc.script=local;run(&sc,&r);
+    CHECK(r.has_hit && !strcmp(r.hit.name,"badsum-x2-g80"),"local method refusal became a network failure");
+    int recorded=0;
+    for(int i=0;i<r.nanswered;i++)if(r.answered[i].fake_layout)recorded++;
+    CHECK(!recorded,"local precise failure entered negative knowledge");
+    g_named=0;sc.script=answers;run(&sc,&r);
+    CHECK(!find_obs(&r,"precise-0") && !find_obs(&r,"precise-1"),"SNI method asked without SNI context");
+}
+
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--precise-only")) {
+        srv_start();test_precise_methods();if(!fails)puts("Precise compound questions: proof scope, conversion and fallback PASS");return fails?1:0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--learned-only")) {
         srv_start(); test_same_question_uses_content(); test_learned_question_precedes_fallback(); return fails ? 1 : 0;
     }
@@ -1207,6 +1237,7 @@ int main(int argc, char **argv)
     test_early_split_is_not_a_diagnosis();
     test_same_question_uses_content();
     test_learned_question_precedes_fallback();
+    test_precise_methods();
     test_long_gap_stops_after_success();
     test_split_uses_runtime();
     test_split_recovers_only_unsent_transport_failure();

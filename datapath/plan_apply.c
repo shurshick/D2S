@@ -271,6 +271,44 @@ static void emit_vec_free(d2s_emit *v, size_t n) {
     free(v);
 }
 
+static int fake_layout_build(const d2s_plan *p,const d2s_pkt *in,
+    const size_t *pts,size_t npts,d2s_emit **out,size_t *count,const char **why) {
+    if(!in->payload || in->payload_len<5 || !in->have_sni || in->sni_len<2 ||
+       in->sni_off>in->payload_len || in->sni_len>in->payload_len-in->sni_off ||
+       5u+((size_t)in->payload[3]<<8 | in->payload[4])!=in->payload_len ||
+       (p->fake_layout==2 && in->sni_len>255)) {
+        *why="fakelayout requires a complete named TLS record";return -1;
+    }
+    const struct d2s_fake *fake=&p->fakes[0];
+    unsigned reps=fake->repeats?fake->repeats:1;
+    size_t cap=(npts+1)*(reps+1u),n=0;
+    d2s_emit *v=calloc(cap,sizeof *v);if(!v) { *why="no memory for fakelayout";return -1; }
+    for(size_t step=0;step<=npts;step++) {
+        size_t i=p->fake_layout==1?npts-step:step;
+        size_t start=i?pts[i-1]:0,end=i<npts?pts[i]:in->payload_len;
+        int host=p->fake_layout==2 && start>=in->sni_off && end<=in->sni_off+in->sni_len;
+        if(p->fake_layout==1 || host)for(unsigned r=0;r<reps;r++) {
+            d2s_emit *e=&v[n];
+            if(emit_fake(e,p,fake,in,in->seq+(uint32_t)(host?in->sni_off:start),
+                         r?fake->gap_us:0,why)) { emit_vec_free(v,n+1);return -1; }
+            n++;
+            if(host) {
+                if(!e->len) { *why="empty host fake pattern";emit_vec_free(v,n);return -1; }
+                uint8_t *pattern=malloc(in->sni_len);
+                if(!pattern) { *why="no memory for host fake";emit_vec_free(v,n);return -1; }
+                for(size_t j=0;j<in->sni_len;j++)pattern[j]=e->bytes[j%e->len];
+                free(e->owned_bytes);e->owned_bytes=pattern;e->bytes=pattern;e->len=in->sni_len;
+            } else {
+                if(start>=e->len) { *why="decoy has no corresponding fake slice";emit_vec_free(v,n);return -1; }
+                e->bytes+=start;e->len-=start;if(e->len>end-start)e->len=end-start;
+            }
+        }
+        d2s_emit *real=&v[n++];real->kind=D2S_EMIT_PAYLOAD;
+        real->seq=in->seq+(uint32_t)start;real->bytes=in->payload+start;real->len=end-start;
+    }
+    *out=v;*count=n;return 0;
+}
+
 /* Заголовки на проводе — те же числа, что у сборщиков (wire.c, wire_udp.c).
    Повторены здесь, а не вынесены в общий заголовок, по тому же правилу, по
    которому wire_udp.c держит собственные копии wr16/sum16: модули пакетного
@@ -307,6 +345,7 @@ size_t d2s_plan_max_emit(const d2s_plan *p) {
         const struct d2s_poison *po = p->fakes[i].poison_id
             ? d2s_find_poison(p, p->fakes[i].poison_id) : NULL;
         size_t body = pl->len + ((p->fakes[i].tls_mod & D2S_TLS_MOD_DUPSID) ? 32u : 0u);
+        if(p->fake_layout==2)body=255;
         if (p->segment_size && body > p->segment_size) { body = p->segment_size; }
         size_t n = emit_overhead(p, po) + body;
         if (n > max) { max = n; }
@@ -544,6 +583,10 @@ int d2s_plan_apply(const d2s_plan *p, const d2s_flow *f,
         free(pts);
         out->refuse_why = "удлинённая нагрузка не помещается в одну UDP-датаграмму";
         return -1;
+    }
+    if(p->fake_layout) {
+        if(fake_layout_build(p,in,pts,n_pts,&v,&n,&out->refuse_why)) { free(pts);return -1; }
+        goto timings;
     }
 
     /* Верхняя оценка числа посылок: копии фальшивок плюс куски. Считаем
@@ -787,6 +830,7 @@ int d2s_plan_apply(const d2s_plan *p, const d2s_flow *f,
      * между ними (фальшивок нет — первый уходит сразу) и выдержка между
      * последней фальшивкой и правдой (первой идёт фальшивка — нагрузка ждёт).
      */
+timings:
     if (p->pace_us > 0) {
         for (size_t i = 0; i < n; i++) {
             if (v[i].kind != D2S_EMIT_PAYLOAD) { continue; }

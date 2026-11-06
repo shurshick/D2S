@@ -1116,6 +1116,14 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
         }
     }
 
+    /* Two new wire hypotheses only after the cheap/learned/composed path
+       failed. A compound success says nothing about its individual axes. */
+    if(!opt->only[0]) {
+        if(d2s_run_precise_family(ip4,family,pnum,tr,opt,res,hit)) {
+            snprintf(res->path,sizeof res->path,"приём");return 1;
+        }
+        if(raw_doubted(res) && !raw_recheck(ip4,family,pnum,opt,res,&props0,d2s_trigger_offers_ts(tr)))return 0;
+    }
     list = d2s_poisons(&n);
     for (i = 0; i < n; i++) {
         d2s_poison p = list[i];

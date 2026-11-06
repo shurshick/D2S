@@ -58,7 +58,8 @@ enum {
     REC_UDPLEN  = 0x010e,
     REC_QSPLIT  = 0x010f,
     REC_QDENY   = 0x0110,
-    REC_AUTOTTL = 0x0111
+    REC_AUTOTTL = 0x0111,
+    REC_FAKE_LAYOUT = 0x0112
 };
 
 /* Пределы одного плана. Не выдуманы: столько же держит датапат в разобранном
@@ -108,6 +109,7 @@ typedef struct {
     pl_fake    fakes[MAX_FAKES];       size_t n_fakes;
     pl_seqovl  seqovls[MAX_SEQOVLS];   size_t n_seqovls;
     uint8_t    order;
+    uint8_t    fake_layout;
     uint8_t    guards;
     uint32_t   pace_us;   /* 0 — записи нет */
     uint32_t   input_len, input_sni_off, input_sni_len, settle_us, segment_size;
@@ -586,6 +588,12 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
                 say(err, errcap, "строка %zu: udplen ждёт одно число 1..65535", lineno); goto bad;
             }
             p->udplen = (uint16_t)u;
+        } else if (strcmp(f[0], "fakelayout") == 0) {
+            unsigned long u=0;
+            if(nf!=2 || p->fake_layout || parse_uint(f[1],2,&u) || !u) {
+                say(err,errcap,"fakelayout expects 1 or 2 once");goto bad;
+            }
+            p->fake_layout=(uint8_t)u;
         } else if (strcmp(f[0], "quicsplit") == 0) {
             /* РАЗРЕЗ CLIENTHELLO НА КАДРЫ CRYPTO внутри того же Initial
                (задача 40, d2s_quic_initial_split_crypto). Форма одна: 1 —
@@ -678,6 +686,30 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
     if (p->wire_profile && (p->minexec < 4 || p->transport != 6)) {
         say(err, errcap, "wire detect-tcp-v1 требует minexec=4 и proto tcp"); goto bad;
     }
+    if(p->fake_layout) {
+        if(p->minexec<15 || p->transport!=6 || p->proto!=1 || !p->input_tls ||
+           !p->wire_profile || p->n_fakes!=1 || !p->n_splits || p->n_seqovls ||
+           p->oob_enabled || p->ipfrag || p->qsplit || p->qdeny || p->udplen ||
+           p->settle_us || p->delay_us || p->fakes[0].tls_mod ||
+           p->fakes[0].placement || (p->fake_layout==1 && p->order!=1) ||
+           (p->fake_layout==2 && (p->order || p->n_splits!=3))) {
+            say(err,errcap,"fakelayout requires executor15 and a dedicated TCP/TLS program");goto bad;
+        }
+        int safe=0;
+        for(size_t i=0;i<p->n_poisons;i++)if(p->poisons[i].id==p->fakes[0].poison_id)
+            safe=(p->poisons[i].flags&((1u<<0)|(1u<<3))) || p->poisons[i].seq_shift==-66000;
+        if(!safe) { say(err,errcap,"fakelayout needs server-discard fooling");goto bad; }
+        int pattern=0;
+        for(size_t i=0;i<p->n_payloads;i++)if(p->payloads[i].id==p->fakes[0].payload_id)
+            pattern=p->payloads[i].len>0 && (p->fake_layout!=2 || p->payloads[i].len<=255);
+        if(!pattern) { say(err,errcap,"fakelayout needs a bounded nonempty pattern");goto bad; }
+        if(p->fake_layout==2) {
+            unsigned anchors=0;
+            for(size_t i=0;i<p->n_splits;i++)if(!p->splits[i].offset)
+                anchors|=p->splits[i].anchor==1?1:p->splits[i].anchor==5?2:p->splits[i].anchor==2?4:0;
+            if(anchors!=7) { say(err,errcap,"host fakelayout needs exact SNI start/middle/end cuts");goto bad; }
+        }
+    }
     return 0;
 bad:
     plan_free(p);
@@ -729,7 +761,8 @@ int d2s_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
                        (p.segment_size ? 1u : 0u) + (p.wire_profile ? 1u : 0u) +
                        (p.input_tls ? 1u : 0u) + (p.delay_us ? 1u : 0u) +
                        (p.ipfrag ? 1u : 0u) + (p.oob_enabled ? 1u : 0u) +
-                       (p.udplen ? 1u : 0u) + (p.qsplit ? 1u : 0u) + (p.qdeny ? 1u : 0u);
+                       (p.udplen ? 1u : 0u) + (p.qsplit ? 1u : 0u) + (p.qdeny ? 1u : 0u) +
+                       (p.fake_layout?1u:0u);
     if (n_records > 0xFFFFu) {
         plan_free(&p);
         say(err, errcap, "слишком много записей (%zu)", n_records);
@@ -746,6 +779,7 @@ int d2s_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
     put_rec(&w, REC_ID, p.id, sizeof p.id);
     uint8_t pr[2] = { p.transport, p.proto };
     put_rec(&w, REC_PROTO, pr, sizeof pr);
+    if(p.fake_layout)put_rec(&w,REC_FAKE_LAYOUT,&p.fake_layout,1);
 
     for (size_t i = 0; i < p.n_payloads; i++) {
         /* Заголовок записи пишем сами: значение — номер плюс байты, и
@@ -880,7 +914,7 @@ int d2s_plan_simplify_next(const char *text, size_t cursor, char *out, size_t ca
     if (parse_text(text,&p,err,errcap)) return -1;
     /* Only full TCP application verification is presently available to the
        background minimizer. QUIC/voice programs are left intact. */
-    if (p.transport!=6 || p.proto!=1) { plan_free(&p); return 0; }
+    if (p.transport!=6 || p.proto!=1 || p.fake_layout) { plan_free(&p); return 0; }
     size_t ordinal=0, fi=0;
     const char *line=text;
     while (*line) {

@@ -5459,7 +5459,8 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
             d2s_arm_plan_measured(&r->arm, &r->arm_input, text, sizeof text) == 0;
         if (rc == 0) {
             memcpy(t->plans[t->n_plans], text, strlen(text) + 1);
-            if (!strcmp(r->arm_path,"перебор") || !strcmp(r->arm_path,"обучено")) {
+            if (!strcmp(r->arm_path,"перебор") || !strcmp(r->arm_path,"обучено") ||
+                (r->arm.fake_layout && !strcmp(r->arm_path,"приём"))) {
                 t->plan_recipes[t->n_plans]=r->arm;
                 t->plan_recipes[t->n_plans].name=NULL;
                 t->plan_recipe_valid[t->n_plans]=1;

@@ -44,7 +44,7 @@
  * чтобы клиент ушёл на TCP; это не обход QUIC. Старый исполнитель такие
  * планы не принимает. */
 /* Version 12: raw TCP-MD5 poison in detect-tcp-v1. */
-#define D2S_EXEC_VERSION 14
+#define D2S_EXEC_VERSION 15
 #define D2S_PLAN_PROTO_HTTP 4
 /* Shared result capacity for measured and live packet programs. */
 #define D2S_WIRE_BATCH_MAX 26

@@ -49,6 +49,7 @@ typedef struct {
                                 (split payload_start +N, order forward) — так
                                 режет настоящее приветствие семейство C; 0 —
                                 нет. Отличен от disorder_pos (обратный порядок). */
+    unsigned    fake_layout; /* 1=per-piece fake/reverse, 2=SNI-window fake/split */
 } d2s_arm;
 
 /* Owned decoy input. No borrowed pointers may cross worker results.

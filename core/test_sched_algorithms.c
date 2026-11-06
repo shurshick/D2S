@@ -204,10 +204,18 @@ static void maintenance(void) {
     t->ver_plan_id[0]=2;bd->successes++;
     assert(!minimize_proven(s,t,1001) && b->n_plans==1); /* concurrent repair generation */
     bd->successes--;t->last_verify_ms=60;
+    /* The cheaper program can already have history from another target.
+       Both new independent proofs must be counted, not only the second. */
+    d2s_cat_plan *existing=realloc(b->plans,2*sizeof *b->plans);assert(existing);b->plans=existing;
+    memset(&b->plans[1],0,sizeof b->plans[1]);b->n_plans=2;
+    plan_ident(t->plans[0],b->plans[1].id,sizeof b->plans[1].id,hash);
+    b->plans[1].text=strdup(t->plans[0]);assert(b->plans[1].text);
+    strcpy(b->plans[1].proto,"tls");b->plans[1].enabled=1;b->plans[1].successes=7;
     assert(minimize_proven(s,t,1002)==1);
     assert(b->n_plans==2 && strcmp(b->binds[0].plan_id,id) && b->binds[0].successes==2);
     assert(b->plans[0].successes==100 && !strcmp(b->plans[0].text,src));
     assert(b->plans[1].quality[0].passed==2 && !b->plans[1].recipe_valid);
+    assert(b->plans[1].successes==9);
     assert(b->binds[0].budget==D2S_CAT_BUDGET_PASSED && t->min_cursor==0);
     assert(minimize_source(s,t,NULL));
     t->state=T_PLANNING;t->n_plans=t->next_plan=1;t->owned_fallback=1;

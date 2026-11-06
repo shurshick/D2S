@@ -16,7 +16,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "98cf5033ae876e7bba83bb6fd580ccb8e3e05f53d7921ad71455d91ea301111b",
+    "sha256": "698c3d72c250e8b614f88c63088c8fd7c5a2f3fa1ad24933b76a3230c21e1cbe",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
@@ -28,11 +28,11 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/classify.c": {
-    "sha256": "ac502456063523f1907f452053c6b7d54a60d49f33deda6e3048d67131b0239f",
+    "sha256": "d9ac1d36fb1618e157e9b0a61b80d439066c487e6f4e17cde22a23de4200e534",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/include/d2s_detect.h": {
-    "sha256": "47960231950a3f2562d8a132f09368251c8bc7615c8d58307dbde8be16f4d952",
+    "sha256": "4d072379a7cb875e57c89c5cb9c8c0cca745134e33565ed9aa1a075d25501dad",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/main.c": {
@@ -40,7 +40,7 @@
     "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/props.c": {
-    "sha256": "56de5a74b46d22c430819854579cb92da93663f5ac30ae0e2d0040cb0b572823",
+    "sha256": "3e3d46112ce66b1f54c66cb9b96db9d8d7b24c32c3cd361fa908aa7ee9cb9cf2",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/response.c": {
@@ -48,7 +48,7 @@
     "reason": "docs/performance-stage2.md#reviewed-engine-changes"
   },
   "detect/test_repeats.c": {
-    "sha256": "c8c76cf0a39e57ad6b458eca56461b4b3a6e973240825e4f8b0a7e7d59f16996",
+    "sha256": "d995bc456ca663295e537519ea2653e6cdece1c39596ec98cac7c3127f1ad2e0",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "files/d2s-tg-firewall.sh": {
@@ -80,7 +80,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/quicprobe.c": {
-    "sha256": "791da99d6302b9c4f840a67f0ead295459deafcf5cb76753e26727fa8fc41e00",
+    "sha256": "6092090d7b63e07a20838e260671cf1133c8ca0ce68184742b5f0632383f4926",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_catalog.c": {
@@ -112,15 +112,15 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/include/d2s_plan.h": {
-    "sha256": "683bf1e8be7bb58e1b3156a5406ba6b4b011810f8ce816e453f407a4aceefe4f",
+    "sha256": "67a52e93aa7514f91f13d77efa00b561ed7ae50ef211f146daf9f3bf5b354861",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/plan_parse.c": {
-    "sha256": "40a68e09ed751f1e9aa3bf51acf5497404275881a54833acfdd9efad47a10d3f",
+    "sha256": "2e0d41cc40475e5d3deb5354913a3af830d07314aaaf98ffc5ff2d23b97d843a",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/compose.c": {
-    "sha256": "efe53e2db2597e98ff791033a602d9921fbb9467d6ced1f58adf5c2f7aa8745d",
+    "sha256": "ce4c965cbc5deed8eca1b27895d09c648f5981c29dcb25f5acbbf849e528ddc6",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/include/d2s_compose.h": {
@@ -128,7 +128,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/poison.c": {
-    "sha256": "b72539190beebb606943d21809776c8bfa6c685c710e4487a1abfc80722cd43f",
+    "sha256": "ba2aae6f68c5196fe96a3d40e3502dfe90bdbc895eac4f0840fcd59d3d7456bc",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/include/d2s_plantlv.h": {
@@ -136,7 +136,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/plantlv.c": {
-    "sha256": "fea1bfb40ac8cf85019e26c9c25fdc272c5606f50655475829023184bdf97e5e",
+    "sha256": "5b74cd28233646a1b67bd2bb894ca004afc15d3fb83018f39b6ca24d26ded439",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/include/d2s_quic.h": {
@@ -208,7 +208,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/plan_apply.c": {
-    "sha256": "d57ab82cf16f82a1f8d973c0b64fd11235cfc99bcc56ed2ed06a48ec0148bbb0",
+    "sha256": "b1fdefa1b5383a0501316bae7ef6367ce1f2d9bf2a4d0064d426613143ca94c4",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/session.c": {
@@ -225,6 +225,18 @@
   },
   "datapath/udp_path.c": {
     "sha256": "f4a4fb061485ff38ee422b76012779e9e033a28ae074f69b45f3edfb222617e8",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_arm.h": {
+    "sha256": "b21e1d282ef4df0058dcbec2dfaffb064d1b59747ab0486930518ebd1ce9f8e5",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/measured.c": {
+    "sha256": "afb10e355e68b2a9dae22585e253581fdf778c7a60a82361d362adb716455b0f",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/plan_internal.h": {
+    "sha256": "730de9dd82ddfe217d567cf32868ed65071d1bfb22c616b37ad1153a2b34097e",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   }
 }

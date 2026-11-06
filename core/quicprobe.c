@@ -2291,7 +2291,7 @@ int d2s_quic_props_findings(const d2s_quic_props *p, char *out, size_t cap) {
 
     static const struct { size_t slot; const char *text; } texts[] = {
         { offsetof(d2s_quic_props, split_crypto),
-          "разрез CRYPTO внутри имени прошёл измерение. "
+          "разрез имени на два кадра CRYPTO прошёл измерение. "
           "План quicsplit 2 разбирает целый полёт Initial, сохраняет байты приветствия "
           "и границы датаграмм; подтверждается отдельно этапом данных." },
         { offsetof(d2s_quic_props, split_datagrams),

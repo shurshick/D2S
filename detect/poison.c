@@ -65,6 +65,7 @@ int d2s_poison_same(const d2s_poison *x, const d2s_poison *y)
 #define SAME(field) if (x->field != y->field) return 0
     SAME(ttl); SAME(autottl); SAME(autottl_delta); SAME(autottl_min); SAME(autottl_max);
     SAME(badsum); SAME(md5); SAME(decoy_hello); SAME(disorder); SAME(disorder_pos);
+    SAME(fake_layout);
     SAME(tcp_ts); SAME(tcp_ts_up); SAME(ip_id_zero); SAME(gap_ms); SAME(syn_data);
     SAME(oob); SAME(fake_between); SAME(seqovl_exact); SAME(seqovl); SAME(split_pos); SAME(seq_shift);
     SAME(decoy_len);
@@ -235,6 +236,11 @@ void d2s_strategy_for_poison(const d2s_poison *p, char *out, size_t cap)
     char st[768];
 
     out[0] = '\0';
+
+    if(p->fake_layout) {
+        snprintf(out,cap,"D2S fakelayout %d (%s)",p->fake_layout,
+            p->fake_layout==1?"per-piece fake/reverse":"SNI-window fake/split");return;
+    }
 
     if (p->syn_data) {
         snprintf(out, cap, "--lua-desync=syndata:payload=tls_client_hello:dir=out");
@@ -421,6 +427,9 @@ int d2s_arm_from_poison(const d2s_poison *p, d2s_arm *a, char *why, size_t whyca
         snprintf(why, whycap, "данные в SYN языком плана не выражаются");
         return -1;
     }
+    if(p->fake_layout<0 || p->fake_layout>2) {
+        snprintf(why,whycap,"unsupported fake layout");return -1;
+    }
     a->oob = p->oob; /* срочный байт выражается планом «oob sni_middle 0f»
                         и исполняется датапатом (поле 10.10.2026, снят отказ);
                         место байта — середина имени, см. d2s_arm_plan_measured. */
@@ -441,6 +450,7 @@ int d2s_arm_from_poison(const d2s_poison *p, d2s_arm *a, char *why, size_t whyca
     a->gap_ms       = p->gap_ms > 0 ? (unsigned)p->gap_ms : 0u;
     a->disorder     = p->disorder;
     a->disorder_pos = p->disorder_pos > 0 ? (unsigned)p->disorder_pos : 0u;
+    a->fake_layout = p->fake_layout > 0 ? (unsigned)p->fake_layout : 0u;
     a->between      = p->fake_between;
     a->ttl          = p->ttl > 0 ? (unsigned)p->ttl : 0u;
     a->autottl      = p->autottl;
