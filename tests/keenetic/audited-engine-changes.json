@@ -16,7 +16,7 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "72baf3ed75014334a6c4ecaabf642d8689315b26bcb0cc6b07423a64c6b96a3d",
+    "sha256": "5653566a3175452f11151a9f81f169ae8926d52fc88a6887b15db033bd11609f",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
@@ -28,11 +28,11 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "detect/classify.c": {
-    "sha256": "0eec1ba9da6ce9b674f79dfefa9649be532ba89eab3d0893388c6c560854d8fd",
+    "sha256": "ac502456063523f1907f452053c6b7d54a60d49f33deda6e3048d67131b0239f",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/include/d2s_detect.h": {
-    "sha256": "69881c8fc76d073cb928944493d08db3fb84bf7a58d6bd3e4d00cf2518e9de83",
+    "sha256": "47960231950a3f2562d8a132f09368251c8bc7615c8d58307dbde8be16f4d952",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/main.c": {
@@ -40,15 +40,15 @@
     "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/props.c": {
-    "sha256": "8fd13df0ea42f6d2db7e4791022dc84ecb383f3346ebdd75eaefdb6ed841f932",
-    "reason": "docs/performance-stage2.md#reviewed-engine-changes"
+    "sha256": "56de5a74b46d22c430819854579cb92da93663f5ac30ae0e2d0040cb0b572823",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/response.c": {
     "sha256": "d0f06716ab32d68a18f0df7d5262ab8c73696d3bba5cd6ed413f638b8eda39e9",
     "reason": "docs/performance-stage2.md#reviewed-engine-changes"
   },
   "detect/test_repeats.c": {
-    "sha256": "0a37a8108985badb85594db9280887fe9530eb229cf6dd42b647e2d340ac3025",
+    "sha256": "c8c76cf0a39e57ad6b458eca56461b4b3a6e973240825e4f8b0a7e7d59f16996",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "files/d2s-tg-firewall.sh": {
@@ -56,15 +56,15 @@
     "reason": "docs/telegram-web.md#reviewed-engine-changes"
   },
   "detect/bridge.c": {
-    "sha256": "5b14c3bd5ff4a386d92a8405e1f83bdc04c5667c1ccbc674a21d5630db525866",
+    "sha256": "7b5f0bd9c75c23b62fd73955125ba4abb1138c710b25a137535cec58f9a27706",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/test_bridge.c": {
-    "sha256": "e68e5d2ea83d83986c4fe4f39088aed1092cc17ca1ffc3da2797c946fad06f85",
+    "sha256": "44463afa02f41c2e7a009ebc373bb516b5a08a6c0a687dc1fe4fe0ee62ea5f9b",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/catalog.c": {
-    "sha256": "0dd5e265704b74ea44ff6a57265fa743ffce7bef1c222f1d7b56cefe5ec98eaa",
+    "sha256": "140be3ae730a7da2b572b435768e8c53ab0b3e0dcea23dfb0be27bd8675ed9f3",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/httpsearch.c": {
@@ -72,7 +72,7 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/include/d2s_catalog.h": {
-    "sha256": "9a705d5b1901ae17f5e49df1ed86d5ec3a20377090de56e14357662177ca2921",
+    "sha256": "9765d4f39a96a3f7c84e6bd900c3e2d437fc96c9af8b6f03df60e310be1790eb",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/quicconn.c": {
@@ -108,7 +108,7 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/include/d2s_verdict.h": {
-    "sha256": "40cca870557c0095d1f650080cf28ba1363b5533abdd08b949df0cc01889241d",
+    "sha256": "dfd5b4a50e72b6cc406aa8b58c9fce8288e9960faa202461f29ac98a968fd8f4",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/include/d2s_plan.h": {
@@ -117,6 +117,18 @@
   },
   "datapath/plan_parse.c": {
     "sha256": "7b2b002ab9625eb5913cedb43c0837c18d263e559499f50fcb8cd03439f5e033",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/compose.c": {
+    "sha256": "efe53e2db2597e98ff791033a602d9921fbb9467d6ced1f58adf5c2f7aa8745d",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_compose.h": {
+    "sha256": "a4ea2673560945956bb4f851536a746245bc24ced999dee66296d055fe3dadc4",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "detect/poison.c": {
+    "sha256": "b72539190beebb606943d21809776c8bfa6c685c710e4487a1abfc80722cd43f",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   }
 }

@@ -595,6 +595,8 @@ int main(void)
         uint8_t hello[] = {0x16, 0x03};
         d2s_hello tr = {hello, sizeof hello, NULL, 0, 0, 0}, none = {0};
         d2s_base_seed seed = {0}; seed.early_split = 1;
+        d2s_arm learned={.badsum=1,.repeats=3};
+        seed.learned=&learned; seed.nlearned=1;
         memset(&answer, 0, sizeof answer);
         answer.verdict = D2S_DV_INCONCLUSIVE;
         answer.split_measured = 1; answer.split_pos = 1;
@@ -603,6 +605,7 @@ int main(void)
             0x2d, 3, 0, 0, NULL, &seed);
         CHECK(seen.early_split && r.split_measured && r.split_pos == 1 &&
               r.verdict == D2S_V_INCONCLUSIVE && r.owns_search);
+        CHECK(seen.nlearned==1 && seen.learned==&learned && !seen.seed_whole);
         dialled = 0;
         r = d2s_detect_sched_tcp_seeded("192.0.2.1", 443, tr, none,
             0x2d, 3, 0, 0, NULL, &seed);

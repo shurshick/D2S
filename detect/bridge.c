@@ -342,6 +342,8 @@ static d2s_vres sched_tcp(const char *ip, uint16_t port,
     }
     int seeded_whole = opt.seed_whole;
     opt.early_split = seed && seed->early_split;
+    opt.learned = seed ? seed->learned : NULL;
+    opt.nlearned = seed ? seed->nlearned : 0;
     opt.on_obs = progress_seen;
     opt.on_obs_ctx = &seeded_whole;
     unplannable refused;

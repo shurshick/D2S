@@ -116,6 +116,7 @@ typedef struct {
 #define D2S_FP_METHOD 2
 
 #include "d2s_quality.h"
+#include "d2s_learning.h"
 
 /* Проверенный план коробки (см. Plan). text — человекочитаемый текст
  * d2s-plan, не байты TLV: он остаётся тем же полем, что каноническую форму
@@ -130,6 +131,8 @@ typedef struct {
     int      successes;
     int      enabled;
     d2s_plan_quality quality[D2S_QUALITY_CONTEXTS];
+    int recipe_valid;
+    d2s_arm recipe; /* numeric own fallback method; name always NULL */
 } d2s_cat_plan;
 
 /* Подтверждённая привязка цели к плану (см. Binding).

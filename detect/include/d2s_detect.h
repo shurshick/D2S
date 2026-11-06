@@ -357,6 +357,8 @@ typedef struct {
        measurement worker; at most three complete trials form one batch. */
     int  parallel_base;
     int  early_split; /* controller may verify a measured cut before diagnosis */
+    const d2s_arm *learned;
+    size_t nlearned; /* immutable numeric questions owned by the caller */
     int  control_vouched;
     /* Метка SO_MARK для ВСЕХ сокетов прогона — и обычных, и сырых. Ноль
      * означает «взять D2S_BYPASS_MARK», а не «не метить»: непомеченный зонд
@@ -435,6 +437,8 @@ const char *d2s_trigger_sni(const d2s_trigger *t);
 /* Run прогоняет дерево зондов по адресу addr ("host:port"). */
 void d2s_classify_run(const char *addr, const d2s_trigger *tr,
                       d2s_opts *opt, d2s_result *res);
+int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
+    const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit);
 
 /* --- сырой слой (raw.c) ------------------------------------------------- */
 

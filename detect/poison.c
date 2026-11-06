@@ -61,12 +61,16 @@ static d2s_poison *add(const char *fmt, ...)
 
 int d2s_poison_same(const d2s_poison *x, const d2s_poison *y)
 {
-    d2s_poison a = *x, b = *y;
-    memset(a.name, 0, sizeof a.name);
-    memset(b.name, 0, sizeof b.name);
-    if (a.repeats <= 1) { a.repeats = 1; }
-    if (b.repeats <= 1) { b.repeats = 1; }
-    return memcmp(&a, &b, sizeof a) == 0;
+    if (!x || !y) return 0;
+#define SAME(field) if (x->field != y->field) return 0
+    SAME(ttl); SAME(autottl); SAME(autottl_delta); SAME(autottl_min); SAME(autottl_max);
+    SAME(badsum); SAME(md5); SAME(decoy_hello); SAME(disorder); SAME(disorder_pos);
+    SAME(tcp_ts); SAME(tcp_ts_up); SAME(ip_id_zero); SAME(gap_ms); SAME(syn_data);
+    SAME(oob); SAME(fake_between); SAME(seqovl_exact); SAME(seqovl); SAME(split_pos); SAME(seq_shift);
+    SAME(decoy_len);
+#undef SAME
+    if ((x->repeats <= 1 ? 1 : x->repeats) != (y->repeats <= 1 ? 1 : y->repeats)) return 0;
+    return !x->decoy_len || (x->decoy && y->decoy && !memcmp(x->decoy,y->decoy,x->decoy_len));
 }
 
 /* Та же гипотеза по всем параметрам, кроме имени, уже есть в списке. */

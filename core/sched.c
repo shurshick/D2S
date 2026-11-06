@@ -748,6 +748,8 @@ typedef struct {
     /* Кандидаты, собранные d2s_compose по вердикту. */
     char       plans[SCHED_MAX_PLANS][4096];
     char       plan_boxes[SCHED_MAX_PLANS][40]; /* candidate source, not established identity */
+    d2s_arm    plan_recipes[SCHED_MAX_PLANS];
+    uint8_t    plan_recipe_valid[SCHED_MAX_PLANS];
     size_t     n_plans;
     size_t     next_plan;
 
@@ -2462,7 +2464,56 @@ typedef struct {
     int split_unfit; /* решено главным потоком (quic_split_unfit) */
     unsigned budget; /* бюджет потока испытания (JOB_VERIFY), 0 — без проверки */
     int diag_memory_tracked;
+    d2s_arm *learned;
+    size_t nlearned;
+    size_t learned_bytes;
+    int learned_tracked;
 } worker_arg;
+
+static uint8_t record_shape(const task *t);
+static int64_t wall_s(const d2s_sched *s, int64_t now_ms);
+static d2s_arm *learned_questions_for(d2s_sched *s, const task *t, size_t *count, size_t *bytes) {
+    *count = *bytes = 0;
+    int context = d2s_quality_index(t->family, record_shape(t));
+    if (!s->cat || t->transport != 6 || context < 0) return NULL;
+    size_t capacity = 0;
+    for (size_t bi=0; bi<s->cat->n_boxes; bi++) {
+        const d2s_cat_box *b=&s->cat->boxes[bi];
+        for (size_t i=0; i<b->n_plans; i++) if (b->plans[i].recipe_valid) {
+            if (capacity==SIZE_MAX) return NULL;
+            capacity++;
+        }
+    }
+    if (!capacity || capacity > SIZE_MAX/sizeof(d2s_arm)) return NULL;
+    d2s_arm *out = malloc(capacity*sizeof *out);
+    if (!out) return NULL; /* unchanged classifier, not negative knowledge */
+    for (size_t bi=0; bi<s->cat->n_boxes; bi++) {
+        const d2s_cat_box *b=&s->cat->boxes[bi];
+        for (size_t pi=0; pi<b->n_plans; pi++) {
+            const d2s_cat_plan *p=&b->plans[pi];
+            d2s_plan_quality evidence=p->quality[context];
+            d2s_quality_decay(&evidence,wall_s(s,s->now_ms));
+            const d2s_plan_quality *q=&evidence;
+            if (!p->enabled || !p->recipe_valid || !d2s_recipe_nonempty(&p->recipe) || strcmp(p->proto,"tls") ||
+                q->passed<2 || q->passed<=q->failed) continue;
+            int compatible=0;
+            for (size_t j=0; j<b->n_binds; j++) {
+                const d2s_cat_binding *bd=&b->binds[j];
+                if (!strcmp(bd->plan_id,p->id) && bd->enabled && bd->level>=3 &&
+                    !bd->recheck_since && bd->transport==6 && bd->family==t->family &&
+                    bd->shape==record_shape(t) && bd->verified_by==D2S_VERBY_PROBE) compatible=1;
+            }
+            if (!compatible) continue;
+            int duplicate=0;
+            for (size_t k=0; k<*count; k++) if (d2s_recipe_same(&out[k],&p->recipe)) duplicate=1;
+            if (duplicate) continue;
+            out[*count]=p->recipe; out[(*count)++].name=NULL;
+        }
+    }
+    if (!*count) { free(out); return NULL; }
+    *bytes=capacity*sizeof *out;
+    return out;
+}
 
 d2s_vres d2s_sched_ech_baseline_result(const d2s_ver_result *baseline,
     d2s_vol_result *volume, const char *origin) {
@@ -2674,6 +2725,8 @@ static void *worker_body(void *vp) {
     int a_use_fd = a->use_fd;
     int a_split_unfit = a->split_unfit;
     unsigned a_budget = a->budget;
+    const d2s_arm *a_learned = a->learned;
+    size_t a_nlearned = a->nlearned;
     /* КОПИЯ ВХОДА — РАЗМЕРОМ С ВХОД. Вход QUIC — пачка датаграмм клиента до
        SCHED_TRIG_MAX байт (задача 66), и копия на 2048 переполняла стек
        потока на первой же пачке Chrome (2508 байт): поле 15.10.2026,
@@ -3032,9 +3085,10 @@ static void *worker_body(void *vp) {
     const d2s_base_seed *seed = t->seed_use && t->seed.valid &&
         t->seed_input == seed_input_of(trig.bytes, trig.len, t->ip, t->port) ? &t->seed : NULL;
     d2s_base_seed run_seed;
-    if (seed && t->transport == 6) {
-        run_seed = *seed;
-        run_seed.early_split = !t->split_detailed;
+    if ((seed || a_nlearned) && t->transport == 6) {
+        run_seed = seed ? *seed : (d2s_base_seed){0};
+        run_seed.early_split = seed && !t->split_detailed;
+        run_seed.learned = a_learned; run_seed.nlearned = a_nlearned;
         seed = &run_seed;
     }
     if (t->transport == 17) {
@@ -3188,6 +3242,8 @@ static void *worker_run(void *vp) {
     d2s_sched *s = a->s;
     task *t = a->t;
     task_job job = t->job;
+    d2s_arm *learned=a->learned; size_t learned_bytes=a->learned_bytes;
+    int learned_tracked=a->learned_tracked;
     pthread_mutex_lock(&s->mu);
     t->worker_executing = 1;
     if (t->worker_started_ms < 0) t->worker_started_ms = sched_mono_ms();
@@ -3195,6 +3251,10 @@ static void *worker_run(void *vp) {
     struct timespec begin, end;
     int timed = clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
     void *result = worker_body(vp); /* owns/frees worker_arg */
+    if (learned) {
+        d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,learned_bytes,learned_tracked);
+        free(learned);
+    }
     int64_t done = sched_mono_ms();
     int64_t elapsed = -1;
     if (timed && clock_gettime(CLOCK_MONOTONIC, &end) == 0) {
@@ -3287,6 +3347,12 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
     if (!a) { d2s_diag_memory_alloc_failure(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG);note_worker_start_failure(s, t); return -1; }
     a->diag_memory_tracked=d2s_diag_memory_acquire(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a);
     a->s = s; a->t = t;
+    a->learned=NULL; a->nlearned=a->learned_bytes=0; a->learned_tracked=0;
+    if (job==JOB_CLASSIFY && t->transport==6) {
+        a->learned=learned_questions_for(s,t,&a->nlearned,&a->learned_bytes);
+        if (a->learned) a->learned_tracked=d2s_diag_memory_acquire(
+            D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,a->learned_bytes);
+    }
     a->trig_len = t->trig_len; a->ctrl_len = t->ctrl_len;
     a->split_unfit = quic_split_unfit(s, t);
     a->budget = job == JOB_VERIFY || (job == JOB_CLASSIFY && t->transport == 17)
@@ -3332,6 +3398,11 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
     if (have_attr) { pthread_attr_destroy(&attr); }
     if (!created) {
         if (a->use_fd >= 0) { close(a->use_fd); }
+        if (a->learned) {
+            d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,
+                                   a->learned_bytes,a->learned_tracked);
+            free(a->learned);
+        }
         d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a,a->diag_memory_tracked);
         free(a);
         note_worker_start_failure(s, t);
@@ -4223,6 +4294,7 @@ static int next_rx_volume_plan(d2s_sched *s, task *t, d2s_shape sh,
 
 static size_t refill_from_fallback(d2s_sched *s, task *t) {
     if ((t->search_owned && !t->owned_fallback) || t->transport == 17) { return 0; }
+    memset(t->plan_recipe_valid,0,sizeof t->plan_recipe_valid);
     size_t cap = sizeof t->plans / sizeof t->plans[0];
     size_t added = 0;
     d2s_shape sh = d2s_hello_shape(t->trig, t->trig_len);
@@ -4264,6 +4336,7 @@ static size_t refill_from_fallback(d2s_sched *s, task *t) {
     if (t->transport == 6 && t->vol.rx_cut) cap = added;
     while (added < cap) {
         char text[sizeof t->plans[0]];
+        size_t recipe_index=t->fb_next;
         if (d2s_fallback_plan(t->fb_next, sh, SCHED_DECOY, s->send_cap,
                               text, sizeof text) != 0) {
             t->fb_next++;
@@ -4281,6 +4354,8 @@ static size_t refill_from_fallback(d2s_sched *s, task *t) {
         snprintf(t->plans[added], sizeof t->plans[added], "%s", text);
         t->plan_boxes[added][0] = '\0';
         t->net_probe_name[added][0] = '\0'; /* не из подбора белого имени */
+        t->plan_recipe_valid[added]=d2s_fallback_arm(recipe_index,&t->plan_recipes[added])==0;
+        t->plan_recipes[added].name=NULL;
         added++;
     }
     if (added) {
@@ -4752,6 +4827,7 @@ static size_t known_plans(d2s_sched *s, task *t) {
         }
         if (!best) { break; }
         memcpy(t->plans[took], best->text, strlen(best->text) + 1);
+        t->plan_recipe_valid[took]=0;
         snprintf(t->plan_boxes[took], sizeof t->plan_boxes[took], "%s", owner->id);
         uint32_t h = fnv1a(best->text);
         tried_add(t, h);
@@ -4970,6 +5046,7 @@ static size_t own_first_plans(d2s_sched *s, task *t, int fill) {
     t->fb_queue = 0;
     for (size_t k = 0; k < n; k++) {
         snprintf(t->plans[k], sizeof t->plans[k], "%s", pick[k]->text);
+        t->plan_recipe_valid[k]=0;
         snprintf(t->plan_boxes[k], sizeof t->plan_boxes[k], "%s", owner[k]->id);
         t->own_seen[t->n_own_seen++] = fnv1a(pick[k]->text);
     }
@@ -5140,6 +5217,7 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
     t->split_pending = r->split_measured && !t->split_detailed;
     t->arm_hash = 0;
     t->arm_path[0] = '\0';
+    memset(t->plan_recipe_valid,0,sizeof t->plan_recipe_valid);
     memset(t->plan_boxes, 0, sizeof t->plan_boxes);
     memset(t->net_probe_name, 0, sizeof t->net_probe_name);
     /* Failed reuse does not prove this is the same box. A newly synthesized
@@ -5362,6 +5440,11 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
             d2s_arm_plan_measured(&r->arm, &r->arm_input, text, sizeof text) == 0;
         if (rc == 0) {
             memcpy(t->plans[t->n_plans], text, strlen(text) + 1);
+            if (!strcmp(r->arm_path,"перебор") || !strcmp(r->arm_path,"обучено")) {
+                t->plan_recipes[t->n_plans]=r->arm;
+                t->plan_recipes[t->n_plans].name=NULL;
+                t->plan_recipe_valid[t->n_plans]=1;
+            }
             t->n_plans++;
             t->arm_hash = fnv1a(text);
             snprintf(t->arm_path, sizeof t->arm_path, "%s", r->arm_path);
@@ -7711,6 +7794,7 @@ static int family_recovery_start(d2s_sched *s, task *t) {
                     if(!strcmp(t->plans[j],p->text)) duplicate=1;
                 if(duplicate || t->n_plans>=sizeof t->plans/sizeof t->plans[0]) break;
                 snprintf(t->plans[t->n_plans],sizeof t->plans[0],"%s",p->text);
+                t->plan_recipe_valid[t->n_plans]=0;
                 snprintf(t->plan_boxes[t->n_plans],sizeof t->plan_boxes[0],"%s",box->id);
                 t->n_plans++;
                 break;
@@ -8782,6 +8866,10 @@ static void plan_quality_record(d2s_sched *s, task *t, int passed, int64_t now_m
             d2s_cat_plan *p = &b->plans[i];
             if (!p->text || strcmp(p->text, text)) continue;
             d2s_plan_quality *q = &p->quality[context];
+            if (passed && t->plan_recipe_valid[t->next_plan-1]) {
+                p->recipe=t->plan_recipes[t->next_plan-1];
+                p->recipe.name=NULL; p->recipe_valid=1;
+            }
             uint32_t elapsed = t->last_verify_ms < 0 ? 0 :
                 (uint64_t)t->last_verify_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)t->last_verify_ms;
             d2s_quality_note(q, passed, elapsed, wall_s(s, now_ms));
@@ -8970,7 +9058,8 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
                перебора в поле считала и её. */
             path = !strcmp(p, "свой план") || t->own_first == 2 ? "own-plan" :
                    !strcmp(p, "RX-лестница") ? "ladder" :
-                   !strcmp(p, "перебор") ? "fallback" : "property";
+                    !strcmp(p, "перебор") ? "fallback" :
+                    !strcmp(p, "обучено") ? "learned" : "property";
         }
     }
     pthread_mutex_lock(&s->mu);
@@ -10272,6 +10361,7 @@ static int rx_saved_bootstrap(d2s_sched *s, task *t, int allow_other_family) {
     }
     if (!plan) return 0;
     snprintf(t->plans[0], sizeof t->plans[0], "%s", plan->text);
+    t->plan_recipe_valid[0]=0;
     int same_family = (best->family ? best->family : 4) == t->family;
     snprintf(t->plan_boxes[0], sizeof t->plan_boxes[0], "%s", same_family ? owner->id : "");
     t->next_plan = 0; t->n_plans = 1; t->n_known = same_family ? 1 : 0; t->fb_queue = 0;

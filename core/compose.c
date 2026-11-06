@@ -1412,7 +1412,8 @@ size_t d2s_fallback_arms(void) {
 }
 
 /* Плечо по номеру. 0 — заполнено, -1 — номер за концом списка. */
-static int fb_arm_at(size_t idx, fb_arm *a) {
+int d2s_fallback_arm(size_t idx, d2s_arm *a) {
+    if (!a) return -1;
     memset(a, 0, sizeof *a);
     if (idx < FB_N_HEAD) { *a = g_fb_head[idx]; return 0; }
     idx -= FB_N_HEAD;
@@ -1455,7 +1456,7 @@ int d2s_fallback_plan(size_t idx, d2s_shape shape, const char *decoy,
                       size_t send_cap, char *buf, size_t cap) {
     fb_arm a;
     if (!buf || cap == 0) { return -1; }
-    int arm_rc = fb_arm_at(idx, &a);
+    int arm_rc = d2s_fallback_arm(idx, &a);
     if (arm_rc != 0) { return -1; }
     return d2s_arm_plan(&a, shape, decoy, send_cap, buf, cap);
 }

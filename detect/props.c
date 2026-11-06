@@ -13,6 +13,7 @@
  * СОБИРАЕТСЯ из ответов. Перебор остаётся, но уже запасным путём.
  */
 #include "d2s_detect.h"
+#include "d2s_learning.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -258,6 +259,63 @@ static void apply_set(d2s_dprops *pr, prop_set s, int ok, const d2s_poison *p)
 
 /* runProperties задаёт вопросы и заполняет вектор. Возвращает первую
  * гипотезу, которая сама по себе сработала, если такая была. */
+int d2s_run_learned_family(const uint8_t *ip, uint8_t family, uint16_t port,
+    const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit)
+{
+    for (size_t i = 0; opt->learned && i < opt->nlearned; i++) {
+        if (d2s_detect_stopped(&opt->cancel)) break;
+        const d2s_arm *a = &opt->learned[i];
+        int valid = 1;
+#define D2S_RECIPE_BOUND(field,lo,hi) \
+        if ((int64_t)a->field < (int64_t)(lo) || (int64_t)a->field > (int64_t)(hi)) valid = 0;
+        D2S_RECIPE_FIELDS(D2S_RECIPE_BOUND)
+#undef D2S_RECIPE_BOUND
+        if (!valid || !d2s_recipe_nonempty(a) ||
+            ((a->tcpts || a->tcpts_up) && !d2s_trigger_offers_ts(tr))) continue;
+        d2s_poison p = {0};
+        snprintf(p.name, sizeof p.name, "learned-%zu", i);
+        p.ttl=a->ttl; p.autottl=a->autottl; p.autottl_delta=a->autottl_delta;
+        p.autottl_min=a->autottl_min; p.autottl_max=a->autottl_max;
+        p.badsum=a->badsum; p.md5=a->md5; p.decoy_hello=a->decoy_hello;
+        p.disorder=a->disorder; p.disorder_pos=a->disorder_pos;
+        p.tcp_ts=a->tcpts; p.tcp_ts_up=a->tcpts_up; p.ip_id_zero=a->ipidzero;
+        p.gap_ms=a->gap_ms; p.oob=a->oob; p.fake_between=a->between;
+        p.repeats=a->repeats; p.seqovl_exact=a->seqovl_hello;
+        p.seqovl=a->seqovl; p.split_pos=a->split_pos;
+        if (a->seq_out) p.seq_shift=-66000;
+        if (!d2s_poison_supports_family(&p, family) || d2s_opts_skipped(opt, p.name)) continue;
+        if (p.decoy_hello || p.seqovl_exact) {
+            const d2s_trigger *d = d2s_opts_decoy(opt);
+            if (p.decoy_hello && p.repeats == 8 && p.split_pos == 2 &&
+                (p.tcp_ts || p.badsum) && opt->white.len) d = &opt->white;
+            if (!d || !d->len) continue;
+            p.decoy=d->payload; p.decoy_len=d->len;
+        }
+        int known=0;
+        for (int k=0; k<res->nanswered; k++) if (d2s_poison_same(&p,&res->answered[k])) known=1;
+        if (known) continue;
+        d2s_obs *obs=d2s_trace_add(res,p.name); obs->delay_ms=p.gap_ms;
+        int pass=0, done=0, local=0;
+        char err[160]={0};
+        for (int j=0; j<opt->repeats; j++) {
+            if (d2s_detect_stopped(&opt->cancel)) { local=1; break; }
+            int rc=d2s_raw_probe_poison_family(ip,family,port,tr,&p,opt->timeout_ms,
+                                              opt->mark,&opt->cancel,err,sizeof err);
+            res->probes++; done++; d2s_raw_note_rc(res,family,rc);
+            if (rc<0) { local=1; snprintf(obs->err,sizeof obs->err,"%s",err); break; }
+            if (rc>0) pass++;
+            if (d2s_prop_majority(pass,opt->repeats) ||
+                !d2s_prop_majority(pass+opt->repeats-done,opt->repeats)) break;
+        }
+        obs->pass=pass; obs->fail=done-pass; d2s_obs_finish(opt,obs);
+        if (!local && res->nanswered<D2S_ANSWERED_MAX) res->answered[res->nanswered++]=p;
+        if (!local && d2s_prop_majority(pass,opt->repeats) && d2s_opts_acceptable(opt,&p)) {
+            *hit=p; return 1;
+        }
+    }
+    return 0;
+}
+
 int d2s_run_properties(const uint8_t ip4[4], uint16_t port,
     const d2s_trigger *tr, const d2s_opts *opt, d2s_result *res, d2s_poison *hit)
 {
@@ -343,6 +401,10 @@ int d2s_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
             p.decoy_len = d->len;
             decoy_cloned = d == &opt->decoy;
         }
+        int already_answered = 0;
+        for (int k = 0; k < res->nanswered; k++)
+            if (d2s_poison_same(&p, &res->answered[k])) already_answered = 1;
+        if (already_answered) continue;
         /* Паузу и число копий кладём в наблюдение явно: без этого трасса
          * показывала «пауза=0мс» у зонда, который её честно выдерживает, и
          * читалась как поломка механизма. */

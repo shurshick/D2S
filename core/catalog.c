@@ -837,8 +837,30 @@ static int parse_quality(jctx *j, d2s_cat_plan *p, int depth, char *err, size_t 
     }
 }
 
+typedef struct { int version; d2s_arm arm; } recipe_row;
+static int handle_recipe_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
+    recipe_row *r=ctx;
+    if (!strcmp(key,"v")) return jparse_i32(j,&r->version,"recipe.v",err,errcap);
+#define D2S_RECIPE_PARSE(field,lo,hi) \
+    if (!strcmp(key,#field)) { \
+        int64_t x; if (jparse_raw_int(j,&x,err,errcap)) return -1; \
+        if (x<(int64_t)(lo) || x>(int64_t)(hi)) { set_err(err,errcap,"recipe.%s outside range",key); return -1; } \
+        r->arm.field=x; return 0; \
+    }
+    D2S_RECIPE_FIELDS(D2S_RECIPE_PARSE)
+#undef D2S_RECIPE_PARSE
+    return jskip_value(j,depth+1,err,errcap);
+}
 static int handle_plan_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
     d2s_cat_plan *out = (d2s_cat_plan *)ctx;
+    if (!strcmp(key,"learned_recipe")) {
+        recipe_row row={0}; out->recipe_valid=0;
+        memset(&out->recipe,0,sizeof out->recipe);
+        if (jeat_null_if_present(j)) return 0;
+        int rc=parse_object(j,handle_recipe_key,&row,depth+1,err,errcap);
+        if (!rc && row.version==1) { out->recipe=row.arm; out->recipe_valid=1; }
+        return rc;
+    }
     if (!strcmp(key, "quality")) return parse_quality(j, out, depth, err, errcap);
     if (strcmp(key, "id") == 0)
         return jparse_string_fixed(j, out->id, sizeof out->id, "plan.id", err, errcap);
@@ -1325,6 +1347,13 @@ static void write_plan_elem(FILE *f, const void *e, int depth) {
                 checked, q->cost_known ? "true" : "false", q->nominal_fakes, q->nominal_delay_us);
     }
     if (any) fputs("],\n", f);
+    if (p->recipe_valid) {
+        wr_indent(f,depth+1); fputs("\"learned_recipe\": {\"v\":1",f);
+#define D2S_RECIPE_WRITE(field,lo,hi) fprintf(f,",\"%s\":%lld",#field,(long long)p->recipe.field);
+        D2S_RECIPE_FIELDS(D2S_RECIPE_WRITE)
+#undef D2S_RECIPE_WRITE
+        fputs("},\n",f);
+    }
     wr_indent(f, depth + 1); fprintf(f, "\"enabled\": %s\n", p->enabled ? "true" : "false");
     wr_indent(f, depth); fputc('}', f);
 }

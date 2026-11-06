@@ -236,6 +236,8 @@ typedef struct {
 /* Фильтр находок, как plannable_hit в bridge.c: NULL — берётся любая. */
 static int (*g_accept)(const d2s_poison *p, void *ctx);
 static int g_early_split;
+static const d2s_arm *g_learned;
+static size_t g_nlearned;
 
 static void run(const scenario *s, d2s_result *res)
 {
@@ -248,6 +250,7 @@ static void run(const scenario *s, d2s_result *res)
     opt.write_gap_ms = 2;
     opt.long_gap_ms = 10;
     opt.early_split = g_early_split;
+    opt.learned = g_learned; opt.nlearned = g_nlearned;
     opt.control_vouched = s->vouched;
     if(g_timeout_seed) {
         opt.seed_whole=1; opt.seed_repeats=3; opt.seed_fail=3;
@@ -1120,6 +1123,54 @@ static void test_early_split_is_not_a_diagnosis(void)
     g_early_split = 0;
 }
 
+static void test_same_question_uses_content(void)
+{
+    const uint8_t a[]={1,2,3}, b[]={1,2,3}, c[]={1,2,4};
+    d2s_poison x={0}, y={0};
+    x.badsum=y.badsum=1; x.decoy_hello=y.decoy_hello=1;
+    x.decoy=a; y.decoy=b; x.decoy_len=y.decoy_len=sizeof a;
+    CHECK(d2s_poison_same(&x,&y), "identical learned stimulus was compared by buffer address");
+    y.decoy=c;
+    CHECK(!d2s_poison_same(&x,&y), "different decoy bytes were deduplicated");
+}
+
+static void test_learned_question_precedes_fallback(void)
+{
+    const d2s_arm recipe = {.badsum=1, .repeats=3, .gap_ms=80, .disorder=1};
+    const script_ent answers[] = {{"learned-0", "+"}, {NULL, NULL}};
+    scenario sc = {"own-learning", answers, "-", NULL, "+", 0, NULL, 0, 0};
+    d2s_result r;
+    g_learned = &recipe; g_nlearned = 1;
+    run(&sc, &r);
+    CHECK(r.has_hit && !strcmp(r.path, "обучено") && !strcmp(r.hit.name, "learned-0"),
+          "verified own method was not asked before static fallback");
+    CHECK(r.props.reassembles == D2S_TRI_UNSET && r.props.validates_checksum == D2S_TRI_UNSET,
+          "learned compound invented individual DPI properties");
+    d2s_arm measured;
+    char why[160];
+    CHECK(!d2s_arm_from_poison(&r.hit,&measured,why,sizeof why) &&
+          d2s_recipe_same(&recipe,&measured), "learned question changed its numeric method");
+    const script_ent fallback[] = {{"learned-0", "-"},{"badsum-x2-g80", "+"},{NULL,NULL}};
+    sc.script=fallback;
+    run(&sc,&r);
+    CHECK(r.has_hit && !strcmp(r.path,"перебор") && !strcmp(r.hit.name,"badsum-x2-g80"),
+          "learned miss suppressed original fallback");
+    d2s_arm duplicate={.badsum=1,.repeats=2,.gap_ms=80};
+    g_learned=&duplicate;
+    run(&sc,&r);
+    CHECK(!r.has_hit && !find_obs(&r,"badsum-x2-g80"), "answered learned hypothesis was reasked by fallback");
+    const script_ent local[] = {{"learned-0", "e"},{"badsum-x2-g80", "+"},{NULL,NULL}};
+    sc.script=local;
+    run(&sc,&r);
+    CHECK(r.has_hit && !strcmp(r.hit.name,"badsum-x2-g80"), "local failure became negative learned knowledge");
+    d2s_arm timestamps={.tcpts=1,.repeats=3};
+    g_learned=&timestamps; sc.no_ts=1; sc.script=fallback;
+    run(&sc,&r);
+    CHECK(!find_obs(&r,"learned-0") && r.has_hit, "TS-dependent method was asked for a client without TS");
+    sc.script = NULL; g_learned = NULL; g_nlearned = 0;
+    run(&sc, &r); CHECK(!r.has_hit, "empty knowledge acquired a learned question");
+}
+
 static void test_observation_timing(void)
 {
     d2s_result r = {0}; d2s_opts opt = {0};
@@ -1140,6 +1191,9 @@ static void test_observation_timing(void)
 
 int main(int argc, char **argv)
 {
+    if (argc == 2 && !strcmp(argv[1], "--learned-only")) {
+        srv_start(); test_same_question_uses_content(); test_learned_question_precedes_fallback(); return fails ? 1 : 0;
+    }
     if (argc == 2 && !strcmp(argv[1], "--early-split-only")) {
         srv_start(); test_early_split_is_not_a_diagnosis(); return fails ? 1 : 0;
     }
@@ -1151,6 +1205,8 @@ int main(int argc, char **argv)
     test_timestamp_questions_follow_client_profile();
     srv_start();
     test_early_split_is_not_a_diagnosis();
+    test_same_question_uses_content();
+    test_learned_question_precedes_fallback();
     test_long_gap_stops_after_success();
     test_split_uses_runtime();
     test_split_recovers_only_unsent_transport_failure();

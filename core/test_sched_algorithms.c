@@ -4,6 +4,9 @@
 #include <assert.h>
 
 static int calls, early_seen;
+static size_t learned_seen;
+static unsigned learned_repeats;
+static int fail_spawn(void) { return -1; }
 static d2s_vres classify_seed(const char *ip, uint16_t port, d2s_hello tr,
     d2s_hello ctl, d2s_hello white, uint32_t mark, int repeats,
     uint32_t gap, uint32_t wait, const volatile sig_atomic_t *stop,
@@ -11,6 +14,8 @@ static d2s_vres classify_seed(const char *ip, uint16_t port, d2s_hello tr,
     (void)ip; (void)port; (void)tr; (void)ctl; (void)white; (void)mark;
     (void)repeats; (void)gap; (void)wait; (void)stop;
     calls++; early_seen = seed && seed->early_split;
+    learned_seen=seed ? seed->nlearned : 0;
+    learned_repeats=learned_seen ? seed->learned[0].repeats : 0;
     d2s_vres r = {0}; r.verdict = D2S_V_INCONCLUSIVE;
     return r;
 }
@@ -35,8 +40,9 @@ static void contextual_ranking(void) {
     d2s_sched *s = d2s_sched_new(&c, -1, 0); assert(s);
     task *t = &s->tasks[0]; strcpy(t->name, "new.example");
     t->transport = 6; t->family = 4;
+    t->plan_recipe_valid[0]=1;
     assert(own_first_plans(s, t, 1) == 2);
-    assert(!strcmp(t->plans[0], "reliable"));
+    assert(!strcmp(t->plans[0], "reliable") && !t->plan_recipe_valid[0]);
     /* IPv6 must not inherit IPv4 observations. */
     for (int i = 0; i < 2; i++) b->binds[i].family = 6;
     t->family = 6; t->n_own_seen = 0;
@@ -49,6 +55,10 @@ static void contextual_ranking(void) {
     free(b->plans[0].text); b->plans[0].text = strdup(text); assert(b->plans[0].text);
     strcpy(t->plans[0], text); t->next_plan = t->n_plans = 1; t->family = 4;
     t->ver.level = D2S_VER_APPLICATION; t->ver_ok = 1; t->last_verify_ms = 120;
+    t->plan_recipe_valid[0]=1;
+    t->plan_recipes[0]=(d2s_arm){.badsum=1,.repeats=3,.gap_ms=80,.disorder=1};
+    t->ver.local_limit=1; plan_quality_record(s,t,1,999);
+    assert(!b->plans[0].recipe_valid); t->ver.local_limit=0;
     plan_quality_record(s, t, 1, 1000);
     d2s_plan_quality *q = &b->plans[0].quality[0];
     assert(q->passed == 101 && q->failed == 900 && q->elapsed_ms == 120 && q->cost_known);
@@ -68,6 +78,8 @@ static void contextual_ranking(void) {
     assert(restored->passed == q->passed && restored->failed == q->failed &&
            restored->cost_known && restored->elapsed_ms == q->elapsed_ms);
     assert(!loaded.boxes[0].plans[0].quality[4].passed);
+    assert(loaded.boxes[0].plans[0].recipe_valid &&
+           d2s_recipe_same(&loaded.boxes[0].plans[0].recipe,&b->plans[0].recipe));
     d2s_catalog_free(&loaded);
     const char *bad[] = {
         "{\"family\":4,\"shape\":1,\"passed\":-1}",
@@ -81,6 +93,43 @@ static void contextual_ranking(void) {
         assert(d2s_catalog_load(path, &loaded, err, sizeof err) != 0);
     }
     unlink(path);
+    /* Promotion requires repeated completed evidence, same protocol family
+       and shape, and a confirmed own binding. Copies own no catalog pointer. */
+    b->plans[0].quality[0]=(d2s_plan_quality){.passed=1};
+    for (int i=0;i<2;i++) { b->binds[i].family=4; b->binds[i].verified_by=D2S_VERBY_PROBE; }
+    size_t n=0, bytes=0;
+    d2s_arm *questions=learned_questions_for(s,t,&n,&bytes);
+    assert(!questions && !n);
+    b->plans[0].quality[0].passed=2;
+    questions=learned_questions_for(s,t,&n,&bytes);
+    assert(questions && n==1 && bytes>=sizeof *questions && !questions[0].name);
+    b->plans[0].recipe.repeats=7;
+    assert(questions[0].repeats==3); free(questions);
+    t->family=6; questions=learned_questions_for(s,t,&n,&bytes);
+    assert(!questions && !n);
+    t->family=4; memset(t->trig,0x42,32); t->trig_len=32;
+    t->seed_use=t->seed.valid=1; t->seed.repeats=3; t->seed.fail=3;
+    t->seed_input=seed_input_of(t->trig,t->trig_len,t->ip,t->port);
+    d2s_sched_tcp_seeded_white_hook=classify_seed;
+    d2s_diag_memory_enable(1);
+    d2s_diag_mem_site before[D2S_DIAG_MEMORY_SITE_COUNT],after[D2S_DIAG_MEMORY_SITE_COUNT];
+    d2s_diag_memory_snapshot(before);
+    assert(!start_worker(s,t,JOB_CLASSIFY));
+    b->plans[0].recipe.repeats=13; /* after main-thread snapshot */
+    assert(!join_worker(t) && learned_seen==1 && learned_repeats==7);
+    d2s_diag_memory_snapshot(after);
+    assert(after[0].live_bytes==before[0].live_bytes && after[0].created==before[0].created+2 &&
+           after[0].destroyed==before[0].destroyed+2);
+    d2s_sched_spawn_hook=fail_spawn;
+    assert(start_worker(s,t,JOB_CLASSIFY)!=0);
+    d2s_sched_spawn_hook=NULL;
+    d2s_diag_memory_snapshot(after);
+    assert(after[0].live_bytes==before[0].live_bytes && after[0].created==before[0].created+4 &&
+           after[0].destroyed==before[0].destroyed+4);
+    d2s_diag_memory_enable(0);
+    assert(!d2s_hello_from_profile(D2S_SHAPE_MODERN,"fallback.example",t->trig,sizeof t->trig,&t->trig_len));
+    t->search_owned=0; t->fb_next=0; t->n_tried=0;
+    assert(refill_from_fallback(s,t)>0 && t->plan_recipe_valid[0] && t->plan_recipes[0].seqovl==1);
     d2s_sched_free(s); d2s_catalog_free(&c);
 }
 
@@ -99,6 +148,7 @@ int main(void) {
     d2s_quality_note(&huge, 1, UINT32_MAX, 1);
     assert(huge.passed && huge.failed && d2s_quality_compare(&huge, NULL) >= 0);
     contextual_ranking();
+    calls=early_seen=0;
     d2s_catalog cat = {0};
     d2s_sched *s = d2s_sched_new(&cat, -1, 0);
     assert(s);

@@ -147,6 +147,7 @@ int d2s_tcp_split_plan(size_t trigger_len, unsigned split, uint32_t gap_us,
 int d2s_arm_plan_measured_cap(const d2s_arm *arm, const d2s_arm_input *input,
                               size_t send_cap, char *buf, size_t cap);
 
+int d2s_fallback_arm(size_t idx, d2s_arm *arm);
 int d2s_fallback_plan(size_t idx, d2s_shape shape, const char *decoy,
                       size_t send_cap,
                       char *buf, size_t cap);

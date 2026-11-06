@@ -1065,6 +1065,12 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
             !raw_recheck(ip4, family, pnum, opt, res, &props0, d2s_trigger_offers_ts(tr))) {
             return 0;
         }
+        /* Retain cheap measured properties first. Learned compound questions
+           precede expensive composition/fallback, never a working property. */
+        if (d2s_run_learned_family(ip4, family, pnum, tr, opt, res, hit)) {
+            snprintf(res->path, sizeof res->path, "обучено");
+            return 1;
+        }
         {
             const d2s_trigger *d = d2s_opts_decoy(opt);
             ncands = d2s_compose_from_props(&res->props, d->payload, d->len, cands, 8);

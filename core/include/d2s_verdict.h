@@ -259,6 +259,8 @@ typedef struct {
     uint8_t  ttl_in;
     int      direct_asked, direct_err, direct_marked;
     int      early_split; /* request only; not evidence contained in the seed */
+    const d2s_arm *learned;
+    size_t nlearned; /* request, never an observation in the baseline */
 } d2s_base_seed;
 
 typedef struct {
