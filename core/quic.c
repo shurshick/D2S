@@ -243,7 +243,9 @@ static size_t collect_crypto_frames(const uint8_t *plain, size_t plen,
        прислать сотни однобайтовых CRYPTO в обратном порядке: прежние восемь
        слотов теряли SNI в совершенно корректном Initial. Карта занятости
        позволяет собрать все кадры за один проход без массива на каждый. */
-    if (cap > D2S_QUIC_ASSEMBLY_MAX) { cap = D2S_QUIC_ASSEMBLY_MAX; }
+    /* cap belongs to this caller's stream AND bit map. The live per-flow
+       assembly has 2048 bytes, whereas full-flight validation owns 8192;
+       clamping both to the live-flow limit truncated valid ML-KEM flights. */
     size_t i = 0;
     while (i < plen) {
         uint8_t t = plain[i];
@@ -838,8 +840,8 @@ static int put_split_frame(uint8_t *body, size_t cap, size_t *pos,
     return 0;
 }
 
-int d2s_quic_initial_split_crypto(const uint8_t *in, size_t n,
-                                  uint8_t *out, size_t cap, size_t *out_len) {
+static int split_crypto_at(const uint8_t *in, size_t n, size_t explicit_cut,
+                           uint8_t *out, size_t cap, size_t *out_len) {
     if (!in || !out || !out_len || cap < n) { return -1; }
     d2s_qw_hdr h;
     if (d2s_qw_hdr_parse(in, n, 0, &h) != 0 || !h.long_hdr ||
@@ -893,9 +895,9 @@ int d2s_quic_initial_split_crypto(const uint8_t *in, size_t n,
     uint8_t stream[D2S_QUIC_MAX_DGRAM];
     size_t filled = crypto_stream_of(in, h.packet_len, stream, sizeof stream);
     size_t sni_off = 0, sni_len = 0;
-    if (filled && find_client_hello_sni(stream, filled, &sni_off, &sni_len) == 0 &&
-        sni_len >= 2) {
-        uint64_t mid = (uint64_t)sni_off + sni_len / 2;
+    if (explicit_cut || (filled && find_client_hello_sni(stream, filled, &sni_off, &sni_len) == 0 &&
+        sni_len >= 2)) {
+        uint64_t mid = explicit_cut ? explicit_cut : (uint64_t)sni_off + sni_len / 2;
         for (size_t f = 0; f < nfr; f++) {
             if (fr[f].off < mid && mid < fr[f].off + fr[f].len) {
                 target = f;
@@ -945,4 +947,85 @@ int d2s_quic_initial_split_crypto(const uint8_t *in, size_t n,
     }
     *out_len = n;
     return 0;
+}
+
+int d2s_quic_initial_split_crypto(const uint8_t *in,size_t n,
+                                  uint8_t *out,size_t cap,size_t *out_len) {
+    return split_crypto_at(in,n,0,out,cap,out_len);
+}
+
+int d2s_quic_initial_split_crypto_at(const uint8_t *in,size_t n,size_t cut,
+                                    uint8_t *out,size_t cap,size_t *out_len) {
+    if(!cut)return -1;
+    return split_crypto_at(in,n,cut,out,cap,out_len);
+}
+
+int d2s_quic_split_flight_prepare(const uint8_t *const *dg,const size_t *len,
+                                 size_t n,size_t *head,size_t *cut) {
+    enum {MAX_FLIGHT=8,MAX_STREAM=8192};
+    if(!dg || !len || !head || !cut || !n || n>MAX_FLIGHT)return -1;
+    uint8_t stream[MAX_STREAM],seen[MAX_STREAM]={0},plain[D2S_QUIC_MAX_DGRAM];
+    uint8_t owners[MAX_STREAM];uint64_t packets[MAX_FLIGHT];size_t end=0;
+    d2s_qw_hdr first={0};
+    for(size_t i=0;i<n;i++) {
+        d2s_qw_hdr h;uint8_t secret[32];d2s_qw_keys keys;uint64_t pn;size_t plen;
+        if(!dg[i] || !len[i] || len[i]>D2S_QUIC_MAX_DGRAM ||
+           d2s_qw_hdr_parse(dg[i],len[i],0,&h) || !h.long_hdr ||
+           h.type!=D2S_QW_LT_INITIAL || h.packet_len>len[i] ||
+           (h.version!=D2S_QUIC_V1 && h.version!=D2S_QUIC_V2))return -1;
+        if(!i)first=h;
+        else if(h.version!=first.version || h.dcid_len!=first.dcid_len ||
+            h.scid_len!=first.scid_len || h.token_len!=first.token_len ||
+            memcmp(dg[i]+h.dcid_off,dg[0]+first.dcid_off,h.dcid_len) ||
+            memcmp(dg[i]+h.scid_off,dg[0]+first.scid_off,h.scid_len) ||
+            memcmp(dg[i]+h.token_off,dg[0]+first.token_off,h.token_len))return -1;
+        /* Coalesced 0-RTT/Handshake is opaque and preserved. Another Initial
+           would need its own validated CRYPTO view; refuse, never guess. */
+        size_t tail=h.packet_len;
+        while(tail<len[i]) {
+            d2s_qw_hdr th;
+            if(!(dg[i][tail]&0x80))break; /* short-header remainder */
+            if(d2s_qw_hdr_parse(dg[i]+tail,len[i]-tail,0,&th) || !th.packet_len ||
+               th.packet_len>len[i]-tail || th.type==D2S_QW_LT_INITIAL ||
+               th.type==D2S_QW_LT_RETRY || th.version!=h.version)return -1;
+            tail+=th.packet_len;
+        }
+        if(d2s_qw_initial_secret(h.version,dg[i]+h.dcid_off,h.dcid_len,D2S_QW_CLIENT,secret) ||
+           d2s_qw_keys_from_secret(h.version,secret,&keys) ||
+           d2s_qw_open(&keys,&h,dg[i],0,plain,&plen,&pn))return -1;
+        for(size_t j=0;j<i;j++)if(packets[j]==pn)return -1;
+        packets[i]=pn;
+        for(size_t pos=0;pos<plen;) {
+            uint8_t type=plain[pos++];
+            if(type==0 || type==1)continue;
+            if(type!=6)return -1;
+            uint64_t off,sz;size_t w;
+            if(read_varint(plain+pos,plen-pos,&off,&w))return -1;
+            pos+=w;
+            if(read_varint(plain+pos,plen-pos,&sz,&w))return -1;
+            pos+=w;
+            if(sz>plen-pos || off>MAX_STREAM || sz>MAX_STREAM-off)return -1;
+            for(size_t j=0;j<(size_t)sz;j++) {
+                size_t at=(size_t)off+j;
+                /* Even identical overlap could carry an unsplit duplicate
+                   of SNI. The whole-flight method does not silently keep it. */
+                if(seen[at])return -1;
+                seen[at]=1;stream[at]=plain[pos+j];owners[at]=(uint8_t)i;
+            }
+            if(off+sz>end)end=(size_t)(off+sz);
+            pos+=(size_t)sz;
+        }
+    }
+    if(end<4)return -1;
+    for(size_t i=0;i<end;i++)if(!seen[i])return -1;
+    if(stream[0]!=1)return -1;
+    size_t total=4+((size_t)stream[1]<<16 | (size_t)stream[2]<<8 | stream[3]);
+    if(total!=end)return -1;
+    size_t off,sz;
+    if(find_client_hello_sni(stream,end,&off,&sz) || sz<2)return D2S_QUIC_SPLIT_NO_NAME;
+    size_t mid=off+sz/2,which=owners[mid];
+    uint8_t scratch[D2S_QUIC_MAX_DGRAM];size_t made=0;
+    int rc=split_crypto_at(dg[which],len[which],mid,scratch,sizeof scratch,&made);
+    if(rc || made!=len[which])return -1;
+    *head=which;*cut=mid;return 0;
 }

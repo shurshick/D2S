@@ -16,12 +16,93 @@
 static int fails;
 #define CHECK(c, m) do { if (!(c)) { printf("ПРОВАЛ: %s (строка %d)\n", m, __LINE__); fails++; } } while (0)
 
+static size_t versioned(const uint8_t *in,size_t n,uint8_t *out,uint32_t version) {
+    d2s_qw_hdr h;d2s_qw_keys k;uint8_t secret[32],plain[1500],hdr[256];
+    size_t plen=0;uint64_t pn=0;
+    if(d2s_qw_hdr_parse(in,n,0,&h) ||
+       d2s_qw_initial_secret(h.version,in+h.dcid_off,h.dcid_len,D2S_QW_CLIENT,secret) ||
+       d2s_qw_keys_from_secret(h.version,secret,&k) || d2s_qw_open(&k,&h,in,0,plain,&plen,&pn))return 0;
+    size_t pnlen=h.length_claimed-plen-16;
+    if(d2s_qw_initial_secret(version,in+h.dcid_off,h.dcid_len,D2S_QW_CLIENT,secret) ||
+       d2s_qw_keys_from_secret(version,secret,&k))return 0;
+    size_t hl=d2s_qw_long_hdr(hdr,sizeof hdr,version,D2S_QW_LT_INITIAL,
+        in+h.dcid_off,h.dcid_len,in+h.scid_off,h.scid_len,pnlen,plen);
+    return hl?d2s_qw_seal(&k,1,hdr,hl,pn,pnlen,plain,plen,out,1500):0;
+}
+
 int main(void) {
     uint8_t d1[1500], d2[1500];
     size_t l1 = 0, l2 = 0;
     CHECK(d2s_test_pq_initials("rutracker.org", d1, &l1, d2, &l2) == 0, "стенд двух датаграмм");
     const uint8_t *dg[2] = {d1, d2};
     size_t len[2] = {l1, l2};
+
+    /* Whole-flight split: SNI in the second datagram cannot be located by
+       the old datagram-local path, but the real CRYPTO stream is complete. */
+    {
+        size_t head=77,cut=77,rn=0,chl0=0,chl1=0;
+        uint8_t re[1500],ch0[8192],ch1[8192];
+        CHECK(d2s_quic_initial_split_crypto(d2,l2,re,sizeof re,&rn)!=0,"old local path unexpectedly had complete SNI context");
+        CHECK(!d2s_quic_split_flight_prepare(dg,len,2,&head,&cut) && head==1 && cut>0,"whole flight did not find the second datagram");
+        CHECK(!d2s_quic_initial_split_crypto_at(d2,l2,cut,re,sizeof re,&rn) && rn==l2,"selected Initial not transformed");
+        const uint8_t *changed[]={re,d1};size_t cl[]={rn,l1};
+        CHECK(!d2s_quic_dgrams_hello(dg,len,2,ch0,sizeof ch0,&chl0) &&
+              !d2s_quic_dgrams_hello(changed,cl,2,ch1,sizeof ch1,&chl1) &&
+              chl0==chl1 && !memcmp(ch0,ch1,chl0),"whole-flight split changed handshake bytes");
+        d2s_qw_hdr a,b;CHECK(!d2s_qw_hdr_parse(d2,l2,0,&a) && !d2s_qw_hdr_parse(re,rn,0,&b) &&
+            a.pn_offset==b.pn_offset && !memcmp(d2+1,re+1,a.pn_offset-1),"public header/DCID/token/length changed");
+        const uint8_t *reversed[]={d2,d1};size_t reversed_len[]={l2,l1};
+        CHECK(!d2s_quic_split_flight_prepare(reversed,reversed_len,2,&head,&cut) && head==0,"out-of-order flight refused");
+        const uint8_t *duplicate[]={d1,d1};size_t dl[]={l1,l1};head=cut=77;
+        CHECK(d2s_quic_split_flight_prepare(duplicate,dl,2,&head,&cut)!=0 && head==77 && cut==77,"duplicate PN/overlap accepted or partial output committed");
+        CHECK(d2s_quic_split_flight_prepare(dg,len,1,&head,&cut)!=0,"incomplete flight accepted");
+        uint8_t bad[1500];memcpy(bad,d2,l2);bad[l2-1]^=1;
+        const uint8_t *broken[]={d1,bad};
+        CHECK(d2s_quic_split_flight_prepare(broken,len,2,&head,&cut)!=0,"bad AEAD tag accepted");
+        bad[6]^=1;
+        CHECK(d2s_quic_split_flight_prepare(broken,len,2,&head,&cut)!=0,"mixed connection accepted");
+        uint8_t v2a[1500],v2b[1500];size_t v2len[]={versioned(d1,l1,v2a,D2S_QW_V2),versioned(d2,l2,v2b,D2S_QW_V2)};
+        const uint8_t *v2[]={v2a,v2b};
+        CHECK(v2len[0]==l1 && v2len[1]==l2 &&
+              !d2s_quic_split_flight_prepare(v2,v2len,2,&head,&cut) && head==1,"QUIC v2 whole flight failed");
+        CHECK(!d2s_quic_initial_split_crypto_at(v2b,v2len[1],cut,re,sizeof re,&rn),"QUIC v2 selected packet failed");
+        const uint8_t *v2changed[]={v2a,re};size_t v2cl[]={v2len[0],rn};
+        CHECK(!d2s_quic_dgrams_hello(v2changed,v2cl,2,ch1,sizeof ch1,&chl1) &&
+              chl1==chl0 && !memcmp(ch0,ch1,chl0),"QUIC v2 handshake changed");
+        const uint8_t *mixed[]={d1,v2b};
+        CHECK(d2s_quic_split_flight_prepare(mixed,len,2,&head,&cut)!=0,"mixed QUIC versions accepted");
+        uint8_t coalesced[1500],tail[256],body[20]={1},hdr[128],sec[32];
+        d2s_qw_hdr source;d2s_qw_keys keys;
+        CHECK(!d2s_qw_hdr_parse(d2,l2,0,&source) &&
+              !d2s_qw_initial_secret(source.version,d2+source.dcid_off,source.dcid_len,D2S_QW_CLIENT,sec) &&
+              !d2s_qw_keys_from_secret(source.version,sec,&keys),"coalesced fixture keys");
+        size_t hl=d2s_qw_long_hdr(hdr,sizeof hdr,source.version,D2S_QW_LT_0RTT,
+            d2+source.dcid_off,source.dcid_len,d2+source.scid_off,source.scid_len,4,sizeof body);
+        size_t tn=d2s_qw_seal(&keys,1,hdr,hl,3,4,body,sizeof body,tail,sizeof tail);
+        CHECK(tn && l2+tn<=sizeof coalesced,"coalesced fixture size");
+        memcpy(coalesced,d2,l2);memcpy(coalesced+l2,tail,tn);
+        const uint8_t *coal[]={d1,coalesced};size_t coal_len[]={l1,l2+tn};
+        CHECK(!d2s_quic_split_flight_prepare(coal,coal_len,2,&head,&cut) && head==1 &&
+              !d2s_quic_initial_split_crypto_at(coalesced,l2+tn,cut,re,sizeof re,&rn) &&
+              rn==l2+tn && !memcmp(re+l2,tail,tn),"coalesced opaque tail changed");
+        /* Fill the target Initial almost completely with CRYPTO. There is
+           insufficient PADDING for another frame header: refuse atomically. */
+        uint8_t longch[2200];size_t old=d2s_test_pq_hello(longch,sizeof longch,"rutracker.org");
+        size_t total=2149,added=total-old;
+        CHECK(old && added>=4,"long CH fixture");
+        longch[1]=(uint8_t)((total-4)>>16);longch[2]=(uint8_t)((total-4)>>8);longch[3]=(uint8_t)(total-4);
+        size_t exts=((size_t)longch[45]<<8 | longch[46])+added;
+        longch[45]=(uint8_t)(exts>>8);longch[46]=(uint8_t)exts;
+        longch[old]=0;longch[old+1]=21;longch[old+2]=(uint8_t)((added-4)>>8);longch[old+3]=(uint8_t)(added-4);
+        memset(longch+old+4,0,added-4);
+        static const uint8_t cid[]={1,2,3,4,5,6,7,8};
+        uint8_t fulla[1500],fullb[1500];
+        size_t full_len[]={d2s_test_pq_dgram(cid,0,0,longch,1000,fulla,sizeof fulla),
+            d2s_test_pq_dgram(cid,1,1000,longch+1000,total-1000,fullb,sizeof fullb)};
+        const uint8_t *full[]={fulla,fullb};head=cut=77;
+        CHECK(full_len[0] && full_len[1] && d2s_quic_split_flight_prepare(full,full_len,2,&head,&cut)!=0 &&
+              head==77 && cut==77,"insufficient padding accepted/partial commit");
+    }
 
     /* --- упаковка и разбор --------------------------------------------- */
     uint8_t blob[D2S_SHAPE_MAX];

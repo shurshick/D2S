@@ -27,6 +27,8 @@
 #include "d2s_quicprobe.h"
 #include "d2s_quic_arms.h"
 #include "d2s_quicwire.h"
+#include "d2s_quicsnap.h"
+#include "test_quic_pq.h"
 #ifndef HEAD_API
 #include "d2s_meas.h"
 #endif
@@ -609,7 +611,43 @@ static void test_length_runtime(uint16_t port){
     pthread_mutex_unlock(&g_mu);
 }
 
+static int shape_probes,shape_data;
+static d2s_tally shape_probe(const d2s_quic_arm_question *q,const char *sni,
+    uint16_t port,uint32_t wait,uint32_t mark,int *sent) {
+    (void)port;(void)wait;(void)mark;*sent=3;
+    d2s_tally r={0};r.marked=1;
+    if(!q->split) { r.fail=3;return r; }
+    shape_probes++;
+    CHECK(sni && !strcmp(sni,TARGET),"adapter resolves SNI from complete QSNP instead of using IP");
+    CHECK(q->initial.bytes && d2s_qsnap_is(q->initial.bytes,q->initial.len) &&
+          q->form && q->form->n==2 && q->form->ch_len>1200,"filter receives whole client flight/form");
+    r.pass=3;return r;
+}
+static d2s_quic_arm_data shape_data_stage(const d2s_quic_arm_question *q,
+    const char *sni,const char *path,uint16_t port,uint32_t wait,uint32_t mark) {
+    (void)path;(void)port;(void)wait;(void)mark;shape_data++;
+    CHECK(sni && !strcmp(sni,TARGET) && q->split && q->form && q->form->n==2 &&
+          q->initial.bytes,"data stage receives same client form/name");
+    d2s_quic_arm_data r={0};r.verdict=D2S_QAD_PASS;return r;
+}
+static void test_client_form_adapter(void) {
+    d2s_quic_ask_arm_fn probe=d2s_quic_ask_arm_hook;
+    d2s_quic_arm_data_wire_fn data=d2s_quic_arm_data_hook;
+    d2s_quic_ask_arm_hook=shape_probe;d2s_quic_arm_data_hook=shape_data_stage;
+    uint8_t a[1500],b[1500],packed[4096];size_t an=0,bn=0;
+    CHECK(!d2s_test_pq_initials(TARGET,a,&an,b,&bn),"adapter fixture");
+    const uint8_t *dg[]={a,b};size_t lens[]={an,bn};
+    size_t n=d2s_qsnap_pack(dg,lens,2,packed,sizeof packed);
+    const char pool[][D2S_QUIC_ADDR_LEN]={"192.0.2.1"};
+    d2s_quic_arm_context ctx={.pool=pool,.n_pool=1,.marked=1};
+    d2s_quic_arm r=d2s_quic_strategy_measure(&ctx,443,
+        (d2s_hello){packed,n,NULL,0,0,0},(d2s_hello){0},100,0);
+    CHECK(r.kind==D2S_QA_SPLIT && shape_probes==1 && shape_data==1,"whole-flight question and data stage connected");
+    d2s_quic_ask_arm_hook=probe;d2s_quic_arm_data_hook=data;
+}
+
 int main(void) {
+    test_client_form_adapter();
     int old_local = d2s_quic_allow_local;
     d2s_quic_allow_local = 1;
     uint16_t port = stand_start();

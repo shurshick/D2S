@@ -173,6 +173,15 @@ D2S_WARN_UNUSED
 int d2s_quic_initial_split_crypto(const uint8_t *in, size_t n,
                                   uint8_t *out, size_t cap, size_t *out_len);
 
+/* Whole-flight form: authenticate and validate the complete ClientHello before
+ * selecting the datagram containing the middle of SNI. No output is changed
+ * on refusal. head is sent first; other datagrams retain relative order and
+ * boundaries. The selected datagram is changed only by the common executor. */
+int d2s_quic_split_flight_prepare(const uint8_t *const *dg,const size_t *len,
+                                 size_t n,size_t *head,size_t *cut);
+int d2s_quic_initial_split_crypto_at(const uint8_t *in,size_t n,size_t cut,
+                                    uint8_t *out,size_t cap,size_t *out_len);
+
 /* Stateful counterpart for a real UDP flow. Feed Initial datagrams in any
  * order; return 0 while the contiguous CRYPTO prefix has no SNI, 1 when the
  * ClientHello contains a complete SNI, and -1 for a packet that cannot belong

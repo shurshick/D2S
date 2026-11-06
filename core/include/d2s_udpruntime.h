@@ -19,4 +19,6 @@ int d2s_quic_question_plan(const d2s_quic_arm_question *q,char *text,size_t cap)
  * datagrams belong to the kernel; payload, hop limit and timing come from Plan. */
 int d2s_udp_plan_send(int fd,const char *text,const uint8_t *payload,size_t len,
     uint32_t mark);
+int d2s_udp_plan_send_flight(int fd,const char *text,const uint8_t *const *dg,
+    const size_t *len,size_t n,uint32_t mark);
 #endif

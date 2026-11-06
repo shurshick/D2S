@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "sched.c"
 #include <assert.h>
+#include "test_quic_pq.h"
 
 static int calls, early_seen;
 static size_t learned_seen;
@@ -216,7 +217,35 @@ static void maintenance(void) {
     s->tasks[1].state=T_FREE;d2s_sched_free(s);d2s_catalog_free(&c);
 }
 
+static void full_flight_applicability(void) {
+    d2s_catalog c={0};d2s_sched *s=d2s_sched_new(&c,-1,0);assert(s);
+    task *t=&s->tasks[0];task_reset(s,t);t->transport=17;t->family=4;
+    strcpy(t->name,"pq.example");uint8_t a[1500],b[1500];size_t an=0,bn=0;
+    assert(!d2s_test_pq_initials(t->name,a,&an,b,&bn));
+    quic_note_multi(s,t->name,4);memcpy(t->trig,a,an);t->trig_len=an;
+    assert(quic_split_unfit(s,t));
+    const uint8_t *dg[]={a,b};size_t len[]={an,bn};
+    t->trig_len=d2s_qsnap_pack(dg,len,2,t->trig,sizeof t->trig);assert(t->trig_len);
+    assert(!quic_split_unfit(s,t));
+    assert(!quic_split_text_unfit(s,t,"d2s-plan 1 14\nproto udp quic\nquicsplit 2\n"));
+    assert(quic_split_text_unfit(s,t,"d2s-plan 1 10\nproto udp quic\nquicsplit 1\n"));
+    c.boxes=calloc(1,sizeof *c.boxes);assert(c.boxes);c.n_boxes=1;
+    d2s_cat_box *box=c.boxes;box->plans=calloc(2,sizeof *box->plans);box->binds=calloc(2,sizeof *box->binds);
+    assert(box->plans && box->binds);box->n_plans=box->n_binds=2;
+    for(int i=0;i<2;i++) {
+        d2s_cat_plan *p=&box->plans[i];d2s_cat_binding *bd=&box->binds[i];
+        snprintf(p->id,sizeof p->id,"form-%d",i+1);p->enabled=1;
+        p->text=strdup(i?"d2s-plan 1 14\nproto udp quic\nquicsplit 2\n":"d2s-plan 1 10\nproto udp quic\nquicsplit 1\n");assert(p->text);
+        strcpy(bd->target,t->name);strcpy(bd->kind,"name");strcpy(bd->plan_id,p->id);
+        bd->transport=17;bd->family=4;bd->shape=D2S_LINK_SHAPE_QUIC;bd->enabled=1;
+    }
+    quic_note_multi(s,t->name,4);
+    assert(box->binds[0].recheck_mono_ms && !box->binds[1].recheck_mono_ms);
+    d2s_sched_free(s);d2s_catalog_free(&c);
+}
+
 int main(void) {
+    full_flight_applicability();
     simplification();
     maintenance();
     d2s_plan_quality good = {.passed=100}, fresh = {.passed=2};

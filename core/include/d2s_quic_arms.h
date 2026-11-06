@@ -17,6 +17,8 @@ typedef struct {
        пуст. benign: blob — безобидная датаграмма вопроса «остаточное
        разрешение» (D2S_QUIC_BENIGN), а не приманка перебора. */
     int split, benign;
+    d2s_hello initial; /* borrowed complete client flight, only for split */
+    const d2s_quic_form *form; /* own data-stage client uses this shape */
     unsigned udplen; /* append after the intact Initial through the Plan executor */
     /* Задача 50, раунд 3: засчитывать только ответ целиком (поиск по обрыву
        после рукопожатия — сравнение с прямым запросом на том же пути). */
@@ -127,8 +129,8 @@ typedef struct {
     int frag_answered;
     int split_failed; /* plain split measured NO, permits adaptive fake x split */
     int ttl_pair_answered; /* post-handshake quic5 x2 TTL3 already measured */
-    /* Финальное ревью core, I1: разрез CRYPTO клиенту неприменим (ClientHello
-       шире датаграммы) — вопрос о нём не задаётся, он не может стать планом. */
+    /* Exact complete-flight preflight refused: do not substitute a shorter
+       one-datagram question or claim that an unexecuted split was measured. */
     int no_split;
     /* Задача 50, раунд 3: этап данных засчитывает только ответ целиком. */
     int need_complete;

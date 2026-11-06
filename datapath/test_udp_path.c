@@ -14,6 +14,7 @@
 #include "d2s_plan.h"
 #include "d2s_plans.h"
 #include "d2s_routemark.h"
+#include "../core/test_quic_pq.h"
 
 static int fails;
 #define CHECK(x, m) do { if (!(x)) { fprintf(stderr, "udp_path:%d: %s\n", __LINE__, m); fails++; } } while (0)
@@ -991,7 +992,33 @@ static void test_owned_deferred_tail(void) {
     done(s, h, f);
 }
 
-int main(void) {
+static void test_whole_flight_split(int form) {
+    for(int early=0;early<2;early++) {
+        d2s_udp_hold *h;d2s_udp_follow *f;d2s_session *s=fresh(&h,&f);reset();
+        uint8_t program[]={'D','2','S','P',0,1,0,14,0,0,0,3,
+            0,2,0,2,17,2,1,3,0,1,0,1,15,0,1,2};
+        program[27]=(uint8_t)form;
+        d2s_plan *p=NULL;char err[160];
+        CHECK(!d2s_plan_load(program,sizeof program,&p,err,sizeof err),"whole-flight plan load");
+        d2s_session_set_plan(s,p);
+        uint8_t d1[1500],d2[1500],a[1600],b[1600];size_t l1=0,l2=0;
+        CHECK(!d2s_test_pq_initials_order("rutracker.org",early,d1,&l1,d2,&l2),"PQ flight");
+        size_t an=build(a,1,(uint16_t)(50000+early),d1,l1),bn=build(b,2,(uint16_t)(50000+early),d2,l2);
+        last_replay_applied=0;
+        CHECK(run_packet(s,1,a,an,1000,1)==D2S_UDP_PATH_HELD,"complete flight must be held even when SNI was first");
+        CHECK(run_packet(s,2,b,bn,2000,2)==D2S_UDP_PATH_REPLAY && last_replay_applied,"whole-flight split did not execute");
+        CHECK(verdicts_of[1]==1 && verdicts_of[2]==1 &&
+            last_verdict[1]==D2S_NF_DROP && last_verdict[2]==D2S_NF_DROP,"one final verdict for each replaced original");
+        CHECK(sends_of[early?2:1]==1 && !sends_of[early?1:2],"wrong original chosen as the transformed head");
+        done(s,h,f);
+    }
+}
+
+int main(int argc,char **argv) {
+    if(argc==2 && !strcmp(argv[1],"--old-split")) {
+        test_whole_flight_split(1);return fails!=0;
+    }
+    test_whole_flight_split(2);
     test_owned_deferred_tail();
     test_device_routed_flow_keeps_kernel_path();
     test_busy_resend_is_transient();

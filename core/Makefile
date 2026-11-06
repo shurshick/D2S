@@ -1075,8 +1075,8 @@ test_quicconn6: test_quicconn6.c quicconn.o quicwire.o compose.o measured.o hell
 
 # Includes quicconn.c itself: the retransmit timer is connection state, and
 # the test needs a ready 1-RTT connection without a live server.
-test_quicconn_rtx: test_quicconn_rtx.c quicconn.c quicwire.o compose.o measured.o hello.o meas.o link.o tls13core.o x25519.o crypto.o $(HDR)
-	$(CC) $(CFLAGS) -o $@ $< quicwire.o compose.o measured.o hello.o meas.o link.o tls13core.o x25519.o crypto.o $(TEST_LDFLAGS)
+test_quicconn_rtx: test_quicconn_rtx.c quicconn.c quic.o quicwire.o compose.o measured.o hello.o meas.o link.o tls13core.o x25519.o crypto.o $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< quic.o quicwire.o compose.o measured.o hello.o meas.o link.o tls13core.o x25519.o crypto.o $(TEST_LDFLAGS)
 
 .PHONY: test-quicconn-rtx
 check: test-quicconn-rtx

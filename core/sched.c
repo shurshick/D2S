@@ -3299,16 +3299,27 @@ static int quic_client_multi(const d2s_sched *s, const char *name, uint8_t famil
     return 0;
 }
 
-/* Неприменим ли разрез CRYPTO клиенту этой цели. Снимок клиента был обрывком
-   (ClientHello шире датаграммы) — неприменим. Целый снимок клиента —
-   применим. Снимка нет вовсе — решает раскладка измеряемого Initial: разрез
-   предлагается, только если вход, которым мерили, — ClientHello в одной
-   датаграмме (так он и подтвердится зондом, и так его исполнит датапат). */
+/* New split questions require an authenticated complete flight and enough
+   padding for the exact frame edit. A multi-datagram ClientHello is supported;
+   an incomplete/unsupported flight is not silently replaced by a single one. */
 static int quic_split_unfit(const d2s_sched *s, const task *t) {
     if (t->transport != 17) return 0;
-    if (!t->by_addr && quic_client_multi(s, t->name, t->family)) return 1;
-    if (t->trig_snapped) return 0;
-    return t->trig_len == 0 || d2s_quic_hello_incomplete(t->trig, t->trig_len);
+    if(!t->trig_len)return 1;
+    if(!t->by_addr && quic_client_multi(s,t->name,t->family) &&
+       !d2s_qsnap_is(t->trig,t->trig_len))return 1;
+    d2s_qsnap pack;size_t head=0,cut=0;
+    if(d2s_qsnap_is(t->trig,t->trig_len)) {
+        if(d2s_qsnap_parse(t->trig,t->trig_len,&pack))return 1;
+        return d2s_quic_split_flight_prepare(pack.dg,pack.len,pack.n,&head,&cut)!=0;
+    }
+    const uint8_t *dg[]={t->trig};size_t len[]={t->trig_len};
+    return d2s_quic_split_flight_prepare(dg,len,1,&head,&cut)!=0;
+}
+
+static int quic_split_text_unfit(const d2s_sched *s,const task *t,const char *text) {
+    if(strstr(text,"\nquicsplit 1\n") && !t->by_addr &&
+       quic_client_multi(s,t->name,t->family))return 1;
+    return quic_split_unfit(s,t);
 }
 
 /* БЮДЖЕТ ПОТОКА для испытания (задача 55): свойство коробки, а не константа
@@ -4570,11 +4581,11 @@ static int install_next(d2s_sched *s, task *t) {
         if (t->probes >= sched_probe_cap(t)) { return -1; }
         const char *text = t->plans[t->next_plan++];
         if (t->ladder_unmeasurable && ladder_candidate_at(t, t->next_plan - 1)) continue;
-        if (t->transport == 17 && quic_text_is_split(text) && quic_split_unfit(s, t)) {
+        if (t->transport == 17 && quic_text_is_split(text) && quic_split_text_unfit(s, t,text)) {
             /* Свой/готовый план разреза другой цели этому клиенту не
                исполнится (финальное ревью core, I1): не ставим и не судим. */
-            say(s, "по %s (QUIC) план разреза CRYPTO пропускаю: ClientHello клиента "
-                   "шире датаграммы — датапат его не исполнит", t->name);
+            say(s, "по %s (QUIC) план разреза CRYPTO пропускаю: полёт ClientHello клиента "
+                   "не прошёл предварительную проверку разреза", t->name);
             continue;
         }
         snprintf(t->box_id, sizeof t->box_id, "%s", t->plan_boxes[t->next_plan - 1]);
@@ -5323,7 +5334,7 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
         const d2s_quic_props *qp = &r->qprops;
         if (t->arm.kind == D2S_QA_SPLIT && quic_split_unfit(s, t)) {
             say(s, "по %s (QUIC) разрез CRYPTO прошёл замер, но клиенту неприменим: его "
-                   "ClientHello шире датаграммы (или вход замера не в одной датаграмме) — "
+                   "целый полёт не прошёл проверку разреза — "
                    "план разреза не строю", t->name);
             return;
         }
@@ -8514,7 +8525,7 @@ static void quic_note_multi(d2s_sched *s, const char *name, uint8_t family) {
             const char *text = NULL;
             for (size_t k = 0; k < b->n_plans && !text; k++)
                 if (!strcmp(b->plans[k].id, bd->plan_id)) text = b->plans[k].text;
-            if (!quic_text_is_split(text)) continue;
+            if (!quic_text_is_split(text) || !strstr(text,"\nquicsplit 1\n")) continue;
             bd->recheck_since = wall_s(s, s->now_ms);
             bd->recheck_mono_ms = s->now_ms ? s->now_ms : 1;
             b->updated = bd->recheck_since;
@@ -9183,11 +9194,11 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
                "это диагностический признак, не доказательство заглушки",
             t->name, plan_id);
     }
-    if (t->transport == 17 && quic_text_is_split(text) && quic_split_unfit(s, t)) {
+    if (t->transport == 17 && quic_text_is_split(text) && quic_split_text_unfit(s, t,text)) {
         /* Зонд шлёт ClientHello одной датаграммой, и разрез ему исполнился;
            клиенту этой цели — нет (финальное ревью core, I1). */
         say(s, "по %s план %s (разрез CRYPTO) зонду исполнился, а клиенту — нет: "
-               "его ClientHello шире датаграммы. Подтверждать не буду, беру "
+               "целый полёт не прошёл проверку разреза. Подтверждать не буду, беру "
                "следующего кандидата", t->name, plan_id);
         trial_retire(s, t);
         ver_close(t);

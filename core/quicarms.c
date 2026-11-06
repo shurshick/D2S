@@ -288,10 +288,7 @@ d2s_quic_arm d2s_quic_strategy_arms(d2s_quic_arm_context *c) {
     } else {
         d2s_quic_arm_question split={0};
         split.split=1;
-        /* Финальное ревью core, I1: клиенту, чей ClientHello шире
-           датаграммы, разрез CRYPTO не исполнится (датапат отказывает: имени
-           нет в датаграмме). Ответ этого вопроса планом стать не может, и
-           вопрос не задаётся; для выбора пути он считается «нет». */
+        /* Whole-flight applicability is established before asking. */
         int no_split = c && c->no_split;
         if(!no_split)
             r.split_crypto=strategy_ask(c,&r,&split,"ClientHello двумя кадрами CRYPTO, хвост первым",
@@ -337,7 +334,7 @@ d2s_quic_arm d2s_quic_strategy_arms(d2s_quic_arm_context *c) {
                     snprintf(r.reason,sizeof r.reason,
                              "разрешение не прошло, разрез CRYPTO %s; IP-фрагментация формы %d прошла "
                              "(приманки не перебирались)",
-                             no_split ? "клиенту неприменим (ClientHello шире датаграммы)" : "не прошёл",
+                             no_split ? "целый полёт не прошёл проверку разреза" : "не прошёл",
                              r.frag_kind);
                     if(c && !c->marked) r.kind=D2S_QA_FLAKY;
                     return r;

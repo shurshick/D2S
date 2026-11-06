@@ -770,10 +770,11 @@ static int qp_send_one(const char *addr, uint16_t port,
             q.blob=prefix;q.blob_len=prefix_len;q.ttl=prefix_ttl;q.copies=prefix_copies;q.split=split;
             q.udplen=longer;
             rc=d2s_quic_question_plan(&q,plan,sizeof plan);
-            if(!rc)rc=d2s_udp_plan_send(fd,plan,head.bytes,head.len,mark);
+            if(!rc)rc=split?d2s_udp_plan_send_flight(fd,plan,pack.dg,pack.len,pack.n,mark)
+                          :d2s_udp_plan_send(fd,plan,head.bytes,head.len,mark);
         }else if(send(fd,head.bytes,head.len,0)!=(ssize_t)head.len)
             rc=errno==ECONNREFUSED?-2:-1;
-        for(size_t i=1;!rc && i<pack.n;i++){
+        for(size_t i=1;!split && !rc && i<pack.n;i++){
             if(send(fd,pack.dg[i],pack.len[i],0)!=(ssize_t)pack.len[i])
                 rc=errno==ECONNREFUSED?-2:-1;
         }
@@ -1468,12 +1469,12 @@ static d2s_tally quic_ask_arm(const d2s_quic_arm_question *q, const char *sni,
         copies=1;
         fragment=&plan;
     }
-    d2s_hello no_snapshot={NULL,0,NULL,0,0, 0};
+    d2s_hello no_snapshot=q->split?q->initial:(d2s_hello){NULL,0,NULL,0,0,0};
     /* Arm answers are bound to our Initial only (qp_verify_bound, task 39);
        the fragment-survival control keeps the donor's reply criterion. */
     return quic_ask_core(q->addr,port,prefix,prefix_len,ttl,copies,0,NULL,
         no_snapshot,wait_ms,mark,D2S_QUIC_REPEATS,NULL,NULL,sent_out,NULL,
-        neutral?qp_verify_aead:qp_verify_bound,fragment,neutral?NULL:sni,neutral,q->split,q->udplen);
+        neutral?qp_verify_aead:qp_verify_bound,fragment,neutral || no_snapshot.bytes?NULL:sni,neutral,q->split,q->udplen);
 }
 d2s_quic_ask_arm_fn d2s_quic_ask_arm_hook=quic_ask_arm;
 
@@ -1504,6 +1505,16 @@ static int qp_arm_first_send(int fd, const uint8_t *initial, size_t len, void *u
     char plan[16384];
     if(d2s_quic_question_plan(a->q,plan,sizeof plan) ||
        d2s_udp_plan_send(fd,plan,initial,len,a->mark))return -1;
+    a->initial_out=1;return 1;
+}
+
+static int qp_arm_first_flight(int fd,const uint8_t *const *dg,const size_t *len,size_t n,void *user) {
+    qp_arm_action *a=user;struct sockaddr_storage me;socklen_t ml=sizeof me;
+    if(getsockname(fd,(struct sockaddr *)&me,&ml)==0)a->local_port=me.ss_family==AF_INET6?
+        ntohs(((struct sockaddr_in6 *)&me)->sin6_port):ntohs(((struct sockaddr_in *)&me)->sin_port);
+    char plan[16384];
+    if(d2s_quic_question_plan(a->q,plan,sizeof plan) ||
+       d2s_udp_plan_send_flight(fd,plan,dg,len,n,a->mark))return -1;
     a->initial_out=1;return 1;
 }
 
@@ -1562,7 +1573,8 @@ static d2s_quic_arm_data quic_arm_data(const d2s_quic_arm_question *q, const cha
     o.deadline_ms = (int)(2u * step);
     o.pad_to = filter_ch;
     o.mark = mark;
-    o.first_send = qp_arm_first_send;
+    if(q->split) { o.first_flight=qp_arm_first_flight;o.form=q->form; }
+    else o.first_send = qp_arm_first_send;
     o.first_send_user = &a;
     d2s_qc *c = NULL;
     char err[200];
@@ -2279,9 +2291,9 @@ int d2s_quic_props_findings(const d2s_quic_props *p, char *out, size_t cap) {
 
     static const struct { size_t slot; const char *text; } texts[] = {
         { offsetof(d2s_quic_props, split_crypto),
-          "приветствие, разложенное на два кадра CRYPTO, проходит — коробка их не пересобирает. "
-          "Исполнимо (задача 40): план quicsplit — датапат перекладывает кадры CRYPTO в Initial "
-          "клиента; ставится ответом вопроса стратегии с этапом данных." },
+          "разрез CRYPTO внутри имени прошёл измерение. "
+          "План quicsplit 2 разбирает целый полёт Initial, сохраняет байты приветствия "
+          "и границы датаграмм; подтверждается отдельно этапом данных." },
         { offsetof(d2s_quic_props, split_datagrams),
           "приветствие, разложенное на две датаграммы, проходит — коробка их не собирает. "
           "Движок так не умеет: второму пакету нужен свой номер, а следующий номер принадлежит "

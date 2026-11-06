@@ -59,8 +59,8 @@ static int quic_arm_found(const d2s_quic_arm *a) {
 static int quic_split_plan_text(char *buf, size_t cap) {
     size_t pos = 0;
     return append_fmt(buf, cap, &pos,
-                      "d2s-plan 1 10\nid 00000000000000000000000000000000\n"
-                      "proto udp quic\nquicsplit 1\norder forward\n");
+                      "d2s-plan 1 14\nid 00000000000000000000000000000000\n"
+                      "proto udp quic\nquicsplit 2\norder forward\n");
 }
 
 /* Один сборщик QUIC-плана на оба входа (плечо askArms и свойства вопросника)
@@ -129,7 +129,7 @@ static int quic_plan_text(const d2s_quic_arm *arm, const uint8_t *blob, size_t b
 
     size_t pos = 0;
     if (arm && arm->kind==D2S_QA_SPLIT) {
-        if(append_fmt(buf,cap,&pos,"d2s-plan 1 10\nid 00000000000000000000000000000000\nproto udp quic\nquicsplit 1\n")!=0) return -1;
+        if(append_fmt(buf,cap,&pos,"d2s-plan 1 14\nid 00000000000000000000000000000000\nproto udp quic\nquicsplit 2\n")!=0) return -1;
     } else if (frag) {
         if (append_fmt(buf,cap,&pos,"d2s-plan 1 7\nid 00000000000000000000000000000000\n"
                                    "proto udp quic\nipfrag %d\n",frag)!=0) return -1;

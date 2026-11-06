@@ -200,6 +200,10 @@ void d2s_session_udp_hold_end(d2s_session *s, const d2s_key *key);
 /* End a successful hold and preserve first-packet semantics for the immediate
  * replay of its original client datagram. */
 void d2s_session_udp_hold_replay(d2s_session *s, const d2s_key *key);
+/* 0=ordinary replay, 1=whole-flight prepared (head filled), -1=refused.
+ * Arrays contain UDP payloads, not synthetic concatenated datagrams. */
+int d2s_session_udp_split_prepare(d2s_session *,const d2s_key *,
+    const uint8_t *const *,const size_t *,size_t,size_t *head);
 /* 1 when this already-processed UDP datagram was the first client-side
  * datagram the session counted on its flow (task 46: it opens the conntrack
  * clash window for the datagrams queued behind it).  Direction as in the UDP

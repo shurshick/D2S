@@ -591,8 +591,8 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
                (задача 40, d2s_quic_initial_split_crypto). Форма одна: 1 —
                два кадра, хвост первым; другие формы не мерились. */
             unsigned long u = 0;
-            if (nf != 2 || p->qsplit || parse_uint(f[1], 1, &u) != 0 || u != 1) {
-                say(err, errcap, "строка %zu: quicsplit ждёт форму 1", lineno); goto bad;
+            if (nf != 2 || p->qsplit || parse_uint(f[1], 2, &u) != 0 || !u) {
+                say(err, errcap, "строка %zu: quicsplit ждёт форму 1 или 2", lineno); goto bad;
             }
             p->qsplit = (uint8_t)u;
         } else if (strcmp(f[0], "quicdeny") == 0) {
@@ -657,7 +657,7 @@ static int parse_text(const char *text, pl_plan *p, char *err, size_t errcap) {
         p->settle_us || p->segment_size || p->wire_profile || p->guards || p->oob_enabled)) {
         say(err, errcap, "udplen требует minexec=9 и UDP без фрагментации и TCP-операций"); goto bad;
     }
-    if (p->qsplit && (p->minexec < 10 || p->transport != 17 || p->ipfrag || p->udplen ||
+    if (p->qsplit && (p->minexec < (p->qsplit==2?14:10) || p->transport != 17 || p->ipfrag || p->udplen ||
         p->n_splits || p->n_seqovls || p->order || p->input_len || p->input_tls ||
         p->settle_us || p->segment_size || p->wire_profile || p->guards || p->oob_enabled)) {
         say(err, errcap, "quicsplit требует minexec=10 и UDP без фрагментации, удлинения и TCP-операций"); goto bad;

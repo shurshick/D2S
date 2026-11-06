@@ -547,8 +547,8 @@ static void quic_strategy_compose_checks(void) {
     p.split_crypto = D2S_PROP_YES;
     p.longer = D2S_PROP_YES;
     CHECK(d2s_quic_compose_plan(&sp, &p, plan, sizeof plan) == 0 &&
-          !strncmp(plan, "d2s-plan 1 10\n", 14) && strstr(plan, "proto udp quic\n") &&
-          strstr(plan, "quicsplit 1\n") && !strstr(plan, "fake ") && !strstr(plan, "udplen") &&
+          !strncmp(plan, "d2s-plan 1 14\n", 14) && strstr(plan, "proto udp quic\n") &&
+          strstr(plan, "quicsplit 2\n") && !strstr(plan, "fake ") && !strstr(plan, "udplen") &&
           !strstr(plan, "ipfrag"),
           "QUIC разрез: не план quicsplit 1 исполнителя 10 без прочих действий");
     CHECK(d2s_plan_text_to_tlv(plan, tlv, sizeof tlv, &n, err, sizeof err) == 0,
@@ -564,7 +564,7 @@ static void quic_strategy_compose_checks(void) {
           "QUIC: свойство «кадры» само по себе стало планом");
     sp.len=620; sp.bytes[0]=0x40; sp.copies=11;
     CHECK(d2s_quic_compose_plan(&sp,&p,plan,sizeof plan)==0 &&
-          strstr(plan,"quicsplit 1") && strstr(plan,"repeats=11") && !strstr(plan,"udplen"),
+          strstr(plan,"quicsplit 2") && strstr(plan,"repeats=11") && !strstr(plan,"udplen"),
           "fake x split: composer must preserve the measured product");
     CHECK(d2s_quic_arm_plan(&sp,sp.bytes,sp.len,plan,sizeof plan)==0 &&
           d2s_plan_text_to_tlv(plan,tlv,sizeof tlv,&n,err,sizeof err)==0,

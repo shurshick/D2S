@@ -18,6 +18,7 @@
 #include "d2s_ip6frag_send.h"
 #include "d2s_meas.h"
 #include "d2s_tls13core.h"
+#include "d2s_quic.h"
 
 static uint32_t udp_next_fragment_id(void){
     static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
@@ -30,8 +31,8 @@ static uint32_t udp_next_fragment_id(void){
 }
 
 void d2s_udp_batch_free(d2s_udp_batch *b){if(b){free(b->bytes);memset(b,0,sizeof *b);}}
-int d2s_udp_plan_build(const char *text,const d2s_conn *c,uint32_t id,
-    const uint8_t *payload,size_t len,d2s_udp_batch *out) {
+static int udp_plan_build_context(const char *text,const d2s_conn *c,uint32_t id,
+    const uint8_t *payload,size_t len,size_t cut,d2s_udp_batch *out) {
     uint8_t *tlv=NULL;d2s_plan *p=NULL;d2s_actions acts={0};int rc=-1;
     size_t tn=0;char err[256];
     if(!out)return -1;
@@ -43,6 +44,7 @@ int d2s_udp_plan_build(const char *text,const d2s_conn *c,uint32_t id,
        d2s_plan_load(tlv,tn,&p,err,sizeof err))goto done;
     if(d2s_plan_transport(p)!=17)goto done;
     d2s_pkt in={0};in.payload=payload;in.payload_len=len;in.own_after_fakes=1;
+    in.quic_split_cut=cut;
     if(d2s_plan_apply(p,NULL,&in,&acts) || acts.fate==D2S_ORIG_HOLD)goto done;
     unsigned payloads=0;
     for(size_t i=0;i<acts.n;i++) {
@@ -90,6 +92,11 @@ done:
     free(tlv);d2s_plan_free(p);d2s_actions_free(&acts);
     if(rc)d2s_udp_batch_free(out);
     return rc;
+}
+
+int d2s_udp_plan_build(const char *text,const d2s_conn *c,uint32_t id,
+    const uint8_t *payload,size_t len,d2s_udp_batch *out) {
+    return udp_plan_build_context(text,c,id,payload,len,0,out);
 }
 
 typedef struct {
@@ -144,7 +151,7 @@ static int (*udp_send_io)(udp_raw_sink *,const uint8_t *,size_t,uint32_t)=udp_ra
 static uint32_t (*udp_fragment_id_io)(void)=udp_next_fragment_id;
 
 /* No fragment-to-datagram fallback: a raw preparation failure is UNSENT. */
-int d2s_udp_plan_send(int fd,const char *text,const uint8_t *payload,size_t len,uint32_t mark){
+static int udp_plan_send_context(int fd,const char *text,const uint8_t *payload,size_t len,uint32_t mark,size_t cut){
     struct sockaddr_storage local,peer;socklen_t sl=sizeof local,pl=sizeof peer;
     d2s_conn c={0};d2s_udp_batch b={0};int rc=-1,ttl=0;
     udp_raw_sink raw;udp_raw_init(&raw);
@@ -162,7 +169,7 @@ int d2s_udp_plan_send(int fd,const char *text,const uint8_t *payload,size_t len,
         c.src_ip=a->sin_addr.s_addr;c.dst_ip=z->sin_addr.s_addr;c.src_port=a->sin_port;c.dst_port=z->sin_port;
     }else goto done;
     uint32_t id=udp_fragment_id_io();if(!id)goto done;
-    if(d2s_udp_plan_build(text,&c,id,payload,len,&b))goto done;
+    if(udp_plan_build_context(text,&c,id,payload,len,cut,&b))goto done;
     for(size_t i=0;i<b.n;i++)if(b.v[i].fragment &&
         udp_prepare_io(&raw,b.bytes+b.v[i].off,b.v[i].len,mark))goto done;
     rc=0;
@@ -187,4 +194,18 @@ int d2s_udp_plan_send(int fd,const char *text,const uint8_t *payload,size_t len,
 done:
     udp_raw_close(&raw);
     d2s_udp_batch_free(&b);return rc;
+}
+
+int d2s_udp_plan_send(int fd,const char *text,const uint8_t *payload,size_t len,uint32_t mark){
+    return udp_plan_send_context(fd,text,payload,len,mark,0);
+}
+
+int d2s_udp_plan_send_flight(int fd,const char *text,const uint8_t *const *dg,
+    const size_t *len,size_t n,uint32_t mark) {
+    size_t head=0,cut=0;
+    if(d2s_quic_split_flight_prepare(dg,len,n,&head,&cut))return -1;
+    int rc=udp_plan_send_context(fd,text,dg[head],len[head],mark,cut);
+    for(size_t i=0;!rc && i<n;i++)if(i!=head && send(fd,dg[i],len[i],0)!=(ssize_t)len[i])
+        rc=errno==ECONNREFUSED?-2:-1;
+    return rc;
 }

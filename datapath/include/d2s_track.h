@@ -255,6 +255,9 @@ struct d2s_flow {
        означает успеха: пока префикс ClientHello не собран, пакет проходит
        без имени и без применения плана. */
     d2s_quic_assembly quic_assembly;
+    int udp_split_flight;
+    size_t udp_split_cut;
+    uint8_t udp_split_plan[D2S_PLAN_ID_LEN];
     /* Полёт приветствия этого потока уже снят (задача 66): повторы Initial
        по PTO и подтверждения после рукопожатия в снимок не идут. */
     int      qsnap_done;

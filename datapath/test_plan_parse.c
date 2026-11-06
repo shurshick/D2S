@@ -66,6 +66,9 @@ int main(void) {
         b[7]=9; CHECK(!loads(b,sizeof b), "quicsplit requires executor 10");
         b[7]=10; b[27]=0; CHECK(!loads(b,sizeof b), "quicsplit form 0 accepted");
         b[27]=2; CHECK(!loads(b,sizeof b), "unmeasured quicsplit form accepted");
+        b[7]=14;CHECK(loads(b,sizeof b),"whole-flight form/minexec14 rejected");
+        b[7]=13;CHECK(!loads(b,sizeof b),"whole-flight form needs executor14");
+        b[7]=10;
         b[27]=1; b[16]=6; CHECK(!loads(b,sizeof b), "quicsplit accepted for TCP");
         b[16]=17; b[22]=1; CHECK(!loads(b,sizeof b), "quicsplit with reverse order accepted");
         b[22]=0;

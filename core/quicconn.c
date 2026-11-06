@@ -1071,31 +1071,31 @@ int d2s_qc_connect(const d2s_qc_opts *o, d2s_qc **out, char *err, size_t errcap)
     }
     /* Первая датаграмма клиента обязана быть не короче 1200 байт
        (RFC 9000 §14.1): иначе сервер вправе её не обслуживать. */
-    if (o->form && o->form->n > 1 && !o->first_send) {
-        /* ПОЛЁТ ИЗ НЕСКОЛЬКИХ ДАТАГРАММ (задача 66). ClientHello режется на
-           form->n кадров CRYPTO по смещениям, каждый уходит своим Initial с
-           номерами 0..n-1 под общим DCID — ровно так его шлёт клиент, чьё
-           приветствие в одну датаграмму не влезло. Размер каждой датаграммы —
-           из формы: он тоже свойство клиента, по которому коробка решает. */
-        size_t parts = o->form->n > D2S_QSNAP_MAX_DGRAMS
-                       ? D2S_QSNAP_MAX_DGRAMS : o->form->n;
-        size_t chunk = (c->tr_len + parts - 1) / parts;
-        size_t pad = o->form->dgram_len ? o->form->dgram_len : 1200;
-        for (size_t i = 0; i < parts; i++) {
-            size_t off = i * chunk;
-            if (off >= c->tr_len) { break; }
-            size_t take = c->tr_len - off < chunk ? c->tr_len - off : chunk;
+    if (o->first_flight || !o->first_send) {
+        uint8_t packets[D2S_QSNAP_MAX_DGRAMS][DGRAM_OUT];
+        const uint8_t *dg[D2S_QSNAP_MAX_DGRAMS];size_t lens[D2S_QSNAP_MAX_DGRAMS];
+        size_t parts=o->form && o->form->n?o->form->n:1;
+        if(parts>D2S_QSNAP_MAX_DGRAMS || parts>c->tr_len ||
+           (o->first_flight && o->first_send)) {
+            say(err,errcap,"invalid Initial flight shape/hooks");d2s_qc_close(c);return -1;
+        }
+        size_t chunk=(c->tr_len+parts-1)/parts;
+        size_t pad=o->form && o->form->dgram_len?o->form->dgram_len:1200;
+        for(size_t i=0;i<parts;i++) {
+            size_t off=i*chunk,take=c->tr_len-off<chunk?c->tr_len-off:chunk;
             uint8_t part[2600];
-            size_t plen = crypto_frame(part, sizeof part, off, c->transcript + off, take);
-            if (plen == 0 ||
-                send_level(c, D2S_QW_LEVEL_INITIAL, part, plen, pad, err, errcap) != 0) {
-                d2s_qc_close(c); return -1;
+            size_t plen=crypto_frame(part,sizeof part,off,c->transcript+off,take);
+            if(!plen || !(lens[i]=seal_level(c,D2S_QW_LEVEL_INITIAL,part,plen,pad,
+                packets[i],sizeof packets[i],err,errcap))) { d2s_qc_close(c);return -1; }
+            dg[i]=packets[i];
+        }
+        int consumed=o->first_flight?o->first_flight(c->fd,dg,lens,parts,o->first_send_user):0;
+        if(consumed<0) { say(err,errcap,"Initial flight action was not sent");d2s_qc_close(c);return -1; }
+        if(!consumed)for(size_t i=0;i<parts;i++)
+            if(send(c->fd,dg[i],lens[i],0)!=(ssize_t)lens[i]) {
+                say(err,errcap,"Initial flight send: %s",strerror(errno));d2s_qc_close(c);return -1;
             }
-        }
-    } else if (!o->first_send) {
-        if (send_level(c, D2S_QW_LEVEL_INITIAL, frame, flen, 1200, err, errcap) != 0) {
-            d2s_qc_close(c); return -1;
-        }
+        c->tx_dgrams+=parts;
     } else {
         /* Замер плеча (задача 39): воздействие плеча идёт ПЕРЕД первым
            Initial на той же четвёрке, ровно как в вопросе-фильтре. Повторы

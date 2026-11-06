@@ -650,8 +650,13 @@ int d2s_plan_apply(const d2s_plan *p, const d2s_flow *f,
                    нетронутым, а не «почти так, как мерили». */
                 uint8_t *re = malloc(e->len);
                 size_t re_len = 0;
-                int src = re ? d2s_quic_initial_split_crypto(e->bytes, e->len, re, e->len,
-                                                             &re_len) : -1;
+                size_t cut=in->quic_split_cut,head=0;
+                const uint8_t *one[]={e->bytes};size_t one_len[]={e->len};
+                int ready=p->qsplit!=2 || cut ||
+                    !d2s_quic_split_flight_prepare(one,one_len,1,&head,&cut);
+                int src = !re || !ready ? -1 : p->qsplit==2
+                    ? d2s_quic_initial_split_crypto_at(e->bytes,e->len,cut,re,e->len,&re_len)
+                    : d2s_quic_initial_split_crypto(e->bytes,e->len,re,e->len,&re_len);
                 if (src != 0 || re_len != e->len) {
                     /* Причина — вызывающему (журнал отказов): разрез, которого
                        не мерили, не выдаётся за применённый план. */

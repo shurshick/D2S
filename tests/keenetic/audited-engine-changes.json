@@ -16,7 +16,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "51724e60cd98401d64dd85ccd4b004706ac56934ea095b84be991e0323b85002",
+    "sha256": "98cf5033ae876e7bba83bb6fd580ccb8e3e05f53d7921ad71455d91ea301111b",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
@@ -24,8 +24,8 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/test_sched.c": {
-    "sha256": "7d14a225df0f68af47fa35b9c036f2e83f99fca51b2f2e2f37b7bf92db01aee5",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "9bd0b300481b91c7bf33d985bcf5168a78227ad185d4448bb9ad1402af007b8a",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "detect/classify.c": {
     "sha256": "ac502456063523f1907f452053c6b7d54a60d49f33deda6e3048d67131b0239f",
@@ -76,12 +76,12 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/quicconn.c": {
-    "sha256": "a4d5757f78851c638c3549a32dc4c58b0e0fcf156402c85cb048f68c2e1eb3da",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "aaf1cc086f63f6f9fa6e83131914b02f5210e7252b319e6f75d0bce7ba98d2b5",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/quicprobe.c": {
-    "sha256": "f65e77ff433443bd595ea9deb50340934b4201ce94a03865bf3fc7579a0c4ac0",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "791da99d6302b9c4f840a67f0ead295459deafcf5cb76753e26727fa8fc41e00",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_catalog.c": {
     "sha256": "b2b5d692267a106e80ae55e25b46cf8a0c52c41ae6e07cc28a6f949894e00c98",
@@ -112,11 +112,11 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/include/d2s_plan.h": {
-    "sha256": "45cddb55626643d77a098e36b8cb90eeea802c8f132003a34587c2dd3fc8fbf2",
+    "sha256": "683bf1e8be7bb58e1b3156a5406ba6b4b011810f8ce816e453f407a4aceefe4f",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/plan_parse.c": {
-    "sha256": "7b2b002ab9625eb5913cedb43c0837c18d263e559499f50fcb8cd03439f5e033",
+    "sha256": "40a68e09ed751f1e9aa3bf51acf5497404275881a54833acfdd9efad47a10d3f",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/compose.c": {
@@ -136,7 +136,95 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/plantlv.c": {
-    "sha256": "a18cea51a846696d5cb6e4ea6f3a55e60425e57573e93ead44aef28295895b35",
+    "sha256": "fea1bfb40ac8cf85019e26c9c25fdc272c5606f50655475829023184bdf97e5e",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_quic.h": {
+    "sha256": "3ac764fa8bfc72199c6c4ba862117c85a0e42835769718c5f7b61a6d8321b9c6",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_quic_arms.h": {
+    "sha256": "e0045401f18d41f4a61af1a787d186b4eb572f95da587e218e22285fd1dbd623",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_quicconn.h": {
+    "sha256": "06f2f7221df9dc921f098158be6ff4f542307a76bb2c4293c9f27d73821383a9",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_udpruntime.h": {
+    "sha256": "342783b688c784428087cadd918859d7df0e01301cff3d0eeb03fa11770ad7ac",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/props.c": {
+    "sha256": "afe6f21e59317a4ea041c216c17482e0dff845297568a810c9cb533c68c110ff",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/quic.c": {
+    "sha256": "3c910ebe973546c40be686b6f04c7f6c3f26d5b2fed7ac4735d378af5024f1fb",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/quicarms.c": {
+    "sha256": "82875d18f07cd459fbdcfab95b1d7fa85a86c3d5dec211395deebb2dbe508e76",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_plantlv.c": {
+    "sha256": "1c86516f464ef7186369177478530f5b3aa2e232db4a4444017587fec82cccf2",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_quic_arm_data.c": {
+    "sha256": "421fc8cb77b1482120727e43e2cef759f38a973698b0f9db67553b19ba19d486",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_quic_arms.c": {
+    "sha256": "d31a9a6fbefd8bcff837fdae708f95acc2356ed40a68d6f3ea882a096bbc5ea7",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_quicconn_rtx.c": {
+    "sha256": "ece528e5a531819bfa8833a89fdc79e933b76e3139ac5e9c7cd0504ba7264c85",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_quicsnap.c": {
+    "sha256": "c2688e62dcbf43a42728abd0fa451799c4469b27ec9dec4a42870e9099ca2087",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/test_udp_runtime.c": {
+    "sha256": "e8a915312d0d563eaa068f1d7ce38a9994f2093e5e70549fa2b9fc5ee5ef14a0",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/udpplan.c": {
+    "sha256": "a4f91ee4840eed7a9dda883e1fa87513f2ad98dd0777ac01e85f3ead6dcb5459",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/udpruntime.c": {
+    "sha256": "f898a3657562cb92121df17c2485e29643c370120cbde2b9f5839d823b9f8ec0",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/include/d2s_session.h": {
+    "sha256": "cb574b017e7f0ec36ff8a9503e4db826759e8bb73e1c14251e80379f4f47b933",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/include/d2s_track.h": {
+    "sha256": "3fda164cd74474d954cdeb6a7fc67c9001d3f40000b18ca4777b43793e14dbec",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/plan_apply.c": {
+    "sha256": "d57ab82cf16f82a1f8d973c0b64fd11235cfc99bcc56ed2ed06a48ec0148bbb0",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/session.c": {
+    "sha256": "b406e72aa1d537143669133f62c109e6287daccd7f83e99908e0403c358ccacf",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/test_plan_parse.c": {
+    "sha256": "bb2ae120d8a98dee509154e175252be10f7b2c646d3101f66bdeefa07ae83076",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/test_udp_path.c": {
+    "sha256": "9dbb9ea47d343099eadff4077b8ec329439d020ca44e621b6cff288ecfb75242",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/udp_path.c": {
+    "sha256": "f4a4fb061485ff38ee422b76012779e9e033a28ae074f69b45f3edfb222617e8",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   }
 }

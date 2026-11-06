@@ -81,8 +81,9 @@ static int scan(const uint8_t *b, size_t len, struct counts *c,
         case REC_QSPLIT:
             /* minexec=10: старый исполнитель записи не знает и выпустил бы
                Initial целым — то есть не то, что мерили. Форма одна. */
-            if (rd16(b + 6) < 10 || ln != 1 || b[off] != 1) {
-                fail(err, errlen, "quicsplit требует minexec=10 и форму 1"); return -1;
+            if (ln != 1 || (b[off]!=1 && b[off]!=2) ||
+                rd16(b+6)<(b[off]==2?14:10)) {
+                fail(err, errlen, "quicsplit: форма 1/minexec10 либо 2/minexec14"); return -1;
             }
             break;
         case REC_QDENY:
@@ -643,3 +644,5 @@ const uint8_t *d2s_plan_id(const d2s_plan *p) {
        прислали» на той стороне провода (см. d2s_plan.h). */
     return p ? p->id : NULL;
 }
+
+int d2s_plan_quic_split(const d2s_plan *p) { return p?p->qsplit:0; }

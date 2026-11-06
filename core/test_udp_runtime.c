@@ -19,6 +19,7 @@
 #include "d2s_compose.h"
 #include "d2s_quichello.h"
 #include "d2s_stun.h"
+#include "test_quic_pq.h"
 #include "../datapath/test_runtime_trace.h"
 static int fails;
 #define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);fails++;}}while(0)
@@ -181,10 +182,32 @@ static d2s_tally oracle(const d2s_quic_arm_question *q,void *u,int *sent_out){
     if(yes){t.pass=3;t.fail=0;if(!q->control)winner=*q;}return t;
 }
 static d2s_quic_arm_data data(const d2s_quic_arm_question *q,void *u){(void)q;(void)u;d2s_quic_arm_data d={0};d.verdict=D2S_QAD_PASS;return d;}
+static void whole_flight(void) {
+    uint8_t a[1500],b[1500],expected[1500];size_t an=0,bn=0,en=0;
+    CHECK(!d2s_test_pq_initials("rutracker.org",a,&an,b,&bn));
+    const uint8_t *dg[]={a,b};size_t len[]={an,bn},head=0,cut=0;
+    CHECK(!d2s_quic_split_flight_prepare(dg,len,2,&head,&cut) && head==1);
+    CHECK(!d2s_quic_initial_split_crypto_at(b,bn,cut,expected,sizeof expected,&en));
+    d2s_quic_arm_question q={.split=1};char text[16384];
+    CHECK(!d2s_quic_question_plan(&q,text,sizeof text) && strstr(text,"quicsplit 2"));
+    for(int family=4;family<=6;family+=2) {
+        ctx(family);current_ttl=context.ttl;sent_count=lower_count=elapsed=0;
+        CHECK(!d2s_udp_plan_send_flight(42,text,dg,len,2,0));
+        CHECK(sent_count==2 && sent[0].len==en && sent[1].len==an &&
+              !memcmp(sent[0].bytes,expected,en) && !memcmp(sent[1].bytes,a,an));
+        CHECK(current_ttl==47 && sent[0].ttl==47 && sent[1].ttl==47);
+        /* Authentication/preflight failure must precede every syscall. */
+        uint8_t bad[1500];memcpy(bad,b,bn);bad[bn-1]^=1;
+        const uint8_t *broken[]={a,bad};sent_count=0;
+        CHECK(d2s_udp_plan_send_flight(42,text,broken,len,2,0)<0 && !sent_count);
+        CHECK(d2s_udp_plan_send_flight(42,text,dg,len,1,0)<0 && !sent_count);
+    }
+}
 int main(int argc,char **argv){
     force_divergence=argc==2 && !strcmp(argv[1],"--diverge");
     d2s_nat_hook=nat4;d2s_nat_family_hook=nat6;
     udp_prepare_io=capture_prepare;udp_send_io=capture_raw;udp_fragment_id_io=fixed_id;
+    whole_flight();
     uint32_t last_id=udp_next_fragment_id();
     for(unsigned i=0;i<100;i++){uint32_t id=udp_next_fragment_id();CHECK(id>last_id && (id&65535));last_id=id;}
     uint8_t initial[4096];size_t len=0;CHECK(d2s_quic_probe_initial("example.com",initial,sizeof initial,&len)==0);

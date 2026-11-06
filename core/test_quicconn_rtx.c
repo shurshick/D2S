@@ -10,9 +10,20 @@
 
 #include <assert.h>
 #include <fcntl.h>
+#include "d2s_quic.h"
 
 static int fails;
 #define CHECK(x, m) do { if (!(x)) { fprintf(stderr, "quicconn_rtx: %s\n", m); fails++; } } while (0)
+
+static int flight_calls;
+static int inspect_flight(int fd,const uint8_t *const *dg,const size_t *len,size_t n,void *u) {
+    (void)fd;(void)u;flight_calls++;
+    CHECK(n==2 && len[0]==1200 && len[1]==1200,"callback lost client datagram form");
+    uint8_t ch[8192];size_t cn=0,head=0,cut=0;
+    CHECK(!d2s_quic_dgrams_hello(dg,len,n,ch,sizeof ch,&cn) && cn==2100,"callback did not receive complete shaped ClientHello");
+    CHECK(!d2s_quic_split_flight_prepare(dg,len,n,&head,&cut),"own data-stage flight cannot execute common split");
+    return -1; /* intentional local refusal: nothing may be sent */
+}
 
 static size_t drain(int fd) {
     uint8_t b[2048];
@@ -156,6 +167,10 @@ int main(void) {
         CHECK(seen == 2, "первый полёт ушёл не двумя датаграммами");
         CHECK(lens[0] == 1200 && lens[1] == 1200, "датаграммы полёта не той длины");
         if (c) { d2s_qc_close(c); }
+        c=NULL;o.first_flight=inspect_flight;
+        CHECK(d2s_qc_connect(&o,&c,err,sizeof err)<0 && flight_calls==1,"whole-flight hook not called exactly once");
+        CHECK(recv(server,got,sizeof got,0)<0 && errno==EAGAIN,"refused flight partially escaped");
+        if(c)d2s_qc_close(c);
         close(server);
     }
 

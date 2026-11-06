@@ -6502,9 +6502,9 @@ shape_test:
         d2s_sched_event(s, &sh3);
         spin(s, 5);
         bd = binding_mut(&c, "single.split.example", 17);
-        CHECK(bd && bd->recheck_since != 0,
-              "I1: разрез, не исполняющийся клиенту, остался подтверждённым");
-        CHECK(said("привязок к повторной проверке"), "I1: снятие разреза не сказано");
+        CHECK(bd && bd->recheck_since == 0,
+              "whole-flight split invalidated solely because an incomplete snapshot was wide");
+        CHECK(!said("привязок к повторной проверке"), "whole-flight split treated as legacy one-datagram form");
 
         /* (d) Следующий поиск той же цели разрез не переподтверждает. */
         d2s_ev h4 = ev_hello(17, 40084, "single.split.example"); d2s_sched_event(s, &h4);
@@ -6519,8 +6519,8 @@ shape_test:
         d2s_ev ap5 = ev_applied(17, 40085); d2s_sched_event(s, &ap5);
         spin(s, 40);
         bd = binding_mut(&c, "single.split.example", 17);
-        CHECK(quic_last_split_unfit == 1 && bd && bd->recheck_since != 0 && bd->successes == succ0,
-              "I1: разрез CRYPTO переподтверждён клиенту шире датаграммы");
+        CHECK(quic_last_split_unfit == 1 && bd && bd->recheck_since == 0 && bd->successes == succ0,
+              "whole-flight split was re-confirmed without its complete client flight");
         if (fails) fprintf(stderr, "%s\n", saidbuf);
         d2s_sched_free(s); d2s_catalog_free(&c);
         arm_kind = D2S_QA_BLOB;

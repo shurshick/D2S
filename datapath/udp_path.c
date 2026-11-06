@@ -2,6 +2,7 @@
 
 #include "d2s_udp_path.h"
 #include "d2s_nl.h"
+#include "d2s_packet.h"
 
 void d2s_udp_path_release(void *ctx, const d2s_udp_hold_batch *b) {
     d2s_udp_path *pp = ctx;
@@ -42,6 +43,31 @@ int d2s_udp_path_post(d2s_udp_path *pp, int fed, const d2s_key *key,
     if (res->udp_hold_ready) {
         if (pp->hold && batch && d2s_udp_hold_take(pp->hold, key, pp->now_ns, batch) &&
             batch->count > 0) {
+            const uint8_t *dg[D2S_UDP_HOLD_PACKETS];size_t len[D2S_UDP_HOLD_PACKETS];
+            int valid=1;
+            for(size_t i=0;i<batch->count;i++) {
+                d2s_packet_view ip;
+                if(!d2s_packet_parse(batch->packets[i],batch->len[i],&ip) ||
+                   ip.protocol!=17 || ip.total<ip.l4+8) { valid=0;break; }
+                dg[i]=batch->packets[i]+ip.l4+8;len[i]=ip.total-ip.l4-8;
+            }
+            size_t head=0;
+            int prepared=valid?d2s_session_udp_split_prepare(pp->sess,key,dg,len,batch->count,&head):-1;
+            if(prepared<0 || head>=batch->count) {
+                d2s_udp_path_release(pp,batch);return D2S_UDP_PATH_RECLAIMED;
+            }
+            if(prepared && head) {
+                /* The common whole-flight method sends the SNI-split packet
+                   first. Preserve packet bytes, marks, IDs and other order. */
+                uint8_t tmp[D2S_UDP_HOLD_PACKET];memcpy(tmp,batch->packets[head],sizeof tmp);
+                uint32_t id=batch->ids[head],mark=batch->marks[head];size_t size=batch->len[head];
+                memmove(batch->packets[1],batch->packets[0],head*sizeof batch->packets[0]);
+                memmove(batch->ids+1,batch->ids,head*sizeof batch->ids[0]);
+                memmove(batch->marks+1,batch->marks,head*sizeof batch->marks[0]);
+                memmove(batch->len+1,batch->len,head*sizeof batch->len[0]);
+                memcpy(batch->packets[0],tmp,sizeof tmp);batch->ids[0]=id;
+                batch->marks[0]=mark;batch->len[0]=size;
+            }
             d2s_session_udp_hold_replay(pp->sess, key);
             return D2S_UDP_PATH_REPLAY;
         }

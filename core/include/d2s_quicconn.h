@@ -70,6 +70,9 @@ typedef struct {
      * хук не видят. */
     int       (*first_send)(int fd, const uint8_t *initial, size_t len, void *user);
     void       *first_send_user;
+    /* Atomic construction of every Initial before the first callback/send.
+       Same return convention as first_send; the two hooks are exclusive. */
+    int (*first_flight)(int fd,const uint8_t *const *dg,const size_t *len,size_t n,void *user);
 } d2s_qc_opts;
 
 /* Поднимает соединение и доводит рукопожатие до прикладных ключей.

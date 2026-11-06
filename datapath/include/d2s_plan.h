@@ -44,7 +44,7 @@
  * чтобы клиент ушёл на TCP; это не обход QUIC. Старый исполнитель такие
  * планы не принимает. */
 /* Version 12: raw TCP-MD5 poison in detect-tcp-v1. */
-#define D2S_EXEC_VERSION 13
+#define D2S_EXEC_VERSION 14
 #define D2S_PLAN_PROTO_HTTP 4
 /* Shared result capacity for measured and live packet programs. */
 #define D2S_WIRE_BATCH_MAX 26
@@ -178,6 +178,7 @@ typedef struct {
     int      is_tls13;
     size_t   sni_off;
     size_t   sni_len;
+    size_t   quic_split_cut; /* authenticated complete-flight CRYPTO offset */
     /* Максимальная длина полезной части одного TCP-сегмента, выведенная из
        MTU маршрута вызывающей стороной. Ноль — обычное поведение плана. */
     size_t   segment_cap;
@@ -299,6 +300,7 @@ size_t d2s_plan_max_emit(const d2s_plan *p);
 uint8_t d2s_plan_guards(const d2s_plan *p);
 /* 1 — план «QUIC для имени не пропускается» (REC_QDENY). */
 int d2s_plan_quic_deny(const d2s_plan *p);
+int d2s_plan_quic_split(const d2s_plan *p);
 
 /* ТРАНСПОРТ, ДЛЯ КОТОРОГО ПЛАН ОБЪЯВЛЕН: 6 TCP, 17 UDP, 0 — не объявлен.
  *

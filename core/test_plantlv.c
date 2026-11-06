@@ -319,6 +319,10 @@ int main(void) {
         for(size_t i=12;i+sizeof rec<=n;i++) if(!memcmp(out+i,rec,sizeof rec)) found=1;
         CHECK(rc==0&&found,"quicsplit 1 не дал записи 010f 0001 01");
         CHECK(rc==0&&out[7]==10,"quicsplit: исполнитель не 10");
+        CHECK(!d2s_plan_text_to_tlv("d2s-plan 1 14\nproto udp quic\nquicsplit 2\n",
+            out,sizeof out,&n,err,sizeof err),"whole-flight quicsplit2/minexec14 rejected");
+        CHECK(d2s_plan_text_to_tlv("d2s-plan 1 13\nproto udp quic\nquicsplit 2\n",
+            out,sizeof out,&n,err,sizeof err)!=0,"whole-flight split accepted for old executor");
         const char *bad[]={"quicsplit 0\n","quicsplit 2\n","quicsplit\n","quicsplit 1 1\n",
             "quicsplit 1\nquicsplit 1\n","quicsplit 1\nipfrag 1\n","quicsplit 1\nudplen 100\n",
             "quicsplit 1\nsplit payload_start +1\n","quicsplit 1\norder reverse\n"};

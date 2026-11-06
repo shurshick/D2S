@@ -1089,13 +1089,63 @@ static void handle_udp(d2s_session *s, const uint8_t *pkt, size_t len,
     uint8_t seen_shape = voice ? D2S_PLAN_SHAPE_VOICE : D2S_PLAN_SHAPE_QUIC;
     fl->client_shape = seen_shape;
 
+    /* Форма — СВОЯ, QUIC. Ноль здесь был дырой: он означает «не объявлено» и
+       совместим с чем угодно, поэтому план, подтверждённый собственным зондом
+       на TLS поверх TCP, выдавался Initial того же имени. Транспорт другой,
+       приветствие другое, и коробка на пути может быть другая — переносить
+       туда подтверждение нечем (0009, U5).
+
+       Записи старого каталога (форма не объявлена) остаются совместимыми: их
+       миграция — задача каталога, а не мгновенного отказа здесь. Совместимы
+       они по ФОРМЕ; транспорт проверяется отдельно и ниже — он объявлен в
+       самом плане, и догадываться о нём не нужно (plan_fits_transport). */
+    /* МЕСТНЫЙ ПОРТ — чтобы пробная запись досталась только потоку зонда и
+       никому больше (d2s_plans.h про d2s_plantab_set_name_probe). Берётся из
+       заголовка как есть, в сетевом порядке: таблица сравнивает его с тем,
+       что назвал контроллер, и переворачивать по дороге нечего. */
+    uint16_t sport_be;
+    memcpy(&sport_be, u + 0, 2);
+    d2s_addr_probe_flow probe_flow;
+    memset(&probe_flow, 0, sizeof probe_flow);
+    probe_flow.family = ip->family;
+    memcpy(ip->family == 6 ? probe_flow.src_ip6 : probe_flow.src_ip4,
+           ip->src.bytes, ip->family == 6 ? 16 : 4);
+    memcpy(&probe_flow.src_port_be, u + 0, 2);
+    memcpy(ip->family == 6 ? probe_flow.dst_ip6 : probe_flow.dst_ip4,
+           ip->dst.bytes, ip->family == 6 ? 16 : 4);
+    memcpy(&probe_flow.dst_port_be, u + 2, 2);
+    probe_flow.transport = 17;
+    uint8_t trial_id[D2S_TRIAL_ID_LEN] = {0};
+    /* ГОЛОСОВОЙ ОПЫТ (задача 15) — только запросу голоса пользовательского
+       потока. Межсетевой экран отдаёт в очередь лишь первые пакеты потока
+       (S99d2s, connbytes 0:8), поэтому опыт ждёт СЛЕДУЮЩИЙ разговор того же
+       клиента LAN с той же точкой сервера (адрес и порт), с любым клиентским
+       портом; его первый IP Discovery / STUN-запрос и получает план, APPLIED
+       несёт trial ID. Голосовые пакеты контроллера адресных опытов не берут;
+       не-голос подстановочных записей не видит (find_addr_probe). */
+    const d2s_plan *use = NULL;
+    if (!voice) {
+        use = d2s_plantab_find_addr_probe(s->plans, &probe_flow, now_ns, trial_id);
+    } else if (!fl->controller_probe) {
+        use = d2s_plantab_find_voice_probe(s->plans, &probe_flow, now_ns, trial_id);
+    }
+    if (!use) { memset(trial_id, 0, sizeof trial_id); }
+    size_t misses_before = d2s_plantab_shape_misses(s->plans);
+    if (!use) { use = d2s_plantab_find_target(s->plans,
+                                                 named ? (const uint8_t *)name : NULL,
+                                                 name_len, ip->dst.bytes, ip->family, now_ns,
+                                                 seen_shape, controller_probe ? sport_be : 0); }
+
     /* Внешний UDP hold уже сохранил эту датаграмму.  Пока ClientHello не
        собран, только накапливаем состояние; когда имя появилось, сообщаем
        владельцу hold, чтобы он взял ПЕРВУЮ исходную датаграмму и повторил её
        через обычный plan path. Нельзя применять воздействие к текущему
        хвосту: это поменяло бы порядок и оставило голову без стратегии. */
     if (fl->udp_hold_active) {
-        if (!named) {
+        fl->udp_split_flight = d2s_plan_quic_split(use?use:s->plan)==2;
+        fl->udp_split_cut=0;
+        if(fl->udp_split_flight)memcpy(fl->udp_split_plan,d2s_plan_id(use?use:s->plan),D2S_PLAN_ID_LEN);
+        if (!named || (fl->udp_split_flight && !d2s_quic_assembly_complete(&fl->quic_assembly))) {
             out->udp_hold_wait = 1;
             out->skipped = "QUIC ClientHello ещё не собран — датаграмма удерживается";
         } else {
@@ -1221,52 +1271,6 @@ static void handle_udp(d2s_session *s, const uint8_t *pkt, size_t len,
         }
     }
 
-    /* Форма — СВОЯ, QUIC. Ноль здесь был дырой: он означает «не объявлено» и
-       совместим с чем угодно, поэтому план, подтверждённый собственным зондом
-       на TLS поверх TCP, выдавался Initial того же имени. Транспорт другой,
-       приветствие другое, и коробка на пути может быть другая — переносить
-       туда подтверждение нечем (0009, U5).
-
-       Записи старого каталога (форма не объявлена) остаются совместимыми: их
-       миграция — задача каталога, а не мгновенного отказа здесь. Совместимы
-       они по ФОРМЕ; транспорт проверяется отдельно и ниже — он объявлен в
-       самом плане, и догадываться о нём не нужно (plan_fits_transport). */
-    /* МЕСТНЫЙ ПОРТ — чтобы пробная запись досталась только потоку зонда и
-       никому больше (d2s_plans.h про d2s_plantab_set_name_probe). Берётся из
-       заголовка как есть, в сетевом порядке: таблица сравнивает его с тем,
-       что назвал контроллер, и переворачивать по дороге нечего. */
-    uint16_t sport_be;
-    memcpy(&sport_be, u + 0, 2);
-    d2s_addr_probe_flow probe_flow;
-    memset(&probe_flow, 0, sizeof probe_flow);
-    probe_flow.family = ip->family;
-    memcpy(ip->family == 6 ? probe_flow.src_ip6 : probe_flow.src_ip4,
-           ip->src.bytes, ip->family == 6 ? 16 : 4);
-    memcpy(&probe_flow.src_port_be, u + 0, 2);
-    memcpy(ip->family == 6 ? probe_flow.dst_ip6 : probe_flow.dst_ip4,
-           ip->dst.bytes, ip->family == 6 ? 16 : 4);
-    memcpy(&probe_flow.dst_port_be, u + 2, 2);
-    probe_flow.transport = 17;
-    uint8_t trial_id[D2S_TRIAL_ID_LEN] = {0};
-    /* ГОЛОСОВОЙ ОПЫТ (задача 15) — только запросу голоса пользовательского
-       потока. Межсетевой экран отдаёт в очередь лишь первые пакеты потока
-       (S99d2s, connbytes 0:8), поэтому опыт ждёт СЛЕДУЮЩИЙ разговор того же
-       клиента LAN с той же точкой сервера (адрес и порт), с любым клиентским
-       портом; его первый IP Discovery / STUN-запрос и получает план, APPLIED
-       несёт trial ID. Голосовые пакеты контроллера адресных опытов не берут;
-       не-голос подстановочных записей не видит (find_addr_probe). */
-    const d2s_plan *use = NULL;
-    if (!voice) {
-        use = d2s_plantab_find_addr_probe(s->plans, &probe_flow, now_ns, trial_id);
-    } else if (!fl->controller_probe) {
-        use = d2s_plantab_find_voice_probe(s->plans, &probe_flow, now_ns, trial_id);
-    }
-    if (!use) { memset(trial_id, 0, sizeof trial_id); }
-    size_t misses_before = d2s_plantab_shape_misses(s->plans);
-    if (!use) { use = d2s_plantab_find_target(s->plans,
-                                                 named ? (const uint8_t *)name : NULL,
-                                                 name_len, ip->dst.bytes, ip->family, now_ns,
-                                                 seen_shape, controller_probe ? sport_be : 0); }
     if (named && !voice) {
         snprintf(out->quic_name, sizeof out->quic_name, "%.*s", (int)name_len, name);
         out->quic_shape_miss = d2s_plantab_shape_misses(s->plans) != misses_before;
@@ -1326,6 +1330,13 @@ static void handle_udp(d2s_session *s, const uint8_t *pkt, size_t len,
     in.payload = pkt + payload_off;
     in.payload_len = payload_len;
     in.seq = 0;      /* у UDP нет номера последовательности */
+    if(d2s_plan_quic_split(use)==2 && fl->udp_split_flight) {
+        if(!fl->udp_split_cut || memcmp(fl->udp_split_plan,d2s_plan_id(use),D2S_PLAN_ID_LEN)) {
+            out->skipped="whole-flight QUIC split was not prepared";
+            refuse(s,now_ns,&key,out->skipped);return;
+        }
+        in.quic_split_cut=fl->udp_split_cut;
+    }
     /* have_sni = 0 НАМЕРЕННО, хотя имя выше уже найдено. Имя d2s_quic_sni
        достаёт из ClientHello, пересобранного ВНУТРИ core/quic.c по смещениям
        CRYPTO-кадров расшифрованного потока — оно не лежит смещением в этом
@@ -2711,7 +2722,7 @@ int d2s_session_udp_opening(d2s_session *s, const uint8_t *p, size_t n) {
 void d2s_session_udp_hold_end(d2s_session *s, const d2s_key *key) {
     if (!s || !key) { return; }
     d2s_flow *fl = d2s_track_find(s->uflows, key);
-    if (fl) { fl->udp_hold_active = 0; }
+    if (fl) { fl->udp_hold_active = 0;fl->udp_split_flight=0;fl->udp_split_cut=0; }
 }
 
 void d2s_session_udp_hold_replay(d2s_session *s, const d2s_key *key) {
@@ -2721,6 +2732,16 @@ void d2s_session_udp_hold_replay(d2s_session *s, const d2s_key *key) {
         fl->udp_hold_active = 0;
         fl->udp_hold_replay_first = 1;
     }
+}
+
+int d2s_session_udp_split_prepare(d2s_session *s,const d2s_key *key,
+    const uint8_t *const *dg,const size_t *len,size_t n,size_t *head) {
+    if(!s || !key || !head)return -1;
+    d2s_flow *fl=d2s_track_find(s->uflows,key);
+    if(!fl || !fl->udp_split_flight)return 0;
+    size_t cut=0,which=0;
+    if(d2s_quic_split_flight_prepare(dg,len,n,&which,&cut))return -1;
+    fl->udp_split_cut=cut;*head=which;return 1;
 }
 
 void d2s_session_note_unassembled(d2s_session *s, const uint8_t *p, size_t n,
