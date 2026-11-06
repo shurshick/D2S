@@ -34,6 +34,7 @@ SRC = classify.c poison.c props.c raw.c trigger.c response.c
 BRIDGE = bridge.c
 OBJ = $(SRC:.c=.o)
 HDR = include/d2s_detect.h ../core/include/d2s_hello.h ../core/include/d2s_arm.h
+HDR += ../core/include/d2s_learning.h
 
 .PHONY: all check cross clean FORCE
 

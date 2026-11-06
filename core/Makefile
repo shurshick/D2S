@@ -84,6 +84,7 @@ HDR += include/d2s_http_reply.h
 HDR += include/d2s_domain.h include/d2s_groups.h
 HDR += include/d2s_diagnostics.h ../runtime/d2s_diagnostics_files.h
 HDR += optimize.inc
+HDR += include/d2s_quality.h include/d2s_learning.h
 diagnostics.o: diagnostics.c include/d2s_diagnostics.h
 SRC += domain.c groups.c udpplan.c udpruntime.c
 DIAG_SRC = diagnostics.c
@@ -1429,7 +1430,7 @@ clean: clean-diagnostics-runtime
 TESTS += test_tcp_layout
 check: test-tcp-layout
 .PHONY: test-tcp-layout
-test_tcp_layout: test_tcp_layout.c $(SCHED_TEST_OBJ) $(HDR)
+test_tcp_layout: test_tcp_layout.c $(SCHED_TEST_OBJ) $(HDR) libd2s_udp.a diagnostics.o
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_TEST_OBJ) $(TEST_LDFLAGS)
 test-tcp-layout: test_tcp_layout
 	./test_tcp_layout
