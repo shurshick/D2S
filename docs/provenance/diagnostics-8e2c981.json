@@ -1,0 +1,31 @@
+{
+  "source": "https://github.com/t0fox/d2o",
+  "commit": "8e2c98146cf0b712dc967fbec558c7b904666e87",
+  "backend_base": "fd4e262",
+  "frontend_base": "1cc424e",
+  "destination_base": "ec30cdc53645aed885a8a03e67010d723c663679",
+  "method": "manual scoped three-way diff and tests; user explicitly waived unavailable REA",
+  "manual_record": "D2S-DIAG-8e2c981-20261106",
+  "scope": "diagnostics only; HTTP admission budgets excluded; Telegram domain exclusion restored; phase timings retained",
+  "openssl": "45e844fa2a14ec92d146bd8f5778ac130b6625fb (3.5.9)",
+  "reviewed_engine_files": {
+    "core/catalog.c": "fef0213390e5c282f7df368c6704886d1b6a604c5034fbef72b5351606800e1f",
+    "core/d2sc.c": "6ef2b990dc2204c9ffbd3dfeaa91b2e12e5bfb3f73f1bd48b945de86d068c4f3",
+    "core/diagnostics.c": "65117734e3898ac07c9619c8242c870c2d58b614520a79a02092abc67f420ea7",
+    "core/httpsearch.c": "ac4569ddf7085304e3409fb44844300f3da32e4fa73c9eb7e6cd20aca8bd3419",
+    "core/include/d2s_catalog.h": "379a2f0c2e03581165ec736051c7814833c0d4b8c5473826f29ec70f6ddfc4f6",
+    "core/include/d2s_diagnostics.h": "faadf1efa5ff3338ec5999b09213a79737304af66a037eb47d65b0b0be695445",
+    "core/include/d2s_sched.h": "8368f2751855b05947245cd7ebe4eb2f5884152db39f46e514b18ec890c0e9f8",
+    "core/quicconn.c": "a4d5757f78851c638c3549a32dc4c58b0e0fcf156402c85cb048f68c2e1eb3da",
+    "core/quicprobe.c": "f65e77ff433443bd595ea9deb50340934b4201ce94a03865bf3fc7579a0c4ac0",
+    "core/sched.c": "76eb81a4b3362f2cdcdfcee405403af94aeddf01ce0d62cb9373ef5f9605c8f4",
+    "core/test_catalog.c": "b2b5d692267a106e80ae55e25b46cf8a0c52c41ae6e07cc28a6f949894e00c98",
+    "core/test_diagnostics.c": "0d7390d79bf77f186124891c1911cb76a3aaa04bee49830f1bbf7c46d7af8902",
+    "core/test_diagnostics_runtime.c": "5d8088e359c31eaaba8262342337f41717d4109de92d03399577a03f609bed87",
+    "core/test_httpsearch.c": "f0a147504483826492e03c6f6afb9d974fd40a399810a40631a89ca7004f6ee7",
+    "core/test_sched.c": "7d14a225df0f68af47fa35b9c036f2e83f99fca51b2f2e2f37b7bf92db01aee5",
+    "core/tls12.c": "aecb85b5bfb69c415573ba8c859319de6f3683a9fac5efc68c51517ab93971f1",
+    "core/tls13.c": "136c7129e3d4eefaa1b1d2313ee2367fc687243418fb93e8acd5c10d9df68857",
+    "core/verify.c": "9a4d706a4be36e9b7e2d4d8737661b270bc052e19f6ab0d6955ac6552fe42fbf"
+  }
+}

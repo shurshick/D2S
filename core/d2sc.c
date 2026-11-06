@@ -415,6 +415,9 @@ static d2s_diag *diagnostics;
 static void diagnostic_event(void *ctx,const d2s_diag_event *e) {
     (void)ctx;d2s_diag_record(diagnostics,e);
 }
+static void diagnostic_limit(void *ctx,int64_t mono,const d2s_diag_counts *c) {
+    (void)ctx;d2s_diag_record_limit(diagnostics,mono,c);
+}
 static void diagnostic_tick(d2s_sched *s,int64_t now) {
     static int64_t checked=-1000,written=-60000;
     if(now>=checked && now-checked<1000)return;
@@ -422,14 +425,18 @@ static void diagnostic_tick(d2s_sched *s,int64_t now) {
     if(!d2s_diag_enabled(D2S_DIAG_DIR)) {
         /* Если выгрузка совпала с выключением, очистить её в следующем цикле. */
         if(diagnostics) (void)d2s_diag_toggle(D2S_DIAG_DIR,0);
-        d2s_diag_free(diagnostics);diagnostics=NULL;
+        d2s_diag_memory_enable(0);d2s_diag_free(diagnostics);diagnostics=NULL;
         d2s_sched_diagnostics(s,NULL,NULL);
+        d2s_sched_limit_diagnostics(s,NULL,NULL);
         d2s_httpsearch_diagnostics(g_hs,NULL,NULL);
         return;
     }
     if(!diagnostics) {
         diagnostics=d2s_diag_new();if(!diagnostics)return;
+        d2s_sched_diagnostic_madvise_reset(s);
+        d2s_diag_memory_enable(1);
         d2s_sched_diagnostics(s,diagnostic_event,NULL);
+        d2s_sched_limit_diagnostics(s,diagnostic_limit,NULL);
         d2s_httpsearch_diagnostics(g_hs,diagnostic_event,NULL);
         written=now-60000;
     }
@@ -437,18 +444,27 @@ static void diagnostic_tick(d2s_sched *s,int64_t now) {
     written=now;
     d2s_diag_counts counts;d2s_sched_diagnostic_counts(s,&counts);
     d2s_httpsearch_diagnostic_counts(g_hs,&counts);
+    d2s_diag_memory_counts(&counts);
+    d2s_diag_madvise madvise;d2s_sched_diagnostic_madvise(s,&madvise);d2s_diag_set_madvise(diagnostics,&madvise);
     d2s_diag_sample(diagnostics,now,&counts,"/proc","/opt/d2s/run");
     char path[512],tmp[512];
     if(d2s_diag_path(path,sizeof path,D2S_DIAG_DIR,"report.json") ||
-       d2s_diag_path(tmp,sizeof tmp,D2S_DIAG_DIR,"report.new"))return;
+       d2s_diag_path(tmp,sizeof tmp,D2S_DIAG_DIR,"report.new")){
+        d2s_diag_record_write_error(diagnostics,"path",errno);return;
+    }
     /* Каталог закрыт; незавершённый файл никогда не отдаётся через панель. */
-    unlink(tmp);
-    int fd=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);if(fd<0)return;
-    FILE *f=fdopen(fd,"w");if(!f){close(fd);unlink(tmp);return;}
-    int bad=d2s_diag_write(diagnostics,f);long size=ftell(f);
-    if(size<0||(unsigned long)size>D2S_DIAG_REPORT_MAX)bad=1;
-    if(fclose(f))bad=1;
-    if(bad||!d2s_diag_enabled(D2S_DIAG_DIR)||rename(tmp,path))unlink(tmp);
+    if(unlink(tmp)&&errno!=ENOENT)d2s_diag_record_write_error(diagnostics,"remove-old-temp",errno);
+    int fd=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);
+    if(fd<0){d2s_diag_record_write_error(diagnostics,"open-temp",errno);return;}
+    FILE *f=fdopen(fd,"w");if(!f){int error=errno;close(fd);unlink(tmp);d2s_diag_record_write_error(diagnostics,"fdopen",error);return;}
+    int bad=0;
+    if(d2s_diag_write(diagnostics,f)){d2s_diag_record_write_error(diagnostics,"serialize",errno);bad=1;}
+    long size=ftell(f);
+    if(size<0){d2s_diag_record_write_error(diagnostics,"size",errno);bad=1;}
+    else if((unsigned long)size>D2S_DIAG_REPORT_MAX){d2s_diag_record_write_error(diagnostics,"size-limit",EFBIG);bad=1;}
+    if(fclose(f)){d2s_diag_record_write_error(diagnostics,"flush-close",errno);bad=1;}
+    if(bad||!d2s_diag_enabled(D2S_DIAG_DIR)){unlink(tmp);return;}
+    if(rename(tmp,path)){d2s_diag_record_write_error(diagnostics,"rename",errno);unlink(tmp);}
 }
 
 int main(int argc, char **argv) {
@@ -907,7 +923,7 @@ int main(int argc, char **argv) {
     d2s_hs_runner_free(g_hr);
     d2s_httpsearch_free(g_hs);
     d2s_sched_free(s);
-    d2s_diag_free(diagnostics);diagnostics=NULL;
+    d2s_diag_memory_enable(0);d2s_diag_free(diagnostics);diagnostics=NULL;
     if (cat.revision != dirty) {
         if (save_atomic(&cat, catpath, err, sizeof err) != 0) {
             fprintf(stderr, "d2sc: каталог не сохранён на выходе: %s\n", err);

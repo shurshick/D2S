@@ -45,7 +45,9 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 #if defined(__linux__)
-#define _DEFAULT_SOURCE   /* madvise: ячейка задачи отдаёт страницы (задача 60) */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE      /* musl otherwise hides MADV_DONTNEED under strict POSIX */
+#endif
 #include <sys/mman.h>
 #endif
 #include <arpa/inet.h>
@@ -629,6 +631,8 @@ typedef enum {
        молчания. */
     T_VOICE_WATCH
 } task_state;
+typedef char diagnostic_task_state_count_must_match[
+    (T_VOICE_WATCH + 1 == D2S_DIAG_TASK_STATE_COUNT) ? 1 : -1];
 
 /* Что делает рабочий поток задачи. Потоки заводятся только под сетевые
    оракулы; управляющего сокета они не касаются (см. шапку d2s_sched.h). */
@@ -955,6 +959,8 @@ typedef struct {
     /* Рабочий поток оракула. */
     pthread_t  th;
     int        th_live;
+    int        worker_executing;
+    int64_t    worker_started_ms;
     struct d2s_sched *worker_owner;
     /* request/waiting under owner->mu; parked and timestamp belong to loop. */
     int quic_yield_request, quic_yield_waiting, quic_parked;
@@ -1250,6 +1256,8 @@ typedef struct {
 struct d2s_sched {
     d2s_diag_observer diagnostic;
     void *diagnostic_ctx;
+    d2s_diag_limit_observer limit_diagnostic;
+    void *limit_diagnostic_ctx;
     d2s_catalog *cat;
     int          link_fd;
     uint32_t     mark;
@@ -1343,6 +1351,9 @@ struct d2s_sched {
     unsigned     limiter_logged;    /* и причина */
     size_t       meas_limit;
     uint64_t     report_sequence;
+    int64_t      last_measurement_done_ms;
+    uint64_t     workers_started, workers_joined, worker_start_failures, worker_join_failures;
+    d2s_diag_madvise madvise;
 
     /* Проход по каталогу, разложенный на порции (см. d2s_sched_sync_step):
        где остановились и просили ли начать заново. */
@@ -2448,6 +2459,7 @@ typedef struct {
     int trig_snapped; /* вход снят с провода: приманка строится клоном */
     int split_unfit; /* решено главным потоком (quic_split_unfit) */
     unsigned budget; /* бюджет потока испытания (JOB_VERIFY), 0 — без проверки */
+    int diag_memory_tracked;
 } worker_arg;
 
 d2s_vres d2s_sched_ech_baseline_result(const d2s_ver_result *baseline,
@@ -2647,6 +2659,12 @@ static void sched_quic_progress(const char *question, int probes) {
     d2s_sched_progress_note(question, probes, 0);
 }
 
+static int64_t sched_mono_ms(void) {
+    struct timespec ts;
+    if(clock_gettime(CLOCK_MONOTONIC,&ts)!=0)return -1;
+    return (int64_t)ts.tv_sec*1000+ts.tv_nsec/1000000;
+}
+
 static void *worker_body(void *vp) {
     worker_arg *a = (worker_arg *)vp;
     d2s_sched *s = a->s;
@@ -2666,6 +2684,7 @@ static void *worker_body(void *vp) {
     d2s_hello trig = {trigger_bytes, a->trig_len, opts_bytes, a->client_opts_len,
                       a->client_opts_known, a->trig_snapped};
     d2s_hello ctl = {a->ctrl_len ? control_bytes : NULL, a->ctrl_len, NULL, 0, 0, 0};
+    d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a,a->diag_memory_tracked);
     free(a);
     /* Ход сообщает только прогон измерителя (JOB_CLASSIFY); поток живёт ровно
        одну задачу, поэтому снимать приёмник не нужно. */
@@ -3161,19 +3180,30 @@ static void *worker_run(void *vp) {
     d2s_sched *s = a->s;
     task *t = a->t;
     task_job job = t->job;
+    pthread_mutex_lock(&s->mu);
+    t->worker_executing = 1;
+    if (t->worker_started_ms < 0) t->worker_started_ms = sched_mono_ms();
+    pthread_mutex_unlock(&s->mu);
     struct timespec begin, end;
     int timed = clock_gettime(CLOCK_MONOTONIC, &begin) == 0;
     void *result = worker_body(vp); /* owns/frees worker_arg */
+    int64_t done = sched_mono_ms();
+    int64_t elapsed = -1;
     if (timed && clock_gettime(CLOCK_MONOTONIC, &end) == 0) {
         int64_t ns = (int64_t)(end.tv_sec - begin.tv_sec) * 1000000000 +
                      end.tv_nsec - begin.tv_nsec;
-        int64_t elapsed = ns > 0 ? ns / 1000000 : 0;
-        pthread_mutex_lock(&s->mu);
+        elapsed = ns > 0 ? ns / 1000000 : 0;
+    }
+    pthread_mutex_lock(&s->mu);
+    t->worker_executing = 0;
+    if (done >= 0 && (job == JOB_CLASSIFY || job == JOB_VERIFY || job == JOB_VOICE))
+        s->last_measurement_done_ms = done;
+    if (elapsed >= 0) {
         if (job == JOB_CLASSIFY) t->classify_ms += elapsed;
         else if (job == JOB_CONTACT) t->contact_ms += elapsed;
         else if (job == JOB_VERIFY) t->verify_ms += elapsed;
-        pthread_mutex_unlock(&s->mu);
     }
+    pthread_mutex_unlock(&s->mu);
     return result;
 }
 
@@ -3237,6 +3267,7 @@ static unsigned task_budget(const d2s_sched *s, task *t) {
 }
 
 static void note_worker_start_failure(d2s_sched *s, task *t) {
+    s->worker_start_failures++;
     t->local_error = 1;
     s->last_local_error_suspect = s->suspect_events;
     snprintf(s->last_local_error_target, sizeof s->last_local_error_target,
@@ -3245,7 +3276,8 @@ static void note_worker_start_failure(d2s_sched *s, task *t) {
 
 static int start_worker(d2s_sched *s, task *t, task_job job) {
     worker_arg *a = malloc(sizeof *a);
-    if (!a) { note_worker_start_failure(s, t); return -1; }
+    if (!a) { d2s_diag_memory_alloc_failure(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG);note_worker_start_failure(s, t); return -1; }
+    a->diag_memory_tracked=d2s_diag_memory_acquire(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a);
     a->s = s; a->t = t;
     a->trig_len = t->trig_len; a->ctrl_len = t->ctrl_len;
     a->split_unfit = quic_split_unfit(s, t);
@@ -3264,6 +3296,8 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
     if (job == JOB_VERIFY) { t->probe_fd = -1; }
     t->job = job;
     t->worker_owner=s;
+    t->worker_started_ms=sched_mono_ms();
+    t->worker_executing=0;
     t->quic_yield_request=t->quic_yield_waiting=t->quic_parked=0;
     t->res_ready = 0;
     /* Новый поток — новый вопрос; зонды прежних прогонов (база задачи 32,
@@ -3290,11 +3324,13 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
     if (have_attr) { pthread_attr_destroy(&attr); }
     if (!created) {
         if (a->use_fd >= 0) { close(a->use_fd); }
+        d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a,a->diag_memory_tracked);
         free(a);
         note_worker_start_failure(s, t);
         return -1;
     }
     t->th_live = 1;
+    s->workers_started++;
     if (job == JOB_CLASSIFY || job == JOB_VOICE) { t->search_started = 1; }
     return 0;
 }
@@ -3304,18 +3340,25 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
  * Просьба ПЕРЕД ожиданием, а не после: наоборот — это и есть прежнее
  * поведение, из-за которого цикл вставал на минуты. Флаг не снимается здесь;
  * его обнуляет task_reset, когда задача начинает жизнь заново. */
-static void join_worker(task *t) {
+static int join_worker(task *t) {
     if (t->th_live) {
         d2s_sched *s=t->worker_owner;
         if(s)pthread_mutex_lock(&s->mu);
         t->stop = 1;
         t->quic_yield_waiting=0;
         if(s){pthread_cond_broadcast(&s->question_cv);pthread_mutex_unlock(&s->mu);}
-        pthread_join(t->th, NULL);
-        t->th_live = 0;
-        t->quic_parked=t->quic_yield_request=0;
-        t->worker_owner=NULL;
+        int err=pthread_join(t->th,NULL);
+        if(s)pthread_mutex_lock(&s->mu);
+        if(err==0) {
+            t->th_live=0;t->worker_executing=0;
+            if(s)s->workers_joined++;
+            t->quic_parked=t->quic_yield_request=0;
+            t->worker_owner=NULL;t->worker_started_ms=-1;
+        } else if(s) s->worker_join_failures++;
+        if(s)pthread_mutex_unlock(&s->mu);
+        return err==0?0:-1;
     }
+    return 0;
 }
 
 /* --------------------------------------------------------------------
@@ -3641,6 +3684,9 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
                           const char *outcome, const char *path);
 
 static void task_reset(d2s_sched *s, task *t) {
+    /* A failed pthread_join must not erase the storage still referenced by
+       its worker. Leave the task intact so the scheduler can retry joining. */
+    if(t->th_live)return;
     search_report(s, t, s->now_ms, "local-abort", NULL);
     if (t->prop_bound_fd > 0) { close(t->prop_bound_fd); }
     /* СТРОГО БОЛЬШЕ НУЛЯ. Задачи живут в занулённом массиве, и при самом
@@ -3657,10 +3703,27 @@ static void task_reset(d2s_sched *s, task *t) {
        внутри ячейки возвращаются ядру; частная анонимная память при следующем
        касании приходит нулями — то же, что записал memset. */
     {
-        uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE);
-        uintptr_t a = ((uintptr_t)t + pg - 1) & ~(pg - 1);
-        uintptr_t b = ((uintptr_t)t + sizeof *t) & ~(pg - 1);
-        if (pg && b > a) { (void)madvise((void *)a, (size_t)(b - a), MADV_DONTNEED); }
+        long page_size=sysconf(_SC_PAGESIZE);
+        if(page_size>0&&(page_size&(page_size-1))==0){
+            uintptr_t pg=(uintptr_t)page_size,start=(uintptr_t)t;
+            uintptr_t a=(start+pg-1)&~(pg-1),b=(start+sizeof *t)&~(pg-1);
+            if(b>a){
+                size_t bytes=(size_t)(b-a);int rc=madvise((void *)a,bytes,MADV_DONTNEED);
+                if(d2s_diag_memory_active()){
+                    s->madvise.requested_bytes+=bytes;
+                    if(rc==0)s->madvise.successes++;
+                    else {
+                        int error=errno;s->madvise.failures++;s->madvise.failed_requested_bytes+=bytes;s->madvise.last_errno=error;
+                        size_t slot=D2S_DIAG_MADVISE_ERRNO_SLOTS;
+                        for(size_t i=0;i<D2S_DIAG_MADVISE_ERRNO_SLOTS;i++)
+                            if(s->madvise.errno_hist[i].error==error){slot=i;break;}
+                            else if(!s->madvise.errno_hist[i].error&&slot==D2S_DIAG_MADVISE_ERRNO_SLOTS)slot=i;
+                        if(slot<D2S_DIAG_MADVISE_ERRNO_SLOTS){s->madvise.errno_hist[slot].error=error;s->madvise.errno_hist[slot].count++;}
+                        else s->madvise.other_errno_count++;
+                    }
+                }
+            }
+        }
     }
 #endif
     t->prop_fd = -1;
@@ -3668,6 +3731,7 @@ static void task_reset(d2s_sched *s, task *t) {
     t->probe_fd = -1;   /* та же ловушка нуля, что у prop_fd */
     t->ver.fd = -1; /* та же ловушка нуля, что у prop_fd, — см. prop_close */
     t->c_fd = -1;   /* и у сокета обращения (contact_close) */
+    t->worker_started_ms=-1;
 }
 
 /* КОРОБКА, КОТОРАЯ ВБРАСЫВАЕТ СБРОС, ЗАСЛУЖИВАЕТ ЗАЩИТЫ ОТ СБРОСА.
@@ -3852,7 +3916,7 @@ static void quic_deny_install(d2s_sched *s, task *t, int64_t now_ms);
 
 static void task_fail(d2s_sched *s, task *t, int64_t now_ms) {
     t->partial_valid = 0; /* поиск кончился — его частичный обход ему и принадлежал */
-    join_worker(t);
+    if(join_worker(t)!=0)return;
     search_report(s, t, now_ms, "failed", NULL);
     contact_close(t);
     if (t->transport == 17 && t->stall_cut) {
@@ -4041,7 +4105,7 @@ static void quic_deny_tick(d2s_sched *s, int64_t now_ms) {
 }
 
 static void task_done(d2s_sched *s, task *t) {
-    join_worker(t);
+    if(join_worker(t)!=0)return;
     search_report(s, t, s->now_ms, "cancelled", NULL);
     contact_close(t);
     prop_close(t);
@@ -5403,6 +5467,8 @@ static void verdict_to_plans(d2s_sched *s, task *t, const d2s_vres *r) {
 
 static size_t measurements_in_flight(const d2s_sched *s);
 static size_t queued_measurements(const d2s_sched *s);
+static size_t measure_slots(const d2s_sched *s);
+static int res_valid(const d2s_sched *s);
 static int cpu_free_pct(const d2s_sched *s);
 static uint64_t mem_reserve_kb(const d2s_sched *s);
 static int ct_pct(const d2s_sched *s);
@@ -5420,6 +5486,7 @@ d2s_sched *d2s_sched_new(d2s_catalog *cat, int link_fd, uint32_t mark) {
     s->n_stall_sent = 1;
     s->meas_limit = SCHED_DEFAULT_ACTIVE_MEASUREMENTS;
     s->limit_logged = SCHED_DEFAULT_ACTIVE_MEASUREMENTS;
+    s->last_measurement_done_ms=-1;
     s->wake[0] = s->wake[1] = -1;
     s->wall_base_s = (int64_t)time(NULL);
     /* Ход QUIC-прогона — тем же приёмником, что TCP (задача 49). Приёмник
@@ -5655,6 +5722,18 @@ static void write_live_groups(FILE *f, const d2s_sched *s);
 void d2s_sched_diagnostics(d2s_sched *s,d2s_diag_observer fn,void *ctx) {
     if(s){s->diagnostic=fn;s->diagnostic_ctx=ctx;}
 }
+void d2s_sched_limit_diagnostics(d2s_sched *s,d2s_diag_limit_observer fn,void *ctx) {
+    if(s){s->limit_diagnostic=fn;s->limit_diagnostic_ctx=ctx;}
+}
+static const char *worker_type(const task *t) {
+    switch(t->job) {
+    case JOB_CLASSIFY:return t->transport==17?"QUIC":"TCP";
+    case JOB_VERIFY:return "VERIFY";
+    case JOB_CONTACT:return "CONTACT";
+    case JOB_VOICE:return "VOICE";
+    default:return "UNKNOWN";
+    }
+}
 void d2s_sched_diagnostic_counts(d2s_sched *s,d2s_diag_counts *c) {
     if(!s||!c)return;
     memset(c,0,sizeof *c);c->boxes=s->cat->n_boxes;
@@ -5663,11 +5742,50 @@ void d2s_sched_diagnostic_counts(d2s_sched *s,d2s_diag_counts *c) {
     }
     if(s->cat->groups)c->observations=s->cat->groups->n_observations;
     c->active=measurements_in_flight(s);c->queued=queued_measurements(s);
+    c->catalog_bytes=d2s_catalog_memory_bytes(s->cat);
+    c->measurement_limit=s->meas_limit;c->measurement_slots=measure_slots(s);
+    c->limiter_mask=s->limiter;c->resources_valid=res_valid(s);
+    c->cpu_valid=s->cpu_valid;c->cpu_free_pct=s->cpu_valid?cpu_free_pct(s):-1;
+    c->mem_valid=s->mem_valid;c->mem_avail_kb=s->mem_avail_kb;c->mem_total_kb=s->mem_total_kb;
+    c->mem_reserve_kb=s->mem_valid?mem_reserve_kb(s):0;
+    c->conntrack_valid=s->ct_valid;c->conntrack_count=s->ct_count;c->conntrack_max=s->ct_max;
+    c->grow_pending=s->grow_pending;c->resource_sequence=s->res_seq;c->limit_sequence=s->limit_seq;
+    if(s->limit_seq && s->now_ms>=s->limit_since_ms)
+        c->limit_age_ms=(uint64_t)(s->now_ms-s->limit_since_ms);
+    c->workers_started=s->workers_started;c->workers_joined=s->workers_joined;
+    c->worker_start_failures=s->worker_start_failures;
+    c->worker_join_failures=s->worker_join_failures;
+    c->worker_oldest_age_ms=c->last_measurement_age_ms=-1;
+    int64_t now=sched_mono_ms();
+    pthread_mutex_lock(&s->mu);
+    if(now>=0&&s->last_measurement_done_ms>=0&&now>=s->last_measurement_done_ms)
+        c->last_measurement_age_ms=now-s->last_measurement_done_ms;
     for(size_t i=0;i<SCHED_MAX_TASKS;i++) {
         const task *t=&s->tasks[i];
-        if(t->state!=T_FREE){c->tasks++;if(t->trig_len||t->snap_len)c->snapshots++;}
+        if((unsigned)t->state<D2S_DIAG_TASK_STATE_COUNT)c->task_states[t->state]++;
+        if(t->state!=T_FREE){
+            c->tasks++;
+            if(t->trig_len||t->snap_len)c->snapshots++;
+            c->snapshot_bytes+=(uint64_t)t->trig_len+t->ctrl_len+t->snap_len;
+        }
+        if(t->th_live) {
+            c->workers_live++;
+            if(t->worker_executing)c->workers_running++;
+            if(t->res_ready)c->workers_join_pending++;
+            else c->workers_result_pending++;
+            if(now>=0&&t->worker_started_ms>=0&&now>=t->worker_started_ms) {
+                int64_t age=now-t->worker_started_ms;
+                if(c->worker_oldest_age_ms<0||age>c->worker_oldest_age_ms) {
+                    c->worker_oldest_age_ms=age;
+                    snprintf(c->worker_oldest_type,sizeof c->worker_oldest_type,"%s",worker_type(t));
+                }
+            }
+        }
     }
+    pthread_mutex_unlock(&s->mu);
 }
+void d2s_sched_diagnostic_madvise(d2s_sched *s,d2s_diag_madvise *stats){if(s&&stats)*stats=s->madvise;}
+void d2s_sched_diagnostic_madvise_reset(d2s_sched *s){if(s)memset(&s->madvise,0,sizeof s->madvise);}
 
 int d2s_sched_write_live(d2s_sched *s, const char *path, const char *catalog_path) {
     if (!s || !path) { return -1; }
@@ -5848,7 +5966,7 @@ void d2s_sched_free(d2s_sched *s) {
         if (s->tasks[i].addr_probe_identity_valid) {
             (void)addr_probe_remove(s, &s->tasks[i], err, sizeof err);
         }
-        join_worker(&s->tasks[i]);
+        if(join_worker(&s->tasks[i])!=0)return;
         search_report(s, &s->tasks[i], s->now_ms, "shutdown", NULL);
         /* Сокеты обращений закрываем сами: поток к этому моменту уже вернулся,
            а дескриптор принадлежит задаче, а не ему. */
@@ -7099,7 +7217,7 @@ static void voice_finish_measure(d2s_sched *s, task *t, int64_t now_ms) {
     pthread_mutex_lock(&s->mu);
     r = t->voice_res;
     pthread_mutex_unlock(&s->mu);
-    join_worker(t);
+    if(join_worker(t)!=0)return;
     t->voice_discovery_verified = r.discovery_verified;
 
     if (r.verdict != D2S_VOICE_BLOCKED) {
@@ -7270,7 +7388,12 @@ static int res_sample(d2s_sched *s, int64_t now_ms) {
     return 1;
 }
 
-enum { MEAS_LIM_CPU = 1u, MEAS_LIM_MEM = 2u, MEAS_LIM_CT = 4u, MEAS_LIM_SLOTS = 8u };
+enum {
+    MEAS_LIM_CPU = D2S_DIAG_LIMIT_CPU,
+    MEAS_LIM_MEM = D2S_DIAG_LIMIT_MEMORY,
+    MEAS_LIM_CT = D2S_DIAG_LIMIT_CONNTRACK,
+    MEAS_LIM_SLOTS = D2S_DIAG_LIMIT_SLOTS
+};
 
 /* Подстройка возможна, только когда измерены процессор И память. */
 static int res_valid(const d2s_sched *s) { return s->cpu_valid && s->mem_valid; }
@@ -7377,10 +7500,17 @@ static void measure_limit_update(d2s_sched *s, int fresh) {
         if (ct_short(s)) lm |= MEAS_LIM_CT;
         if (!lm && lim >= measure_slots(s)) lm |= MEAS_LIM_SLOTS;
     }
-    if (lim != s->meas_limit || lm != s->limiter) {
+    int changed=lim != s->meas_limit || lm != s->limiter;
+    if (changed) {
         s->meas_limit = lim;
         s->limiter = lm;
         s->limit_since_ms = s->now_ms;
+        s->limit_seq = s->res_seq;
+        if(s->limit_diagnostic) {
+            d2s_diag_counts c;
+            d2s_sched_diagnostic_counts(s,&c);
+            s->limit_diagnostic(s->limit_diagnostic_ctx,s->now_ms,&c);
+        }
     }
     /* Журнал с мёртвой зоной (задача 29): смена наличия данных — сразу;
        смена предела или причины — только когда продержалась
@@ -7725,6 +7855,16 @@ static int is_voice_class(const char *name, uint8_t transport) {
     return transport == 17 && strcmp(name, D2S_LINK_VOICE_CLASS) == 0;
 }
 
+/* Telegram domains belong to the separately managed local Telegram proxy.
+   Match complete DNS labels: nottelegram.org is an unrelated target. */
+static int is_telegram_tunnel_domain(const char *name) {
+    static const char domain[] = "telegram.org";
+    size_t name_len = strlen(name), domain_len = sizeof domain - 1;
+    if (name_len == domain_len) return strcasecmp(name, domain) == 0;
+    if (name_len <= domain_len || name[name_len - domain_len - 1] != '.') return 0;
+    return strcasecmp(name + name_len - domain_len, domain) == 0;
+}
+
 static int clean_handshake_recent(d2s_sched *s, const char *name, const d2s_ev *ev);
 static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
     if (!replayed && s->suspect_events < UINT64_MAX) { s->suspect_events++; }
@@ -7786,6 +7926,10 @@ static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
         /* Имени нет — искать не по чему. Это не отказ: датапат подозревает
            поток, а не имя, и поток без приветствия (или с приветствием, уже
            вытесненным из кольца) законно бывает. */
+        return 0;
+    }
+    if (is_telegram_tunnel_domain(name)) {
+        say(s, "по %s замер не запускаю: домен обслуживается локальным Telegram-прокси", name);
         return 0;
     }
     if (!strcasecmp(name, SCHED_DECOY)) {
@@ -9957,7 +10101,7 @@ int d2s_sched_event(d2s_sched *s, const d2s_ev *ev) {
 static void own_first_continue(d2s_sched *s, task *t) {
     /* Фазу может оборвать и срок жизни посреди испытания: рабочий поток
        зонда сперва присоединяется, потом снимается его опыт. */
-    join_worker(t);
+    if(join_worker(t)!=0)return;
     trial_retire(s, t);
     ver_close(t);
     /* Испытанные на проводе свои планы полный прогон второй раз не берёт. */
@@ -10379,7 +10523,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                    в отдых здесь означал бы, что следующая задача начнёт с
                    пустым own_seen и проиграет те же свои планы снова, а
                    полный замер не начнётся никогда. */
-                join_worker(t);
+                if(join_worker(t)!=0)continue;
                 for (size_t k = 0; k < t->n_plans && k < 32; k++) {
                     if (!(t->own_probed & (1u << k))) continue;
                     tried_add(t, (uint32_t)fnv1a(t->plans[k]));
@@ -10487,7 +10631,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             r = t->res;
             pthread_mutex_unlock(&s->mu);
             if (!ready) { continue; }
-            join_worker(t);
+            if(join_worker(t)!=0)continue;
             int vol_cut = t->transport == 6 &&
                 (t->vol.rx_cut || t->vol.verdict == D2S_VOL_CUT);
             int direct_clear = (r.verdict == D2S_V_CLEAR && !vol_cut && !t->ech_trial &&
@@ -11027,7 +11171,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                 t->prop_until_ms = now_ms + SCHED_PROP_STEP_MS;
                 continue;
             }
-            join_worker(t);
+            if(join_worker(t)!=0)continue;
             if (!t->c_ok) {
                 contact_close(t);
                 /* Обращение не состоялось (транспорт) — вопрос не измерен. */
@@ -11127,7 +11271,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             ready = t->res_ready;
             pthread_mutex_unlock(&s->mu);
             if (!ready) { continue; } /* зонд в сети; срок задачи считается выше */
-            join_worker(t);
+            if(join_worker(t)!=0)continue;
             if (t->exec_nak) {
                 exec_refusal(s, t, t->exec_nak & 0xffu, 1);
                 moved++;

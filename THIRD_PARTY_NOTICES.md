@@ -44,8 +44,8 @@ SOFTWARE.
 
 ## OpenSSL
 
-The optional Telegram tunnel runtime statically links OpenSSL 3.5.8 from
-upstream commit `f4dc4d58b48d346a8270183f89acf826d459b0ca`. OpenSSL is licensed
+The optional Telegram tunnel runtime statically links OpenSSL 3.5.9 from
+upstream commit `45e844fa2a14ec92d146bd8f5778ac130b6625fb`. OpenSSL is licensed
 under the Apache License 2.0. Source and license: <https://www.openssl.org/source/license.html>.
 
 `files/tg-roots.pem` contains the public ISRG Root X1 and ISRG Root X2 trust

@@ -149,6 +149,7 @@
 #include "d2s_quicwire.h"
 #include "d2s_udpruntime.h"
 #include "d2s_quicprobe.h"
+#include "d2s_diagnostics.h"
 #include "d2s_verify.h" /* D2S_VERIFY_HEADER_LIMIT */
 #include "d2s_ip6frag_send.h"
 #include "d2s_quic_arms.h"
@@ -1627,10 +1628,12 @@ void d2s_quic_data_stage(d2s_qc *c, const char *sni, const char *path, int need_
     size_t head_len = 0;
     int head_full = 0;
     if (!head) {
+        d2s_diag_memory_alloc_failure(D2S_DIAG_MEM_QUIC_HEADER);
         d.verdict = D2S_QAD_NOT_RUN;
         snprintf(d.reason, sizeof d.reason, "не хватило памяти под заголовки ответа HTTP/3");
         { *out = d; return; }
     }
+    int memory_tracked=d2s_diag_memory_acquire(D2S_DIAG_MEM_QUIC_HEADER,D2S_VERIFY_HEADER_LIMIT);
     int64_t start = qp_now_ms(), progress_at = start;
     /* Раунд 3 (задача 50): «встал» решает молчание транспорта, проверенное
        PING (d2s_qstall), а не пауза в ответе. Медленный первый байт и
@@ -1733,7 +1736,7 @@ void d2s_quic_data_stage(d2s_qc *c, const char *sni, const char *path, int need_
         if (bytes > last) { last = bytes; progress_at = qp_now_ms(); }
         if (closed) break;
     }
-    free(head);
+    d2s_diag_memory_release(D2S_DIAG_MEM_QUIC_HEADER,D2S_VERIFY_HEADER_LIMIT,memory_tracked);free(head);
     d2s_qc_app_progress(c, &bytes, &complete);
     d.app_bytes = done_bytes + bytes;
     d.requests = requests;

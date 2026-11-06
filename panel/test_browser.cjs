@@ -58,8 +58,106 @@ const fixture={telegramStats:{
    {target:'a.example.com',family:6,transport:6,shape:1,kind:'name',level:3,level_name:'обмен прошёл',successes:1,confirmed:iso(130),enabled:true,recheck:true},
    {target:'skip.example.com',family:4,transport:6,shape:1,kind:'name',level:3,level_name:'обмен прошёл',successes:1,confirmed:iso(140),enabled:true,recheck:false}
   ]}],
- measurements:{active:1,limit:4,queued:0,cores:2,free_pct:80},targets:4,confirms:7,probes_used:30,client_unfit:0}};
-let ws;
+  measurements:{active:1,limit:4,queued:0,cores:2,free_pct:80},targets:4,confirms:7,probes_used:30,client_unfit:0}};
+function diagnosticFixture(kind='full'){
+ const now=Math.floor(Date.now()/1000);
+ const fields=['mono_delta_s','catalog_bytes','at_delta_s','rss_kib','vm_data_kib','vm_swap_kib','smaps_rollup_status_code',
+  'smaps_rollup_errno','smaps_rollup_kib','rss_anon_kib','http_bytes','snapshot_bytes','tracked_tcp_bytes','tracked_quic_bytes',
+  'tracked_tls_bytes','tasks','workers_live','workers_result_pending','workers_join_pending','d2sc_epoch'];
+ const encode=row=>fields.map(name=>Object.prototype.hasOwnProperty.call(row,name)?row[name]:null);
+ const record=(i,overrides={})=>({mono_delta_s:i*60,catalog_bytes:i===1439?9625:8192+i,at_delta_s:i*60,rss_kib:41000+i,
+  vm_data_kib:66000+i*2,vm_swap_kib:null,smaps_rollup_status_code:i>=1438?4:2,smaps_rollup_errno:null,
+  smaps_rollup_kib:i>=1438?null:[40000+i,39000+i,22000+i*3,12000+i*5,0],rss_anon_kib:22000+i*3,
+  http_bytes:i===1439?5529:4096+i,snapshot_bytes:2048+i*2,tracked_tcp_bytes:1024+i*3,tracked_quic_bytes:512+i*2,
+  tracked_tls_bytes:256+i*4,tasks:4,workers_live:3,workers_result_pending:1,workers_join_pending:1,d2sc_epoch:0,...overrides});
+ if(kind==='empty')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],samples:[],limit_transitions:[],
+  memory_history:{capacity:1440,sample_interval_ms:60000,fields,time_base:[null,null],samples:[]},memory_details:[]};
+ if(kind==='unavailable')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,processes:[{name:'d2sc',pid:123,rss_kib:null,vm_data_kib:null,anon_kib:512}]}],
+  memory_history:{capacity:1440,sample_interval_ms:60000,time_base:[now-60,1000],samples:[[0,0,null,null,null,1,13,null,512,null,null,null,null,null,null,0,0,0,0]]},
+  memory_details:[{name:'d2sc',latest:{smaps_rollup_status:'unavailable',smaps_rollup_errno:13}}]};
+ if(kind==='unsupported')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,processes:[{name:'d2sc',pid:123,rss_kib:1100,vm_data_kib:2100,anon_kib:550}]}],
+   memory_history:{capacity:1440,sample_interval_ms:60000,time_base:[now-60,1000],samples:[
+    [0,0,1024,2048,null,4,null,null,512,8,16,4,1,2,3,2,1,0,0],
+    [60,60,1100,2100,null,4,null,null,550,10,17,4,1,2,3,2,1,0,0]]},
+  anomalies:[{kind:'unattributed-rss-growth',at:now,rss_delta_kib:1024,accounted_delta_kib:0,window_samples:10}],
+   memory_details:[{name:'d2sc',latest:{smaps_rollup_status:'unsupported',smaps_rollup_errno:null,smaps_rollup_source:'unavailable',smaps_status:'not-read',smaps_errno:null}}]};
+ if(kind==='fallback')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,processes:[{name:'d2sc',pid:123,rss_kib:1024,vm_data_kib:2048,anon_kib:512}]}],
+   memory_history:{capacity:1440,sample_interval_ms:60000,time_base:[now-60,1000],samples:[[0,0,1024,2048,null,4,2,[900,800,512,384,0],512,8,16,4,1,2,3,2,1,0,0]]},
+   memory_details:[{name:'d2sc',latest:{smaps_rollup_status:'unsupported',smaps_rollup_errno:2,smaps_rollup_source:'smaps-fallback',smaps_rollup:{rss_kib:900,anonymous_kib:512,private_dirty_kib:384},smaps_status:'ok',smaps_errno:null}}]};
+ if(kind==='legacy')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,bindings:4,plans:2,boxes:1,processes:[{name:'d2sc',pid:77,rss_kib:8192,vm_data_kib:16384,anon_kib:4096}]}],
+  memory_details:[{name:'d2sc',latest:{pid:77,rss_kib:8192,vm_data_kib:16384,smaps:{anonymous:{anonymous_kib:3072,private_dirty_kib:1024},heap:{anonymous_kib:2048,private_dirty_kib:1536},stack:{anonymous_kib:512,private_dirty_kib:256},other:{anonymous_kib:256,private_dirty_kib:128}}}}]};
+ if(kind==='legacy_enoent')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,bindings:1,plans:1,boxes:1,processes:[{name:'d2sc',pid:77,rss_kib:8192,vm_data_kib:16384,anon_kib:4096}]}],
+  memory_details:[{name:'d2sc',latest:{pid:77,rss_kib:8192,vm_data_kib:16384,smaps_rollup_status:'unavailable',smaps_rollup_errno:2}}]};
+ if(kind==='legacy_smaps_enoent')return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,events:[],
+  samples:[{at:now,processes:[{name:'d2sc',pid:77,rss_kib:8192,vm_data_kib:16384,anon_kib:4096}]}],
+  memory_details:[{name:'d2sc',latest:{pid:77,smaps_rollup_status:'ok',smaps_rollup_source:'smaps_rollup',
+   smaps_rollup:{rss_kib:8192,pss_kib:6144,anonymous_kib:4096,private_dirty_kib:2048,swap_kib:0},smaps_status:'unavailable',smaps_errno:2}}]};
+ if(['units','short','time_mismatch','pid_change','sample_mismatch','legacy_history','legacy_no_fields'].includes(kind)){
+  const count=kind==='short'?11:2, step=kind==='short'?60:600, raw=[];
+  for(let i=0;i<count;i++){
+   const epoch=kind==='pid_change'&&i===1?8:7;
+   raw.push(record(i,{mono_delta_s:i*step,at_delta_s:i*step,smaps_rollup_status_code:4,smaps_rollup_kib:null,
+    rss_kib:1024+i*1024,rss_anon_kib:512+i*512,vm_data_kib:4096+i*2048,
+    catalog_bytes:i===count-1?9625:8192,http_bytes:i===count-1?5529:4096,
+    snapshot_bytes:i===count-1?4096:2048,tracked_tcp_bytes:i===count-1?2048:1024,
+    tracked_quic_bytes:i===count-1?2048:4096,tracked_tls_bytes:i===count-1?8192:0,d2sc_epoch:epoch}));
+  }
+  const firstAt=now-(count-1)*step, lastTime=1000+(count-1)*step;
+  const currentPid=kind==='pid_change'?78:77;
+  const sampleMono=kind==='time_mismatch'?lastTime-60:lastTime;
+  const current=raw[raw.length-1];
+  const memory={capacity:1440,sample_interval_ms:60000,time_base:[firstAt,1000],samples:raw.map(encode)};
+  if(kind!=='legacy_no_fields')memory.fields=fields;
+  if(kind==='legacy_history'||kind==='legacy_no_fields'){
+   const oldFields=['at_delta_s','mono_delta_s','rss_kib','vm_data_kib','vm_swap_kib','smaps_rollup_status_code',
+    'smaps_rollup_errno','smaps_rollup_kib','rss_anon_kib','catalog_kib','http_kib','snapshot_kib','tracked_tcp_kib',
+    'tracked_quic_kib','tracked_tls_kib','tasks','workers_live','workers_result_pending','workers_join_pending'];
+   if(kind==='legacy_history')memory.fields=oldFields;
+   memory.samples=raw.map(r=>[r.at_delta_s,r.mono_delta_s,r.rss_kib,r.vm_data_kib,r.vm_swap_kib,r.smaps_rollup_status_code,
+    r.smaps_rollup_errno,r.smaps_rollup_kib,r.rss_anon_kib,Math.ceil(r.catalog_bytes/1024),Math.ceil(r.http_bytes/1024),
+    Math.ceil(r.snapshot_bytes/1024),Math.ceil(r.tracked_tcp_bytes/1024),Math.ceil(r.tracked_quic_bytes/1024),
+    Math.ceil(r.tracked_tls_bytes/1024),r.tasks,r.workers_live,r.workers_result_pending,r.workers_join_pending]);
+  }
+  const sample={at:now,mono_ms:sampleMono*1000,catalog_bytes:current.catalog_bytes+(kind==='sample_mismatch'?1024:0),http_bytes:current.http_bytes,
+   snapshot_bytes:current.snapshot_bytes,processes:[{name:'d2sc',pid:currentPid,rss_kib:current.rss_kib,
+    vm_data_kib:current.vm_data_kib,anon_kib:current.rss_anon_kib,threads:5}]};
+  return {schema:1,enabled:true,event_capacity:64,sample_capacity:120,samples:[sample],events:[],memory_history:memory,
+   memory_details:[{name:'d2sc',latest:{pid:currentPid,rss_kib:current.rss_kib,smaps_rollup_status:'unsupported',
+    smaps_rollup_errno:null,smaps_rollup_source:'unavailable'}}]};
+ }
+ const start=now-1439*60,history=[];
+ for(let i=0;i<1440;i++)history.push(encode(record(i)));
+ const current=record(1439);
+ return {schema:1,enabled:true,event_capacity:64,limit_transition_capacity:32,sample_capacity:120,
+  events:[{id:1,at:now,outcome:'failed'}],events_overwritten:6,samples_overwritten:2,
+  limit_transitions_overwritten:1,memory_history_overwritten:20,
+  limit_transitions:[{at:now-120,measurement_limit:2,measurement_slots:4,limit_reason:['cpu']},
+   {at:now-60,measurement_limit:1,measurement_slots:1,limit_reason:['memory','conntrack']}],
+  memory_history:{capacity:1440,sample_interval_ms:60000,fields,time_base:[start,500000],samples:history},
+  samples:[{at:now,mono_ms:(500000+1439*60)*1000,boxes:3,bindings:8,plans:4,observations:12,
+   snapshot_bytes:current.snapshot_bytes,catalog_bytes:current.catalog_bytes,workers_running:3,workers_live:3,workers_result_pending:1,workers_join_pending:1,
+   worker_oldest_age_ms:12500,worker_oldest_type:'TCP',workers_started:40,workers_joined:36,
+   worker_start_failures:2,worker_join_failures:1,http_failures:7,http_records_bytes:8192,
+   http_queue_bytes:2048,http_failure_bytes:4096,http_record_limit_hits:2,http_queue_limit_hits:3,
+   http_failure_limit_hits:1,http_failure_record_limit_hits:4,measurement_limit:1,measurement_slots:1,
+   http_bytes:current.http_bytes,http_queue_bytes:2048,http_failure_bytes:4096,
+   limit_reason:['memory','conntrack'],grow_pending:false,processes:[{name:'d2sc',pid:123,rss_kib:current.rss_kib,vm_data_kib:current.vm_data_kib,anon_kib:current.rss_anon_kib,threads:5}]}],
+  http_storage_limits:{records_bytes:262144,queue_bytes:32768,failures_bytes:65536,failure_record_bytes:8192},
+  memory_tracking:{enabled:true,coverage:'учитываются объекты, выделенные при включённом сборе',sites:[
+   {id:'tls13.session',name:'TLS 1.3 session',location:'core/tls13.c:tls_connect_internal',live_bytes:1536,peak_bytes:2048,live_objects:1,created:4,destroyed:3,alloc_failures:0},
+   {id:'quic.connection',name:'QUIC connection',location:'core/quicconn.c:d2s_qc_connect',live_bytes:3072,peak_bytes:6144,live_objects:1,created:6,destroyed:5,alloc_failures:0}]},
+  madvise:{successes:10,failures:1,requested_bytes:65536,failed_requested_bytes:4096,last_errno:12,errno:[{code:12,count:1}],other_errno_count:0},
+  diagnostic_write_failures:1,anomalies_overwritten:2,
+  anomalies:[{kind:'unattributed-rss-growth',at:now,rss_delta_kib:1536,accounted_delta_kib:128,window_samples:10},
+   {kind:'diagnostic-json-write-error',at:now,stage:'open-temp',error_code:13}],
+  memory_details:[{name:'d2sc',latest:{smaps_rollup_status:'unsupported',smaps_rollup_source:'smaps-fallback',smaps_rollup_errno:2,smaps_status:'ok',smaps_errno:null,smaps_rollup:{rss_kib:42399,anonymous_kib:23439,private_dirty_kib:13439}}}]};
+}
+let ws,diagnosticsReply=null,pageLoads=0;
 async function main(){
  let port;
  for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -69,11 +167,18 @@ async function main(){
  let id=0;const pending=new Map(),exceptions=[],dialogs=[];
  ws.onmessage=e=>{const x=JSON.parse(e.data);if(x.id){const p=pending.get(x.id);pending.delete(x.id);x.error?p.reject(x.error):p.resolve(x.result)}
  else if(x.method==='Page.javascriptDialogOpening'){dialogs.push(x.params.message);call('Page.handleJavaScriptDialog',{accept:true})}
- else if(x.method==='Runtime.exceptionThrown')exceptions.push(x.params.exceptionDetails)};
+ else if(x.method==='Page.loadEventFired')pageLoads++;
+ else if(x.method==='Runtime.exceptionThrown')exceptions.push(x.params.exceptionDetails)
+ else if(x.method==='Fetch.requestPaused'){
+  if(x.params.request.url.includes('/api/diagnostics?report'))call('Fetch.fulfillRequest',{requestId:x.params.requestId,responseCode:200,
+   responseHeaders:[{name:'Content-Type',value:'application/json; charset=utf-8'}],
+   body:Buffer.from(JSON.stringify(diagnosticsReply||{enabled:false})).toString('base64')});
+  else call('Fetch.continueRequest',{requestId:x.params.requestId});}};
  const call=(method,params={})=>new Promise((resolve,reject)=>{pending.set(++id,{resolve,reject});ws.send(JSON.stringify({id,method,params}))});
  const evaluate=async(expression)=>{try{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value}catch(e){throw Error('Runtime.evaluate failed for '+expression+': '+(e?.message||JSON.stringify(e)))}};
  const wait=ms=>new Promise(r=>setTimeout(r,ms));
  const until=async(expr,msg)=>{for(let i=0;i<160;i++){if(await evaluate(expr))return;await wait(50)}throw Error(msg)};
+ const reloadPage=async()=>{const before=pageLoads;await call('Page.reload');for(let i=0;i<200;i++){if(pageLoads>before)return;await wait(25)}throw Error('Reload did not complete')};
  await call('Page.enable');await call('Runtime.enable');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
   const arc=CanvasRenderingContext2D.prototype.arc;
@@ -616,10 +721,150 @@ async function main(){
    const b=await evaluate('(()=>{const r=document.querySelector("#telegram-body").getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}})()');
    const s=await call('Page.captureScreenshot',{format:'png',clip:{...b,scale:2}});fs.writeFileSync(path.join(process.env.D2S_TUNNEL_SHOTS,'9-reduced-motion-connected.png'),Buffer.from(s.data,'base64'))}
   await call('Emulation.setEmulatedMedia',{features:[]});
-  await until('document.querySelector("#diagnostic-status").textContent.includes("Сбор выключен")','сбор диагностики по умолчанию выключен');
-  assert.equal(await evaluate('document.querySelector("#diagnostic-download").hidden'),true,'выгрузка диагностики скрыта при выключенном сборе');
+  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await call('Fetch.enable',{patterns:[{url:'*',requestStage:'Request'}]});
+  diagnosticsReply=diagnosticFixture('full');
+  await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart")?.dataset.points==="121"','two-hour diagnostics history renders');
+  await evaluate('document.querySelector("[data-memory-range=\\"24\\"]").click()');
+  await until('document.querySelector("#diagnostic-memory-chart")?.dataset.points==="1440"','1440 compact memory samples render in the 24-hour view');
+  await evaluate('document.querySelector("#diagnostics").scrollIntoView({block:"start"})');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-data").hidden'),false,'enabled report content is visible');
+  await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
+   ['rss','rss_anon','vm_data','anonymous','private_dirty','catalog','http','snapshot','tracked_tcp','tracked_quic','tracked_tls'],
+   'all available RSS, process and subsystem metrics are plotted when selected');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'9.4 КиБ','9625 catalog bytes format consistently in the card');
+  assert.equal(await evaluate('document.querySelector("[data-series-option=catalog] small").textContent.split(" · ")[0]'),
+   await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'catalog card and legend use the same byte value');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-http-bytes").textContent'),'5.4 КиБ','5529 HTTP bytes format consistently in the card');
+  assert.equal(await evaluate('document.querySelector("[data-series-option=http] small").textContent.split(" · ")[0]'),
+   await evaluate('document.querySelector("#diagnostic-http-bytes").textContent'),'HTTP card and legend use the same byte value');
+  assert.match(await evaluate('document.querySelector("#diagnostic-history-coverage").textContent'),/Доступно 23 ч 59 мин из 24 часа/,
+   'selected 24-hour range shows the duration actually retained');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/RSS вырос/,'positive RSS growth is visible as a qualified information notice');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Часть истории вытеснена/,'overwritten diagnostic records are reported');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'optional smaps data is a calm information notice');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 2/,'expected unsupported procfs capability is described instead of shown as an operational errno');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/без сопоставимого роста/,'unattributed RSS anomaly is reported without calling it a leak');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Не удалось сохранить диагностический JSON/,'JSON write failures are visible');
+  assert.match(await evaluate('document.querySelector("#diagnostic-memory-tracking-coverage").textContent'),/выделенные при включённом сборе/,'tracking coverage is separate from history duration');
+  assert.match(await evaluate('document.querySelector("#diagnostic-madvise-results").textContent'),/10 \/ 1/,'madvise outcomes are visible');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-workers-running").textContent'),'3','active workers are shown');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-workers-errors").textContent'),'2 / 1','thread start and join errors are shown');
+  assert.match(await evaluate('document.querySelector("#diagnostic-http-records").textContent'),/256\.0 КиБ/,'HTTP record storage shows its report-provided cap');
+  assert.match(await evaluate('document.querySelector("#diagnostic-http-overflows").textContent'),/очередь — 3/,'HTTP overflow counters are shown');
+  assert.match(await evaluate('document.querySelector("#diagnostic-aimd-current").textContent'),/1\/1.*память, conntrack/,'current 1/1 limiter and its causes are shown');
+  assert.match(await evaluate('document.querySelector("#diagnostic-aimd-history").textContent'),/1 \/ 1.*память/,'AIMD transition history includes the 1/1 cause');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-download").getAttribute("href")'),'/api/diagnostics?download','the complete JSON download endpoint stays linked');
+  diagnosticsReply=diagnosticFixture('units');await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"','controlled metric fixture renders');
+  await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
+  const deltas=await evaluate('Object.fromEntries(Array.from(document.querySelectorAll("[data-series-option]"),label=>[label.dataset.seriesOption,label.querySelector("small")?.textContent]))');
+  for(const [series,delta] of [['rss','+1.0 МиБ'],['rss_anon','+512.0 КиБ'],['vm_data','+2.0 МиБ'],
+   ['tracked_tcp','+1.0 КиБ'],['tracked_quic','−2.0 КиБ'],['tracked_tls','+8.0 КиБ']])
+   assert.ok(deltas[series].endsWith(delta),'independent '+series+' delta is shown, got '+deltas[series]);
+  diagnosticsReply=diagnosticFixture('sample_mismatch');await reloadPage();
+  await until('document.querySelector("#diagnostic-warnings").textContent.includes("Несовпадение объёмов в отчёте")','same-time byte mismatch is exposed');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'9.4 КиБ','card keeps the chart history value');
+  assert.match(await evaluate('document.querySelector("#diagnostic-catalog-note").textContent'),/Время снимка совпадает, но объёмы расходятся/,'catalog card explains the conflicting aggregate value');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/общий снимок 10\.4 КиБ/,'mismatch includes both source values in collapsed details');
+  diagnosticsReply=diagnosticFixture('time_mismatch');await reloadPage();
+  await until('document.querySelector("#diagnostic-process-note").textContent.includes("разница")','different sample times are called out');
+  assert.match(await evaluate('document.querySelector("#diagnostic-catalog-note").textContent'),/разница 1 мин/,'catalog history and counters show their offset');
+  diagnosticsReply=diagnosticFixture('pid_change');await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"','PID generation fixture renders');
+  await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
+  assert.doesNotMatch(await evaluate('document.querySelector("[data-series-option=rss] small").textContent'),/· [+-−]/,'RSS delta is not joined across a PID change');
+  diagnosticsReply=diagnosticFixture('short');await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="11"','short history renders');
+  await evaluate(`document.querySelector('[data-memory-range="24"]').click()`);
+  assert.match(await evaluate('document.querySelector("#diagnostic-history-coverage").textContent'),/Доступно 10 мин из 24 часа/,'24-hour view reports only ten available minutes');
+  for(const kind of ['legacy_history','legacy_no_fields']){
+   diagnosticsReply=diagnosticFixture(kind);await reloadPage();
+   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"',kind+' report renders');
+   assert.equal(await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'9.4 КиБ',kind+' exact matched byte value is retained');
+   assert.equal(await evaluate('document.querySelector("#diagnostic-http-bytes").textContent'),'5.4 КиБ',kind+' keeps HTTP units consistent');
+  }
+  diagnosticsReply=diagnosticFixture('fallback');await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1"','fallback memory snapshot renders');
+  await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
+  const fallbackSeries=await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)');
+  assert.ok(fallbackSeries.includes('anonymous')&&fallbackSeries.includes('private_dirty'),'smaps fallback metrics render when smaps_rollup is unsupported');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'unsupported rollup stays informational');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 2/,'fallback does not report the expected absent optional procfs path as an error');
+  await evaluate(`document.querySelector('[data-memory-range="2"]').click()`);
+  assert.equal(await evaluate('document.querySelector("#diagnostic-memory-chart").dataset.points'),'1','range selection does not synthesize unavailable fallback samples');
+  for(const width of [320,390]){
+   await call('Emulation.setDeviceMetricsOverride',{width,height:844,deviceScaleFactor:1,mobile:true});
+   await wait(100);
+   assert.equal(await evaluate('document.documentElement.scrollWidth>innerWidth'),false,'diagnostics fit the '+width+'px mobile viewport');
+  }
+  await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  if(process.env.D2S_DIAG_SHOTS){
+   await evaluate('document.querySelector("#diagnostics").scrollIntoView({block:"start"})');await wait(150);
+   const b=await evaluate('(()=>{const r=document.querySelector(".diag-history").getBoundingClientRect();return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}})()');
+   const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{...b,scale:1}});
+   fs.mkdirSync(process.env.D2S_DIAG_SHOTS,{recursive:true});
+   fs.writeFileSync(path.join(process.env.D2S_DIAG_SHOTS,'diagnostics-desktop.png'),Buffer.from(shot.data,'base64'));
+  }
+  diagnosticsReply=diagnosticFixture('empty');await reloadPage();
+  await until('document.querySelector("#diagnostic-status").textContent.includes("Ожидаем первый снимок")','empty report remains usable');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-data").hidden'),false,'enabled empty history keeps the panel visible');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-memory-empty").hidden'),false,'empty history has an explicit chart state');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-download").hidden'),false,'empty enabled report can still be downloaded');
+  diagnosticsReply=diagnosticFixture('unavailable');await reloadPage();
+  await until('!document.querySelector("#diagnostic-warnings").hidden','unavailable memory metadata produces a warning');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 13/,'rollup errno is retained in the warning');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
+   ['rss_anon'],'RssAnon remains plotted while unavailable metrics are omitted');
+  diagnosticsReply=diagnosticFixture('unsupported');await reloadPage();
+  await until('!document.querySelector("#diagnostic-warnings").hidden','OpenWrt without proc page monitoring explains unsupported smaps');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'missing rollup has the requested calm title');
+  assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'ordinary procfs capability absence stays neutral');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/в 2 снимках/,'two unsupported rollup samples are counted');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/гонкой при остановке процесса/,'unsupported means the PID exists but the kernel interface is absent');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/KERNEL_PROC_PAGE_MONITOR и CONFIG_PROC_PAGE_MONITOR=y/,'firmware option needed for optional smaps metrics is explicit');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/RSS, RssAnon, VmData и учтённые D2S объекты продолжают собираться/,'OpenWrt baseline metrics stay available without smaps');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/CONFIG_PROC_PAGE_MONITOR/,'OpenWrt guidance points to the kernel setting behind optional rollup metrics');
+  assert.equal(diagnosticsReply.memory_details[0].latest.smaps_rollup_status,'unsupported','OpenWrt procfs absence is classified as unsupported in JSON');
+  assert.equal(diagnosticsReply.memory_details[0].latest.smaps_rollup_errno,null,'OpenWrt procfs feature absence is not serialized as a syscall error');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 2/,'ENOENT is described as an optional kernel procfs capability, not a D2S runtime failure');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
+   ['rss','rss_anon','vm_data'],'RSS, RssAnon and VmData remain charted when smaps_rollup is missing');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/без сопоставимого роста/,'RSS anomaly remains visible in the OpenWrt case');
+  diagnosticsReply=diagnosticFixture('legacy');await reloadPage();
+  await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1"','legacy report memory fields still render');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
+   ['rss','rss_anon','vm_data','anonymous','private_dirty'],'legacy RssAnon and detailed smaps metrics keep their meanings');
+  diagnosticsReply=diagnosticFixture('legacy_enoent');await reloadPage();
+  await until('!document.querySelector("#diagnostic-warnings").hidden','legacy ENOENT rollup metadata is classified');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'legacy ENOENT is calm when the PID is present');
+  assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'optional ENOENT is not yellow');
+  assert.equal(await evaluate('document.querySelector("#diagnostic-warnings details").open'),false,'technical errno details start collapsed');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings .diag-notice-text").textContent'),/errno 2/,'technical errno stays inside the disclosure');
+  assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
+   ['rss','rss_anon','vm_data'],'legacy ENOENT keeps RSS, RssAnon and VmData while omitting unavailable smaps values');
+  diagnosticsReply=diagnosticFixture('legacy_smaps_enoent');await reloadPage();
+  await until('document.querySelector("#diagnostic-status").textContent.includes("Обновлено")','old report with missing smaps renders');
+  assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'missing optional smaps is not a warning');
+  if(out){
+   diagnosticsReply=diagnosticFixture('full');await reloadPage();
+   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="121"','diagnostics capture loaded');
+   await evaluate('document.querySelector("[data-memory-range=\\"24\\"]").click()');
+   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1440"','diagnostics capture has a full history');
+   for(const [name,width,height] of [['diagnostics-wide',1440,1800],['diagnostics-mobile',390,1800]]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+    await evaluate('document.querySelector("#diagnostics").scrollIntoView({block:"start"})');
+    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
+    assert.equal(await evaluate('document.documentElement.scrollWidth>window.innerWidth'),false,name+' has no horizontal overflow');
+    const bounds=await evaluate('(()=>{const r=document.querySelector("#diagnostics").getBoundingClientRect();return {x:r.left+scrollX,y:r.top+scrollY,width:r.width,height:r.height}})()');
+    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{...bounds,scale:1}});
+    fs.writeFileSync(path.join(out,name+'.png'),Buffer.from(shot.data,'base64'));
+   }
+  }
   assert.deepEqual(exceptions,[]);
-  console.log('Browser + C panel: rendering, honesty, polling, layout and all six commands passed.');
+  console.log('Browser + C panel: byte units, independent deltas, time/PID alignment, optional smaps, 10-minute coverage, 1440 samples, layout and commands passed.');
  }finally{await panel.close()}
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>{if(ws)ws.close();chrome.kill()});

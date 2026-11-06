@@ -398,6 +398,8 @@ struct d2s_httpsearch {
     uint64_t diagnostic_seq;
     d2s_hs_ops ops;
     rec *recs; size_t n_recs, cap_recs;
+    uint64_t diagnostic_record_alloc_failures, diagnostic_queue_alloc_failures;
+    uint64_t diagnostic_failure_alloc_failures;
     char measured[8][40]; size_t n_measured;   /* ключи измеренной порчи */
     uint32_t job_seq;
     pend *q; size_t n_q, cap_q;
@@ -480,7 +482,7 @@ static rec *rec_get(d2s_httpsearch *hs, const char *host, uint8_t family) {
     if (hs->n_recs == hs->cap_recs) {
         size_t nc = hs->cap_recs ? hs->cap_recs * 2 : 16;
         rec *nv = realloc(hs->recs, nc * sizeof *nv);
-        if (!nv) { return NULL; }
+        if (!nv) { hs->diagnostic_record_alloc_failures++; return NULL; }
         hs->recs = nv;
         hs->cap_recs = nc;
     }
@@ -513,12 +515,12 @@ static const live_failure *failed_live(rec *r,const char *key,const uint8_t *add
     }
     return NULL;
 }
-static int remember_live_failure(rec *r,const uint8_t *addr,
+static int remember_live_failure(d2s_httpsearch *hs,rec *r,const uint8_t *addr,
     const d2s_binding_context *binding,uint64_t execution,int64_t request_ms) {
     if(failed_live(r,r->key,addr))return 0;
     if(r->evidence_lost)return -1;
     live_failure *v=realloc(r->failures,(r->n_failures+1)*sizeof *v);
-    if(!v)return -1;
+    if(!v){hs->diagnostic_failure_alloc_failures++;return -1;}
     r->failures=v;
     live_failure *f=&v[r->n_failures++];memset(f,0,sizeof *f);
     snprintf(f->key,sizeof f->key,"%s",r->key);
@@ -636,7 +638,25 @@ const char *d2s_httpsearch_plan_of(const d2s_httpsearch *hs, const char *host, u
 static void start_next(d2s_httpsearch *hs, int64_t now);
 
 void d2s_httpsearch_diagnostic_counts(d2s_httpsearch *hs,d2s_diag_counts *c) {
-    if(hs && c){c->http_records=hs->n_recs;c->http_queued=hs->n_q;}
+    if(!hs||!c)return;
+    c->http_records=hs->n_recs;c->http_queued=hs->n_q;
+    c->http_failures=0;c->http_failure_bytes=0;
+    for(size_t i=0;i<hs->n_recs;i++) {
+        c->http_failures+=hs->recs[i].n_failures;
+        c->http_failure_bytes+=(uint64_t)hs->recs[i].n_failures*sizeof *hs->recs[i].failures;
+    }
+    c->http_records_bytes=(uint64_t)hs->cap_recs*sizeof *hs->recs;
+    c->http_queue_bytes=(uint64_t)hs->cap_q*sizeof *hs->q;
+    c->http_bytes=sizeof *hs+c->http_records_bytes+c->http_queue_bytes+c->http_failure_bytes;
+    c->http_record_alloc_failures=hs->diagnostic_record_alloc_failures;
+    c->http_queue_alloc_failures=hs->diagnostic_queue_alloc_failures;
+    c->http_failure_alloc_failures=hs->diagnostic_failure_alloc_failures;
+    /* Port telemetry without introducing unrelated HTTP admission budgets.
+       This version has no configured fixed limits for these stores. */
+    c->http_records_limit_bytes=c->http_queue_limit_bytes=0;
+    c->http_failure_limit_bytes=c->http_failure_record_limit_bytes=0;
+    c->http_record_limit_hits=c->http_queue_limit_hits=0;
+    c->http_failure_limit_hits=c->http_failure_record_limit_hits=0;
 }
 void d2s_httpsearch_diagnostics(d2s_httpsearch *hs,d2s_diag_observer fn,void *ctx) {
     if(hs){hs->diagnostic=fn;hs->diagnostic_ctx=ctx;}
@@ -1049,7 +1069,7 @@ int d2s_httpsearch_bound_failure(d2s_httpsearch *hs, const char *host, uint8_t f
     if(!addr)return 0;
     rec *r=live_owner(hs,host,family,plan_id,binding,execution_id,request_ms);
     if(!r)return 0;
-    if(remember_live_failure(r,addr,binding,execution_id,request_ms))r->evidence_lost=1;
+    if(remember_live_failure(hs,r,addr,binding,execution_id,request_ms))r->evidence_lost=1;
     r->revoked=1;r->no_before_ms=0;
     r->repro_gap=!hs_path_ok(path) || r->evidence_lost;
     r->repeat_path[0]=0;
@@ -1142,7 +1162,7 @@ void d2s_httpsearch_portal(d2s_httpsearch *hs, const char *host, uint8_t family,
     if (hs->n_q == hs->cap_q) {
         size_t nc = hs->cap_q ? hs->cap_q * 2 : 8;
         pend *nv = realloc(hs->q, nc * sizeof *nv);
-        if (!nv) { return; }
+        if (!nv) { hs->diagnostic_queue_alloc_failures++; return; }
         hs->q = nv;
         hs->cap_q = nc;
     }

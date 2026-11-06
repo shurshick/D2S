@@ -1,5 +1,7 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
+#include <openssl/crypto.h>
+#include <stdio.h>
 
 int main(void) {
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
@@ -7,5 +9,6 @@ int main(void) {
     if (!ctx || !ed) return 1;
     EVP_PKEY_CTX_free(ed);
     SSL_CTX_free(ctx);
+    puts(OpenSSL_version(OPENSSL_VERSION));
     return 0;
 }

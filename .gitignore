@@ -100,3 +100,4 @@ release-out/
 /.impeccable/
 *.dSYM/
 /detect/test_parallel_base
+/core/test_sched_worker_lifecycle

@@ -1242,7 +1242,26 @@ static void test_base_silence_on_cut_is_not_absence(void) {
     d2s_httpsearch_free(hs);
 }
 
+static void test_diagnostic_ownership(void) {
+    fake f;memset(&f,0,sizeof f);
+    d2s_hs_ops ops=ops_of(&f);
+    d2s_httpsearch *hs=d2s_httpsearch_new(&ops);
+    d2s_diag_counts counts={0};
+    d2s_httpsearch_diagnostic_counts(hs,&counts);
+    CHECK(counts.http_bytes>0,"HTTP owner storage missing from memory report");
+    d2s_httpsearch_portal(hs,"owner-a.example",4,IP,1000);
+    d2s_httpsearch_portal(hs,"owner-b.example",4,IP,1001);
+    d2s_httpsearch_diagnostic_counts(hs,&counts);
+    CHECK(counts.http_queued==1 && counts.http_queue_bytes>0,"allocated HTTP queue is not accounted");
+    CHECK(counts.http_bytes>=counts.http_records_bytes+counts.http_queue_bytes+counts.http_failure_bytes,
+          "HTTP total smaller than owned buffers");
+    CHECK(!counts.http_records_limit_bytes&&!counts.http_queue_limit_bytes&&!counts.http_failure_limit_bytes,
+          "diagnostics introduced new HTTP admission limits");
+    d2s_httpsearch_free(hs);
+}
+
 int main(void) {
+    test_diagnostic_ownership();
     test_base_silence_on_cut_is_not_absence();
     test_base_connect_fail_is_unmeasured();
     test_repeated_base_connect_fail_is_diagnostic();

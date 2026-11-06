@@ -27,7 +27,7 @@ CFLAGS += -DD2S_RELEASE_ID='"$(RELEASE_ID)"'
 LDFLAGS ?=
 # Стенд в тестах поднимает петлю-мишень в отдельном потоке; самому оракулу
 # потоки не нужны, поэтому pthread — только у тестовой линковки.
-TEST_LDFLAGS = $(LDFLAGS) -lpthread
+TEST_LDFLAGS = diagnostics.o $(LDFLAGS) -lpthread
 
 # Кросс-компиляторы для проверки переносимости. Пути переопределяются извне.
 ZIG        ?= /opt/homebrew/bin/zig
@@ -84,7 +84,8 @@ HDR += include/d2s_http_reply.h
 HDR += include/d2s_domain.h include/d2s_groups.h
 HDR += include/d2s_diagnostics.h ../runtime/d2s_diagnostics_files.h
 diagnostics.o: diagnostics.c include/d2s_diagnostics.h
-SRC += diagnostics.c domain.c groups.c udpplan.c udpruntime.c
+SRC += domain.c groups.c udpplan.c udpruntime.c
+DIAG_SRC = diagnostics.c
 domain.o: domain.c include/d2s_domain.h profiles/psl_index.h
 groups.o: groups.c include/d2s_groups.h include/d2s_domain.h
 
@@ -116,7 +117,7 @@ TESTS += test_httpsearch
 check: test-httpsearch
 .PHONY: test-httpsearch
 test_httpsearch: $(HTTP_READ_OBJ) test_httpsearch.c httpsearch.c httpup_logic.c plantlv.o quic.o quicwire.o crypto.o ../datapath/plan_parse.c ../datapath/plan_apply.c include/d2s_httpsearch.h
-	$(CC) $(CFLAGS) -o $@ test_httpsearch.c httpsearch.c httpup_logic.c plantlv.o quic.o quicwire.o crypto.o ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
+	$(CC) $(CFLAGS) -DD2S_HS_TESTING -o $@ test_httpsearch.c httpsearch.c httpup_logic.c plantlv.o quic.o quicwire.o crypto.o ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
 test-httpsearch: test_httpsearch
 	./test_httpsearch
 
@@ -124,7 +125,7 @@ TESTS += test_http_compare_failure
 check: test-http-compare-failure
 .PHONY: test-http-compare-failure
 httpsearch_compare_test.o: httpsearch.c include/d2s_httpsearch.h include/d2s_httpup.h $(HDR)
-	$(CC) $(CFLAGS) -Dd2s_plan_text_to_tlv=d2s_test_compare_tlv -c httpsearch.c -o $@
+	$(CC) $(CFLAGS) -DD2S_HS_TESTING -Dd2s_plan_text_to_tlv=d2s_test_compare_tlv -c httpsearch.c -o $@
 test_http_compare_failure: $(HTTP_READ_OBJ) test_http_compare_failure.c test_httpsearch.c httpsearch_compare_test.o httpup_logic.c plantlv.o quic.o quicwire.o crypto.o ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c include/d2s_httpsearch.h include/d2s_httpup.h $(HDR)
 	$(CC) $(CFLAGS) -o $@ test_http_compare_failure.c httpsearch_compare_test.o httpup_logic.c plantlv.o quic.o quicwire.o crypto.o ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
 test-http-compare-failure: test_http_compare_failure
@@ -176,7 +177,7 @@ cross-mips-pipe: hello_profiles.inc
 			$(ZIG) cc $$triple $(CFLAGS) -o "$$pipe_dir/test_mips_pipe" test_mips_pipe.c \
 				"$$pipe_dir/httpsearch.o" "$$pipe_dir/httpsprobe.o" httpup_logic.c plantlv.c \
 				quic.c quicwire.c crypto.c ../datapath/plan_parse.c ../datapath/plan_apply.c \
-				../datapath/wire.c $(HTTP_READ_SRC) -lpthread; \
+				../datapath/wire.c $(HTTP_READ_SRC) diagnostics.c -lpthread; \
 		done; \
 		echo "test_mips_pipe: оба порядка байт mips линкуются"
 TESTS += test_verify_http
@@ -673,7 +674,7 @@ san-measured: hello_profiles.inc
 # test_httpsearch, как и test_measured, берёт исполнитель плана датапата:
 # общий цикл ниже его не слинкует.
 san-httpsearch:
-	$(CC) $(SANFLAGS) -o /tmp/d2s-core-san-test_httpsearch test_httpsearch.c httpsearch.c httpup_logic.c plantlv.c quic.c quicwire.c crypto.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) -lpthread
+	$(CC) $(SANFLAGS) -DD2S_HS_TESTING -o /tmp/d2s-core-san-test_httpsearch test_httpsearch.c httpsearch.c httpup_logic.c plantlv.c quic.c quicwire.c crypto.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) diagnostics.c -lpthread
 	/tmp/d2s-core-san-test_httpsearch
 
 # test_volume_context подставляет свои заглушки verify/tls12 вместо
@@ -707,7 +708,7 @@ san-mips-pipe:
 		$(CC) $(SANFLAGS) -Dpipe=d2s_test_mips_pipe -c httpsprobe.c -o "$$mips_dir/httpsprobe.o"; \
 		$(CC) $(SANFLAGS) -o "$$mips_dir/test" test_mips_pipe.c "$$mips_dir/httpsearch.o" \
 			"$$mips_dir/httpsprobe.o" httpup_logic.c plantlv.c quic.c quicwire.c crypto.c \
-			../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) -lpthread; \
+			../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) diagnostics.c -lpthread; \
 		"$$mips_dir/test"
 
 .PHONY: san-http-compare-failure
@@ -715,8 +716,8 @@ san: san-http-compare-failure
 san-http-compare-failure:
 	@set -eu; compare_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/d2s-http-compare-san.XXXXXX"); \
 		trap 'rm -rf "$$compare_dir"' EXIT HUP INT TERM; \
-		$(CC) $(SANFLAGS) -Dd2s_plan_text_to_tlv=d2s_test_compare_tlv -c httpsearch.c -o "$$compare_dir/httpsearch.o"; \
-		$(CC) $(SANFLAGS) -o "$$compare_dir/test" test_http_compare_failure.c "$$compare_dir/httpsearch.o" httpup_logic.c plantlv.c quic.c quicwire.c crypto.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) -lpthread; \
+		$(CC) $(SANFLAGS) -DD2S_HS_TESTING -Dd2s_plan_text_to_tlv=d2s_test_compare_tlv -c httpsearch.c -o "$$compare_dir/httpsearch.o"; \
+		$(CC) $(SANFLAGS) -o "$$compare_dir/test" test_http_compare_failure.c "$$compare_dir/httpsearch.o" httpup_logic.c plantlv.c quic.c quicwire.c crypto.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(HTTP_READ_SRC) diagnostics.c -lpthread; \
 		"$$compare_dir/test"
 
 # Цикл тестов под санитайзером — отдельной целью, чтобы CI мог делить его на
@@ -735,7 +736,7 @@ san-list:
 san-loop: hello_profiles.inc tcp1620_whitelist.inc ../datapath/ctlprobe ../datapath/planlab d2sask
 	@set -e; for t in $(SAN_LOOP); do \
 		echo "== $$t =="; \
-		srcs=$$(echo "$(SRC) $(SAN_EXTRA_SRC)" | tr ' ' '\n' | grep -v '^$$'); \
+		srcs=$$(echo "$(SRC) $(DIAG_SRC) $(SAN_EXTRA_SRC)" | tr ' ' '\n' | grep -v '^$$'); \
 		for inc in $$(grep -o '#include "[A-Za-z0-9_]*\.c"' $$t.c | sed 's/#include "//; s/"//'); do \
 			srcs=$$(echo "$$srcs" | grep -vx "$$inc" || true); \
 		done; \
@@ -759,7 +760,7 @@ GCC ?= mipsel-unknown-linux-gnu-gcc
 # тест ядра включает d2s_detect.h, и без этого пути чужой компилятор падает
 # на нём, не дойдя до самих предупреждений.
 gcc-warn: hello_profiles.inc tcp1620_whitelist.inc
-	@for f in $(SRC) d2sask.c $(TESTS:=.c); do \
+	@for f in $(SRC) $(DIAG_SRC) d2sask.c $(TESTS:=.c); do \
 		$(GCC) $(CFLAGS) -I../detect/include -c -o /tmp/d2s-core-gccwarn.o $$f || exit 1; \
 	done
 	@echo "чужой компилятор: предупреждений нет"
@@ -771,7 +772,7 @@ gcc-warn: hello_profiles.inc tcp1620_whitelist.inc
 # доказывает, что именно эта комбинация (включая pthread на musl и glibc)
 # слинкуется.
 cross: hello_profiles.inc
-	@for f in $(SRC) d2sask.c d2svoice.c; do \
+	@for f in $(SRC) $(DIAG_SRC) d2sask.c d2svoice.c; do \
 		echo "== $$f =="; \
 		$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -c -o /tmp/d2s-core-a64.o $$f || exit 1; \
 		$(ZIG) cc $(MIPS_BE_ZIG) $(CFLAGS) -c -o /tmp/d2s-core-mips.o $$f || exit 1; \
@@ -813,9 +814,9 @@ cross: hello_profiles.inc
 		d2svoice.c voice.c voice_discovery.c stun.c net4.c tls13core.c crypto.c x25519.c meas.c $(filter-out d2svoice.c voice.c voice_discovery.c stun.c net4.c tls13core.c crypto.c x25519.c meas.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@echo "== test_quicprobe целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_quicprobe-a64 \
-		test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c $(filter-out test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c diagnostics.c $(filter-out test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-core-test_quicprobe-mipsel \
-		test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c $(filter-out test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c diagnostics.c $(filter-out test_quicprobe.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c hello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@echo "== original QUIC arm regressions целиком =="
 	@set -e; for t in test_ipfrag test_quic_original_arms test_quic_run_order test_quic_fresh_repeats test_quic_arm_data test_quic_strategy test_quic_split; do \
 		$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-$$t-a64 $$t.c $(SRC) $(filter-out $$t.c $(SRC) $$t.c $(SRC),$(UDP_ENGINE_SRC)) -lpthread; \
@@ -823,9 +824,9 @@ cross: hello_profiles.inc
 	done
 	@echo "== test_quic_arms целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_quic_arms-a64 \
-		test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c $(filter-out test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c diagnostics.c $(filter-out test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-core-test_quic_arms-mipsel \
-		test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c $(filter-out test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c diagnostics.c $(filter-out test_quic_arms.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c props.c quicprobe.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c quichello.c tls13core.c x25519.c quic.c quicwire.c crypto.c meas.c compose.c measured.c hello.c plantlv.c link.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@echo "== test_hello целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_hello-a64 \
 		test_hello.c hello.c -lpthread || exit 1
@@ -833,9 +834,9 @@ cross: hello_profiles.inc
 		test_hello.c hello.c -lpthread || exit 1
 	@echo "== test_quichello целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_quichello-a64 \
-		test_quichello.c quichello.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c hello.c tls13core.c crypto.c x25519.c quicconn.c meas.c -lpthread || exit 1
+		test_quichello.c quichello.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c hello.c tls13core.c crypto.c x25519.c quicconn.c meas.c diagnostics.c -lpthread || exit 1
 	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-core-test_quichello-mipsel \
-		test_quichello.c quichello.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c hello.c tls13core.c crypto.c x25519.c quicconn.c meas.c -lpthread || exit 1
+		test_quichello.c quichello.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c hello.c tls13core.c crypto.c x25519.c quicconn.c meas.c diagnostics.c -lpthread || exit 1
 	@echo "== test_catalog целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_catalog-a64 \
 		test_catalog.c catalog.c groups.c domain.c -lpthread || exit 1
@@ -874,11 +875,11 @@ cross: hello_profiles.inc
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_sched-a64 \
 		test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c \
 		props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c \
-		verify.c verify_quic_replay.c quicconn.c h3.c $(filter-out test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c verify.c verify_quic_replay.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		verify.c verify_quic_replay.c quicconn.c h3.c diagnostics.c $(filter-out test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c verify.c verify_quic_replay.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-core-test_sched-mipsel \
 		test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c \
 		props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c \
-		verify.c verify_quic_replay.c quicconn.c h3.c $(filter-out test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c verify.c verify_quic_replay.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
+		verify.c verify_quic_replay.c quicconn.c h3.c diagnostics.c $(filter-out test_sched.c sched.c quichello.c plantlv.c verdict.c meas.c crypto.c quic.c quicsnap.c quicsnap_reseal.c quicwire.c quicprobe.c quicarms.c ipfrag.c net4.c props.c voice.c voice_discovery.c stun.c hello.c catalog.c groups.c domain.c match.c compose.c measured.c link.c volume.c tls13.c tls12.c p256.c tls13core.c x25519.c verify.c verify_quic_replay.c quicconn.c h3.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1
 	@echo "== d2sask целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-d2sask-a64 \
 		d2sask.c compose.c measured.c hello.c meas.c link.c || exit 1
@@ -886,10 +887,10 @@ cross: hello_profiles.inc
 		d2sask.c compose.c measured.c hello.c meas.c link.c || exit 1
 	@echo "== test_verify целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-core-test_verify-a64 \
-		test_verify.c verify.c quicconn.c quicwire.c h3.c compose.c measured.c hello.c meas.c link.c tls13.c tls12.c p256.c tls13core.c x25519.c crypto.c \
+		test_verify.c verify.c quicconn.c quicwire.c h3.c compose.c measured.c hello.c meas.c link.c tls13.c tls12.c p256.c tls13core.c x25519.c crypto.c diagnostics.c \
 		udpplan.c -lpthread || exit 1
 	@$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-core-test_verify-mipsel \
-		test_verify.c verify.c quicconn.c quicwire.c h3.c compose.c measured.c hello.c meas.c link.c tls13.c tls12.c p256.c tls13core.c x25519.c crypto.c \
+		test_verify.c verify.c quicconn.c quicwire.c h3.c compose.c measured.c hello.c meas.c link.c tls13.c tls12.c p256.c tls13core.c x25519.c crypto.c diagnostics.c \
 		udpplan.c -lpthread || exit 1
 	@echo "== d2sc целиком =="
 	@$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -I../detect/include -o /tmp/d2s-core-d2sc-a64 \
@@ -970,7 +971,7 @@ release: hello_profiles.inc tcp1620_whitelist.inc
 		volume.c tls13.c tls12.c p256.c tls13core.c x25519.c verify.c verify_quic_replay.c quicconn.c h3.c $(DETECT_SRC) ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c ../datapath/wire_udp.c udpplan.c udpruntime.c -lpthread
 	@ls -l $(BUILDDIR)/d2sc-linux-$(ARCH)
 	$(ZIG) cc -target $(TARGET) $(TARGET_FLAGS) $(CFLAGS) -static -Wl,-S \
-		-o $(BUILDDIR)/d2sfetch-linux-$(ARCH) d2sfetch.c verify.c verify_quic_replay.c volume.c quichello.c plantlv.c quicconn.c h3.c quicwire.c quicprobe.c quicsnap.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c props.c \
+		-o $(BUILDDIR)/d2sfetch-linux-$(ARCH) d2sfetch.c diagnostics.c verify.c verify_quic_replay.c volume.c quichello.c plantlv.c quicconn.c h3.c quicwire.c quicprobe.c quicsnap.c quicsnap_reseal.c quicarms.c ipfrag.c net4.c props.c \
 		compose.c measured.c hello.c meas.c link.c tls13.c tls12.c p256.c tls13core.c x25519.c crypto.c quic.c ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c ../datapath/wire_udp.c udpplan.c udpruntime.c -lpthread
 	@ls -l $(BUILDDIR)/d2sfetch-linux-$(ARCH)
 
@@ -1163,7 +1164,7 @@ $(DETECT_OBJ): FORCE
 d2sc: d2sc.c diagnostics.o httpsprobe.o httpsearch.o httpup_logic.o sched.o verify_quic_replay.o quichello.o plantlv.o verdict.o meas.o crypto.o quic.o quicwire.o quicprobe.o quicsnap.o quicsnap_reseal.o quicarms.o ipfrag.o net4.o props.o voice.o voice_discovery.o stun.o \
       hello.o catalog.o groups.o domain.o match.o compose.o measured.o link.o volume.o tls13.o tls13core.o x25519.o verify.o tls12.o p256.o quicconn.o h3.o \
       $(DETECT_OBJ) $(HDR)
-	$(CC) $(CFLAGS) -o $@ $< diagnostics.o httpsprobe.o httpsearch.o httpup_logic.o sched.o verify_quic_replay.o quichello.o plantlv.o verdict.o meas.o crypto.o quic.o quicwire.o quicprobe.o quicsnap.o quicsnap_reseal.o quicarms.o ipfrag.o net4.o props.o \
+	$(CC) $(CFLAGS) -o $@ $< httpsprobe.o httpsearch.o httpup_logic.o sched.o verify_quic_replay.o quichello.o plantlv.o verdict.o meas.o crypto.o quic.o quicwire.o quicprobe.o quicsnap.o quicsnap_reseal.o quicarms.o ipfrag.o net4.o props.o \
 		voice.o voice_discovery.o stun.o hello.o catalog.o groups.o domain.o match.o compose.o measured.o link.o volume.o tls13.o tls13core.o x25519.o verify.o tls12.o p256.o quicconn.o h3.o \
 		$(DETECT_OBJ) ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(TEST_LDFLAGS)
 
@@ -1273,7 +1274,7 @@ TESTS += test_http_runtime
 check: test-http-runtime
 .PHONY: test-http-runtime
 test_http_runtime: $(HTTP_READ_OBJ) ../datapath/test_runtime_trace.h test_http_runtime.c test_httpsearch.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c libd2s_udp.a tls13core.o x25519.o
-	$(CC) $(CFLAGS) -o $@ test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
+	$(CC) $(CFLAGS) -DD2S_HS_TESTING -o $@ test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
 test-http-runtime: test_http_runtime
 	./test_http_runtime
 
@@ -1281,7 +1282,7 @@ TESTS += test_http_live
 check: test-http-live
 .PHONY: test-http-live
 test_http_live: $(HTTP_READ_OBJ) test_http_live.c test_httpsearch.c ../datapath/test_runtime_trace.h d2sc httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c ../datapath/ctl.c ../datapath/ctlsrv.c libd2s_udp.a tls13core.o x25519.o link.o
-	$(CC) $(CFLAGS) -o $@ test_http_live.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c ../datapath/ctl.c ../datapath/ctlsrv.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
+	$(CC) $(CFLAGS) -DD2S_HS_TESTING -o $@ test_http_live.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c ../datapath/ctl.c ../datapath/ctlsrv.c $(HTTP_READ_OBJ) $(TEST_LDFLAGS)
 test-http-live: test_http_live
 	./test_http_live
 
@@ -1302,25 +1303,25 @@ san: san-udp-runtime
 san-udp-runtime: hello_profiles.inc
 	$(CC) $(SANFLAGS) -o /tmp/d2s-san-udp-runtime test_udp_runtime.c $(UDP_SESSION_SRC) $(filter-out udpruntime.c,$(UDP_ENGINE_SRC)) quicarms.c quichello.c hello.c tls13core.c x25519.c meas.c -lpthread
 	/tmp/d2s-san-udp-runtime
-	$(CC) $(SANFLAGS) -o /tmp/d2s-san-quic-sink test_quic_sink.c $(UDP_SESSION_SRC) $(filter-out udpruntime.c,$(UDP_ENGINE_SRC)) quicarms.c quichello.c hello.c tls13core.c x25519.c meas.c quicconn.c h3.c net4.c props.c quicsnap_reseal.c -lpthread
+	$(CC) $(SANFLAGS) -o /tmp/d2s-san-quic-sink test_quic_sink.c $(UDP_SESSION_SRC) $(filter-out udpruntime.c,$(UDP_ENGINE_SRC)) quicarms.c quichello.c hello.c tls13core.c x25519.c meas.c quicconn.c h3.c net4.c props.c quicsnap_reseal.c diagnostics.c -lpthread
 	/tmp/d2s-san-quic-sink
-	$(CC) $(SANFLAGS) -o /tmp/d2s-san-http-runtime test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) -lpthread
+	$(CC) $(SANFLAGS) -DD2S_HS_TESTING -o /tmp/d2s-san-http-runtime test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) diagnostics.c -lpthread
 	/tmp/d2s-san-http-runtime
 .PHONY: san-http-live
 san: san-http-live
 san-http-live: hello_profiles.inc d2sc
-	$(CC) $(SANFLAGS) -o /tmp/d2s-san-http-live test_http_live.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c ../datapath/ctl.c ../datapath/ctlsrv.c $(filter-out udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) -lpthread
+	$(CC) $(SANFLAGS) -DD2S_HS_TESTING -o /tmp/d2s-san-http-live test_http_live.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c ../datapath/ctl.c ../datapath/ctlsrv.c $(filter-out udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) diagnostics.c -lpthread
 	/tmp/d2s-san-http-live
 .PHONY: cross-runtime-gates
 cross: cross-runtime-gates
 cross-runtime-gates: hello_profiles.inc
 	@for t in test_udp_runtime test_quic_sink; do \
-		extra=""; if test "$$t" = test_quic_sink; then extra="quicconn.c h3.c net4.c props.c quicsnap_reseal.c"; fi; \
+		extra=""; if test "$$t" = test_quic_sink; then extra="quicconn.c h3.c net4.c props.c quicsnap_reseal.c diagnostics.c"; fi; \
 		$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-$$t-a64 $$t.c $(UDP_SESSION_SRC) quicarms.c quichello.c hello.c tls13core.c x25519.c meas.c $$extra $(filter-out udpruntime.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1; \
 		$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-$$t-mipsel $$t.c $(UDP_SESSION_SRC) quicarms.c quichello.c hello.c tls13core.c x25519.c meas.c $$extra $(filter-out udpruntime.c,$(UDP_ENGINE_SRC)) -lpthread || exit 1; \
 	done
-	$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-http-runtime-a64 test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) -lpthread
-	$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-http-runtime-mipsel test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) -lpthread
+	$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -DD2S_HS_TESTING -o /tmp/d2s-http-runtime-a64 test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) diagnostics.c -lpthread
+	$(MIPSEL_CC) $(CFLAGS) -DD2S_HS_TESTING -o /tmp/d2s-http-runtime-mipsel test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c $(filter-out test_http_runtime.c httpsearch.c $(UDP_SESSION_SRC) ../datapath/session.c udpruntime.c udpplan.c,$(UDP_ENGINE_SRC)) $(HTTP_READ_SRC) diagnostics.c -lpthread
 
 # TLS record progress is observable independently of successful decryption.
 TESTS += test_tls_rx12
@@ -1333,12 +1334,12 @@ test-tls-rx12: test_tls_rx12
 SAN_SKIP += test_tls_rx12
 san: san-tls-rx12
 san-tls-rx12:
-	$(CC) $(SANFLAGS) -o /tmp/d2s-san-tls-rx12 test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c -lpthread
+	$(CC) $(SANFLAGS) -o /tmp/d2s-san-tls-rx12 test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c diagnostics.c -lpthread
 	/tmp/d2s-san-tls-rx12
 cross: cross-tls-rx12
 cross-tls-rx12:
-	$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-tls-rx12-a64 test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c -lpthread
-	$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-tls-rx12-mipsel test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c -lpthread
+	$(ZIG) cc -target aarch64-linux-musl $(CFLAGS) -o /tmp/d2s-tls-rx12-a64 test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c diagnostics.c -lpthread
+	$(MIPSEL_CC) $(CFLAGS) -o /tmp/d2s-tls-rx12-mipsel test_tls_rx12.c p256.c tls13core.c crypto.c x25519.c diagnostics.c -lpthread
 
 # A blocked QUIC question sequence must yield a measurement slot to TCP.
 test_sched_quic_yield: test_sched_quic_yield.c sched.c $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(HDR)
@@ -1355,10 +1356,18 @@ test-sched-timers: test_sched_timers
 	./test_sched_timers
 check: test-sched-timers
 TESTS += test_sched_timers
+
+.PHONY: test-sched-worker-lifecycle
+test-sched-worker-lifecycle: test_sched_worker_lifecycle
+	./test_sched_worker_lifecycle
+check: test-sched-worker-lifecycle
+TESTS += test_sched_worker_lifecycle
+test_sched_worker_lifecycle: test_sched_worker_lifecycle.c sched.c $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< $(filter-out sched.o,$(SCHED_TEST_OBJ)) $(TEST_LDFLAGS)
 .PHONY: san-sched-quic-yield
 san: san-sched-quic-yield
 san-sched-quic-yield: hello_profiles.inc tcp1620_whitelist.inc
-	$(CC) $(SANFLAGS) -o /tmp/d2s-san-sched-quic-yield test_sched_quic_yield.c $(sort $(filter-out sched.c,$(SCHED_TEST_OBJ:.o=.c)) $(UDP_ENGINE_SRC)) -lpthread
+	$(CC) $(SANFLAGS) -o /tmp/d2s-san-sched-quic-yield test_sched_quic_yield.c $(sort $(filter-out sched.c,$(SCHED_TEST_OBJ:.o=.c)) $(UDP_ENGINE_SRC)) diagnostics.c -lpthread
 	/tmp/d2s-san-sched-quic-yield
 
 # В САМОМ КОНЦЕ, И ЭТО ВАЖНО. LDFLAGS выше несёт libd2s_udp.a в каждую
@@ -1369,7 +1378,7 @@ san-sched-quic-yield: hello_profiles.inc tcp1620_whitelist.inc
 # test_ip6frag_send_live) не получали её вовсе. Последовательная сборка этого
 # не замечала — библиотека успевала собраться раньше. `make -j` падал за
 # секунду: «no such file or directory: libd2s_udp.a».
-$(TESTS) d2sask d2sc d2sfetch d2svoice test_tls12 test_d2sc_proto test_ip6frag_send_live: libd2s_udp.a
+$(TESTS) d2sask d2sc d2sfetch d2svoice test_tls12 test_d2sc_proto test_ip6frag_send_live: libd2s_udp.a diagnostics.o
 
 .PHONY: test-diagnostics
 check: test-diagnostics
@@ -1377,17 +1386,33 @@ test-diagnostics: test_diagnostics
 	python3 test_diagnostics_json.py
 test_diagnostics: test_diagnostics.c diagnostics.c include/d2s_diagnostics.h
 	$(CC) $(CFLAGS) -o $@ test_diagnostics.c diagnostics.c
+TESTS += test_diagnostics
+
+.PHONY: cross-diagnostics
+cross: cross-diagnostics
+cross-diagnostics:
+	@set -eu; diag_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/d2s-diag-cross.XXXXXX"); \
+		trap 'rm -rf "$$diag_dir"' EXIT HUP INT TERM; \
+		for triple in "$(MIPS_BE_ZIG)" "$(MIPS_LE_ZIG)"; do \
+			echo "== diagnostics: zig $$triple =="; \
+			$(ZIG) cc $$triple $(CFLAGS) -UNDEBUG -o "$$diag_dir/test_diagnostics" test_diagnostics.c diagnostics.c; \
+		done; \
+		echo "test_diagnostics: MIPS and MIPSel link"
 clean: clean-diagnostics
 .PHONY: clean-diagnostics
 clean-diagnostics:
 	$(RM) test_diagnostics
+clean-sched-worker-lifecycle:
+	$(RM) test_sched_worker_lifecycle
+.PHONY: clean-sched-worker-lifecycle
+clean: clean-sched-worker-lifecycle
 
 .PHONY: test-diagnostics-runtime
 check: test-diagnostics-runtime
 test-diagnostics-runtime: test_diagnostics_runtime
 	./test_diagnostics_runtime
 test_diagnostics_runtime: test_diagnostics_runtime.c d2sc.c diagnostics.o $(SCHED_TEST_OBJ) $(DETECT_OBJ) libd2s_udp.a $(HDR)
-	$(CC) $(CFLAGS) -o $@ $< diagnostics.o $(SCHED_TEST_OBJ) $(DETECT_OBJ) ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(TEST_LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $< $(SCHED_TEST_OBJ) $(DETECT_OBJ) ../datapath/plan_parse.c ../datapath/plan_apply.c ../datapath/wire.c $(TEST_LDFLAGS)
 clean-diagnostics-runtime:
 	$(RM) test_diagnostics_runtime
 clean: clean-diagnostics-runtime

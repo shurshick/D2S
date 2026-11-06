@@ -5185,11 +5185,14 @@ admission_only_run:
     }
 
 telegram_only_run:
-    /* HTTPS names are measured in their observed protocol. There is no VPS
-       tunnel handling all telegram.org websites in the local-proxy setup. */
+    /* Telegram sites are owned by the separately managed local proxy again.
+       Preserve the original DNS-label boundary and case-insensitive match. */
     {
-        static const char *cases[] = {
-            "telegram.org", "core.telegram.org", "WEB.TELEGRAM.ORG", "nottelegram.org"
+        static const struct { const char *name; int excluded; } cases[] = {
+            {"telegram.org", 1}, {"core.telegram.org", 1},
+            {"WEB.TELEGRAM.ORG", 1}, {"a.web.telegram.org", 1},
+            {"nottelegram.org", 0}, {"telegram.org.example", 0},
+            {"telegram.orgx", 0}
         };
         for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
             d2s_catalog empty = {0};
@@ -5197,15 +5200,15 @@ telegram_only_run:
             uint16_t port = (uint16_t)(40600 + i);
             tcp_calls = quic_calls = 0;
             tcp_answer = D2S_V_OPAQUE;
-            d2s_ev h = ev_hello(6, port, cases[i]);
+            d2s_ev h = ev_hello(6, port, cases[i].name);
             d2s_sched_event(s, &h);
             settle(s);
             CHECK(tcp_calls == 0 && quic_calls == 0, "имя само запустило подбор без подозрения");
             d2s_ev su = ev_suspect(6, port);
             int rc = d2s_sched_event(s, &su);
-            CHECK(rc == 1, "HTTPS Telegram ошибочно оставлен без замера из-за имени");
+            CHECK(rc == !cases[i].excluded, "Telegram proxy exclusion has wrong DNS boundary");
             settle(s);
-            CHECK(tcp_calls == 1, "подозрение HTTPS не прошло обычный прямой замер");
+            CHECK(tcp_calls == !cases[i].excluded, "Telegram proxy exclusion starts an unwanted probe");
             d2s_sched_free(s);
             d2s_catalog_free(&empty);
         }
@@ -5213,7 +5216,7 @@ telegram_only_run:
     if (telegram_only) {
         close(sv[0]); close(sv[1]);
         if (fails) { printf("ПРОВАЛОВ: %d\n", fails); return 1; }
-        puts("Telegram HTTPS admission: PASS");
+        puts("Telegram proxy exclusions: PASS");
         return 0;
     }
 

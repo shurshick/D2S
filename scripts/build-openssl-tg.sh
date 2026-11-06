@@ -3,7 +3,7 @@ set -eu
 
 # OpenSSL source is fetched at an immutable upstream commit, then built into a
 # static musl archive for the selected router architecture.
-OPENSSL_COMMIT=f4dc4d58b48d346a8270183f89acf826d459b0ca
+OPENSSL_COMMIT=45e844fa2a14ec92d146bd8f5778ac130b6625fb
 ZLIB_COMMIT=51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf
 SIZE_CFLAGS='-ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables'
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)

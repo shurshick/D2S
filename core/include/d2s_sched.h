@@ -65,7 +65,10 @@
 #include "d2s_diagnostics.h"
 typedef struct d2s_sched d2s_sched;
 void d2s_sched_diagnostics(d2s_sched *,d2s_diag_observer,void *);
+void d2s_sched_limit_diagnostics(d2s_sched *,d2s_diag_limit_observer,void *);
 void d2s_sched_diagnostic_counts(d2s_sched *,d2s_diag_counts *);
+void d2s_sched_diagnostic_madvise(d2s_sched *,d2s_diag_madvise *);
+void d2s_sched_diagnostic_madvise_reset(d2s_sched *);
 d2s_vres d2s_sched_ech_baseline_result(const d2s_ver_result *baseline,
     d2s_vol_result *volume, const char *origin);
 

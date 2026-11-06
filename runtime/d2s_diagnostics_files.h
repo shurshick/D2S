@@ -4,12 +4,12 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
-#include <stdio.h>
 #include <string.h>
 #ifndef D2S_DIAG_DIR
 #define D2S_DIAG_DIR "/tmp/d2s-diagnostics"
 #endif
-#define D2S_DIAG_REPORT_MAX (256u*1024u)
+/* 24h ownership metrics extend the lossless 1440-row report. */
+#define D2S_DIAG_REPORT_MAX (448u*1024u)
 /* Временный закрытый каталог: запрещаем ссылки и доступ для других пользователей. */
 static inline int d2s_diag_dir(const char *dir,int create) {
     struct stat st;
@@ -18,7 +18,12 @@ static inline int d2s_diag_dir(const char *dir,int create) {
     return 0;
 }
 static inline int d2s_diag_path(char *out,size_t n,const char *dir,const char *name) {
-    int z=snprintf(out,n,"%s/%s",dir,name);return z<0||(size_t)z>=n?-1:0;
+    size_t dir_len=strlen(dir),name_len=strlen(name);
+    if(n<2||dir_len>n-2||name_len>n-2-dir_len){errno=ENAMETOOLONG;return -1;}
+    memcpy(out,dir,dir_len);
+    out[dir_len]='/';
+    memcpy(out+dir_len+1,name,name_len+1);
+    return 0;
 }
 static inline int d2s_diag_enabled(const char *dir) {
     char p[512];struct stat st;

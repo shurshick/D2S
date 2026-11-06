@@ -5,9 +5,21 @@ static char diagnostic_test_dir[]="/tmp/d2s-diag-runtime-XXXXXX";
 #include "d2sc.c"
 #undef main
 #include <assert.h>
+static int path_overflows(const char *dir,const char *name) {
+    char out[2];volatile size_t cap=sizeof out;
+    int (*volatile join_path)(char *,size_t,const char *,const char *)=d2s_diag_path;
+    return join_path(out,cap,dir,name);
+}
 int main(void) {
     assert(mkdtemp(diagnostic_test_dir));
+    errno=0;assert(path_overflows(D2S_DIAG_DIR,"report.json")<0);
+    assert(errno==ENAMETOOLONG);
     d2s_catalog cat={0};d2s_sched *s=d2s_sched_new(&cat,-1,0);assert(s);
+    d2s_diag_counts counts;
+    d2s_sched_diagnostic_counts(s,&counts);
+    assert(counts.tasks==0 && counts.task_states[0]==64);
+    assert(counts.workers_running==0 && counts.workers_join_pending==0);
+    assert(counts.workers_started==0 && counts.workers_joined==0);
     diagnostic_tick(s,1000);assert(!diagnostics);
     for(int i=0;i<10;i++) {
         int64_t now=2000+(int64_t)i*4000;
