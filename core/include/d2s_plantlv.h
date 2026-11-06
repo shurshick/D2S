@@ -36,4 +36,11 @@ int d2s_plan_text_to_tlv(const char *text, uint8_t *out, size_t cap,
 int d2s_plan_text_to_hex(const char *text, char *out, size_t cap,
                          char *err, size_t errcap);
 
+/* One strictly cheaper hypothesis, never evidence. cursor enumerates edits of
+ * this exact source; 1=candidate, 0=no further edit, -1=invalid/OOM. Both source
+ * and result use the ordinary parser. Payloads, fooling and input guards stay
+ * intact. The caller must independently verify before replacing a binding. */
+int d2s_plan_simplify_next(const char *text, size_t cursor, char *out, size_t cap,
+                           size_t *next, char *err, size_t errcap);
+
 #endif /* D2S_PLANTLV_H */

@@ -1,7 +1,7 @@
 {
   "core/d2sc.c": {
-    "sha256": "6ef2b990dc2204c9ffbd3dfeaa91b2e12e5bfb3f73f1bd48b945de86d068c4f3",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "8281777189ab7253b692a3e6ae5cfc50222c752c7de48089b1be5d49ff1c0736",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/diagnostics.c": {
     "sha256": "65117734e3898ac07c9619c8242c870c2d58b614520a79a02092abc67f420ea7",
@@ -12,11 +12,11 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/include/d2s_sched.h": {
-    "sha256": "8368f2751855b05947245cd7ebe4eb2f5884152db39f46e514b18ec890c0e9f8",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "7f8d9b12c8b897e0cb76000228b366214ba4906bdac4c6c9a43ace9f8144786f",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "5653566a3175452f11151a9f81f169ae8926d52fc88a6887b15db033bd11609f",
+    "sha256": "51724e60cd98401d64dd85ccd4b004706ac56934ea095b84be991e0323b85002",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
@@ -129,6 +129,14 @@
   },
   "detect/poison.c": {
     "sha256": "b72539190beebb606943d21809776c8bfa6c685c710e4487a1abfc80722cd43f",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_plantlv.h": {
+    "sha256": "2a877bbb4170c659e7fa485b36ce3cc9bee906890cac2adcce199ce24cc14682",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/plantlv.c": {
+    "sha256": "a18cea51a846696d5cb6e4ea6f3a55e60425e57573e93ead44aef28295895b35",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   }
 }

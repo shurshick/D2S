@@ -64,6 +64,8 @@
 
 #include "d2s_diagnostics.h"
 typedef struct d2s_sched d2s_sched;
+/* Explicit apply-mode admission; defaults off, including observe-mode runs. */
+void d2s_sched_optimize(d2s_sched *, int enabled);
 void d2s_sched_diagnostics(d2s_sched *,d2s_diag_observer,void *);
 void d2s_sched_limit_diagnostics(d2s_sched *,d2s_diag_limit_observer,void *);
 void d2s_sched_diagnostic_counts(d2s_sched *,d2s_diag_counts *);

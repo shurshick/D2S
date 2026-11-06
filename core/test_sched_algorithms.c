@@ -133,7 +133,92 @@ static void contextual_ranking(void) {
     d2s_sched_free(s); d2s_catalog_free(&c);
 }
 
+static void simplification(void) {
+    const char *src = "d2s-plan 1 1\nid 12345678123456781234567812345678\n"
+        "proto tcp tls\npayload 1 01020304\npoison 1 badsum\n"
+        "fake payload=1 poison=1 repeats=3 gap_us=1000 place=before\n"
+        "split payload_start +1\npace 100\n";
+    char out[4096], err[160]; size_t next=0;
+    assert(d2s_plan_simplify_next(src,0,out,sizeof out,&next,err,sizeof err)==1);
+    assert(strstr(out,"repeats=2") && strstr(out,"gap_us=1000") &&
+           strstr(out,"poison 1 badsum") && next==1);
+    assert(strstr(out,"id 00000000000000000000000000000000"));
+    assert(d2s_plan_simplify_next(src,next,out,sizeof out,&next,err,sizeof err)==1);
+    assert(strstr(out,"repeats=3") && strstr(out,"gap_us=0"));
+    assert(d2s_plan_simplify_next(src,next,out,sizeof out,&next,err,sizeof err)==1);
+    assert(!strstr(out,"pace ") && strstr(out,"split payload_start +1"));
+    assert(d2s_plan_simplify_next(src,next,out,sizeof out,&next,err,sizeof err)==0);
+    assert(d2s_plan_simplify_next("invalid",0,out,sizeof out,&next,err,sizeof err)==-1);
+    assert(d2s_plan_simplify_next(src,0,out,3,&next,err,sizeof err)==-1);
+    uint8_t wire[D2S_PLAN_TLV_MAX];size_t wn=0;d2s_plan *p=NULL;
+    assert(d2s_plan_simplify_next(src,0,out,sizeof out,&next,err,sizeof err)==1);
+    assert(!d2s_plan_text_to_tlv(out,wire,sizeof wire,&wn,err,sizeof err));
+    assert(!d2s_plan_load(wire,wn,&p,err,sizeof err));d2s_plan_free(p);
+}
+
+static void maintenance(void) {
+    const char *src="d2s-plan 1 1\nid 00000000000000000000000000000000\n"
+        "proto tcp tls\npayload 1 01020304\npoison 1 badsum\n"
+        "fake payload=1 poison=1 repeats=3 gap_us=1000 place=before\n"
+        "split payload_start +1\n";
+    d2s_catalog c={0};c.boxes=calloc(1,sizeof *c.boxes);assert(c.boxes);c.n_boxes=1;
+    d2s_cat_box *b=c.boxes;strcpy(b->id,"measured-box");
+    b->plans=calloc(1,sizeof *b->plans);b->binds=calloc(1,sizeof *b->binds);
+    assert(b->plans && b->binds);b->n_plans=b->n_binds=1;
+    char id[40];uint8_t hash[D2S_PLAN_ID_LEN];plan_ident(src,id,sizeof id,hash);
+    d2s_cat_plan *p=b->plans;strcpy(p->id,id);strcpy(p->proto,"tls");
+    p->text=strdup(src);assert(p->text);p->enabled=1;p->successes=100;
+    d2s_cat_binding *bd=b->binds;strcpy(bd->target,"min.example");strcpy(bd->kind,"name");
+    strcpy(bd->plan_id,id);bd->enabled=1;bd->level=3;bd->confirmed=100;
+    bd->successes=100;bd->transport=6;bd->family=4;bd->shape=1;
+    bd->verified_by=D2S_VERBY_PROBE;bd->budget=D2S_CAT_BUDGET_PASSED;
+    d2s_sched *s=d2s_sched_new(&c,-1,0);assert(s);task *t=&s->tasks[0];
+    task_reset(s,t);
+    strcpy(t->name,bd->target);strcpy(t->min_box,b->id);strcpy(t->min_source,id);
+    t->transport=6;t->family=4;t->state=T_WATCHING;t->min_ready=1;
+    assert(!d2s_hello_from_profile(D2S_SHAPE_MODERN,t->name,t->trig,sizeof t->trig,&t->trig_len));
+    s->cpu_valid=s->mem_valid=1;s->cpu_free_u=900000;
+    minimize_dispatch(s);assert(!t->min_active); /* observe/default-off */
+    d2s_sched_optimize(s,1);s->tasks[1].state=T_QUEUED;
+    minimize_dispatch(s);assert(!t->min_active); /* repair has priority */
+    s->tasks[1].state=T_FREE;minimize_dispatch(s);assert(t->min_active);
+    assert(!task_of(s,t->name,6,4)); /* new suspicion may start separately */
+    assert(task_free_slot(s)!=t);
+    char err[160];
+    assert(d2s_plan_simplify_next(src,0,t->plans[0],sizeof t->plans[0],&t->min_next,err,sizeof err)==1);
+    t->n_plans=t->next_plan=1;t->ver_ok=1;t->trial_installed=1;
+    t->ver.level=D2S_VER_APPLICATION;t->ver.body_complete=1;t->ver.name_ok=1;
+    t->ver.budget=D2S_BUDGET_PASSED;t->last_verify_ms=40;t->ver_plan_id[0]=1;
+    t->ver.local_limit=1;assert(!minimize_proven(s,t,1000) && !t->min_passes);
+    t->ver.local_limit=0;s->dropped_seen=1;assert(!minimize_proven(s,t,1000) && !t->min_passes);
+    s->dropped_seen=0;t->ver.budget=D2S_BUDGET_CUT;
+    assert(!minimize_proven(s,t,1000) && !t->min_passes);
+    t->ver.budget=D2S_BUDGET_PASSED;t->ver_ok=0;
+    assert(!minimize_proven(s,t,1000) && !t->min_passes); /* APP alone is insufficient */
+    t->ver_ok=1;
+    assert(!minimize_proven(s,t,1000) && t->min_passes==1);
+    assert(!strcmp(b->binds[0].plan_id,id) && b->n_plans==1); /* first proof changes nothing */
+    t->trial_installed=1;t->next_plan=1;
+    assert(!minimize_proven(s,t,1001) && b->n_plans==1); /* duplicate receipt */
+    t->ver_plan_id[0]=2;bd->successes++;
+    assert(!minimize_proven(s,t,1001) && b->n_plans==1); /* concurrent repair generation */
+    bd->successes--;t->last_verify_ms=60;
+    assert(minimize_proven(s,t,1002)==1);
+    assert(b->n_plans==2 && strcmp(b->binds[0].plan_id,id) && b->binds[0].successes==2);
+    assert(b->plans[0].successes==100 && !strcmp(b->plans[0].text,src));
+    assert(b->plans[1].quality[0].passed==2 && !b->plans[1].recipe_valid);
+    assert(b->binds[0].budget==D2S_CAT_BUDGET_PASSED && t->min_cursor==0);
+    assert(minimize_source(s,t,NULL));
+    t->state=T_PLANNING;t->n_plans=t->next_plan=1;t->owned_fallback=1;
+    assert(install_next(s,t)==-1 && !t->fb_next);
+    s->tasks[1].state=T_QUEUED;assert(minimize_tick(s,t,2000)==1 && t->state==T_FREE);
+    assert(b->n_binds==1 && b->binds[0].enabled); /* only the trial retired */
+    s->tasks[1].state=T_FREE;d2s_sched_free(s);d2s_catalog_free(&c);
+}
+
 int main(void) {
+    simplification();
+    maintenance();
     d2s_plan_quality good = {.passed=100}, fresh = {.passed=2};
     assert(d2s_quality_compare(&good, &fresh) > 0);
     fresh.passed = 100; good.cost_known = fresh.cost_known = 1;

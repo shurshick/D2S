@@ -83,6 +83,7 @@ HDR += include/d2s_resource.h
 HDR += include/d2s_http_reply.h
 HDR += include/d2s_domain.h include/d2s_groups.h
 HDR += include/d2s_diagnostics.h ../runtime/d2s_diagnostics_files.h
+HDR += optimize.inc
 diagnostics.o: diagnostics.c include/d2s_diagnostics.h
 SRC += domain.c groups.c udpplan.c udpruntime.c
 DIAG_SRC = diagnostics.c

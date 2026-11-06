@@ -468,6 +468,7 @@ static void diagnostic_tick(d2s_sched *s,int64_t now) {
 }
 
 int main(int argc, char **argv) {
+    int optimize=0;
     if (argc == 2 && strcmp(argv[1], "--version") == 0) { printf("d2sc release=%s wire=%u\n", D2S_RELEASE_ID, D2S_RUNTIME_WIRE); return 0; }
     int offline = d2s_runtime_offline(argc, argv, "d2sc", offline_self_check);
     if (offline >= 0) return offline;
@@ -483,7 +484,8 @@ int main(int argc, char **argv) {
 
     for (int i = 1; i < argc; i++) {
         const char *f = argv[i];
-        if (strcmp(f, "--health-file") == 0 && i + 1 < argc) { health_path = argv[++i]; }
+        if (strcmp(f, "--optimize") == 0) { optimize=1; }
+        else if (strcmp(f, "--health-file") == 0 && i + 1 < argc) { health_path = argv[++i]; }
         else if (strcmp(f, "--control") == 0 && i + 1 < argc) { sock = argv[++i]; }
         else if (strcmp(f, "--catalog") == 0 && i + 1 < argc) { catpath = argv[++i]; }
         else if (strcmp(f, "--live") == 0 && i + 1 < argc) { livepath = argv[++i]; }
@@ -571,6 +573,7 @@ int main(int argc, char **argv) {
         return 1;
     }
     d2s_sched_set_measure_mark(s, have_measure_mark ? measure_mark : mark);
+    d2s_sched_optimize(s,optimize);
     d2s_sched_set_send_cap(s, greeting.send_maxlen);
     d2s_raw_set_segment_max(d2s_arm_segment(greeting.send_maxlen));
 

@@ -665,6 +665,13 @@ typedef struct {
     int64_t    report_queue_ms;
     int64_t    classify_ms, contact_ms, verify_ms; /* worker wall time, not CPU */
     int64_t    last_verify_ms;
+    /* Maintenance retains no catalog pointers across probes. */
+    int min_ready, min_active, min_passes;
+    size_t min_cursor, min_next;
+    char min_box[40], min_source[40];
+    int64_t min_confirmed, min_first_ms;
+    uint8_t min_first_trial[D2S_PLAN_ID_LEN];
+    int min_successes;
     int        local_error; /* запуск рабочего потока не удался */
 
     /* ГОЛОС/АДРЕСНЫЙ UDP: поток, к которому применился приём, и наблюдения.
@@ -1258,6 +1265,7 @@ typedef struct {
 } installed_area;
 
 struct d2s_sched {
+    int optimize;
     d2s_diag_observer diagnostic;
     void *diagnostic_ctx;
     d2s_diag_limit_observer limit_diagnostic;
@@ -2182,7 +2190,7 @@ static void stall_budgets_push(d2s_sched *s) {
 
 static task *task_of(d2s_sched *s, const char *name, uint8_t transport, uint8_t family) {
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
-        if (s->tasks[i].state != T_FREE && s->tasks[i].transport == transport &&
+        if (s->tasks[i].state != T_FREE && !s->tasks[i].min_active && s->tasks[i].transport == transport &&
             s->tasks[i].family == (family ? family : 4) &&
             strcmp(s->tasks[i].name, name) == 0) {
             return &s->tasks[i];
@@ -4736,7 +4744,7 @@ static int install_next(d2s_sched *s, task *t) {
         if (t->probe_fd >= 0) { close(t->probe_fd); t->probe_fd = -1; }
     }
         /* Запасной перебор — последний этап оригинального инструмента. */
-        if(t->family_fast==1 || t->own_first == 2 || t->split_pending) return -1;
+        if(t->min_active || t->family_fast==1 || t->own_first == 2 || t->split_pending) return -1;
         /* Свой план позднего закрытия (rx_saved_bootstrap) — не замер. Его
            неудача ведёт к полному замеру, а не к запасному списку: поле
            14.10.2026, www.bbc.com — «8 планов из запасного перебора донора»
@@ -8748,7 +8756,7 @@ static void on_shape(d2s_sched *s, const d2s_ev *ev) {
          * поиск повторяется ими. Повторяется ОДИН раз: перемер записывает
          * полноту входа «байты клиента», и следующий снимок сюда уже не
          * заходит. */
-        if (t->state == T_WATCHING && t->transport == ev->transport &&
+        if (!t->min_active && t->state == T_WATCHING && t->transport == ev->transport &&
             strcmp(t->name, name) == 0) {
             if (t->watch_shape_pending && t->transport == 6) {
                 t->watch_shape_pending = 0;
@@ -9461,6 +9469,14 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
     trial_retire(s, t);
     ver_close(t);
     t->state = T_WATCHING;
+    t->min_ready = s->optimize && t->transport==6 && !t->by_addr &&
+        !t->ech_offer && !t->partial_finishing && !t->vol.rx_cut &&
+        !t->ver.replay_proof && !t->ver.handshake_proof &&
+        t->ver.level==D2S_VER_APPLICATION && t->ver.budget==D2S_BUDGET_PASSED;
+    if (t->min_ready) {
+        snprintf(t->min_box,sizeof t->min_box,"%s",box_id);
+        snprintf(t->min_source,sizeof t->min_source,"%s",plan_id);
+    }
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
         task *ot = &s->tasks[i];
         if (ot == t || ot->state != T_ASKING || !ot->th_live || ot->yield_to_own_plan)
@@ -10195,6 +10211,7 @@ int d2s_sched_event(d2s_sched *s, const d2s_ev *ev) {
             for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
                 task *t = &s->tasks[i];
                 if (!candidate_trial_matches(t, ev->code, ev->trial_id)) { continue; }
+                if(t->min_active && !ok) { t->exec_nak=0x100u|code;wake_loop(s);continue; }
                 if (t->state == T_TRIAL_SETTLE) {
                     if (ok) { t->trial_acked = 1; wake_loop(s); }
                     else { exec_refusal(s, t, code, 0); }
@@ -10585,6 +10602,8 @@ static void voice_pending_dispatch(d2s_sched *s) {
     (void)on_suspect(s, &ev, 1);
 }
 
+#include "optimize.inc"
+
 int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
     if (!s) { return 0; }
     /* Привязка монотонных часов к стенным делается ПО ПЕРВОМУ ТИКУ, а не при
@@ -10637,9 +10656,11 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
     }
 
     int moved = 0;
+    minimize_dispatch(s);
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
         task *t = &s->tasks[i];
         if (t->state == T_FREE) { continue; }
+        if (t->min_active) { moved += minimize_tick(s,t,now_ms); continue; }
 
         if (t->state == T_QUEUED) {
             if (t->queued_ms == 0) { t->queued_ms = now_ms; }

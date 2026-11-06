@@ -861,3 +861,84 @@ int d2s_plan_text_to_hex(const char *text, char *out, size_t cap,
     out[2 * n] = '\0';
     return 0;
 }
+
+static void simplify_cost(const pl_plan *p,uint64_t *copies,uint64_t *pause,size_t *pieces) {
+    *copies=p->n_seqovls;*pause=(uint64_t)p->pace_us+p->settle_us+p->delay_us;
+    *pieces=p->n_splits;
+    for(size_t i=0;i<p->n_fakes;i++) {
+        unsigned n=p->fakes[i].repeats?p->fakes[i].repeats:1;
+        *copies+=n;*pause+=(uint64_t)(n-1)*p->fakes[i].gap_us;
+    }
+}
+
+int d2s_plan_simplify_next(const char *text, size_t cursor, char *out, size_t cap,
+                           size_t *next, char *err, size_t errcap) {
+    if (!text || !out || !next || strlen(text)>=cap) {
+        say(err,errcap,"simplify: invalid buffer"); return -1;
+    }
+    pl_plan p;
+    if (parse_text(text,&p,err,errcap)) return -1;
+    /* Only full TCP application verification is presently available to the
+       background minimizer. QUIC/voice programs are left intact. */
+    if (p.transport!=6 || p.proto!=1) { plan_free(&p); return 0; }
+    size_t ordinal=0, fi=0;
+    const char *line=text;
+    while (*line) {
+        const char *end=strchr(line,'\n'); if (!end) end=line+strlen(line);
+        const char *word=line;
+        while (word<end && (*word==' ' || *word=='\t')) word++;
+        size_t replace_len=(size_t)(end-line)+(*end=='\n');
+        char replacement[256]; unsigned edits=0;
+        int fake=(end-word>=5 && !memcmp(word,"fake ",5));
+        if (fake) edits=3;
+        else if ((end-word>=5 && !memcmp(word,"pace ",5)) ||
+                 (end-word>=7 && !memcmp(word,"settle ",7)) ||
+                 (end-word>=6 && !memcmp(word,"delay ",6)) ||
+                 (p.n_splits>1 && end-word>=6 && !memcmp(word,"split ",6)) ||
+                 (p.n_seqovls>1 && end-word>=7 && !memcmp(word,"seqovl ",7))) edits=1;
+        for (unsigned edit=0;edit<edits;edit++) {
+            replacement[0]=0;
+            if (fake) {
+                if (fi>=p.n_fakes) continue;
+                pl_fake f=p.fakes[fi];
+                if (edit==0) { if (f.repeats<=1) continue; f.repeats--; }
+                if (edit==1) { if (!f.gap_us || f.repeats<=1) continue; f.gap_us=0; }
+                if (edit==2 && p.n_fakes<=1) continue;
+                if (edit!=2) snprintf(replacement,sizeof replacement,
+                    "fake payload=%u poison=%u repeats=%u gap_us=%u place=%s%s\n",
+                    f.payload_id,f.poison_id,f.repeats,f.gap_us,
+                    f.placement?"between":"before",f.tls_mod==3?" tlsmod=rnd,dupsid":
+                    f.tls_mod==2?" tlsmod=dupsid":f.tls_mod==1?" tlsmod=rnd":"");
+            }
+            if (ordinal++<cursor) continue;
+            size_t prefix=(size_t)(line-text), rn=strlen(replacement);
+            if (prefix+rn+strlen(line+replace_len)>=cap) {
+                plan_free(&p); say(err,errcap,"simplify: output too small"); return -1;
+            }
+            memcpy(out,text,prefix); memcpy(out+prefix,replacement,rn);
+            strcpy(out+prefix+rn,line+replace_len);
+            /* A changed program must not retain its source's wire identity. */
+            char *id=out;
+            while (*id) {
+                char *nl=strchr(id,'\n'); if (!nl) nl=id+strlen(id);
+                char *w=id; while (w<nl && (*w==' ' || *w=='\t')) w++;
+                if (nl-w>=35 && !memcmp(w,"id ",3)) {
+                    w+=3; while (w<nl && (*w==' ' || *w=='\t')) w++;
+                    if (nl-w>=32) memset(w,'0',32);
+                }
+                id=*nl?nl+1:nl;
+            }
+            pl_plan candidate;
+            if (parse_text(out,&candidate,err,errcap)) continue;
+            uint64_t ac,bc,ap,bp;size_t an,bn;
+            simplify_cost(&p,&ac,&ap,&an);simplify_cost(&candidate,&bc,&bp,&bn);
+            int cheaper=bc<=ac && bp<=ap && bn<=an && (bc<ac || bp<ap || bn<an);
+            if(!cheaper) { plan_free(&candidate);continue; }
+            plan_free(&candidate); plan_free(&p); *next=ordinal; return 1;
+        }
+        if (fake) fi++;
+        line=*end?end+1:end;
+    }
+    plan_free(&p); *next=ordinal;
+    return 0;
+}

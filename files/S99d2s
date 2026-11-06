@@ -1329,6 +1329,7 @@ start_engine() {
     # потоки потомка не наследует, и вывод уходил бы в никуда — проверено на
     # роутере, файл оставался нулевым при исправно работающем движке.
     set -- --health-file "$RUNTIME_DIR/d2sc.health"
+    [ "$MODE" != apply ] || set -- "$@" --optimize
     spawn_daemon -S -b -m -p "$CT_PID" -x "$BIN" -- \
         --control "$SOCK" --catalog "$DIR/state/catalog.json" --live "$LIVE" --mark "$PROBE_MARK" \
         --measure-mark "$MEASURE_MARK" \
