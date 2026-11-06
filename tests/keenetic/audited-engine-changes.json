@@ -16,7 +16,7 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "6c8d396a622cb1364a95cd88b02158ce43ea73348157fdd8f691c6e7958eff66",
+    "sha256": "72baf3ed75014334a6c4ecaabf642d8689315b26bcb0cc6b07423a64c6b96a3d",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
@@ -64,16 +64,16 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/catalog.c": {
-    "sha256": "fef0213390e5c282f7df368c6704886d1b6a604c5034fbef72b5351606800e1f",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "0dd5e265704b74ea44ff6a57265fa743ffce7bef1c222f1d7b56cefe5ec98eaa",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/httpsearch.c": {
     "sha256": "ac4569ddf7085304e3409fb44844300f3da32e4fa73c9eb7e6cd20aca8bd3419",
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/include/d2s_catalog.h": {
-    "sha256": "379a2f0c2e03581165ec736051c7814833c0d4b8c5473826f29ec70f6ddfc4f6",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "9a705d5b1901ae17f5e49df1ed86d5ec3a20377090de56e14357662177ca2921",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/quicconn.c": {
     "sha256": "a4d5757f78851c638c3549a32dc4c58b0e0fcf156402c85cb048f68c2e1eb3da",
@@ -109,6 +109,14 @@
   },
   "core/include/d2s_verdict.h": {
     "sha256": "40cca870557c0095d1f650080cf28ba1363b5533abdd08b949df0cc01889241d",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/include/d2s_plan.h": {
+    "sha256": "45cddb55626643d77a098e36b8cb90eeea802c8f132003a34587c2dd3fc8fbf2",
+    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "datapath/plan_parse.c": {
+    "sha256": "7b2b002ab9625eb5913cedb43c0837c18d263e559499f50fcb8cd03439f5e033",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   }
 }

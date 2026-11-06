@@ -210,6 +210,9 @@ typedef struct d2s_flow d2s_flow;
 int  d2s_plan_load(const uint8_t *buf, size_t len,
                    d2s_plan **out, char *err, size_t errlen);
 void d2s_plan_free(d2s_plan *p);
+/* Static program cost; excludes input-dependent segmentation/retransmission.
+   This estimate ranks hypotheses, never serves as a wire proof. */
+void d2s_plan_nominal_cost(const d2s_plan *p, uint32_t *fakes, uint32_t *delay_us);
 
 /* 0 при успехе, -1 при отказе. Отказ означает, что план к этому пакету
  * неприменим (например, не вычисляется якорь) — тогда действий нет вовсе, а не

@@ -115,6 +115,8 @@ typedef struct {
  * отпечаток набирает. */
 #define D2S_FP_METHOD 2
 
+#include "d2s_quality.h"
+
 /* Проверенный план коробки (см. Plan). text — человекочитаемый текст
  * d2s-plan, не байты TLV: он остаётся тем же полем, что каноническую форму
  * порождает (см. план задачи и internal/plan), и не размером-ограничен —
@@ -127,6 +129,7 @@ typedef struct {
     int64_t  added;
     int      successes;
     int      enabled;
+    d2s_plan_quality quality[D2S_QUALITY_CONTEXTS];
 } d2s_cat_plan;
 
 /* Подтверждённая привязка цели к плану (см. Binding).

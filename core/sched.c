@@ -664,6 +664,7 @@ typedef struct {
     int64_t    report_admitted_ms; /* -1 until scheduler time is known */
     int64_t    report_queue_ms;
     int64_t    classify_ms, contact_ms, verify_ms; /* worker wall time, not CPU */
+    int64_t    last_verify_ms;
     int        local_error; /* запуск рабочего потока не удался */
 
     /* ГОЛОС/АДРЕСНЫЙ UDP: поток, к которому применился приём, и наблюдения.
@@ -3208,7 +3209,7 @@ static void *worker_run(void *vp) {
     if (elapsed >= 0) {
         if (job == JOB_CLASSIFY) t->classify_ms += elapsed;
         else if (job == JOB_CONTACT) t->contact_ms += elapsed;
-        else if (job == JOB_VERIFY) t->verify_ms += elapsed;
+        else if (job == JOB_VERIFY) { t->verify_ms += elapsed; t->last_verify_ms = elapsed; }
     }
     pthread_mutex_unlock(&s->mu);
     return result;
@@ -4660,7 +4661,7 @@ static int install_next(d2s_sched *s, task *t) {
         if (t->probe_fd >= 0) { close(t->probe_fd); t->probe_fd = -1; }
     }
         /* Запасной перебор — последний этап оригинального инструмента. */
-        if(t->family_fast==1 || t->own_first == 2) return -1;
+        if(t->family_fast==1 || t->own_first == 2 || t->split_pending) return -1;
         /* Свой план позднего закрытия (rx_saved_bootstrap) — не замер. Его
            неудача ведёт к полному замеру, а не к запасному списку: поле
            14.10.2026, www.bbc.com — «8 планов из запасного перебора донора»
@@ -4832,9 +4833,13 @@ static int bound_plan_here(const d2s_sched *s, const task *t, uint8_t shape,
    формы клиента; затем гипотезы другой формы TLS по TCP. Внутри группы —
    число успехов, затем свежесть подтверждения. */
 static int own_rank_before(int lead_a, int tier_a, const d2s_cat_plan *a, int64_t fresh_a,
-                           int lead_b, int tier_b, const d2s_cat_plan *b, int64_t fresh_b) {
+                           int lead_b, int tier_b, const d2s_cat_plan *b, int64_t fresh_b,
+                           int context, int64_t now) {
     if (lead_a != lead_b) return lead_a > lead_b;
     if (tier_a != tier_b) return tier_a < tier_b;
+    int quality = d2s_quality_compare_at(context < 0 ? NULL : &a->quality[context],
+                                         context < 0 ? NULL : &b->quality[context], now);
+    if (quality) return quality > 0;
     if (a->successes != b->successes) return a->successes > b->successes;
     return fresh_a > fresh_b;
 }
@@ -4855,6 +4860,7 @@ static size_t own_first_plans(d2s_sched *s, task *t, int fill) {
        имён. Применимость докажет только повтор байтов клиента под планом. */
     int ech_replay = t->transport == 6 && t->ech_offer && t->ech_replay;
     uint8_t bound_shape = ech_replay ? (uint8_t)D2S_LINK_SHAPE_ECH_TCP : want;
+    int quality_context = d2s_quality_index(t->family, bound_shape);
     const d2s_cat_plan *pick[SCHED_MAX_PLANS];
     const d2s_cat_box *owner[SCHED_MAX_PLANS];
     int64_t fresh[SCHED_MAX_PLANS];
@@ -4931,7 +4937,7 @@ static size_t own_first_plans(d2s_sched *s, task *t, int fill) {
             size_t dup = n;
             for (size_t k = 0; k < n; k++) if (!strcmp(pick[k]->text, p->text)) dup = k;
             int better_than_dup = dup < n &&
-                own_rank_before(lead, tier, p, newest, first[dup], tiers[dup], pick[dup], fresh[dup]);
+                own_rank_before(lead, tier, p, newest, first[dup], tiers[dup], pick[dup], fresh[dup], quality_context, wall_s(s, s->now_ms));
             if (dup < n && !better_than_dup) continue;
             if (dup < n) {
                 for (size_t k = dup; k + 1 < n; k++) {
@@ -4942,7 +4948,7 @@ static size_t own_first_plans(d2s_sched *s, task *t, int fill) {
             }
             size_t at = n;
             while (at > 0 && own_rank_before(lead, tier, p, newest, first[at - 1], tiers[at - 1],
-                                             pick[at - 1], fresh[at - 1]))
+                                             pick[at - 1], fresh[at - 1], quality_context, wall_s(s, s->now_ms)))
                 at--;
             if (at >= SCHED_MAX_PLANS) continue;
             if (n == SCHED_MAX_PLANS) n--;
@@ -5480,6 +5486,7 @@ static int resume_split_detail(d2s_sched *s, task *t, int64_t now_ms) {
     t->researched = 1;
     t->cached_measure_valid = 0;
     t->exec_refused = t->exec_probed = 0;
+    t->owned_fallback = 0;
     t->n_plans = t->n_known = t->next_plan = 0;
     t->box_id[0] = '\0';
     t->state = T_ASKING;
@@ -8752,6 +8759,47 @@ static void budget_uncountable_note(d2s_sched *s, const task *t) {
 
 static int partial_finish(d2s_sched *s, task *t, int64_t now_ms);
 
+/* Rankings are hypotheses only. Only attributed, completed network trials
+   enter their history; local loss/refusal or handshake-only replay does not. */
+static void plan_quality_record(d2s_sched *s, task *t, int passed, int64_t now_ms) {
+    int context = d2s_quality_index(t->family, record_shape(t));
+    if (!s->cat || context < 0 || !t->next_plan || t->next_plan > t->n_plans ||
+        t->ver.local_limit || s->dropped_seen != t->ver_dropped0 ||
+        t->ver.replay_proof || t->ver.handshake_proof || t->partial_finishing ||
+        t->ver.level < D2S_VER_TRANSPORT) return;
+    int applied = t->ver_ok;
+    d2s_ev own = {0}; own.family = t->ver_flow.family; own.transport = t->ver_flow.transport;
+    memcpy(own.low_ip, t->ver_flow.a_ip, sizeof own.low_ip);
+    memcpy(own.high_ip, t->ver_flow.b_ip, sizeof own.high_ip);
+    own.low_port = t->ver_flow.a_port; own.high_port = t->ver_flow.b_port;
+    for (size_t k = 0; !applied && k < t->ver_seen; k++)
+        applied = ev_matches_flow(&own, &t->ver_early[k]);
+    if (!applied) return;
+    const char *text = t->plans[t->next_plan - 1];
+    for (size_t bi = 0; bi < s->cat->n_boxes; bi++) {
+        d2s_cat_box *b = &s->cat->boxes[bi];
+        for (size_t i = 0; i < b->n_plans; i++) {
+            d2s_cat_plan *p = &b->plans[i];
+            if (!p->text || strcmp(p->text, text)) continue;
+            d2s_plan_quality *q = &p->quality[context];
+            uint32_t elapsed = t->last_verify_ms < 0 ? 0 :
+                (uint64_t)t->last_verify_ms > UINT32_MAX ? UINT32_MAX : (uint32_t)t->last_verify_ms;
+            d2s_quality_note(q, passed, elapsed, wall_s(s, now_ms));
+            if (!q->cost_known) {
+                uint8_t *wire = malloc(D2S_PLAN_TLV_MAX);
+                size_t n = 0; char err[128]; d2s_plan *program = NULL;
+                if (wire && !d2s_plan_text_to_tlv(text, wire, D2S_PLAN_TLV_MAX, &n, err, sizeof err) &&
+                    !d2s_plan_load(wire, n, &program, err, sizeof err)) {
+                    d2s_plan_nominal_cost(program, &q->nominal_fakes, &q->nominal_delay_us);
+                    q->cost_known = 1;
+                }
+                d2s_plan_free(program); free(wire);
+            }
+            s->cat->revision++; s->sync_pending = 1;
+        }
+    }
+}
+
 /* ОБРЫВ ПОСРЕДИ ПОВТОРОВ ПРИ ДОКАЗАННОМ ПРИМЕНЕНИИ (задача 55; ревью I-1,
    I-3). Ответ приложения был, план исполнился на потоке зонда, а поток не
    перенёс 2 × бюджет коробки — действие (a) поля 04.10. Кандидат не
@@ -8771,6 +8819,8 @@ static int partial_finish(d2s_sched *s, task *t, int64_t now_ms);
    отказ нельзя — частичный результат записывается сразу (отметка «оборван»,
    повторная проверка после отдыха), объёмный блок остаётся открытым. */
 static void budget_cut_reject(d2s_sched *s, task *t, int64_t now_ms) {
+    /* A separately measured second RX block is not a handshake-plan failure. */
+    if (!(t->transport == 6 && t->vol.rx_cut)) plan_quality_record(s, t, 0, now_ms);
     char cut_id[40]; uint8_t cut_wire[D2S_PLAN_ID_LEN];
     plan_ident(t->plans[t->next_plan - 1], cut_id, sizeof cut_id, cut_wire);
     /* Объёмный обрыв этой цели измерен — остановка потока принадлежит ему. */
@@ -8830,7 +8880,7 @@ static void budget_cut_reject(d2s_sched *s, task *t, int64_t now_ms) {
        каждый следующий кандидат получит тот же обрыв от того же блока, и
        судить его будет то же неизмеренное число. Поиск кончается частичным
        результатом; объёмный вопрос мерит свой замер, а не этот бюджет. */
-    if (volume_block) {
+    if (volume_block && !t->split_pending) {
         say(s, "по %s следующий кандидат получит тот же обрыв от того же блока, а "
                "требование %u пакетов к этой цели не измерено (%s) — перебор по нему не "
                "продолжаю, записываю частичный результат", t->name,
@@ -8841,7 +8891,7 @@ static void budget_cut_reject(d2s_sched *s, task *t, int64_t now_ms) {
        замер владеет поиском и продолжить свой перебор с этого места не
        умеет, поэтому дальше — внутренние гипотезы оригинала (запасной
        список), как у невыразимого приёма (78a70fd). */
-    if (t->transport == 6 && t->search_owned && !t->owned_fallback && t->own_first != 2) {
+    if (t->transport == 6 && t->search_owned && !t->owned_fallback && t->own_first != 2 && !t->split_pending) {
         t->owned_fallback = 1;
         say(s, "по %s приём замера снял рукопожатие, но поток режется бюджетом — это "
                "частичный обход; ищу проходящий бюджет дальше, в запасном списке", t->name);
@@ -9128,6 +9178,7 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
                          /* Перенос не меняет отпечаток коробки плана: цель
                             этой коробкой не измерялась (задача 32, I1). */
                          wall_s(s, now_ms), transferred ? NULL : &t->fp);
+    if (t->ver.budget != D2S_BUDGET_CUT) plan_quality_record(s, t, 1, now_ms);
     /* Блок доказан полным замером ИЛИ базовым вопросом донора перед своими
        планами (0/3 — рукопожатие режется): оба — опыт для семейства. Без
        второго семейства не учились бы на основном пути (поле 03.10). */
@@ -11609,6 +11660,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                             plan_ident(t->plans[t->next_plan-1],failed_id,sizeof failed_id,wire_id);
                             group_record(s,t,D2S_GROUP_PLAN_FAILED,failed_id,t->asked_shape,now_ms);
                         }
+                        plan_quality_record(s, t, 0, now_ms);
                         trial_retire(s, t);
                         ver_close(t);
                         t->state = T_PLANNING;

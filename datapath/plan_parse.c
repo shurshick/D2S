@@ -565,6 +565,21 @@ int d2s_plan_load(const uint8_t *buf, size_t len,
     return 0;
 }
 
+void d2s_plan_nominal_cost(const d2s_plan *p, uint32_t *fakes, uint32_t *delay_us) {
+    uint64_t copies = 0, delay = 0;
+    if (p) {
+        delay = (uint64_t)p->delay_us + p->settle_us;
+        for (size_t i = 0; i < p->n_fakes; i++) {
+            const struct d2s_fake *f = &p->fakes[i];
+            copies += f->repeats;
+            if (f->repeats) delay += (uint64_t)(f->repeats - 1u) * f->gap_us;
+        }
+        delay += (uint64_t)p->pace_us * (p->n_splits + (copies != 0));
+    }
+    if (fakes) *fakes = copies > UINT32_MAX ? UINT32_MAX : (uint32_t)copies;
+    if (delay_us) *delay_us = delay > UINT32_MAX ? UINT32_MAX : (uint32_t)delay;
+}
+
 void d2s_plan_free(d2s_plan *p) {
     if (!p) {
         return;

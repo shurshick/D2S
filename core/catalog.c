@@ -794,8 +794,52 @@ static int parse_fp(jctx *j, d2s_cat_fp *out, int depth, char *err, size_t errca
  * Планы и привязки.
  * -------------------------------------------------------------------- */
 
+typedef struct { uint8_t family, shape; d2s_plan_quality q; } quality_row;
+static int handle_quality_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
+    quality_row *r = ctx;
+    if (!strcmp(key, "family")) return jparse_u8(j, &r->family, "quality.family", err, errcap);
+    if (!strcmp(key, "shape")) return jparse_u8(j, &r->shape, "quality.shape", err, errcap);
+    if (!strcmp(key, "cost_known")) return jparse_bool_i(j, &r->q.cost_known, "quality.cost_known", err, errcap);
+    if (!strcmp(key, "checked")) return jparse_rfc3339(j, &r->q.checked_at, "quality.checked", err, errcap);
+    uint32_t *v = !strcmp(key, "passed") ? &r->q.passed :
+                  !strcmp(key, "failed") ? &r->q.failed :
+                  !strcmp(key, "elapsed_ms") ? &r->q.elapsed_ms :
+                  !strcmp(key, "nominal_fakes") ? &r->q.nominal_fakes :
+                  !strcmp(key, "nominal_delay_us") ? &r->q.nominal_delay_us : NULL;
+    if (v) {
+        int64_t x;
+        if (jparse_raw_int(j, &x, err, errcap)) return -1;
+        if (x < 0 || (uint64_t)x > UINT32_MAX) {
+            set_err(err, errcap, "quality.%s: outside uint32", key); return -1;
+        }
+        *v = (uint32_t)x; return 0;
+    }
+    return jskip_value(j, depth + 1, err, errcap);
+}
+static int parse_quality(jctx *j, d2s_cat_plan *p, int depth, char *err, size_t errcap) {
+    unsigned seen = 0;
+    memset(p->quality, 0, sizeof p->quality);
+    if (depth + 2 > D2S_JSON_MAX_DEPTH) { set_err(err, errcap, "quality: excessive nesting"); return -1; }
+    if (jeat_null_if_present(j)) return 0;
+    if (jeat(j, '[', err, errcap)) return -1;
+    if (jpeek(j) == ']') { j->i++; return 0; }
+    for (;;) {
+        quality_row r = {0};
+        if (parse_object(j, handle_quality_key, &r, depth + 2, err, errcap)) return -1;
+        int index = d2s_quality_index(r.family, r.shape);
+        if (index < 0 || (seen & (1u << index))) {
+            set_err(err, errcap, "quality: invalid or duplicate context"); return -1;
+        }
+        seen |= 1u << index; p->quality[index] = r.q;
+        int c = jpeek(j);
+        if (c == ']') { j->i++; return 0; }
+        if (jeat(j, ',', err, errcap)) return -1;
+    }
+}
+
 static int handle_plan_key(jctx *j, const char *key, void *ctx, int depth, char *err, size_t errcap) {
     d2s_cat_plan *out = (d2s_cat_plan *)ctx;
+    if (!strcmp(key, "quality")) return parse_quality(j, out, depth, err, errcap);
     if (strcmp(key, "id") == 0)
         return jparse_string_fixed(j, out->id, sizeof out->id, "plan.id", err, errcap);
     if (strcmp(key, "proto") == 0)
@@ -1266,6 +1310,21 @@ static void write_plan_elem(FILE *f, const void *e, int depth) {
     wr_indent(f, depth + 1); fputs("\"text\": ", f); write_json_string(f, p->text ? p->text : ""); fputs(",\n", f);
     wr_indent(f, depth + 1); fprintf(f, "\"added\": \"%s\",\n", added_s);
     wr_indent(f, depth + 1); fprintf(f, "\"successes\": %d,\n", p->successes);
+    int any = 0;
+    for (int i = 0; i < D2S_QUALITY_CONTEXTS; i++) {
+        const d2s_plan_quality *q = &p->quality[i];
+        if (!q->passed && !q->failed) continue;
+        if (!any) { wr_indent(f, depth + 1); fputs("\"quality\": [", f); }
+        if (any++) fputc(',', f);
+        static const unsigned shapes[4] = {1, 2, 3, 6};
+        char checked[32]; format_rfc3339(q->checked_at, checked, sizeof checked);
+        fprintf(f, "{\"family\":%u,\"shape\":%u,\"passed\":%u,\"failed\":%u,"
+                   "\"elapsed_ms\":%u,\"checked\":\"%s\",\"cost_known\":%s,"
+                   "\"nominal_fakes\":%u,\"nominal_delay_us\":%u}",
+                i < 4 ? 4u : 6u, shapes[i % 4], q->passed, q->failed, q->elapsed_ms,
+                checked, q->cost_known ? "true" : "false", q->nominal_fakes, q->nominal_delay_us);
+    }
+    if (any) fputs("],\n", f);
     wr_indent(f, depth + 1); fprintf(f, "\"enabled\": %s\n", p->enabled ? "true" : "false");
     wr_indent(f, depth); fputc('}', f);
 }
