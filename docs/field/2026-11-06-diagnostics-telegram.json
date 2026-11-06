@@ -20,5 +20,21 @@
   "controller_rss_kib": 4572,
   "controller_hwm_kib": 13556,
   "doq_unchanged": true,
-  "scope": "observed operation, not proof of absence of all leaks; memory accounting covers only six sites"
+  "scope": "observed operation, not proof of absence of all leaks; memory accounting covers only six sites",
+  "publication": {
+    "release": "d2s-v0.3.5",
+    "source_commit": "621f04bbfddc1a6fadfcde994c81c5f618738f91",
+    "exact_ci_run": 42250192719,
+    "release_run": 42250968056,
+    "public_artifacts_verified": true,
+    "stand_stock_update_health_passed_msk": "2026-11-06T19:24:49+03:00",
+    "installed_binaries_verified": 7,
+    "installed_ui_files_verified": 6,
+    "auto_update": true,
+    "diagnostics_enabled": false,
+    "doq_unchanged": true,
+    "telegram_web_fixed": false,
+    "browser_version": "d2s-v0.3.5",
+    "app_acceptance_scope": "Candidate application checks; no separate stable retest claimed"
+  }
 }
