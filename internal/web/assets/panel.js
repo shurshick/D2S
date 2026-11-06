@@ -554,13 +554,38 @@
     }).finally(function () { self.updateInflight = false; });
   };
 
+  function compareD2sReleases(left, right) {
+    var pattern = /^d2s-v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
+    var a = pattern.exec(left), b = pattern.exec(right);
+    if (!a || !b) return null;
+    for (var i = 1; i <= 3; i++) {
+      if (+a[i] !== +b[i]) return +a[i] > +b[i] ? 1 : -1;
+    }
+    if (a[4] === b[4]) return 0;
+    if (!a[4] || !b[4]) return a[4] ? -1 : 1;
+    var ap = a[4].split("."), bp = b[4].split(".");
+    for (i = 0; i < Math.max(ap.length, bp.length); i++) {
+      if (ap[i] === bp[i]) continue;
+      if (ap[i] === undefined || bp[i] === undefined) return ap[i] === undefined ? -1 : 1;
+      var an = /^\d+$/.test(ap[i]), bn = /^\d+$/.test(bp[i]);
+      if (an && bn) { if (+ap[i] !== +bp[i]) return +ap[i] > +bp[i] ? 1 : -1; }
+      else if (an !== bn) return an ? -1 : 1;
+      else return ap[i] > bp[i] ? 1 : -1;
+    }
+    return 0;
+  }
+
   App.prototype.renderUpdates = function (status) {
     if (!this.$("updates-body")) return;
     if (status) this.updateStatus = status;
     var self = this, s = status || {}, pending = this.updatePending;
     var absent = !!s.absent, latest = s.latest || null, current = str(s.current);
+    var runningVersion = str(this.status && this.status.snapshot && this.status.snapshot.version);
+    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(runningVersion)) current = "d2s-v" + runningVersion;
     var busy = str(s.busy), action = busy === "installing" ? "install" : busy === "checking" ? "check" : pending && pending.action;
-    var newer = latest && latest.release_id && latest.release_id !== current;
+    var order = latest && latest.release_id ? compareD2sReleases(latest.release_id, current) : null;
+    var newer = latest && latest.release_id && (order === null ? latest.release_id !== current : order > 0);
+    var ahead = order !== null && order < 0;
     var failedInstall = s.last_ok === false && num(s.last_utc) > 0 && str(s.last_release) && num(s.last_utc) >= num(s.checked_utc) - 5;
     var tone = "", reason = "", text;
     if (absent) { text = "Автообновление не подключено"; reason = "Эта установка обновляется командой установки."; }
@@ -570,6 +595,10 @@
     else if (failedInstall) { text = "Не удалось установить обновление"; tone = "warn"; reason = str(s.last_message); }
     else if (s.check_ok === false) { text = "Не удалось проверить обновления"; tone = "warn"; reason = str(s.check_error); }
     else if (newer) text = "Доступна версия " + (str(latest.version) || latest.release_id);
+    else if (ahead) {
+      text = /^d2s-v\d+\.\d+\.\d+-/.test(current) ? "Установлена тестовая сборка" : "Установленная сборка новее опубликованной";
+      reason = "Последний опубликованный выпуск: " + (str(latest.version) || latest.release_id);
+    }
     else text = "Установлена последняя версия";
     function write(id, value) { var node = self.$(id); if (node.textContent !== value) node.textContent = value; return node; }
     var body = this.$("updates-body");
@@ -579,7 +608,7 @@
     write("update-state", text);
     if (state.parentElement) state.parentElement.setAttribute("data-tone", tone);
     var lamp = this.$("update-lamp");
-    if (lamp) lamp.setAttribute("data-tone", tone || (!absent && !action && s.check_ok === true && !newer ? "ok" : "idle"));
+    if (lamp) lamp.setAttribute("data-tone", tone || (!absent && !action && s.check_ok === true && !newer && !ahead ? "ok" : "idle"));
     if (changed && !this.doc.hidden && Motion.on()) {
       Motion.g.killTweensOf(state);
       Motion.g.fromTo(state, { opacity: .55, y: 3 }, { opacity: 1, y: 0, duration: .2, clearProps: "opacity,transform" });
@@ -636,6 +665,7 @@
     this.renderCatalog(false);
     this.renderTelegram(m);
     this.renderDiagnostics(m);
+    if (this.updateStatus) this.renderUpdates(this.updateStatus);
     this.renderNav(m);
     if (!this.arrived) {
       this.arrived = true;

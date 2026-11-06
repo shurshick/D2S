@@ -22,6 +22,23 @@ function state(over={}) {
 const json = (data, status=200) => ({ok:status<300,status,json:async()=>data});
 
 (async () => {
+  // Manual signed candidates must not inherit the updater's stale version.
+  {
+    const {app,nodes}=fixture(()=>json(state()));
+    app.status={snapshot:{version:'0.3.5-test1'}};
+    app.renderUpdates(state({current:'d2s-v0.3.4',latest:{release_id:'d2s-v0.3.4',version:'0.3.4'},
+      last_utc:now-120,last_ok:true,last_release:'d2s-v0.3.4',last_message:'установлен выпуск d2s-v0.3.4'}));
+    assert.equal(nodes['update-current'].textContent,'d2s-v0.3.5-test1','live panel version wins over saved updater state');
+    assert.equal(nodes['update-state'].textContent,'Установлена тестовая сборка');
+    assert.equal(nodes['update-install'].hidden,true,'older stable release is not offered as an update');
+    assert.match(nodes['update-result'].textContent,/0\.3\.4/,'last successful update remains historical');
+    app.renderUpdates(state({current:'d2s-v0.3.4',latest:{release_id:'d2s-v0.3.5',version:'0.3.5'}}));
+    assert.equal(nodes['update-install'].hidden,false,'stable 0.3.5 supersedes its test candidate');
+    assert.equal(nodes['update-state'].textContent,'Доступна версия 0.3.5');
+    app.status={snapshot:{version:'dev'}};
+    app.renderUpdates(state());
+    assert.equal(nodes['update-current'].textContent,'r1','unknown build versions preserve legacy updater IDs');
+  }
   // В простое — один запрос в минуту; действия и восстановление остаются быстрыми.
   {
     const realNow = Date.now;
