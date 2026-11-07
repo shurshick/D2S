@@ -1,0 +1,18 @@
+{
+  "source": "https://github.com/t0fox/d2o",
+  "commit": "9b74cdbdef74513a14cbc1483409f5a251297834",
+  "compared_to": "8e2c98146cf0b712dc967fbec558c7b904666e87",
+  "destination_base": "237f15f30ce92cbb919dff3ac31e8bdb4f63f8d3",
+  "method": "manual scoped diff and regression tests; REA unavailable, prior user waiver continued in ongoing task",
+  "manual_record": "D2S-UPSTREAM-9B74CDB-20261107",
+  "scope": "worker argument mappings and exact anonymous Discord Gateway verification; own strict Hello JSON, per-probe nonce, local limits; independent D2S STATS fix",
+  "reviewed_engine_files": {
+    "core/link.c": "bb3403061cdc7074325e620f39f01c4b9da1e005b584463d6a27464811b3c544",
+    "core/sched.c": "22935c0079f9c6b73c9a92ce1ba1214ebeaaa50f28289c24f9f068e5c11354e5",
+    "core/test_link.c": "361d3b66a84d39fd384b39285bce2a14120f0eeb28e9504d636b717d80bb4e8b",
+    "core/test_sched_summary.c": "f363a3eb9cd1159c8501f780497651003c809d92b76e5b9979d1de4de886f942",
+    "core/test_verify_http.c": "192f5e32a368670dc5230288797ae9cb5894149e7a63706c6958b11612456100",
+    "core/verify.c": "38eb35a7edbb800fdcaa299e369cae8535e7c8ed3b87cff026aa314c7395b4cf",
+    "datapath/d2sd.c": "aeca58fab9df6f9ad95697c70ca55ffaa08e26b1d8958cd63173ae34d3027624"
+  }
+}

@@ -4,6 +4,18 @@
 #include <errno.h>
 #include <pthread.h>
 #if defined(__linux__)
+#include <sys/mman.h>
+static unsigned worker_mmap_calls,worker_munmap_calls;
+static int worker_map_fail_next;
+static size_t worker_mmap_bytes,worker_munmap_bytes;
+static void *test_worker_mmap(void *,size_t,int,int,int,off_t);
+static int test_worker_munmap(void *,size_t);
+static void *(*native_mmap)(void *,size_t,int,int,int,off_t)=mmap;
+static int (*native_munmap)(void *,size_t)=munmap;
+#define mmap test_worker_mmap
+#define munmap test_worker_munmap
+#endif
+#if defined(__linux__)
 static unsigned madvise_calls;
 static size_t madvise_bytes;
 static int madvise_errno_next;
@@ -69,6 +81,10 @@ static long proc_kib(const char *key) {
 }
 
 int main(void) {
+#if defined(__linux__)
+    (void)test_worker_mmap;(void)test_worker_munmap;
+#endif
+
     enum { CYCLES = 1500, MEMORY_GROWTH_LIMIT_KIB = 5 * 1024 };
     d2s_catalog catalog = {0};
     d2s_sched *sched = d2s_sched_new(&catalog, -1, 0);
@@ -160,6 +176,10 @@ int main(void) {
     assert(counts.worker_start_failures == 0 && counts.worker_join_failures == 3);
     assert(counts.last_measurement_age_ms >= 0);
     assert(synthetic_calls == CYCLES);
+#if defined(__linux__) && defined(MAP_ANONYMOUS)
+    assert(worker_mmap_calls==CYCLES && worker_munmap_calls==CYCLES);
+    assert(worker_mmap_bytes==worker_munmap_bytes);
+#endif
     d2s_diag_mem_site memory_sites[D2S_DIAG_MEMORY_SITE_COUNT];
     d2s_diag_memory_snapshot(memory_sites);
     assert(memory_sites[D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG].live_objects==0);
@@ -170,6 +190,15 @@ int main(void) {
 
     long rss_after = proc_kib("VmRSS");
     long data_after = proc_kib("VmData");
+#if defined(__linux__) && defined(MAP_ANONYMOUS)
+    task *allocation=&sched->tasks[0];task_reset(sched,allocation);
+    unsigned failures=sched->worker_start_failures,created=worker_mmap_calls,released=worker_munmap_calls;
+    worker_map_fail_next=1;
+    assert(start_worker(sched,allocation,JOB_CLASSIFY)==-1);
+    assert(!worker_map_fail_next && !allocation->th_live && !allocation->worker_owner);
+    assert(sched->worker_start_failures==failures+1 && worker_mmap_calls==created && worker_munmap_calls==released);
+    task_reset(sched,allocation);
+#endif
     printf("1500 mock TCP measurements: VmRSS %ld -> %ld -> %ld KiB, "
            "VmData %ld -> %ld -> %ld KiB (start/warm/end)\n",
            rss_before, rss_warm, rss_after, data_before, data_warm, data_after);
@@ -191,6 +220,17 @@ int main(void) {
     return 0;
 }
 #if defined(__linux__)
+static void *test_worker_mmap(void *addr,size_t length,int prot,int flags,int fd,off_t offset) {
+    if(worker_map_fail_next && length==sizeof(worker_arg)) { worker_map_fail_next=0;errno=ENOMEM;return MAP_FAILED; }
+    void *p=native_mmap(addr,length,prot,flags,fd,offset);
+    if(p!=MAP_FAILED && length==sizeof(worker_arg)) {worker_mmap_calls++;worker_mmap_bytes+=length;}
+    return p;
+}
+static int test_worker_munmap(void *addr,size_t length) {
+    int rc=native_munmap(addr,length);
+    if(!rc && length==sizeof(worker_arg)) {worker_munmap_calls++;worker_munmap_bytes+=length;}
+    return rc;
+}
 static int test_madvise(void *addr,size_t length,int advice) {
     (void)addr;assert(length>0&&advice==MADV_DONTNEED);
     madvise_calls++;madvise_bytes=length;

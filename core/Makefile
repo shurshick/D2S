@@ -1434,3 +1434,8 @@ test_tcp_layout: test_tcp_layout.c $(SCHED_TEST_OBJ) $(HDR) libd2s_udp.a diagnos
 	$(CC) $(CFLAGS) -o $@ $< $(SCHED_TEST_OBJ) $(TEST_LDFLAGS)
 test-tcp-layout: test_tcp_layout
 	./test_tcp_layout
+
+.PHONY: test-gateway-json
+check: test-gateway-json
+test-gateway-json:
+	CC="$(CC)" python3 test_gateway_json.py

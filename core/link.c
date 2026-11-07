@@ -262,6 +262,13 @@ int d2s_link_next(int fd, d2s_ev *out, int wait_ms, char *err, size_t errcap) {
     }
 
     out->kind = type;
+    /* v21 emitted STATS with a genuinely anonymous zero key. Normalize
+       only that exact non-flow envelope, so event-loss evidence reaches
+       the scheduler. A zero-family flow or populated key stays invalid. */
+    if(type==D2S_EV_STATS && g_scratch[0]==0) {
+        size_t i=0;while(i<D2S_KEY_WIRE_LEN && !g_scratch[i])i++;
+        if(i==D2S_KEY_WIRE_LEN)g_scratch[0]=4;
+    }
     if (g_scratch[0] != 4 && g_scratch[0] != 6) {
         say(err, errcap, "неизвестное семейство ключа потока: %u", g_scratch[0]);
         return -1;

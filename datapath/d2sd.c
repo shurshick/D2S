@@ -2336,6 +2336,7 @@ int main(int argc, char **argv) {
                не уезжал. */
             uint8_t body[D2S_KEY_WIRE_LEN + 8];
             memset(body, 0, sizeof body);
+            body[0] = 4; /* anonymous key uses the same canonical family as ACK/PROTO */
             uint64_t dr = d2s_ctl_dropped(ctl), sn = d2s_ctl_sent(ctl);
             uint32_t dr32 = dr > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)dr;
             uint32_t sn32 = sn > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)sn;

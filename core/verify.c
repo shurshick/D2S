@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -875,6 +876,382 @@ static void budget_say(d2s_ver_result *r, int outcome, const char *fmt, ...) {
     va_end(ap);
 }
 
+static size_t gateway_header_end(const uint8_t *buf, size_t used) {
+    for (size_t i = 0; i + 3 < used; i++)
+        if (buf[i] == '\r' && buf[i + 1] == '\n' &&
+            buf[i + 2] == '\r' && buf[i + 3] == '\n') return i;
+    return (size_t)-1;
+}
+
+static char *gateway_header_value(char *line, const char *name) {
+    char *colon = strchr(line, ':');
+    if (!colon) return NULL;
+    size_t name_len = strlen(name);
+    if ((size_t)(colon - line) != name_len || strncasecmp(line, name, name_len)) return NULL;
+    *colon = '\0';
+    char *value = colon + 1;
+    while (*value == ' ' || *value == '\t') value++;
+    size_t n = strlen(value);
+    while (n && (value[n - 1] == ' ' || value[n - 1] == '\t')) value[--n] = '\0';
+    return value;
+}
+
+static int gateway_connection_upgrade(const char *value) {
+    while (*value) {
+        while (*value == ' ' || *value == '\t' || *value == ',') value++;
+        const char *start = value;
+        while (*value && *value != ',') value++;
+        const char *end = value;
+        while (end > start && (end[-1] == ' ' || end[-1] == '\t')) end--;
+        if ((size_t)(end - start) == 7 && !strncasecmp(start, "Upgrade", 7)) return 1;
+    }
+    return 0;
+}
+
+/* Complete bounded JSON, not a substring/opcode prefix. Only the actual
+ * root op and its d.heartbeat_interval prove the anonymous Gateway Hello. */
+typedef struct {
+    const uint8_t *p,*end;
+    unsigned op_count,data_count,interval_count;
+    uint32_t op;int limit;
+} gateway_json;
+static void gj_space(gateway_json *j) {
+    while(j->p<j->end && (*j->p==' ' || *j->p=='\t' || *j->p=='\r' || *j->p=='\n'))j->p++;
+}
+static int gj_hex4(gateway_json *j,uint32_t *v) {
+    if((size_t)(j->end-j->p)<4)return 0;
+    *v=0;
+    for(unsigned i=0;i<4;i++) {
+        unsigned c=*j->p++,n;
+        if(c>='0' && c<='9')n=c-'0';else if(c>='a' && c<='f')n=c-'a'+10;
+        else if(c>='A' && c<='F')n=c-'A'+10;else return 0;
+        *v=(*v<<4)|n;
+    }
+    return 1;
+}
+static int gj_string(gateway_json *j,char *out,size_t cap) {
+    if(j->p==j->end || *j->p++!='"')return 0;
+    size_t used=0;
+    while(j->p<j->end) {
+        uint32_t c=*j->p++;
+        if(c=='"') { if(cap)out[used<cap?used:cap-1]=0;return 1; }
+        if(c<32)return 0;
+        if(c=='\\') {
+            if(j->p==j->end)return 0;
+            c=*j->p++;
+            if(c=='u') {
+                if(!gj_hex4(j,&c))return 0;
+                if(c>=0xd800 && c<=0xdbff) {
+                    uint32_t low;
+                    if(j->end-j->p<6 || j->p[0]!='\\' || j->p[1]!='u')return 0;
+                    j->p+=2;if(!gj_hex4(j,&low) || low<0xdc00 || low>0xdfff)return 0;
+                    c=0x10000+((c-0xd800)<<10)+(low-0xdc00);
+                } else if(c>=0xdc00 && c<=0xdfff)return 0;
+            } else if(c=='b')c=8;else if(c=='f')c=12;else if(c=='n')c=10;
+            else if(c=='r')c=13;else if(c=='t')c=9;
+            else if(c!='"' && c!='\\' && c!='/')return 0;
+        } else if(c>=128) {
+            unsigned extra;uint32_t min;
+            if(c>=0xc2 && c<=0xdf) { extra=1;min=0x80;c&=31; }
+            else if(c>=0xe0 && c<=0xef) { extra=2;min=0x800;c&=15; }
+            else if(c>=0xf0 && c<=0xf4) { extra=3;min=0x10000;c&=7; }
+            else return 0;
+            if((size_t)(j->end-j->p)<extra)return 0;
+            for(unsigned k=0;k<extra;k++) {
+                unsigned v=*j->p++;if((v&0xc0)!=0x80)return 0;c=(c<<6)|(v&63);
+            }
+            if(c<min || c>0x10ffff || (c>=0xd800 && c<=0xdfff))return 0;
+        }
+        if(cap && used<cap-1)out[used]=(char)(c>0 && c<128?c:'?');
+        used++;
+    }
+    return 0;
+}
+static int gj_number(gateway_json *j,uint32_t *value,int *integer) {
+    const uint8_t *p=j->p;uint64_t v=0;int fits=1;
+    if(p<j->end && *p=='-') { fits=0;p++; }
+    if(p==j->end || *p<'0' || *p>'9')return 0;
+    if(*p=='0')p++;
+    else while(p<j->end && *p>='0' && *p<='9') {
+        if(v>UINT32_MAX/10u || v*10u+(unsigned)(*p-'0')>UINT32_MAX)fits=0;
+        if(fits)v=v*10u+(unsigned)(*p-'0');
+        p++;
+    }
+    if(p<j->end && *p=='.') {
+        fits=0;p++;const uint8_t *start=p;
+        while(p<j->end && *p>='0' && *p<='9')p++;
+        if(start==p)return 0;
+    }
+    if(p<j->end && (*p=='e' || *p=='E')) {
+        fits=0;p++;if(p<j->end && (*p=='+' || *p=='-'))p++;
+        const uint8_t *start=p;while(p<j->end && *p>='0' && *p<='9')p++;
+        if(start==p)return 0;
+    }
+    j->p=p;*value=(uint32_t)v;*integer=fits;return 1;
+}
+static int gj_value(gateway_json *,unsigned,unsigned);
+static int gj_object(gateway_json *j,unsigned depth,unsigned role) {
+    if(j->p==j->end || *j->p++!='{')return 0;
+    gj_space(j);if(j->p<j->end && *j->p=='}') { j->p++;return 1; }
+    for(;;) {
+        char key[64];if(!gj_string(j,key,sizeof key))return 0;
+        gj_space(j);if(j->p==j->end || *j->p++!=':')return 0;gj_space(j);
+        if(role==1 && !strcmp(key,"op")) {
+            int integer;
+            if(j->op_count++ || !gj_number(j,&j->op,&integer) || !integer)return 0;
+        } else if(role==1 && !strcmp(key,"d")) {
+            if(j->data_count++ || j->p==j->end || *j->p!='{' || !gj_value(j,depth+1,2))return 0;
+        } else if(role==2 && !strcmp(key,"heartbeat_interval")) {
+            uint32_t interval;int integer;
+            if(j->interval_count++ || !gj_number(j,&interval,&integer) || !integer || !interval)return 0;
+        } else if(!gj_value(j,depth+1,0))return 0;
+        gj_space(j);if(j->p==j->end)return 0;
+        uint8_t c=*j->p++;if(c=='}')return 1;if(c!=',')return 0;gj_space(j);
+    }
+}
+static int gj_value(gateway_json *j,unsigned depth,unsigned role) {
+    if(depth>32) { j->limit=1;return 0; }
+    gj_space(j);if(j->p==j->end)return 0;
+    if(*j->p=='{')return gj_object(j,depth,role);
+    if(*j->p=='[') {
+        j->p++;gj_space(j);if(j->p<j->end && *j->p==']') { j->p++;return 1; }
+        for(;;) {
+            if(!gj_value(j,depth+1,0))return 0;
+            gj_space(j);if(j->p==j->end)return 0;
+            uint8_t c=*j->p++;if(c==']')return 1;if(c!=',')return 0;
+        }
+    }
+    if(*j->p=='"')return gj_string(j,NULL,0);
+    const char *literal=*j->p=='t'?"true":*j->p=='f'?"false":*j->p=='n'?"null":NULL;
+    if(literal) {
+        size_t n=strlen(literal);if((size_t)(j->end-j->p)<n || memcmp(j->p,literal,n))return 0;
+        j->p+=n;return 1;
+    }
+    uint32_t v;int integer;return gj_number(j,&v,&integer);
+}
+static int gateway_json_hello(const uint8_t *json,size_t len,int *opcode) {
+    if(opcode)*opcode=-1;
+    if(!json)return 0;
+    gateway_json j={.p=json,.end=json+len};gj_space(&j);
+    if(j.p==j.end || *j.p!='{' || !gj_value(&j,0,1))return j.limit?-1:0;
+    gj_space(&j);if(j.p!=j.end || j.op_count!=1 || j.data_count!=1 || j.interval_count!=1)return 0;
+    if(opcode && j.op<=INT32_MAX)*opcode=(int)j.op;
+    return j.op==10;
+}
+
+static int gateway_fill(read_fn rd, void *sess, uint8_t *buf, size_t cap,
+                        size_t *used, size_t need, int64_t until, d2s_ver_result *r,
+                        char *err, size_t errcap) {
+    while (*used < need) {
+        if (*used == cap) {
+            r->local_limit=1;
+            snprintf(err, errcap, "WebSocket-ответ больше локального предела");
+            return -2;
+        }
+        int64_t left = until - verify_now_ms();
+        if (left <= 0) {
+            snprintf(err, errcap, "тайм-аут WebSocket Gateway");
+            return -1;
+        }
+        err[0] = '\0';
+        long got = rd(sess, buf + *used, cap - *used, (int)left, err, errcap);
+        if (got <= 0) {
+            if (!err[0]) snprintf(err, errcap, "Gateway закрыл WebSocket до Hello");
+            return -1;
+        }
+        *used += (size_t)got;
+    }
+    return 0;
+}
+
+/* SHA-1 here is solely the RFC6455 public handshake transform, not a
+ * certificate/signature primitive. Its input is exactly key24 + GUID36. */
+static uint32_t gateway_rol(uint32_t v,unsigned n) { return (v<<n)|(v>>(32-n)); }
+static void gateway_b64(const uint8_t *b,size_t n,char *out) {
+    static const char digits[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t o=0;
+    for(size_t i=0;i<n;i+=3) {
+        unsigned v=(unsigned)b[i]<<16;
+        if(i+1<n)v|=(unsigned)b[i+1]<<8;
+        if(i+2<n)v|=b[i+2];
+        out[o++]=digits[v>>18];out[o++]=digits[(v>>12)&63];
+        out[o++]=i+1<n?digits[(v>>6)&63]:'=';out[o++]=i+2<n?digits[v&63]:'=';
+    }
+    out[o]=0;
+}
+static void gateway_accept(const char key[25],char accept[29]) {
+    uint8_t message[128]={0},digest[20];uint32_t h[]={0x67452301,0xefcdab89,0x98badcfe,0x10325476,0xc3d2e1f0};
+    memcpy(message,key,24);memcpy(message+24,"258EAFA5-E914-47DA-95CA-C5AB0DC85B11",36);
+    message[60]=0x80;message[126]=1;message[127]=0xe0; /* 60*8 bits */
+    for(unsigned block=0;block<2;block++) {
+        uint32_t w[80];const uint8_t *p=message+block*64;
+        for(unsigned i=0;i<16;i++)w[i]=(uint32_t)p[4*i]<<24|(uint32_t)p[4*i+1]<<16|(uint32_t)p[4*i+2]<<8|p[4*i+3];
+        for(unsigned i=16;i<80;i++)w[i]=gateway_rol(w[i-3]^w[i-8]^w[i-14]^w[i-16],1);
+        uint32_t a=h[0],b=h[1],c=h[2],d=h[3],e=h[4];
+        for(unsigned i=0;i<80;i++) {
+            uint32_t f,k;
+            if(i<20) { f=(b&c)|(~b&d);k=0x5a827999; }
+            else if(i<40) { f=b^c^d;k=0x6ed9eba1; }
+            else if(i<60) { f=(b&c)|(b&d)|(c&d);k=0x8f1bbcdc; }
+            else { f=b^c^d;k=0xca62c1d6; }
+            uint32_t t=gateway_rol(a,5)+f+e+k+w[i];e=d;d=c;c=gateway_rol(b,30);b=a;a=t;
+        }
+        h[0]+=a;h[1]+=b;h[2]+=c;h[3]+=d;h[4]+=e;
+    }
+    for(unsigned i=0;i<20;i++)digest[i]=(uint8_t)(h[i/4]>>(24-8*(i%4)));
+    gateway_b64(digest,sizeof digest,accept);
+}
+static int (*gateway_random_hook)(uint8_t *,size_t);
+
+static void request_gateway_websocket(read_fn rd, write_fn wr, void *sess,
+                                      int deadline_ms, d2s_ver_result *r,
+                                      char *err, size_t errcap) {
+    uint8_t random[16];char key[25],expected_accept[29],request[512];
+    if((gateway_random_hook?gateway_random_hook:d2s_t13_random)(random,sizeof random)) {
+        r->local_refusal=1;snprintf(r->reason,sizeof r->reason,"нет случайности для WebSocket nonce");return;
+    }
+    gateway_b64(random,sizeof random,key);gateway_accept(key,expected_accept);
+    int request_len=snprintf(request,sizeof request,
+        "GET /?v=10&encoding=json HTTP/1.1\r\n"
+        "Host: gateway.discord.gg\r\n"
+        "User-Agent: Mozilla/5.0\r\n"
+        "Origin: https://discord.com\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: %s\r\n\r\n",key);
+    if(request_len<0 || (size_t)request_len>=sizeof request) { r->local_limit=1;return; }
+    /* shortcut: 4 KiB Gateway cap; raise it if a real header or Hello exceeds it. */
+    uint8_t buf[4096];
+    size_t used = 0;
+    size_t header_end;
+    int code = 0, upgrade_count = 0, accept_count = 0, connection_upgrade = 0;
+    r->level = D2S_VER_HANDSHAKE;
+    r->budget_requests = 1;
+    budget_say(r, D2S_BUDGET_NOT_APPLICABLE,
+               "Gateway WebSocket: HTTP keep-alive budget is not applicable");
+    err[0] = '\0';
+    if (wr(sess, (const uint8_t *)request, (size_t)request_len, err, errcap) != 0) {
+        snprintf(r->reason, sizeof r->reason, "WebSocket-запрос не ушёл: %.120s", err);
+        return;
+    }
+    int64_t until = verify_now_ms() + (deadline_ms > 0 ? deadline_ms : 3000);
+    while ((header_end = gateway_header_end(buf, used)) == (size_t)-1) {
+        int filled=gateway_fill(rd,sess,buf,sizeof buf,&used,used+1,until,r,err,errcap);
+        if(filled) {
+            if(filled==-2)r->local_limit=1;
+            snprintf(r->reason, sizeof r->reason, "нет полного WebSocket-заголовка: %.100s", err);
+            return;
+        }
+    }
+    for(size_t i=0;i<header_end+4;i++) {
+        uint8_t c=buf[i];
+        if((c<32 && c!='\r' && c!='\n' && c!='\t') || c==127 ||
+           (c=='\r' && (i+1>=header_end+4 || buf[i+1]!='\n')) ||
+           (c=='\n' && (!i || buf[i-1]!='\r'))) {
+            snprintf(r->reason,sizeof r->reason,"недопустимый байт в WebSocket-заголовке");return;
+        }
+    }
+    size_t status_end = 0;
+    while (status_end + 1 < header_end &&
+           !(buf[status_end] == '\r' && buf[status_end + 1] == '\n')) status_end++;
+    if (status_end + 1 >= header_end || status_end >= 128) {
+        snprintf(r->reason, sizeof r->reason, "битая строка статуса WebSocket Gateway");
+        return;
+    }
+    buf[status_end] = '\0';
+    if(status_end<12 || memcmp(buf,"HTTP/1.1 ",9) || buf[9]<'1' || buf[9]>'5' ||
+       buf[10]<'0' || buf[10]>'9' || buf[11]<'0' || buf[11]>'9' ||
+       (status_end>12 && buf[12]!=' ') || sscanf((char *)buf,"HTTP/1.1 %d",&code)!=1) {
+        snprintf(r->reason, sizeof r->reason, "битая строка статуса WebSocket Gateway");
+        return;
+    }
+    r->status = code;
+    if (code != 101) {
+        snprintf(r->reason, sizeof r->reason,
+                 "Gateway ответил HTTP %d без WebSocket Upgrade", code);
+        return;
+    }
+    for (size_t pos = status_end + 2; pos < header_end; ) {
+        size_t end = pos;
+        while (end <= header_end && !(buf[end] == '\r' && buf[end + 1] == '\n')) end++;
+        if (end > header_end) break;
+        buf[end] = '\0';
+        char *line = (char *)buf + pos;
+        char *value = gateway_header_value(line, "Upgrade");
+        if (value) {
+            upgrade_count++;
+            if (strcasecmp(value, "websocket")) upgrade_count = 2;
+        } else if ((value = gateway_header_value(line, "Connection")) != NULL) {
+            if (gateway_connection_upgrade(value)) connection_upgrade = 1;
+        } else if ((value = gateway_header_value(line, "Sec-WebSocket-Accept")) != NULL) {
+            accept_count++;
+            if (strcmp(value, expected_accept)) accept_count = 2;
+        }
+        pos = end + 2;
+    }
+    if (upgrade_count != 1 || !connection_upgrade || accept_count != 1) {
+        snprintf(r->reason, sizeof r->reason,
+                 "Gateway 101 не подтвердил WebSocket Upgrade");
+        return;
+    }
+    size_t frame = header_end + 4;
+    if (gateway_fill(rd, sess, buf, sizeof buf, &used, frame + 2, until, r, err, errcap) != 0) {
+        snprintf(r->reason, sizeof r->reason, "Gateway не прислал Hello: %.100s", err);
+        return;
+    }
+    uint8_t first = buf[frame], second = buf[frame + 1];
+    if (!(first & 0x80) || (first & 0x70) || (first & 0x0f) != 1 || (second & 0x80)) {
+        if(!(first&0x70) && !(second&0x80) && ((first&15)==1 || (first&15)==9 || (first&15)==10))r->unsupported=1;
+        snprintf(r->reason, sizeof r->reason, "Gateway прислал неподдерживаемый первый WebSocket frame");
+        return;
+    }
+    size_t frame_header = 2;
+    uint64_t payload_len = second & 0x7f;
+    if (payload_len == 126) {
+        if (gateway_fill(rd, sess, buf, sizeof buf, &used, frame + 4, until, r, err, errcap) != 0) {
+            snprintf(r->reason, sizeof r->reason, "неполная длина Gateway Hello");
+            return;
+        }
+        payload_len = ((uint64_t)buf[frame + 2] << 8) | buf[frame + 3];
+        frame_header = 4;
+        if(payload_len<126) { snprintf(r->reason,sizeof r->reason,"неканоническая длина Gateway frame");return; }
+    } else if (payload_len == 127) {
+        if (gateway_fill(rd, sess, buf, sizeof buf, &used, frame + 10, until, r, err, errcap) != 0) {
+            snprintf(r->reason, sizeof r->reason, "неполная длина Gateway Hello");
+            return;
+        }
+        payload_len = 0;
+        for (size_t i = 0; i < 8; i++) payload_len = (payload_len << 8) | buf[frame + 2 + i];
+        frame_header = 10;
+        if((buf[frame+2]&0x80) || payload_len<=65535) { snprintf(r->reason,sizeof r->reason,"неканоническая длина Gateway frame");return; }
+    }
+    if(payload_len>sizeof buf-frame-frame_header) {
+        r->local_limit=1;snprintf(r->reason,sizeof r->reason,"Gateway Hello превышает локальный предел");return;
+    }
+    if (gateway_fill(rd, sess, buf, sizeof buf, &used,
+                     frame + frame_header + (size_t)payload_len, until, r, err, errcap) != 0) {
+        snprintf(r->reason, sizeof r->reason, "Gateway Hello превышает предел или неполон");
+        return;
+    }
+    /* shortcut: first unfragmented text frame; extend if Discord fragments Hello. */
+    int opcode = -1;
+    int hello=gateway_json_hello(buf+frame+frame_header,(size_t)payload_len,&opcode);
+    if(hello<=0) {
+        if(hello<0)r->local_limit=1;
+        if (opcode >= 0)
+            snprintf(r->reason, sizeof r->reason, "первый WebSocket frame Gateway op=%d, не Hello op=10", opcode);
+        else
+            snprintf(r->reason, sizeof r->reason, "первый WebSocket frame Gateway не содержит top-level op=10");
+        return;
+    }
+    r->level = D2S_VER_APPLICATION;
+    r->body_complete = 1;
+    r->body_bytes=payload_len;
+    snprintf(r->http_evidence, sizeof r->http_evidence, "WebSocket 101 + Gateway Hello op=10");
+    snprintf(r->reason, sizeof r->reason, "Gateway WebSocket принят, получен Hello op=10");
+}
+
 /* Чтение с запоминанием законного конца потока (close_notify): после него
    сокет может ещё не показать FIN, а молчанием коробки это не является. */
 /* Заодно помнит, чем кончилось последнее чтение: отказ (n < 0) и сколько
@@ -1003,6 +1380,11 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
                                 int deadline_ms, int tls12,
                                 const budget_io *io, unsigned budget,
                                 d2s_ver_result *r, char *err, size_t errcap) {
+    if (!initial_path && host && !strcasecmp(host, "gateway.discord.gg")) {
+        request_gateway_websocket(rd,wr,sess,deadline_ms,r,err,errcap);
+        return;
+    }
+
     char path[1024] = "/";
     if (initial_path) snprintf(path, sizeof path, "%s", initial_path);
     const char *accept_encoding = encoding == 1 ? "gzip" :

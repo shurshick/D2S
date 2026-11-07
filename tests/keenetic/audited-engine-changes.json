@@ -16,8 +16,8 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "698c3d72c250e8b614f88c63088c8fd7c5a2f3fa1ad24933b76a3230c21e1cbe",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "22935c0079f9c6b73c9a92ce1ba1214ebeaaa50f28289c24f9f068e5c11354e5",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
     "sha256": "0d7390d79bf77f186124891c1911cb76a3aaa04bee49830f1bbf7c46d7af8902",
@@ -104,8 +104,8 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/verify.c": {
-    "sha256": "9a4d706a4be36e9b7e2d4d8737661b270bc052e19f6ab0d6955ac6552fe42fbf",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "38eb35a7edbb800fdcaa299e369cae8535e7c8ed3b87cff026aa314c7395b4cf",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/include/d2s_verdict.h": {
     "sha256": "dfd5b4a50e72b6cc406aa8b58c9fce8288e9960faa202461f29ac98a968fd8f4",
@@ -238,5 +238,25 @@
   "datapath/plan_internal.h": {
     "sha256": "730de9dd82ddfe217d567cf32868ed65071d1bfb22c616b37ad1153a2b34097e",
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+  },
+  "core/link.c": {
+    "sha256": "bb3403061cdc7074325e620f39f01c4b9da1e005b584463d6a27464811b3c544",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+  },
+  "core/test_link.c": {
+    "sha256": "361d3b66a84d39fd384b39285bce2a14120f0eeb28e9504d636b717d80bb4e8b",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+  },
+  "core/test_sched_summary.c": {
+    "sha256": "f363a3eb9cd1159c8501f780497651003c809d92b76e5b9979d1de4de886f942",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+  },
+  "core/test_verify_http.c": {
+    "sha256": "192f5e32a368670dc5230288797ae9cb5894149e7a63706c6958b11612456100",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+  },
+  "datapath/d2sd.c": {
+    "sha256": "aeca58fab9df6f9ad95697c70ca55ffaa08e26b1d8958cd63173ae34d3027624",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   }
 }

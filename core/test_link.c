@@ -223,6 +223,28 @@ static d2s_ev ev_with_seen(uint8_t seen_types) {
 
 int main(void) {
     {
+        /* Actual v21 router STATS used an anonymous all-zero key. It must
+           reach dropped_seen, without accepting zero-family flow events. */
+        int sv[2];d2s_ev ev;char err[160];
+        CHECK(!socketpair(AF_UNIX,SOCK_STREAM,0,sv),"STATS fixture socket");
+        uint8_t frame[6+D2S_KEY_WIRE_LEN+8]={0};
+        frame[3]=sizeof frame-4;frame[4]=D2S_EV_STATS>>8;frame[5]=(uint8_t)D2S_EV_STATS;
+        frame[6+D2S_KEY_WIRE_LEN+3]=7;frame[6+D2S_KEY_WIRE_LEN+7]=255;
+        CHECK(write(sv[0],frame,sizeof frame)==sizeof frame,"legacy STATS write");
+        CHECK(!d2s_link_next(sv[1],&ev,100,err,sizeof err) && ev.kind==D2S_EV_STATS &&
+              ev.dropped==7 && ev.sent==255,"anonymous STATS counters lost");
+        frame[6]=4;
+        CHECK(write(sv[0],frame,sizeof frame)==sizeof frame,"canonical STATS write");
+        CHECK(!d2s_link_next(sv[1],&ev,100,err,sizeof err) && ev.dropped==7,"canonical STATS lost");
+        frame[6]=0;frame[7]=1;
+        CHECK(write(sv[0],frame,sizeof frame)==sizeof frame,"nonanonymous STATS write");
+        CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)<0,"zero-family nonanonymous STATS accepted");
+        frame[7]=0;frame[5]=(uint8_t)D2S_EV_HELLO;
+        CHECK(write(sv[0],frame,sizeof frame)==sizeof frame,"zero-family flow write");
+        CHECK(d2s_link_next(sv[1],&ev,100,err,sizeof err)<0,"zero-family flow accepted");
+        close(sv[0]);close(sv[1]);
+    }
+    {
         int sv[2];d2s_ev ev;char err[160];
         CHECK(!socketpair(AF_UNIX,SOCK_STREAM,0,sv),"bound ACK fixture socket");
         uint8_t rest[4+16+28+1]={0};

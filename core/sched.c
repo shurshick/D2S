@@ -2478,6 +2478,33 @@ typedef struct {
     int learned_tracked;
 } worker_arg;
 
+/* Worker arguments hold two copied ClientHello buffers (~8 KiB). They are
+ * allocated by the scheduler thread and released by another thread. Repeated
+ * cross-thread malloc/free on the router's static musl build is a candidate
+ * for persistent RSS retention despite successful joins and task madvise.
+ *
+ * Anonymous mappings have exact ownership and munmap releases their pages
+ * directly to the kernel. Do not change worker/task lifetimes or stack size. */
+static worker_arg *worker_arg_alloc(void) {
+#if defined(__linux__) && defined(MAP_ANONYMOUS)
+    void *memory = mmap(NULL, sizeof(worker_arg), PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return memory == MAP_FAILED ? NULL : memory;
+#else
+    return malloc(sizeof(worker_arg));
+#endif
+}
+
+static void worker_arg_free(worker_arg *a) {
+    if (!a) return;
+#if defined(__linux__) && defined(MAP_ANONYMOUS)
+    (void)munmap(a, sizeof(*a));
+#else
+    free(a);
+#endif
+}
+
+
 static uint8_t record_shape(const task *t);
 static int64_t wall_s(const d2s_sched *s, int64_t now_ms);
 static d2s_arm *learned_questions_for(d2s_sched *s, const task *t, size_t *count, size_t *bytes) {
@@ -2748,7 +2775,7 @@ static void *worker_body(void *vp) {
                       a->client_opts_known, a->trig_snapped};
     d2s_hello ctl = {a->ctrl_len ? control_bytes : NULL, a->ctrl_len, NULL, 0, 0, 0};
     d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a,a->diag_memory_tracked);
-    free(a);
+    worker_arg_free(a);
     /* Ход сообщает только прогон измерителя (JOB_CLASSIFY); поток живёт ровно
        одну задачу, поэтому снимать приёмник не нужно. */
     if (t->job == JOB_CLASSIFY) {
@@ -3362,7 +3389,7 @@ static void note_worker_start_failure(d2s_sched *s, task *t) {
 }
 
 static int start_worker(d2s_sched *s, task *t, task_job job) {
-    worker_arg *a = malloc(sizeof *a);
+    worker_arg *a = worker_arg_alloc();
     if (!a) { d2s_diag_memory_alloc_failure(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG);note_worker_start_failure(s, t); return -1; }
     a->diag_memory_tracked=d2s_diag_memory_acquire(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a);
     a->s = s; a->t = t;
@@ -3423,7 +3450,7 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
             free(a->learned);
         }
         d2s_diag_memory_release(D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,sizeof *a,a->diag_memory_tracked);
-        free(a);
+        worker_arg_free(a);
         note_worker_start_failure(s, t);
         return -1;
     }
