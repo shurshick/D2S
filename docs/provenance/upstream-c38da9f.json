@@ -1,0 +1,37 @@
+{
+  "source": "https://github.com/t0fox/d2o",
+  "commit": "c38da9ffb51e4160bdc4aa7d72e278a1394a0177",
+  "compared_to": "9b74cdbdef74513a14cbc1483409f5a251297834",
+  "method": "manual scoped three-way source comparison under prior user REA waiver; REA unavailable",
+  "manual_record": "D2S-UPSTREAM-C38DA9F-20261107",
+  "files": {
+    "core/catalog.c": "b958086f2e779a7dbaadfe87e0e75ad37465e87c5b4ef47acef21af212610146",
+    "core/compose.c": "eb4e5bb6edb3922b5bef97eb73174bbff85c38d4604cb907339bff4db4794532",
+    "core/groups.c": "9e496eaab56b469c38ed0f008d3f028f953addf3e6c4cc5f242504f9ea189c6c",
+    "core/include/d2s_catalog.h": "918d5c62e9f0c1ebebd57f4d34a761e6e7c748b68b6cde74051bc5d58f1a9401",
+    "core/include/d2s_compose_internal.h": "7335c53133200ad2f61f54c432106067b10547174561958fff3df90ee30ba987",
+    "core/include/d2s_link.h": "675da3fae08afda25677fabd571854e3cd261570b739f484ddb307db071d1a69",
+    "core/include/d2s_verify.h": "5b41ee6c1d7340e9909bc1f14530073984ac7054666a8091e28818419baab87e",
+    "core/link.c": "67673dff88186b55e76b0f3231841da01e638fedf17818e411ccfa3768020777",
+    "core/sched.c": "50944053f42523c54a1e378a329679fe2c70760a46055b79dcee60d28c1ef34c",
+    "core/test_catalog.c": "08a3f969aff4583e5741a0d5b90d6c10ffaadbd9bf56c610038c4094bcd9d9c4",
+    "core/test_groups.c": "a898ceb4844a24ef0e10779ed9c1e05fea5e70c1baf543088e05a6bf50c1839c",
+    "core/test_sched.c": "09bd0c638317e79b92ad8679cce5d0fb62ec66820d78177f6e4a68179452aad9",
+    "core/verify.c": "2bb1086092ef8e12512a263956c0f9dedf5962fe37fe1940912770d05a1f01b8",
+    "datapath/include/d2s_ctl.h": "b7814e5fb266052257a51fe993cbf8195fc5a357663a5bcfea611f2c2f50fd2e",
+    "datapath/include/d2s_plans.h": "50754b2c2a034815351e664bd2821d5cf679fcc64b2ce22aa306817b8623b420",
+    "datapath/plans.c": "7ee1f377560ca92c513540ff6d351bfb16fed4c8ddedf7a3dc9a6c00e75bc2cb",
+    "datapath/session.c": "96366c5e35fbf2b64bf9c02ea9f654fafa0311310c5a3cb78133c075b99ab8df",
+    "datapath/test_plans.c": "fba4b52adc7011be603284d5a49c83bdd0cc6f3a9608d6205059c8da3ea7b701",
+    "datapath/test_session.c": "81f967c0f5c6302a3967cab3e0ca7971705b717f99e0d924c3012d160078fd8e",
+    "internal/web/assets/index.html": "54164392fa38e4c6ab0eac190130ace59fd209ef6a1b574816223d901a0f47ac",
+    "internal/web/assets/panel.js": "05a4b70a7abb4f4b0f52de12a4d1e2434af486f8e5bf23001146349a8d8aba22",
+    "runtime/d2s_protocol.h": "9adf61fe796a31c83cd481aec06de37ea39cc57b713ab775d140b44d95c4b866"
+  },
+  "own_followup": [
+    "core/optimize.inc",
+    "core/test_sched_algorithms.c",
+    "core/test_tcp_profile.c",
+    "core/sched.c"
+  ]
+}

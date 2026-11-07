@@ -1,10 +1,34 @@
 /* Scheduler algorithm lifecycle: real worker, isolated socketpair, no network. */
 #define _POSIX_C_SOURCE 200809L
+#define d2s_props_contact_on_family_tcp_profile d2s_alg_contact_profile
 #include "sched.c"
+#undef d2s_props_contact_on_family_tcp_profile
 #include <assert.h>
 #include "test_quic_pq.h"
 
 static int calls, early_seen;
+static int contact_profile_seen;
+int d2s_alg_contact_profile(int fd,const char *ip,uint16_t port,d2s_hello hello,
+    uint8_t family,int profile,uint8_t *addr,uint16_t *local_port,int *out) {
+    (void)ip;(void)port;(void)hello;(void)family;(void)addr;(void)local_port;
+    if(fd>=0)close(fd);
+    *out=-1;contact_profile_seen=profile;return -3;
+}
+static void contact_profile_scope(void) {
+    d2s_catalog catalog={0};
+    d2s_sched *s=d2s_sched_new(&catalog,-1,0);assert(s);
+    task *t=&s->tasks[0];
+    for(int profile=1;profile<=2;profile++) {
+        task_reset(s,t);t->transport=6;t->family=4;t->port=443;
+        t->prop_bound_fd=-1;
+        t->trigger_tcp_profile=(uint8_t)profile;
+        contact_profile_seen=-99;
+        assert(start_worker(s,t,JOB_CONTACT)==0);
+        assert(join_worker(t)==0);
+        assert(contact_profile_seen==profile-1 && !t->c_ok && t->res_ready);
+    }
+    d2s_sched_free(s);
+}
 static size_t learned_seen;
 static unsigned learned_repeats;
 static int fail_spawn(void) { return -1; }
@@ -208,6 +232,12 @@ static void maintenance(void) {
     strcpy(t->name,bd->target);strcpy(t->min_box,b->id);strcpy(t->min_source,id);
     t->transport=6;t->family=4;t->state=T_WATCHING;t->min_ready=1;
     assert(!d2s_hello_from_profile(D2S_SHAPE_MODERN,t->name,t->trig,sizeof t->trig,&t->trig_len));
+    bd->tcp_profile=D2S_TCP_PROFILE_TS;
+    t->trigger_tcp_profile=D2S_TCP_PROFILE_NO_TS;
+    assert(!minimize_source(s,t,NULL));
+    t->trigger_tcp_profile=D2S_TCP_PROFILE_TS;
+    assert(minimize_source(s,t,NULL));
+    /* Keep a non-default context through both trials and the new binding. */
     s->cpu_valid=s->mem_valid=1;s->cpu_free_u=900000;
     minimize_dispatch(s);assert(!t->min_active); /* observe/default-off */
     d2s_sched_optimize(s,1);s->tasks[1].state=T_QUEUED;
@@ -247,6 +277,7 @@ static void maintenance(void) {
     assert(b->plans[1].quality[0].passed==2 && !b->plans[1].recipe_valid);
     assert(b->plans[1].successes==9);
     assert(b->binds[0].budget==D2S_CAT_BUDGET_PASSED && t->min_cursor==0);
+    assert(b->binds[0].tcp_profile==D2S_TCP_PROFILE_TS);
     assert(minimize_source(s,t,NULL));
     t->state=T_PLANNING;t->n_plans=t->next_plan=1;t->owned_fallback=1;
     assert(install_next(s,t)==-1 && !t->fb_next);
@@ -283,6 +314,7 @@ static void full_flight_applicability(void) {
 }
 
 int main(void) {
+    contact_profile_scope();
     full_flight_applicability();
     simplification();
     maintenance();

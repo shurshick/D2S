@@ -136,4 +136,16 @@ assert.equal(ui.telegramFailureStage(5), 'MTProto');
   assert.equal(blind.short, 'предел по умолчанию');
   assert.match(blind.note, /Данных о нагрузке/);
 }
+{
+  assert.match(ui.shapeLabel(11, 6), /TLS 1.3.*Timestamp/);
+  assert.match(ui.shapeLabel(1, 6, 1), /без Timestamp/);
+  assert.match(ui.shapeLabel(6, 6, 2), /ECH.*Timestamp/);
+  assert.equal(ui.shapeLabel(3, 17, 2), 'QUIC');
+  const b = {target:'a.example.com', transport:6, family:4, shape:1, tcp_profile:2};
+  const g = {active:true, suffix:'example.com', transport:6, family:4, shape:11};
+  assert.equal(ui.coveredBy(b, [g]), g);
+  assert.equal(ui.coveredBy({...b, tcp_profile:1}, [g]), null);
+  assert.equal(ui.coveredBy({...b, tcp_profile:0}, [g]), null);
+  assert.equal(ui.coveredBy(b, [{...g, exceptions:['a.example.com']}]), null);
+}
 console.log('panel model: all checks passed');

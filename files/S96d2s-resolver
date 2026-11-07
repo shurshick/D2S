@@ -15,6 +15,11 @@ running() {
 start() {
     if running; then return 0; fi
     mkdir -p /opt/d2s/run /opt/d2s/log
+    if [ -f /etc/openwrt_release ]; then
+        for manifest in instagram-ip-hosts.tsv whatsapp-ip-hosts.tsv whatsapp-media-hosts.tsv; do
+            D2S_INSTAGRAM_MANIFEST="/opt/d2s/state/$manifest" /opt/d2s/d2s-meta-dns-core.sh restore || return 1
+        done
+    fi
     start-stop-daemon -S -b -m -p "$PID" -x "$BIN" -- --port 9083 >> "$LOG" 2>&1
     for attempt in 1 2 3 4 5; do
         if curl -fsS --noproxy '*' --connect-timeout 1 --max-time 2 http://127.0.0.1:9083/health >/dev/null; then

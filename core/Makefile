@@ -522,6 +522,14 @@ test_match: test_match.c match.o catalog.o groups.o domain.o $(HDR)
 
 test_compose: test_compose.c compose.o measured.o hello.o meas.o link.o $(HDR) $(TESTHDR)
 	$(CC) $(CFLAGS) -o $@ test_compose.c compose.o measured.o hello.o meas.o link.o $(TEST_LDFLAGS)
+
+test_tcp_profile: test_tcp_profile.c compose.o measured.o hello.o meas.o link.o $(HDR)
+	$(CC) $(CFLAGS) -o $@ test_tcp_profile.c compose.o measured.o hello.o meas.o link.o $(TEST_LDFLAGS)
+TESTS += test_tcp_profile
+.PHONY: test-tcp-profile
+test-tcp-profile: test_tcp_profile
+	./test_tcp_profile
+check: test-tcp-profile
 test_link: test_link.c link.o quicsnap.o quic.o quicwire.o crypto.o $(HDR) test_quic_pq.h
 	$(CC) $(CFLAGS) -o $@ test_link.c link.o quicsnap.o quic.o quicwire.o crypto.o $(TEST_LDFLAGS)
 

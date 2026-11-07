@@ -75,7 +75,82 @@ edge_verified() {
     done
     return 1
 }
+dns_backend_available() {
+    if [ -f /etc/openwrt_release ]; then
+        [ -x /etc/init.d/dnsmasq ] || return 1
+        _dns_config_found=0
+        for _dns_config in /var/etc/dnsmasq.conf.*; do
+            [ -f "$_dns_config" ] || continue
+            grep -Fqx "addn-hosts=$(dns_hosts_dir)" "$_dns_config" || return 1
+            _dns_config_found=1
+        done
+        [ "$_dns_config_found" = 1 ]
+    else
+        command -v ndmc >/dev/null 2>&1
+    fi
+}
+dns_hosts_dir() { printf '%s\n' "${D2S_DNS_HOSTS_DIR:-/tmp/hosts}"; }
+dns_pin_file() {
+    _base=${MANIFEST##*/}
+    case "$_base" in ''|*[!A-Za-z0-9_.-]*) return 1;; esac
+    printf '%s/d2s-%s\n' "$(dns_hosts_dir)" "$_base"
+}
+dns_openwrt_change() (
+    _op=$1 _host=$2 _ip=$3
+    case "$_host" in ''|*[!A-Za-z0-9.-]*) exit 1;; esac
+    valid_ipv4 "$_ip" || exit 1
+    _file=$(dns_pin_file) || exit 1
+    _dir=$(dns_hosts_dir)
+    [ ! -L "$_dir" ] && [ ! -L "$_file" ] || exit 1
+    mkdir -p "$_dir" || exit 1
+    _lock="${_file}.lock"
+    mkdir "$_lock" 2>/dev/null || exit 1
+    _tmp=$(mktemp /tmp/d2s-dns-pin.XXXXXX) || { rmdir "$_lock"; exit 1; }
+    trap 'rm -f "$_tmp"; rmdir "$_lock"' EXIT
+    if [ -f "$_file" ]; then
+        awk -v h="$_host" -v a="$_ip" '!($1==a && $2==h)' "$_file" > "$_tmp" || exit 1
+    fi
+    [ "$_op" != add ] || printf '%s %s\n' "$_ip" "$_host" >> "$_tmp"
+    if [ -s "$_tmp" ]; then
+        chmod 0644 "$_tmp" && mv -f "$_tmp" "$_file"
+    else
+        rm -f "$_file"
+    fi
+)
+dns_pin_add() {
+    if [ -f /etc/openwrt_release ]; then dns_openwrt_change add "$1" "$2"
+    else LD_LIBRARY_PATH='' ndmc -c "ip host $1 $2" >/dev/null 2>&1; fi
+}
+dns_pin_remove() {
+    if [ -f /etc/openwrt_release ]; then dns_openwrt_change remove "$1" "$2"
+    else LD_LIBRARY_PATH='' ndmc -c "no ip host $1 $2" >/dev/null 2>&1; fi
+}
+dns_restore_owned() (
+    [ -f /etc/openwrt_release ] || exit 0
+    [ -s "$MANIFEST" ] || exit 0
+    _file=$(dns_pin_file) || exit 1
+    [ ! -L "$_file" ] || exit 1
+    mkdir -p "$(dns_hosts_dir)" || exit 1
+    _tmp=$(mktemp /tmp/d2s-dns-restore.XXXXXX) || exit 1
+    trap 'rm -f "$_tmp"' EXIT
+    while read -r _host _ip _extra; do
+        case "$_host" in ''|*[!A-Za-z0-9.-]*) exit 1;; esac
+        valid_ipv4 "$_ip" || exit 1
+        [ -z "${_extra:-}" ] || exit 1
+        printf '%s %s\n' "$_ip" "$_host" >> "$_tmp"
+    done < "$MANIFEST"
+    chmod 0644 "$_tmp" && mv -f "$_tmp" "$_file" || exit 1
+    /etc/init.d/dnsmasq reload
+)
 running_config() {
+    if [ -f /etc/openwrt_release ]; then
+        printf '# OpenWrt DNS hosts\n'
+        for _hosts in "$(dns_hosts_dir)"/*; do
+            [ -f "$_hosts" ] && [ ! -L "$_hosts" ] || continue
+            awk 'NF>=2 && $1!~/^#/ {for(i=2;i<=NF;i++) {if($i~/^#/)break;print "ip host",$i,$1}}' "$_hosts" || return 1
+        done
+        return 0
+    fi
     _cfg=$(LD_LIBRARY_PATH='' ndmc -c 'show running-config' 2>/dev/null) || return 1
     [ -n "$_cfg" ] || return 1
     printf '%s\n' "$_cfg"
@@ -93,6 +168,10 @@ ndm_touched() { ndm_cfg_ok=0; ndm_changed=1; }
 # Saving writes the router's flash: only after an add or a removal.
 ndm_save_if_changed() {
     [ "$ndm_changed" = 1 ] || return 0
+    if [ -f /etc/openwrt_release ]; then
+        /etc/init.d/dnsmasq reload
+        return $?
+    fi
     LD_LIBRARY_PATH='' ndmc -c 'system configuration save' >/dev/null 2>&1
 }
 record_exists() {
@@ -136,7 +215,7 @@ drop_dead_pins() {
     while read -r host ip; do
         { [ -n "${host:-}" ] && [ -n "${ip:-}" ]; } || continue
         if record_exists "$host" "$ip"; then
-            LD_LIBRARY_PATH='' ndmc -c "no ip host $host $ip" >/dev/null 2>&1 || { log "ошибка удаления недоступной записи $host $ip"; return 1; }
+            dns_pin_remove "$host" "$ip" || { log "ошибка удаления недоступной записи $host $ip"; return 1; }
             ndm_touched
             log "удалена недоступная D2S-запись $host $ip; имя снова решается обычным DNS"
         else
@@ -157,7 +236,7 @@ EOF_DEAD
 }
 remove_owned() {
     [ -s "$MANIFEST" ] || { rm -f "$MANIFEST"; log 'нет D2S-owned DNS-записей Instagram/WhatsApp'; return 0; }
-    command -v ndmc >/dev/null 2>&1 || { log 'ndmc отсутствует; manifest оставлен'; return 1; }
+    dns_backend_available || { log 'ndmc отсутствует; manifest оставлен'; return 1; }
     while read -r host ip _extra; do
         { [ -n "${host:-}" ] && [ -n "${ip:-}" ]; } || continue
         if ! managed_host "$host" || ! valid_ipv4 "$ip"; then
@@ -165,7 +244,7 @@ remove_owned() {
             continue
         fi
         if record_exists "$host" "$ip"; then
-            LD_LIBRARY_PATH='' ndmc -c "no ip host $host $ip" >/dev/null 2>&1 || { log "ошибка удаления $host $ip"; return 1; }
+            dns_pin_remove "$host" "$ip" || { log "ошибка удаления $host $ip"; return 1; }
             ndm_touched
             log "удалена D2S-запись $host $ip"
         else
@@ -180,7 +259,7 @@ remove_owned() {
     rm -f "$MANIFEST"
 }
 refresh() {
-    if ! command -v ndmc >/dev/null 2>&1; then log 'ndmc отсутствует — пропускаю (не Keenetic)'; return 0; fi
+    if ! dns_backend_available; then log 'DNS backend отсутствует — обновление пропущено'; return 1; fi
     [ -s "$META_RANGES" ] || { log "нет списка диапазонов Meta: $META_RANGES"; return 1; }
     command -v "$TGBIN" >/dev/null 2>&1 || { log 'нет C-инструмента проверки адресов d2stg'; return 1; }
     ca_bundle=${D2S_IP_CA_BUNDLE:-/opt/etc/ssl/certs/ca-certificates.crt}
@@ -343,7 +422,7 @@ EOF_CANDIDATES
             # point (service stop, uninstall) still leaves it removable, and
             # remove skips a claimed pair that NDM never received.
             printf '%s %s\n' "$host" "$ip" >> "$MANIFEST"
-            if LD_LIBRARY_PATH='' ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+            if dns_pin_add "$host" "$ip"; then
                 ndm_touched
                 printf '%s %s\n' "$host" "$ip" >> "$next"; log "добавлена D2S-запись $host $ip"
             else ndm_touched; add_failed=1; log "ошибка добавления $host $ip"; fi
@@ -370,7 +449,7 @@ EOF_CANDIDATES
             [ -n "$fresh" ] || continue
             case " $fresh " in *" $ip "*) continue;; esac
             if record_exists "$host" "$ip"; then
-                if LD_LIBRARY_PATH='' ndmc -c "no ip host $host $ip" >/dev/null 2>&1; then
+                if dns_pin_remove "$host" "$ip"; then
                     ndm_touched
                     log "удалена устаревшая D2S-запись $host $ip"
                     stale_removed=1

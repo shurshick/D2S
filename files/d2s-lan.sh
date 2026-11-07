@@ -4,6 +4,36 @@
 D2S_LAN_SET4=${D2S_LAN_SET4:-d2s_lan4}
 
 d2s_lan_entries() (
+    if [ -f /etc/openwrt_release ]; then
+        # OpenWrt shell libraries intentionally read unset optional variables.
+        set +u
+        . /lib/functions.sh
+        . /lib/functions/network.sh
+        devices=
+        collect_dhcp_lan() {
+            local interface ignored device
+            config_get ignored "$1" ignore 0
+            [ "$ignored" != 1 ] || return 0
+            config_get interface "$1" interface "$1"
+            case "$interface" in wan|wan6|loopback) return 0;; esac
+            network_get_device device "$interface" || return 0
+            case "$device" in ''|*[!A-Za-z0-9_.:-]*) return 0;; esac
+            devices="$devices $device"
+        }
+        config_load dhcp
+        config_foreach collect_dhcp_lan dhcp
+        [ -n "$devices" ] || exit 1
+        ip -4 -o addr show | awk -v devices="$devices" '
+            BEGIN {n=split(devices,a," ");for(i=1;i<=n;i++) wanted[a[i]]=1}
+            {dev=$2;sub(/@.*/,"",dev);if(!(dev in wanted))next;
+             for(i=1;i<NF;i++)if($i=="inet") {
+                split($(i+1),c,"/");split(c[1],o,".");
+                if(c[2]!~/^[0-9]+$/ || c[2]>32)continue;
+                v=((o[1]*256+o[2])*256+o[3])*256+o[4];b=2^(32-c[2]);v=int(v/b)*b;
+                printf "%s %.0f.%.0f.%.0f.%.0f/%s\n",dev,int(v/16777216),int(v/65536)%256,int(v/256)%256,v%256,c[2]
+             }}' | sort -u
+        exit
+    fi
     config=$(LD_LIBRARY_PATH='' ndmc -c 'show running-config' 2>/dev/null) || exit 1
     [ -n "$config" ] || exit 1
     addresses=$(printf '%s\n' "$config" | awk '

@@ -90,7 +90,7 @@ static inline void d2s_ctl_binding_write(uint8_t *p, const d2s_binding_context *
 }
 static inline int d2s_ctl_binding_read(d2s_binding_context *b,const uint8_t *p,size_t n) {
     if(n!=D2S_CTL_BINDING_LEN || p[8]>D2S_BIND_FLOW ||
-       (p[9] && p[9]!=4 && p[9]!=6) || p[10]>D2S_PLAN_SHAPE_HTTP || p[11]>1)return -1;
+       (p[9] && p[9]!=4 && p[9]!=6) || p[10]>D2S_TCP_SHAPE_MAX || p[11]>1)return -1;
     b->generation=0;
     for(unsigned i=0;i<8;i++)b->generation=(b->generation<<8)|p[i];
     b->kind=p[8];b->family=p[9];b->shape=p[10];b->temporary=p[11];

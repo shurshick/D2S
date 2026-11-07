@@ -16,7 +16,8 @@ static d2s_cat_binding *minimize_source(d2s_sched *s,const task *t,
             d2s_cat_binding *bd=&b->binds[j];
             if(strcmp(bd->target,t->name) || strcmp(bd->kind,"name") ||
                strcmp(bd->plan_id,t->min_source) || bd->transport!=6 ||
-               (bd->family?bd->family:4)!=t->family || bd->shape!=record_shape(t))continue;
+               (bd->family?bd->family:4)!=t->family || bd->shape!=record_shape(t) ||
+               bd->tcp_profile!=t->trigger_tcp_profile)continue;
             if(!bd->enabled || bd->level<3 || bd->recheck_since ||
                bd->verified_by!=D2S_VERBY_PROBE || bd->budget!=D2S_CAT_BUDGET_PASSED)return NULL;
             if(t->min_confirmed && (bd->confirmed!=t->min_confirmed ||
@@ -102,7 +103,7 @@ static int minimize_proven(d2s_sched *s,task *t,int64_t now_ms) {
     char id[40];uint8_t wire[D2S_PLAN_ID_LEN];
     plan_ident(t->plans[0],id,sizeof id,wire);
     if(bind_confirmed(s->cat,t->min_box,id,t->plans[0],"tls",t->name,"name",
-        6,t->family,record_shape(t),D2S_VERBY_PROBE,
+        6,t->family,record_shape(t),t->trigger_tcp_profile,D2S_VERBY_PROBE,
         t->trig_snapped?D2S_INPUT_CLIENT:D2S_INPUT_PROFILE,wall_s(s,now_ms),NULL))return 0;
     /* Re-fetch after reallocations; source identity/generation must now change. */
     snprintf(t->min_source,sizeof t->min_source,"%s",id);t->min_confirmed=0;
@@ -111,7 +112,8 @@ static int minimize_proven(d2s_sched *s,task *t,int64_t now_ms) {
     if(b)for(size_t j=0;j<b->n_binds;j++) {
         d2s_cat_binding *bd=&b->binds[j];
         if(!strcmp(bd->target,t->name) && !strcmp(bd->plan_id,id) &&
-           bd->transport==6 && bd->family==t->family && bd->shape==record_shape(t)) {
+           bd->transport==6 && bd->family==t->family && bd->shape==record_shape(t) &&
+           bd->tcp_profile==t->trigger_tcp_profile) {
             bd->successes=2;bd->budget=D2S_CAT_BUDGET_PASSED;
             t->min_confirmed=bd->confirmed;t->min_successes=bd->successes;
         }

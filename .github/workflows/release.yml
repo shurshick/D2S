@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, arm, mipsel]
+        arch: [arm64, arm, mipsel, amd64]
     steps:
       - uses: actions/checkout@v4
       - name: Validate release version
@@ -61,6 +61,7 @@ jobs:
             build/telegram/openssl-${{ matrix.arch }}
             build/telegram/zlib-${{ matrix.arch }}
           key: d2s-crypto-v1-${{ runner.os }}-${{ matrix.arch }}-zig016-${{ hashFiles('scripts/build-openssl-tg.sh', 'scripts/build-target.sh', '.github/workflows/release.yml') }}
+          restore-keys: d2s-crypto-v1-${{ runner.os }}-${{ matrix.arch }}-zig016-
       - name: Build complete router package
         env:
           ARCHES: ${{ matrix.arch }}
@@ -73,7 +74,7 @@ jobs:
         env:
           ARCH: ${{ matrix.arch }}
         run: |
-          case "$ARCH" in arm64) QEMU=qemu-aarch64;; arm) QEMU=qemu-arm;; mipsel) QEMU=qemu-mipsel;; esac
+          case "$ARCH" in arm64) QEMU=qemu-aarch64;; arm) QEMU=qemu-arm;; mipsel) QEMU=qemu-mipsel;; amd64) QEMU=qemu-x86_64;; esac
           "$QEMU" "builds/d2sd-linux-$ARCH" --help
           "$QEMU" "builds/d2sc-linux-$ARCH" --version
           "$QEMU" "builds/d2sfetch-linux-$ARCH" --version
@@ -105,7 +106,7 @@ jobs:
         env:
           RELEASE_ID: d2s-v${{ inputs.version }}
           VERSION: ${{ inputs.version }}
-          ARCHES: arm64 arm mipsel
+          ARCHES: arm64 arm mipsel amd64
           D2S_SIGNING_KEY: ${{ secrets.D2S_ED25519_PRIVATE_KEY }}
         run: |
           test -n "$D2S_SIGNING_KEY"

@@ -9,6 +9,7 @@ export D2S_INSTAGRAM_MANIFEST="$DIR/state/whatsapp-media-hosts.tsv"
 export D2S_INSTAGRAM_LOG="$DIR/log/whatsapp-media-dns.log"
 . "$DIR/d2s-meta-dns-library.sh"
 ca_bundle=${D2S_IP_CA_BUNDLE:-/opt/etc/ssl/certs/ca-certificates.crt}
+[ -r "$ca_bundle" ] || ca_bundle=/etc/ssl/certs/ca-certificates.crt
 CHECK_STATE=$DIR/state/whatsapp-media-last-check
 NAMES=$DIR/state/whatsapp-media-names.txt
 POOL=$DIR/state/whatsapp-media-pool.txt
@@ -83,7 +84,7 @@ for host in $names; do
             rc=$?
             [ "$rc" = 1 ] || exit 1
             printf '%s %s\n' "$host" "$ip" >> "$MANIFEST"
-            if LD_LIBRARY_PATH='' ndmc -c "ip host $host $ip" >/dev/null 2>&1; then
+            if dns_pin_add "$host" "$ip"; then
                 ndm_touched
                 log "добавлен проверенный медиадомен $host $ip"
             else
@@ -106,7 +107,7 @@ for host in $names; do
             case " $fresh_ips " in *" $old_ip "*) continue;; esac
             valid_ipv4 "$old_ip" || continue
             if record_exists "$old_host" "$old_ip"; then
-                LD_LIBRARY_PATH='' ndmc -c "no ip host $old_host $old_ip" >/dev/null 2>&1 || exit 1
+                dns_pin_remove "$old_host" "$old_ip" || exit 1
                 ndm_touched
             else
                 rc=$?

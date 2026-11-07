@@ -11,6 +11,12 @@
   /* ─── Словарь ─── */
 
   var SHAPES = { 0: "", 1: "TLS 1.3", 2: "TLS 1.2", 3: "QUIC", 4: "любая форма", 5: "голос", 6: "TLS 1.3 + ECH" };
+  SHAPES[8] = "TLS 1.3 · без Timestamp";
+  SHAPES[9] = "TLS 1.2 · без Timestamp";
+  SHAPES[10] = "TLS 1.3 + ECH · без Timestamp";
+  SHAPES[11] = "TLS 1.3 · Timestamp";
+  SHAPES[12] = "TLS 1.2 · Timestamp";
+  SHAPES[13] = "TLS 1.3 + ECH · Timestamp";
   var MODES = { apply: "применение", observe: "наблюдение", off: "выключен" };
 
   var TRACK = [
@@ -44,7 +50,13 @@
     return body && typeof body.getAttribute === "function" ? body.getAttribute(name) : null;
   }
 
-  function shapeLabel(shape, transport) {
+  function tcpShape(shape, transport, profile) {
+    if (transport !== 6 || (profile !== 1 && profile !== 2)) return shape;
+    var base = shape === 1 ? 8 : shape === 2 ? 9 : shape === 6 ? 10 : 0;
+    return base ? base + (profile === 2 ? 3 : 0) : shape;
+  }
+  function shapeLabel(shape, transport, profile) {
+    shape = tcpShape(shape, transport, profile);
     var s = SHAPES[shape];
     if (s) return s;
     if (transport === 17) return "UDP";
@@ -177,7 +189,7 @@
       var g = groups[i];
       var suffix = normName(g.suffix);
       if (!g.active || (binding.transport || 6) !== g.transport || (binding.family || 4) !== g.family ||
-          (binding.shape || 0) !== g.shape ||
+          tcpShape(binding.shape || 0, binding.transport || 6, binding.tcp_profile || 0) !== g.shape ||
           (binding.probe_path || "/") !== (g.probe_path || "/") ||
           (binding.ech_origin || "") !== (g.ech_origin || "")) continue;
       if (name !== suffix && name.slice(-suffix.length - 1) !== "." + suffix) continue;
@@ -1468,9 +1480,15 @@
         add(ctx, tag(doc, shapeLabel(g.shape, g.transport)), tag(doc, familyLabel(g.family)));
         if (g.ech_origin) ctx.appendChild(tag(doc, "ECH: " + g.ech_origin));
         if (g.probe_path && g.probe_path !== "/") ctx.appendChild(tag(doc, "путь " + g.probe_path));
-        var stamp = el(doc, "span", "ftag-stamp", active ? "Применяется" : "Не подтверждено");
+        var stampText = active ? "Общее правило активно" : !m.linked
+          ? "Нет связи с датапатом" : "Общее правило не подтверждено";
+        var stamp = el(doc, "span", "ftag-stamp", stampText);
         stamp.setAttribute("data-active", String(active));
-        if (!active) stamp.title = "Решение сохранено, но применение к семейству сейчас не подтверждено";
+        stamp.title = active
+          ? "Датапат подтвердил установку правила для суффикса; это само по себе не доказывает успех каждого сайта."
+          : !m.linked
+            ? "Нет связи с датапатом, поэтому текущий статус семейного правила неизвестен."
+            : "План подтверждён на доменах, но датапат не подтвердил установку общего правила для суффикса. Отдельные домены могут работать по собственным точным привязкам.";
         var ev = list(g.evidence);
         /* Отказы узла — по одной строке на узел, с причиной: d2s хранит отказ
            каждого плана отдельно, человеку нужен узел, а не журнал. */
@@ -1489,7 +1507,7 @@
         fold.setAttribute("aria-expanded", String(open));
         fold.setAttribute("aria-controls", regionId);
         var foldText = el(doc, "span", "ftag-fold-text",
-          "Подтверждено на " + count(num(g.evidence_count) || ev.length, "домене", "доменах", "доменах"));
+          "План подтверждён на " + count(num(g.evidence_count) || ev.length, "домене", "доменах", "доменах"));
         if (dead.length) foldText.appendChild(el(doc, "span", "ftag-fold-dead", " · без плана " + dead.length));
         fold.appendChild(foldText);
         fold.appendChild(foldMark(doc));
@@ -1785,7 +1803,7 @@
   function boxFacts(binds) {
     var protos = {}, v6 = false, recheck = 0, off = 0;
     binds.forEach(function (bd) {
-      protos[shapeLabel(bd.shape, bd.transport)] = true;
+      protos[shapeLabel(bd.shape, bd.transport, bd.tcp_profile)] = true;
       if (bd.family === 6) v6 = true;
       if (bd.recheck) recheck++;
       if (bd.enabled === false) off++;
@@ -1898,7 +1916,7 @@
         tr.setAttribute("data-enabled", String(bd.enabled !== false));
         var t = el(doc, "td", "t", targetLabel(bd.target));
         if (bd.kind === "addr") t.appendChild(el(doc, "small", "", "адрес"));
-        var proto = el(doc, "td", "n c-proto", shapeLabel(bd.shape, bd.transport) + " · " + familyLabel(bd.family));
+        var proto = el(doc, "td", "n c-proto", shapeLabel(bd.shape, bd.transport, bd.tcp_profile) + " · " + familyLabel(bd.family));
         var lv = el(doc, "td", "c-level");
         add(lv, tag(doc, str(bd.level_name) || "не измерено", (bd.level || 0) >= 3 ? "ok" : (bd.level || 0) > 0 ? "warn" : "mute"));
         if (bd.recheck) add(lv, " ", tag(doc, "перепроверяется", "live"));

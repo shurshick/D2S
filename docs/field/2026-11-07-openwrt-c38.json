@@ -1,0 +1,61 @@
+{
+  "date": "2026-11-07",
+  "candidate": "d2s-v0.5.0-test1",
+  "candidate_source": "659964d plus uncommitted scoped c38da9f port and OpenWrt scripts",
+  "candidate_arch": "amd64",
+  "vm": {
+    "platform": "OpenWrt 25.12.6 x86_64 VirtualBox",
+    "upgrade_from": "22.03.5",
+    "official_image_sha256": "f8538784d0288b4133a99ac2a68443e4922ffde6343e80df56a5882364b9d499",
+    "snapshot": "8981d188-e50b-4181-8b65-7fe661efc5b7",
+    "primary_router_modified": false,
+    "keenetic_stand_modified": false
+  },
+  "checks": {
+    "native_core_full": true,
+    "native_datapath_full": true,
+    "native_detect_full": true,
+    "focused_asan_ubsan": true,
+    "own_minimizer_profile_red_green": true,
+    "new_panel_profile_labels_red_green": true,
+    "linux_tcp_info_absent": 4,
+    "linux_tcp_info_present": 4,
+    "original_timestamp_sysctl_restored": true,
+    "real_signature_accepted": true,
+    "tampered_signature_rejected": true,
+    "stock_signed_update": "wire21 to wire22, 60-second health success, private HTTPS fixture, trusted RSA test CA plus ordinary roots",
+    "virtual_client_https_full_unchanged": true,
+    "virtual_client_both_timestamp_profiles": true,
+    "nfqueue_sequence_before": 318,
+    "nfqueue_sequence_after": 335,
+    "virtual_client_quic": {
+      "http_status": 200,
+      "level": 3,
+      "response_complete": true,
+      "name_ok": 1
+    },
+    "dns_add_restore_remove_foreign_preserved": true,
+    "uninstall_keep_configuration_exact": true,
+    "learned_catalog_in_vm": false,
+    "catalog_retention_test": "isolated installation fixture, not a learned VM catalog",
+    "signed_reinstall": true,
+    "full_uninstall": true,
+    "clean_signed_install": true
+  },
+  "runtime_source_hashes": {
+    "core/compose.c": "eb4e5bb6edb3922b5bef97eb73174bbff85c38d4604cb907339bff4db4794532",
+    "core/sched.c": "50944053f42523c54a1e378a329679fe2c70760a46055b79dcee60d28c1ef34c",
+    "core/optimize.inc": "d94929a533b4fb168f2f15bb77fe649d3362407d6dd08953bd54994f02b534e3",
+    "core/verify.c": "2bb1086092ef8e12512a263956c0f9dedf5962fe37fe1940912770d05a1f01b8",
+    "datapath/session.c": "96366c5e35fbf2b64bf9c02ea9f654fafa0311310c5a3cb78133c075b99ab8df",
+    "datapath/plans.c": "7ee1f377560ca92c513540ff6d351bfb16fed4c8ddedf7a3dc9a6c00e75bc2cb",
+    "runtime/d2s_protocol.h": "9adf61fe796a31c83cd481aec06de37ea39cc57b713ab775d140b44d95c4b866"
+  },
+  "limits": [
+    "source mutex does not protect unrelated processes during short namespace tcp_timestamps changes",
+    "no provider bypass attribution through upper gateway",
+    "no external Discord voice or Telegram Web fix claim",
+    "physical OpenWrt ARM/MIPS and IPv6 not field-tested"
+  ],
+  "publication": null
+}
