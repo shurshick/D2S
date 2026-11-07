@@ -94,7 +94,41 @@
     "run": 42348844144,
     "conclusion": "success"
   },
-  "publication": null,
+  "publication": {
+    "release": "d2s-v0.4.0",
+    "source": "eca51918b131e9c48ef05739be9647c81803668a",
+    "stable_latest": true,
+    "url": "https://github.com/shurshick/D2S/releases/tag/d2s-v0.4.0",
+    "build_run": 42350960666,
+    "conclusion": "success",
+    "architecture_build_seconds": {
+      "arm64": 113,
+      "arm": 114,
+      "mipsel": 131
+    },
+    "public_assets_downloaded": true,
+    "ed25519_verified": true,
+    "sha256_verified": true,
+    "source_scripts_ui_and_notes_exact": true,
+    "asset_sha256": {
+      "arm64": "7fd748f4156a04b87bbab49cb81f3523eef30c0e92727ca99cae9852e36aa052",
+      "arm": "be99bc0ff4800993e2cdd9b0a206d06be68b8b0b0c79103691a6f15e39807605",
+      "mipsel": "0b47ec0d1f11a2eedec0c6348403888842f93c4c2ba97f9387c35d63bea7aa44"
+    },
+    "stock_stand_update": {
+      "success": true,
+      "health_wait_seconds": 60,
+      "installed_binaries_verified": 7,
+      "installed_ui_assets_verified": 6,
+      "mode": "apply",
+      "telegram_enabled": true,
+      "auto_update": true,
+      "doq_unchanged": true,
+      "old_catalog_restored": false,
+      "diagnostics_enabled_preserved": true,
+      "diagnostics_flag_mtime": "2026-11-07T02:18:46+03:00"
+    }
+  },
   "overall_speedup_measured": false,
   "telegram_web_fixed": false,
   "queue_observation": {
@@ -121,5 +155,9 @@
     "cause": "own temporary candidate staging and backup exports consumed RAM; verified PC copies retained; staging removed",
     "ui_fix": "show actual limiter and update unchanged queues when resource reason changes"
   },
-  "original_d2o_installation_saved": false
+  "original_d2o_installation_saved": false,
+  "ci_final_ui": {
+    "run": 42350742238,
+    "conclusion": "success"
+  }
 }
