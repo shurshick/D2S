@@ -136,8 +136,8 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/plantlv.c": {
-    "sha256": "5b74cd28233646a1b67bd2bb894ca004afc15d3fb83018f39b6ca24d26ded439",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "f32b502a850599ef73cc7c8e88d1413255d4dbb4f696b9919b0bd34737497d5c",
+    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/include/d2s_quic.h": {
     "sha256": "3ac764fa8bfc72199c6c4ba862117c85a0e42835769718c5f7b61a6d8321b9c6",

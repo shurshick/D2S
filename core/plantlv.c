@@ -966,7 +966,13 @@ int d2s_plan_simplify_next(const char *text, size_t cursor, char *out, size_t ca
             if (parse_text(out,&candidate,err,errcap)) continue;
             uint64_t ac,bc,ap,bp;size_t an,bn;
             simplify_cost(&p,&ac,&ap,&an);simplify_cost(&candidate,&bc,&bp,&bn);
-            int cheaper=bc<=ac && bp<=ap && bn<=an && (bc<ac || bp<ap || bn<an);
+            /* delay overrides settle, which overrides pace on the first
+               real action. Removing a small override must not expose a
+               larger pause, despite a lower sum of written parameters. */
+            uint32_t first=p.delay_us?p.delay_us:p.settle_us?p.settle_us:p.pace_us;
+            uint32_t after=candidate.delay_us?candidate.delay_us:
+                candidate.settle_us?candidate.settle_us:candidate.pace_us;
+            int cheaper=after<=first && bc<=ac && bp<=ap && bn<=an && (bc<ac || bp<ap || bn<an);
             if(!cheaper) { plan_free(&candidate);continue; }
             plan_free(&candidate); plan_free(&p); *next=ordinal; return 1;
         }

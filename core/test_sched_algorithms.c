@@ -134,6 +134,20 @@ static void contextual_ranking(void) {
     d2s_sched_free(s); d2s_catalog_free(&c);
 }
 
+static uint32_t first_payload_delay(const char *text) {
+    uint8_t wire[D2S_PLAN_TLV_MAX],payload[]={1,2,3,4};size_t n=0;
+    d2s_plan *p=NULL;char err[160];d2s_actions actions;
+    assert(!d2s_plan_text_to_tlv(text,wire,sizeof wire,&n,err,sizeof err));
+    assert(!d2s_plan_load(wire,n,&p,err,sizeof err));
+    d2s_pkt packet={.payload=payload,.payload_len=sizeof payload,.seq=100};
+    assert(!d2s_plan_apply(p,NULL,&packet,&actions));
+    uint32_t delay=UINT32_MAX;
+    for(size_t i=0;i<actions.n;i++)if(actions.v[i].kind==D2S_EMIT_PAYLOAD) {
+        delay=actions.v[i].delay_us;break;
+    }
+    assert(delay!=UINT32_MAX);d2s_actions_free(&actions);d2s_plan_free(p);return delay;
+}
+
 static void simplification(void) {
     const char *src = "d2s-plan 1 1\nid 12345678123456781234567812345678\n"
         "proto tcp tls\npayload 1 01020304\npoison 1 badsum\n"
@@ -155,6 +169,22 @@ static void simplification(void) {
     assert(d2s_plan_simplify_next(src,0,out,sizeof out,&next,err,sizeof err)==1);
     assert(!d2s_plan_text_to_tlv(out,wire,sizeof wire,&wn,err,sizeof err));
     assert(!d2s_plan_load(wire,wn,&p,err,sizeof err));d2s_plan_free(p);
+    /* Removing an overriding delay/settle must not reveal a larger lower
+       priority pause. Check actual common-executor actions, not cost alone. */
+    for(unsigned timing=0;timing<2;timing++) {
+        char mixed[1024];
+        snprintf(mixed,sizeof mixed,"d2s-plan 1 6\nid 00000000000000000000000000000000\n"
+            "proto tcp tls\npayload 1 01020304\npoison 1 badsum\n"
+            "fake payload=1 poison=1 repeats=1 gap_us=0 place=before\n"
+            "split payload_start +1\n%s\npace 12000\n",
+            timing?"settle 1":"delay 1\nsettle 15000");
+        uint32_t before=first_payload_delay(mixed);assert(before==1);
+        size_t cursor=0;unsigned candidates=0;
+        while(d2s_plan_simplify_next(mixed,cursor,out,sizeof out,&next,err,sizeof err)==1) {
+            assert(first_payload_delay(out)<=before);assert(next>cursor);cursor=next;candidates++;
+        }
+        assert(candidates);
+    }
 }
 
 static void maintenance(void) {
