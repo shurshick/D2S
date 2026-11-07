@@ -1,15 +1,17 @@
 # D2S 0.3: текущее состояние
 
-## В работе 07.11.2026: выпуск 0.5.0
+## Завершено 07.11.2026: stable 0.5.0
 
-- OpenWrt VM192.168.1.250 обновлена до25.12.6; основной роутер и Keenetic-стенд не администрировались.
-- Перенос c38da9f, native OpenWrt, wire22: a2d6045; TCP_INFO и отказ небезопасного включения Timestamp: 4575bee.
-- Полные CI42370348856 и42372207576 прошли, локальные core/datapath/detect и целевые ASan/UBSan прошли.
-- VM: чистый private0.5.0-test2 из4575bee; MODEapply,TG1,AUTOUPDATE0. LAN helper дополнен поддержкой статического LAN при выключенном DHCP.
-- Проверены реальные signed update/rollback, keep-config/full uninstall, NAT HTTPS/H3, оба TCP-профиля, DNS lifecycle, реальный DNS observer с ПК и fw4 offload restore. Подробности docs/field/2026-11-07-openwrt-c38.json.
-- DHCP-сервер VM отключён (dhcp.lan.ignore=1), чтобы не раздавать адреса в общей bridged LAN. Оставить отключённым.
-- Осталось: точный CI финального LAN-коммита; release0.5.0 четыре архитектуры; скачать и проверить подпись/хеши/состав; публичная установка на VM и reboot; вернуть AUTOUPDATE1, проверить отсутствие fixture env; экспортировать evidence и удалить только свои fixture/netns/veth/ip d2s_lab и правила D2S-lab-client. Удалить приватный fault-архив. Не отменять сборки.
-- Fixture/root/d2s-fixture и ключи, клиент d2s-client, таблица ip d2s_lab пока требуют уборки. Логи на ПК work/private.
+- Stable/latest d2s-v0.5.0; неизменяемый исходник2628c4dc2969ecb7b72542bfc11145081393c216.
+  CI42374713278 success; release42374902360 success: четыре архитектуры и28 runtime-запусков под QEMU, четыре crypto smoke. ARM64 занял126сек.
+- Полные регрессии4575bee, scoped c38da9f и собственный TCP_INFO fix; детали docs/upstream-c38da9f.md.
+- Публичные файлы скачаны обратно: Ed25519, SHA256, состав,28 ELF, все установочные исходники и заметки совпали с тегом.
+- OpenWrt VM192.168.1.250:25.12.6, публичный stock update с60сек health, затем обычный one-line bootstrap и reboot — PASS. После reboot все службы живы, хеши совпали. MODEapply,TG1,AUTOUPDATE1, обычный канал GitHub без fixture environment.
+- VM DHCP-сервер выключен (dhcp.lan.ignore=1), оставить выключенным на общей bridged LAN. DNS observerbr-lan работает. Снимок VirtualBox8981d188-e50b-4181-8b65-7fe661efc5b7 и приватные backups на ПК. Свои netns/veth/ip d2s_lab/HTTPSfixture и тестовые сертификаты удалены. Evidence экспортирован на ПК work/private/openwrt25-lab-evidence.tar.gz.
+- После напоминания владельца Keenetic-стенд192.168.31.1 тоже обновлён публичным updater с0.4.0 на0.5.0:60сек health success, конфигурация byte-exact,7 программ/6 assets/helper hashes совпали. PPEv4/v6 8/8, NFQUEUE2000, resolver/observer/TG, DoQ alive и его хеши прежние. MODEapply,TG1,AUTOUPDATE1. Реальный TCP_INFO тест с assertions на Linux4.9:4 noTS +4 TS, sysctl восстановлен, peer-decline fault assertion прошёл. Резервная копия config/state на стенде и ПК. Проверка приложений у владельца запрошена.
+- Основной192.168.1.1 не администрировался. TelegramWeb/Discordvoice исправленными не объявляются. Физические OpenWrtARM/MIPS и отдельный IPv6-прогон не проверены.
+- Подробности: docs/field/2026-11-07-openwrt-c38.json, docs/field/2026-11-07-keenetic-0.5.json.
+- Локальный outputs/D2S-0.5.0-fault — намеренно сломанный частный тест отката, НЕ публиковать/устанавливать. Автопроверка запретила его удаление; добавлен DO-NOT-INSTALL.txt. На VM этот fixture удалён. Публичный архив чистый.
 
 ## Завершено 07.11.2026: stable 0.4.0
 

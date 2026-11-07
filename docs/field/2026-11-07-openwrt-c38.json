@@ -66,6 +66,26 @@
     "no external Discord voice or Telegram Web fix claim",
     "physical OpenWrt ARM/MIPS and IPv6 not field-tested"
   ],
-  "publication": null,
+  "publication": {
+    "release": "d2s-v0.5.0",
+    "source": "2628c4dc2969ecb7b72542bfc11145081393c216",
+    "ci": "42374713278 success",
+    "release_ci": "42374902360 success",
+    "architectures": [
+      "arm64",
+      "arm",
+      "mipsel",
+      "amd64"
+    ],
+    "public_signature_sha256_archive_source_verification": true,
+    "public_stock_update_60_second_health": true,
+    "public_bootstrap_one_line": true,
+    "vm_reboot_autostart": true,
+    "final_mode": "apply",
+    "final_telegram": true,
+    "final_autoupdate": true,
+    "normal_update_environment": true,
+    "owned_lab_network_and_tls_removed": true
+  },
   "additional_profile_probe_source": "4575beee5d800320bab246362d2ef006a3399044, clean private test2 installed"
 }

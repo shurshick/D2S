@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-07",
+  "platform": "Keenetic/Netcraze Entware ARM64, Linux 4.9-ndm-5",
+  "host": "192.168.31.1",
+  "release": "d2s-v0.5.0",
+  "source": "2628c4dc2969ecb7b72542bfc11145081393c216",
+  "previous": "d2s-v0.4.0",
+  "backup_config_catalog_sha256": "5c9cd4c8256316184406ab4905ac4e177fef84cc646e77da69288ebf940e8328",
+  "checks": {
+    "public_stock_signed_update": true,
+    "health_60_seconds": true,
+    "seven_binaries_six_panel_assets_and_helpers_match_public_package": true,
+    "config_byte_exact": true,
+    "doq_files_unchanged_and_service_alive": true,
+    "nfqueue_2000_attached": true,
+    "ppe_v4_rules": "8/8",
+    "ppe_v6_rules": "8/8",
+    "controller_wire": 22,
+    "local_resolver": true,
+    "dns_media_observer": true,
+    "tcp_profile_real_kernel": {
+      "original_sysctl": 1,
+      "no_timestamp_connections": 4,
+      "timestamp_connections": 4,
+      "original_restored_every_time": true,
+      "peer_declined_timestamp_fault_assertion": true,
+      "test_assertions_enabled": true
+    },
+    "lan_config_detected": [
+      "br0 192.168.31.0/24",
+      "br1 10.1.30.0/24"
+    ]
+  },
+  "final": {
+    "mode": "apply",
+    "telegram": true,
+    "autoupdate": true
+  },
+  "limits": [
+    "Application recheck requested, response pending at documentation time",
+    "No physical ARMv7 or MIPSel field test",
+    "No new Telegram Web or external Discord voice fix claim"
+  ],
+  "primary_router_administered": false
+}
