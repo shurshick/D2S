@@ -77,6 +77,12 @@ jobs:
           EXPECTED: ${{ steps.key.outputs.value }}
         run: |
           make -C core check ZIG="$ZIG"
+          sudo unshare --net sh -eu -c '
+            ip link set lo up
+            for value in 0 1 2; do
+              echo "$value" > /proc/sys/net/ipv4/tcp_timestamps
+              D2S_REQUIRE_TCP_PROFILE=1 ./core/test_tcp_profile
+            done'
           make -C datapath check ZIG="$ZIG"
           make -C detect check
           mkdir -p build/ci

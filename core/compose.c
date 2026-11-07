@@ -82,9 +82,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#ifdef __linux__
+#include <linux/tcp.h>
+#else
 #include <netinet/tcp.h>
+#endif
 #include <poll.h>
 #include <pthread.h>
+#include <stddef.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -598,6 +603,13 @@ static int connect_with_tcp_profile(int fd, const struct sockaddr *addr,
     int changed = 0;
     if (timestamps >= 0) {
         if (tcp_timestamps_read(&previous) != 0) goto profile_fail;
+        /* Restoring 0 before a remote SYN-ACK makes Linux discard its TS
+           negotiation. A loopback peer can hide this race. Do not claim a
+           timestamp-enabled probe in this namespace: it is not measurable. */
+        if (timestamps == 1 && previous == '0') {
+            errno = EOPNOTSUPP;
+            goto profile_fail;
+        }
         if ((timestamps == 0 && previous != '0') ||
             (timestamps == 1 && previous == '0')) {
             char wanted = timestamps ? '1' : '0';
@@ -707,6 +719,18 @@ int d2s_props_contact_on_family_tcp_profile(int use_fd, const char *ip, uint16_t
             return -1;
         }
     }
+#ifdef __linux__
+    if (tcp_timestamps >= 0) {
+        struct tcp_info info;
+        socklen_t info_len = sizeof info;
+        memset(&info, 0, sizeof info);
+        if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &info_len) != 0 ||
+            info_len < offsetof(struct tcp_info, tcpi_options) + sizeof info.tcpi_options ||
+            !!(info.tcpi_options & TCPI_OPT_TIMESTAMPS) != tcp_timestamps) {
+            close(fd); errno = EOPNOTSUPP; return -3;
+        }
+    }
+#endif
     (void)fcntl(fd, F_SETFL, flags);
 
     struct sockaddr_storage local;

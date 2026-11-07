@@ -120,7 +120,7 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/compose.c": {
-    "sha256": "eb4e5bb6edb3922b5bef97eb73174bbff85c38d4604cb907339bff4db4794532",
+    "sha256": "b846ce2d42748f9b330e1c5d83b4b96c065d01ce4cd02e0ae0e50c1aea6d57eb",
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/include/d2s_compose.h": {
@@ -264,7 +264,7 @@
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/include/d2s_compose_internal.h": {
-    "sha256": "7335c53133200ad2f61f54c432106067b10547174561958fff3df90ee30ba987",
+    "sha256": "b8fffc2f4fb82794a00aefe9d769e98652c1d9e4fb1caeaab53643b971cd0db8",
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/include/d2s_link.h": {

@@ -523,8 +523,8 @@ test_match: test_match.c match.o catalog.o groups.o domain.o $(HDR)
 test_compose: test_compose.c compose.o measured.o hello.o meas.o link.o $(HDR) $(TESTHDR)
 	$(CC) $(CFLAGS) -o $@ test_compose.c compose.o measured.o hello.o meas.o link.o $(TEST_LDFLAGS)
 
-test_tcp_profile: test_tcp_profile.c compose.o measured.o hello.o meas.o link.o $(HDR)
-	$(CC) $(CFLAGS) -o $@ test_tcp_profile.c compose.o measured.o hello.o meas.o link.o $(TEST_LDFLAGS)
+test_tcp_profile: test_tcp_profile.c compose.c measured.o hello.o meas.o link.o $(HDR) tcp1620_whitelist.inc
+	$(CC) $(CFLAGS) -o $@ test_tcp_profile.c measured.o hello.o meas.o link.o $(TEST_LDFLAGS)
 TESTS += test_tcp_profile
 .PHONY: test-tcp-profile
 test-tcp-profile: test_tcp_profile

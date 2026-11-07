@@ -122,8 +122,10 @@ int  d2s_props_contact_on(int use_fd, const char *ip, uint16_t port, d2s_hello h
 int  d2s_props_contact_on_family(int use_fd, const char *ip, uint16_t port,
                                 d2s_hello h, uint8_t family, uint8_t *local_addr,
                                 uint16_t *local_port, int *out_fd);
-/* Same connect with a requested TCP Timestamp option profile: -1 leaves the
- * kernel default, 0 omits Timestamp, 1 offers it. */
+/* Same connect with a requested established TCP Timestamp profile: -1 leaves
+ * the kernel default, 0 omits Timestamp, 1 requires negotiated Timestamp.
+ * A disabled namespace or declining peer may make that locally unsupported;
+ * return -3 rather than claim a different profile or change router policy. */
 int  d2s_props_contact_on_family_tcp_profile(int use_fd, const char *ip, uint16_t port,
                                 d2s_hello h, uint8_t family, int tcp_timestamps,
                                 uint8_t *local_addr, uint16_t *local_port, int *out_fd);

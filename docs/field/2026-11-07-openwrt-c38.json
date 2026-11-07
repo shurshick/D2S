@@ -40,10 +40,15 @@
     "catalog_retention_test": "isolated installation fixture, not a learned VM catalog",
     "signed_reinstall": true,
     "full_uninstall": true,
-    "clean_signed_install": true
+    "clean_signed_install": true,
+    "remote_timestamp_disabled_repro": true,
+    "remote_timestamp_disabled_fixed_local_refusal": true,
+    "peer_declined_timestamp_red_green": true,
+    "isolated_namespace_settings_0_1_2": true,
+    "real_partial_install_rollback": true
   },
   "runtime_source_hashes": {
-    "core/compose.c": "eb4e5bb6edb3922b5bef97eb73174bbff85c38d4604cb907339bff4db4794532",
+    "core/compose.c": "b846ce2d42748f9b330e1c5d83b4b96c065d01ce4cd02e0ae0e50c1aea6d57eb",
     "core/sched.c": "50944053f42523c54a1e378a329679fe2c70760a46055b79dcee60d28c1ef34c",
     "core/optimize.inc": "d94929a533b4fb168f2f15bb77fe649d3362407d6dd08953bd54994f02b534e3",
     "core/verify.c": "2bb1086092ef8e12512a263956c0f9dedf5962fe37fe1940912770d05a1f01b8",
@@ -57,5 +62,6 @@
     "no external Discord voice or Telegram Web fix claim",
     "physical OpenWrt ARM/MIPS and IPv6 not field-tested"
   ],
-  "publication": null
+  "publication": null,
+  "additional_profile_probe_source": "working source after a2d6045; VM main test1 still predates final connector fix"
 }

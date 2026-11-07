@@ -6,10 +6,10 @@
   "manual_record": "D2S-UPSTREAM-C38DA9F-20261107",
   "files": {
     "core/catalog.c": "b958086f2e779a7dbaadfe87e0e75ad37465e87c5b4ef47acef21af212610146",
-    "core/compose.c": "eb4e5bb6edb3922b5bef97eb73174bbff85c38d4604cb907339bff4db4794532",
+    "core/compose.c": "b846ce2d42748f9b330e1c5d83b4b96c065d01ce4cd02e0ae0e50c1aea6d57eb",
     "core/groups.c": "9e496eaab56b469c38ed0f008d3f028f953addf3e6c4cc5f242504f9ea189c6c",
     "core/include/d2s_catalog.h": "918d5c62e9f0c1ebebd57f4d34a761e6e7c748b68b6cde74051bc5d58f1a9401",
-    "core/include/d2s_compose_internal.h": "7335c53133200ad2f61f54c432106067b10547174561958fff3df90ee30ba987",
+    "core/include/d2s_compose_internal.h": "b8fffc2f4fb82794a00aefe9d769e98652c1d9e4fb1caeaab53643b971cd0db8",
     "core/include/d2s_link.h": "675da3fae08afda25677fabd571854e3cd261570b739f484ddb307db071d1a69",
     "core/include/d2s_verify.h": "5b41ee6c1d7340e9909bc1f14530073984ac7054666a8091e28818419baab87e",
     "core/link.c": "67673dff88186b55e76b0f3231841da01e638fedf17818e411ccfa3768020777",
@@ -32,6 +32,8 @@
     "core/optimize.inc",
     "core/test_sched_algorithms.c",
     "core/test_tcp_profile.c",
-    "core/sched.c"
+    "core/sched.c",
+    "core/compose.c TCP_INFO and disabled-namespace refusal",
+    "core/test_tcp_profile.c lower-level peer option fault injection and isolated namespaces"
   ]
 }
