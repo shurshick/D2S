@@ -29,7 +29,15 @@
     "lan_config_detected": [
       "br0 192.168.31.0/24",
       "br1 10.1.30.0/24"
-    ]
+    ],
+    "owner_application_recheck": {
+      "youtube": true,
+      "telegram": true,
+      "whatsapp": true,
+      "upper_router_bypass_disabled_owner_report": true,
+      "upper_router_separate_telegram_tunnel": "not separately restated in latest reply",
+      "source": "Owner reply 2026-11-07: bypass disabled; Telegram, WhatsApp and YouTube work"
+    }
   },
   "final": {
     "mode": "apply",
@@ -37,7 +45,6 @@
     "autoupdate": true
   },
   "limits": [
-    "Application recheck requested, response pending at documentation time",
     "No physical ARMv7 or MIPSel field test",
     "No new Telegram Web or external Discord voice fix claim"
   ],
