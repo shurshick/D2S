@@ -1,13 +1,20 @@
-# D2S 0.3: текущее состояние
+# D2S — текущее состояние
 
-## В работе 07.11.2026: перенос a378e23, выпуск 0.5.1
+## Завершено 07.11.2026: stable 0.5.1
 
-- База00f78c5 чистая перед началом. Последний upstream a378e230947ebfd011439e1cac0f1e994d883aae; относительно c38da9f восемь коммитов/восемь файлов.
-- Scoped three-way port: runtime без конфликтов; тест браузера объединяет empty-box fixture и новое семейство. Новые core/UI тесты RED против прежней реализации подтверждены. Focused GREEN (groups/retry/removal/restart, own optimizer/profiles, worker lifecycle/link/TCP, Telegram HTTPS, recheck/lifecycle) и все panel JS прошли. Реальный Chromium + C-panel responsive integration прошёл. ASan/UBSan идёт; далее полный CI.
-- REA недоступен, прежнее разрешение без REA действует. Ручная запись D2S-UPSTREAM-A378E23-20261107, docs/upstream-a378e23.md.
-- Дополнительно найден upstream gap в datapath/ctlsrv.c: SET_BYPASS/DEL_BYPASS/DEL_SUFFIX отвергали TCP8–13. Реальный стенд имел BAD_ARGS api.github.com shape11,4 группы/0active. Исправлен только valid-range; core/test_link через настоящий ctlprobe:36 RED,60 positive/33 negative GREEN. Первый CI не отменять; необходим новый полный CI исправленногоSHA.
-- Wire22, установочные скрипты/сеть/Telegram/DNS не менялись. Наши optimizer/contact/TCP_INFO и шесть алгоритмов сохраняются. Ни каталоги, ни стратегии не сбрасывать.
-- После проверок: точный CI, signed0.5.1 четыре архитектуры, проверка публичных файлов, public update на Keenetic192.168.31.1 и OpenWrt192.168.1.250 с резервной копией и проверкой конфигурации/DoQ. Основной192.168.1.1 не администрировать. Не отменять CI/сборки.
+- Stable/latest d2s-v0.5.1; неизменяемый исходник f49938564b0ade9755a3c73a1ab2d5f9b8731891.
+  Перенос a378e23: f5cb958. Собственный wire22 area parser fix: f499385.
+  CI42406653081 и release42408619510 success. Предыдущий CI42405056412 также завершился, не отменялся.
+- Из источника: повторы ACK/ошибок, backoff без общего стопа, правильный порядок удаления suffix/установки исключения/возврата suffix, случайные ID, честные статусы панели.
+- На Keenetic обнаружен реальный BAD_ARGS TCP shape11: parser источника пропустил8–13. Минимально исправлены SET_BYPASS/DEL_BYPASS/DEL_SUFFIX. core/test_link с настоящим ctlprobe:36 RED,60valid/33invalid GREEN; ASan/UBSan чистый. Wire22 не менялся.
+- Группы/алгоритмы/профили/worker lifecycle/link/Telegram/recheck тесты и ASan прошли. Настоящий Chromium+C-panel responsive прошёл, empty-box regression сохранён. Настоящий controller+ctlprobe с одним потерянным ACK: старая0.5.0 не восстановила правило; новый повторил с новымID и установил его. CPU-сэмпл ожидания0.0сек у обоих — улучшение CPU по этому опыту не заявлять.
+- Публичные четыре архива скачаны обратно: Ed25519/SHA256, все устанавливаемые исходники, заметки и28ELF соответствуют тегу. В CI28QEMU-launch и4crypto-smoke прошли.
+- Keenetic192.168.31.1: candidate и public0.5.1 стоят и проверены. До переноса4семейства/0active, после4/4active; все25уникальных прежних планов сохранены. Владелец подтвердил YouTube с перемоткой и TG/WA файлы наtest1 того же исходника при выключенном верхнем обходе. Public stock updater прошёл60сек health. Хеши7bin/6assets/helpers и6запущенных процессов совпали. DoQ жив, его файлы неизменны. MODEapply,TG1,AUTOUPDATE1; обычный GitHub канал без tag override.
+- Во время проверок TG на Keenetic был выключен перед публичным обновлением и затем снова включён через настройки. Установщик сохранил непосредственную pre-public конфигурацию; финальная конфигурация byte-exact совпала с исходной резервной копией. Не перезаписывали её ради совпадения хеша.
+- OpenWrt192.168.1.250: candidate и public0.5.1, signed stock update60сек health, хеши7bin/6assets/helpers и6running exe совпали. Config/network/DHCP byte-exact, DHCP ignore1 оставлен. Каталога изученных решений в VM не было.
+- Тёплый reboot VM завис при загрузке модулей ядра до D2S. Выполнен cold power-on, всё автоматически поднялось, bootID сменился, хеши/settings/normal updater подтверждены. Надёжность warm reboot VirtualBox не считать доказанной. UI-консоль пользователь ранее остановил Esc; последующие восстановление/перезапуск делались API VirtualBox, Windows GUI больше не автоматизировался.
+- Primary192.168.1.1 не администрировался. Полные code/config/state backups0.5.0 на обоих стендах /opt/d2s-release051-backup-20261107; конфигурационные архивы скопированы на ПК work/private. Валидные подписанные private candidates остаются outputs/D2S-0.5.1-test1, public outputs/D2S-0.5.1.
+- Сводка docs/field/2026-11-07-family-sync.json; перенос docs/upstream-a378e23.md. Ни TelegramWeb, ни Discordvoice, ни физический IPv6/ARMv7/MIPSel этим не закрываются.
 
 ## Завершено 07.11.2026: stable 0.5.0
 

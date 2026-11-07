@@ -1,0 +1,134 @@
+{
+  "date": "2026-11-07",
+  "release": "d2s-v0.5.1",
+  "release_source": "f49938564b0ade9755a3c73a1ab2d5f9b8731891",
+  "upstream": "a378e230947ebfd011439e1cac0f1e994d883aae",
+  "upstream_base": "c38da9ffb51e4160bdc4aa7d72e278a1394a0177",
+  "scope": "family sync retries, safe exception ordering, panel statuses, own TCP-profile area parser fix",
+  "checks": {
+    "upstream_groups_red_green": true,
+    "all_panel_javascript": true,
+    "actual_chromium_c_panel_responsive": true,
+    "groups_algorithms_asan_ubsan": true,
+    "actual_controller_datapath_ack_loss_red_green": [
+      {
+        "controller": "old",
+        "ack_wait_window_s": 1.2,
+        "cpu_seconds": 0.0,
+        "suffix_commands": 1,
+        "recovered": false
+      },
+      {
+        "controller": "new",
+        "ack_wait_window_s": 1.2,
+        "cpu_seconds": 0.0,
+        "suffix_commands": 2,
+        "recovered": true
+      }
+    ],
+    "own_area_parser": {
+      "valid_rejections_before_fix": 36,
+      "valid_commands_after_fix": 60,
+      "invalid_contexts_refused": 33,
+      "ipv4_ipv6": true,
+      "ack_identity": true,
+      "asan_ubsan": true
+    },
+    "pinned_base_guard": {
+      "base_unchanged": 199,
+      "reviewed": 76
+    },
+    "full_ci": {
+      "id": 42406653081,
+      "conclusion": "success"
+    }
+  },
+  "keenetic_candidate": {
+    "release": "d2s-v0.5.1-test1",
+    "signed_local_package": true,
+    "full_code_config_catalog_backup": true,
+    "config_byte_exact": true,
+    "doq_hashes_unchanged": true,
+    "all_seven_programs_six_assets_match_package": true,
+    "nfqueue": 2000,
+    "ppe_v4": "8/8",
+    "ppe_v6": "8/8",
+    "groups_before": 4,
+    "active_groups_before": 0,
+    "groups_after": 4,
+    "active_groups_after": 4,
+    "retained_original_unique_plan_ids": 25,
+    "owner_application_check": {
+      "youtube_new_video_and_seek": true,
+      "telegram_file_send": true,
+      "whatsapp_file_send": true,
+      "upper_bypass_disabled": true
+    }
+  },
+  "openwrt_candidate": {
+    "status": "installed and healthy",
+    "release": "d2s-v0.5.1-test1",
+    "signed_local_package": true,
+    "full_code_config_catalog_backup": true,
+    "backup_sha256": "0d95366c523390d7e0f47d9bb18a4707baa34131b9bef4b0b3edc4b12f05f63b",
+    "config_network_dhcp_byte_exact": true,
+    "seven_programs_six_assets_match_package": true,
+    "six_running_process_images_match_installed_files": true,
+    "resolver_observer": true,
+    "dhcp_server_remains_disabled": true
+  },
+  "publication": {
+    "url": "https://github.com/shurshick/D2S/releases/tag/d2s-v0.5.1",
+    "stable_latest": true,
+    "source": "f49938564b0ade9755a3c73a1ab2d5f9b8731891",
+    "ci": 42406653081,
+    "release_ci": 42408619510,
+    "all_four_archives_signature_sha256_source_files_elf_and_notes_verified": true,
+    "runtime_qemu_launches": 28,
+    "crypto_smoke_architectures": 4
+  },
+  "limits": [
+    "No measured overall selection speedup",
+    "CPU sample at ACK wait was zero for both versions, not a CPU reduction result",
+    "No new Telegram Web or Discord voice success claim",
+    "No separate physical IPv6 application verification",
+    "VirtualBox warm reboot stalled before D2S startup; cold power-on recovered the VM. General warm reboot reliability is not certified."
+  ],
+  "primary_router_administered": false,
+  "public_deployment": {
+    "keenetic": {
+      "stock_signed_update_60_second_health": true,
+      "seven_programs_six_assets_helpers_match_public_package": true,
+      "six_running_process_images_match_package": true,
+      "groups": 4,
+      "active_groups": 4,
+      "original_unique_plan_ids_retained": 25,
+      "doq_files_unchanged_and_service_alive": true,
+      "config": "matched immediate pre-public snapshot after install; Telegram toggled off/on during checks; final bytes match original saved snapshot",
+      "final": {
+        "mode": "apply",
+        "telegram": true,
+        "autoupdate": true
+      },
+      "ordinary_update_channel": true
+    },
+    "openwrt": {
+      "stock_signed_update_60_second_health": true,
+      "seven_programs_six_assets_helpers_match_public_package": true,
+      "six_running_process_images_match_package": true,
+      "config_network_dhcp_byte_exact": true,
+      "learned_catalog_before": false,
+      "ordinary_update_channel": true,
+      "final": {
+        "mode": "apply",
+        "telegram": true,
+        "autoupdate": true
+      },
+      "startup": {
+        "warm_reboot": "guest stalled during kernel module loading before D2S startup",
+        "cold_boot": "passed, boot ID changed; all services automatically started; executable hashes matched",
+        "guest_network_configuration_changed": false
+      }
+    }
+  }
+}
