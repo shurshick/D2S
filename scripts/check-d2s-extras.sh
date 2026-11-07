@@ -5,6 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 TEMP=$(mktemp -d)
 trap 'rm -rf "$TEMP"' EXIT INT TERM
 python3 "$ROOT/tests/keenetic/test-lan.py" "$ROOT/files/d2s-lan.sh"
+python3 "$ROOT/scripts/test-lan-openwrt.py"
 python3 "$ROOT/tests/keenetic/test-media.py" "$ROOT/files"
 cc -O2 -std=c11 -Wall -Wextra -Werror -pedantic -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -I"$ROOT/telegram/include" -o "$TEMP/resolver" "$ROOT/resolver-local/local-resolver.c" \

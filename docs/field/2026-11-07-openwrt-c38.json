@@ -1,7 +1,7 @@
 {
   "date": "2026-11-07",
-  "candidate": "d2s-v0.5.0-test1",
-  "candidate_source": "659964d plus uncommitted scoped c38da9f port and OpenWrt scripts",
+  "candidate": "d2s-v0.5.0-test2",
+  "candidate_source": "4575beee5d800320bab246362d2ef006a3399044 plus reviewed LAN discovery fix",
   "candidate_arch": "amd64",
   "vm": {
     "platform": "OpenWrt 25.12.6 x86_64 VirtualBox",
@@ -45,7 +45,11 @@
     "remote_timestamp_disabled_fixed_local_refusal": true,
     "peer_declined_timestamp_red_green": true,
     "isolated_namespace_settings_0_1_2": true,
-    "real_partial_install_rollback": true
+    "real_partial_install_rollback": true,
+    "static_lan_dhcp_disabled_red_green": true,
+    "real_pc_dns_media_observer": true,
+    "fw4_offload_disable_and_restore": true,
+    "github_full_engine_ci": "42372207576 success"
   },
   "runtime_source_hashes": {
     "core/compose.c": "b846ce2d42748f9b330e1c5d83b4b96c065d01ce4cd02e0ae0e50c1aea6d57eb",
@@ -63,5 +67,5 @@
     "physical OpenWrt ARM/MIPS and IPv6 not field-tested"
   ],
   "publication": null,
-  "additional_profile_probe_source": "working source after a2d6045; VM main test1 still predates final connector fix"
+  "additional_profile_probe_source": "4575beee5d800320bab246362d2ef006a3399044, clean private test2 installed"
 }
