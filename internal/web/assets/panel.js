@@ -147,11 +147,20 @@
     var active = Math.max(0, Math.round(num(meas && meas.active) || 0));
     var queued = Math.max(0, Math.round(num(meas && meas.queued) || 0));
     var measured = num(meas && meas.free_pct) !== null;
+    var why = str(meas && meas.limited_by).replace(/conntrack/g, "таблица соединений");
+    var detail = "";
+    if (why.indexOf("память") !== -1 && num(meas.mem_avail_mb) !== null)
+      detail += " · доступно " + meas.mem_avail_mb + " МБ";
+    if (why.indexOf("таблица соединений") !== -1 && num(meas.conntrack_pct) !== null)
+      detail += " · занято " + meas.conntrack_pct + "%";
+    var queueNote = why ? "Параллельность ограничена: " + why + detail + "."
+      : "Замеры запускаются по мере освобождения слотов и запаса ресурсов роутера.";
     return {
       kind: limit <= 16 ? "cells" : "bar",
       limit: limit, active: Math.min(active, Math.max(limit, active)), queued: queued,
-      short: measured ? "предел по нагрузке роутера" : "предел по умолчанию",
-      note: measured
+      short: why ? "предел: " + why : measured ? "предел по нагрузке роутера" : "предел по умолчанию",
+      queueNote: queueNote,
+      note: why ? queueNote : measured
         ? "Сколько замеров идёт одновременно, решает движок: предел снижается, когда роутеру не хватает процессора, памяти или conntrack, и растёт, когда есть запас и очередь."
         : "Данных о нагрузке роутера нет — движок держит предел по умолчанию."
     };
@@ -224,7 +233,7 @@
       m.tone = "live"; m.lamp = "live";
       m.headline = ["Идёт ", count(m.hunting, "поиск", "поиска", "поисков")];
       m.state = "Движок работает, идёт подбор";
-      m.lede = "D2S подтвердил блокировку и сам подбирает обход в протоколе, где она встретилась. Делать ничего не нужно." +
+      m.lede = "D2S проверяет подозрение на блокировку и подбирает обход там, где оно подтвердится." +
         (m.queued.length ? " Замеряется " + (m.hunting - m.queued.length) + ", " + m.queued.length + " " +
           plural(m.queued.length, "ждёт", "ждут", "ждут") + " свободного слота замера." : "");
     } else {
@@ -1237,7 +1246,7 @@
     if (m.queued.length) {
       if (!queue) { queue = el(doc, "li", "queue"); queue.__d2sKey = "queue"; }
       keep.queue = true;
-      this.updateQueue(queue, m.queued);
+      this.updateQueue(queue, m.queued, m.k.measurements);
       if (listNode.lastChild !== queue) { listNode.appendChild(queue); }
     }
     // Keep layout in normal flow. Only the reserved empty edges overlap.
@@ -1258,14 +1267,15 @@
     }
   };
 
-  App.prototype.updateQueue = function (li, queued) {
+  App.prototype.updateQueue = function (li, queued, meas) {
     var doc = this.doc, self = this;
-    var key = JSON.stringify(queued.map(function (s) { return [s.target, s.family, s.transport, s.ip, s.port, s.since]; }));
+    var queueNote = slotsView(meas).queueNote;
+    var key = JSON.stringify([queued.map(function (s) { return [s.target, s.family, s.transport, s.ip, s.port, s.since]; }), queueNote]);
     if (li.__d2sData !== key) {
       li.__d2sData = key;
       var head = el(doc, "p", "queue-head");
       add(head, el(doc, "b", "", "Ждут свободного слота замера: " + queued.length),
-        " — замеры идут не больше, чем позволяет свободный процессор.");
+        " — " + queueNote);
       var ul = el(doc, "ul", "queue-list");
       queued.forEach(function (s) {
         var row = el(doc, "li");
@@ -1387,7 +1397,7 @@
     var rows = this.$("searches").children;
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].__parts) this.updateClock(rows[i]);
-      else if (rows[i].__d2sKey === "queue") this.updateQueue(rows[i], this.m ? this.m.queued : []);
+      else if (rows[i].__d2sKey === "queue") this.updateQueue(rows[i], this.m ? this.m.queued : [], this.m && this.m.k && this.m.k.measurements);
     }
     var staleBefore = bodyAttribute(this.doc, "data-stale");
     this.renderNotice();

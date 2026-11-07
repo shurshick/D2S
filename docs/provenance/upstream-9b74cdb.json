@@ -14,5 +14,9 @@
     "core/test_verify_http.c": "192f5e32a368670dc5230288797ae9cb5894149e7a63706c6958b11612456100",
     "core/verify.c": "38eb35a7edbb800fdcaa299e369cae8535e7c8ed3b87cff026aa314c7395b4cf",
     "datapath/d2sd.c": "aeca58fab9df6f9ad95697c70ca55ffaa08e26b1d8958cd63173ae34d3027624"
+  },
+  "own_followup": {
+    "commit": "c90eee2aeda585accb6fb3eb1649ce73fa864bd2",
+    "scope": "safe precedence of first-payload delay in the background simplifier; not an upstream change"
   }
 }

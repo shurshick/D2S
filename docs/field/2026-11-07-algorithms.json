@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "date": "2026-11-07",
+  "baseline": "cdb192ec99c660f79b929ea38ce1f24a2cdf76db",
+  "algorithm_commits": [
+    "bd1c9de",
+    "3f0b511",
+    "99bc528",
+    "dde90b3",
+    "86a1be8",
+    "b7b034a"
+  ],
+  "candidate_source": "97931e0508ea6dc91aa42a8a89e9e39404264f08",
+  "timing_guard_source": "c90eee2aeda585accb6fb3eb1649ce73fa864bd2",
+  "upstream": "9b74cdbdef74513a14cbc1483409f5a251297834",
+  "manual_application_acceptance": {
+    "0.4.0-test1": true,
+    "0.4.0-test2": true,
+    "scope": "new YouTube video and seek; Telegram and WhatsApp application file uploads; owner confirmed upper bypass and Telegram tunnel off"
+  },
+  "doq_unchanged": true,
+  "main_router_administered": false,
+  "wire_checks": {
+    "tcp_layout1": {
+      "applied": 1,
+      "refused": 0,
+      "http": 200,
+      "complete": true,
+      "name_ok": true
+    },
+    "tcp_layout2": {
+      "applied": 1,
+      "refused": 0,
+      "http": 200,
+      "complete": true,
+      "name_ok": true
+    },
+    "quic_whole_flight": {
+      "applied": 1,
+      "refused": 0,
+      "http": 200,
+      "complete": true,
+      "name_ok": true,
+      "initial_datagrams": 2,
+      "client_hello_bytes": 2100
+    },
+    "temporary_flow_budget": 2,
+    "control_read_errors": 0,
+    "catalog_written_by_helper": false,
+    "scope": "execution and preservation on public controls, not proof of new provider bypass"
+  },
+  "worker_memory": {
+    "mock_cycles": 1500,
+    "physical_arm64": true,
+    "rss_kib": [
+      10544,
+      10608,
+      10608
+    ],
+    "data_kib": [
+      10540,
+      10540,
+      10540
+    ],
+    "mapped_bytes_equal_unmapped": true,
+    "allocation_failure_checked": true
+  },
+  "gateway": {
+    "independent_json_cases": 8004,
+    "independent_accept_vectors": 300,
+    "qemu_protocol_arches": [
+      "arm64",
+      "arm",
+      "mipsel"
+    ],
+    "actual_arm64_tls_control": [
+      "hello",
+      "http404",
+      "bad_accept",
+      "truncated_json"
+    ],
+    "external_route": "TLS response not received within 8000ms",
+    "full_discord_verified": false,
+    "voice_verified": false
+  },
+  "native_full_97931e0": true,
+  "focused_sanitizers": true,
+  "native_full_c90eee2": true,
+  "ci_97931e0": {
+    "run": 42347470472,
+    "conclusion": "success"
+  },
+  "ci_c90eee2": {
+    "run": 42348844144,
+    "conclusion": "success"
+  },
+  "publication": null,
+  "overall_speedup_measured": false,
+  "telegram_web_fixed": false,
+  "queue_observation": {
+    "user_cleared_catalog": true,
+    "before": {
+      "active": 1,
+      "limit": 1,
+      "queued": 24,
+      "cpu_free_pct": 93,
+      "mem_available_mb": 44,
+      "limited_by": "memory"
+    },
+    "test_staging_tmp_kib": 30580,
+    "after": {
+      "active": 2,
+      "limit": 13,
+      "queued": 0,
+      "cpu_free_pct": 92,
+      "mem_available_mb": 72,
+      "limited_by": null
+    },
+    "resource_policy_changed": false,
+    "engine_restarted_for_cleanup": false,
+    "cause": "own temporary candidate staging and backup exports consumed RAM; verified PC copies retained; staging removed",
+    "ui_fix": "show actual limiter and update unchanged queues when resource reason changes"
+  },
+  "original_d2o_installation_saved": false
+}
