@@ -1196,6 +1196,51 @@ int main(void) {
         CHECK(rc == 1, "тайм-аут без события должен возвращать 1");
     }
 
+    /* Actual parser must accept the same TCP profiles that the controller
+       puts in family commands. A v22 TS bypass on the Keenetic stand was
+       rejected here even though link.c and the plan table accepted it. */
+    {
+        const uint16_t commands[] = {D2S_CMD_SET_BYPASS, D2S_CMD_DEL_BYPASS, D2S_CMD_DEL_SUFFIX};
+        const uint8_t shapes[] = {1,2,3,6,8,9,10,11,12,13};
+        uint8_t id[D2S_TRIAL_ID_LEN] = {0x51};
+        for (unsigned fi=0; fi<2; fi++) {
+            uint8_t family = fi ? 6 : 4;
+            for (size_t si=0; si<sizeof shapes; si++) {
+                uint8_t shape=shapes[si], transport=shape==3 ? 17 : 6;
+                for (size_t ci=0; ci<sizeof commands/sizeof commands[0]; ci++) {
+                    id[1]++; d2s_ev ack={0};
+                    CHECK(!d2s_link_area_identified(fd,commands[ci],"area.example",transport,
+                          shape,family,NULL,id,err,sizeof err),"profiled area command not sent");
+                    CHECK(!next_of_kind(fd,D2S_EV_ACK,5,&ack,err,sizeof err) &&
+                          ack.code==commands[ci] && ack.num==(1u<<8) &&
+                          !memcmp(ack.trial_id,id,sizeof id),
+                          "actual area parser rejected a valid TCP/QUIC profile or lost its command ID");
+                }
+            }
+        }
+        /* Send malformed context directly: link.c correctly rejects these
+           locally, but the independent datapath boundary must reject them too. */
+        const uint8_t bad[][3]={{6,0,4},{6,4,4},{6,5,4},{6,7,4},{6,14,4},{6,255,4},
+                                {17,1,4},{17,5,4},{17,8,4},{6,11,5},{1,11,4}};
+        const char *name="area.example";size_t nl=strlen(name);
+        for (size_t bi=0; bi<sizeof bad/sizeof bad[0]; bi++) {
+            for (size_t ci=0; ci<sizeof commands/sizeof commands[0]; ci++) {
+                uint8_t frame[80]={0};size_t size=6+4+nl+sizeof id;
+                uint32_t plen=(uint32_t)size-4;
+                frame[0]=(uint8_t)(plen>>24);frame[1]=(uint8_t)(plen>>16);
+                frame[2]=(uint8_t)(plen>>8);frame[3]=(uint8_t)plen;
+                frame[4]=(uint8_t)(commands[ci]>>8);frame[5]=(uint8_t)commands[ci];
+                frame[6]=(uint8_t)nl;memcpy(frame+7,name,nl);
+                memcpy(frame+7+nl,bad[bi],3);id[1]++;
+                memcpy(frame+10+nl,id,sizeof id);d2s_ev ack={0};
+                CHECK(write(fd,frame,size)==(ssize_t)size,"malformed area write failed");
+                CHECK(!next_of_kind(fd,D2S_EV_ACK,5,&ack,err,sizeof err) &&
+                      ack.code==commands[ci] && ack.num==D2S_ACK_BAD_ARGS &&
+                      !memcmp(ack.trial_id,id,sizeof id),"malformed area context was accepted or ACK identity lost");
+            }
+        }
+    }
+
     /* --- SET_NAME долетает, ack различим по причине (годный план) --------- */
     {
         /* "tiny" — тот же минимальный годный план (только порядок), что и в

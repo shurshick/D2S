@@ -244,8 +244,8 @@
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/test_link.c": {
-    "sha256": "361d3b66a84d39fd384b39285bce2a14120f0eeb28e9504d636b717d80bb4e8b",
-    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+    "sha256": "b69ba6678abb8b4f53bb028c667638041145df835a4393acab4e1fc91138585a",
+    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
   },
   "core/test_sched_summary.c": {
     "sha256": "f363a3eb9cd1159c8501f780497651003c809d92b76e5b9979d1de4de886f942",
@@ -298,5 +298,9 @@
   "datapath/test_session.c": {
     "sha256": "81f967c0f5c6302a3967cab3e0ca7971705b717f99e0d924c3012d160078fd8e",
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+  },
+  "datapath/ctlsrv.c": {
+    "sha256": "fb0f360441b58eac3c5e1372bb3d8e35845945df25286ac63dc741c5b3f084ec",
+    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
   }
 }

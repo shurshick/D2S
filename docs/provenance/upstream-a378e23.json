@@ -18,5 +18,10 @@
   "runtime_conflicts": [],
   "test_conflicts": [
     "panel/test_browser.cjs: retain empty-box fixture; both family ownership links expected; active fixture has explicit install state"
-  ]
+  ],
+  "own_followup": {
+    "datapath/ctlsrv.c": "fb0f360441b58eac3c5e1372bb3d8e35845945df25286ac63dc741c5b3f084ec",
+    "core/test_link.c": "b69ba6678abb8b4f53bb028c667638041145df835a4393acab4e1fc91138585a"
+  },
+  "own_followup_reason": "Real Keenetic BAD_ARGS for TCP shape11; upstream area parser missed wire22 TCP shapes8-13. 36 valid command rejections RED; 60 valid/33 invalid end-to-end commands GREEN."
 }

@@ -380,7 +380,8 @@ void d2s_ctlsrv_command(void *vctx, uint16_t type, const uint8_t *b, size_t len)
     case D2S_CMD_DEL_BYPASS: {
         if (len < 5 || len != 4u+b[0] || !b[0] ||
             (b[3u+b[0]] != 4 && b[3u+b[0]] != 6) ||
-            !((b[1u+b[0]] == 6 && (b[2u+b[0]] == 1 || b[2u+b[0]] == 2 || b[2u+b[0]] == 6)) ||
+            !((b[1u+b[0]] == 6 && (b[2u+b[0]] == 1 || b[2u+b[0]] == 2 || b[2u+b[0]] == 6 ||
+                (b[2u+b[0]] >= D2S_TCP_SHAPE_MODERN_NO_TS && b[2u+b[0]] <= D2S_TCP_SHAPE_ECH_TS))) ||
               (b[1u+b[0]] == 17 && b[2u+b[0]] == 3))) {
             ack(cx, type, 0, D2S_ACK_BAD_ARGS); return;
         }
