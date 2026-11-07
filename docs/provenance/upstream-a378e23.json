@@ -1,0 +1,22 @@
+{
+  "source": "https://github.com/t0fox/d2o",
+  "commit": "a378e230947ebfd011439e1cac0f1e994d883aae",
+  "compared_to": "c38da9ffb51e4160bdc4aa7d72e278a1394a0177",
+  "method": "manual scoped three-way comparison under existing user REA waiver; source clone unchanged",
+  "manual_record": "D2S-UPSTREAM-A378E23-20261107",
+  "files": {
+    "core/d2sc.c": "144444a6b7d42b5c61e7d3ef3d0822bc18db140577d2c11ec3d971507176a49b",
+    "core/include/d2s_sched.h": "81df14323728dee5f8bb7f0023d0766f5ebf6e599d24e34549fff44f39d38438",
+    "core/sched.c": "299eaf3ffcd96b3da3a6347636d604135d9569ef052c63e9e9e1eace0046d911",
+    "core/test_sched.c": "267b001162efb4eaa77fb4630cb2c18c2d28a1dcf1b523c221c38b4468f39552",
+    "internal/web/assets/panel.css": "e8e27e52b2806440d686cf86b94b29952bf6cea9634126eea05a5d265dad756d",
+    "internal/web/assets/panel.js": "7b2a6a5a9685527ccc05712a06fe2cabe7cfe86f240c5e8c57645c99fd56ee3c",
+    "panel/test_browser.cjs": "655924dbad68d282dcd8cb1f2875abfef321b55365ee57abf206ba6fdc47ce7b",
+    "panel/test_ui.cjs": "8ebdc07e78175620557f989247336758fdb77f9ad8fdb9f3daf9efbd74d77d4f"
+  },
+  "excluded_changes": [],
+  "runtime_conflicts": [],
+  "test_conflicts": [
+    "panel/test_browser.cjs: retain empty-box fixture; both family ownership links expected; active fixture has explicit install state"
+  ]
+}

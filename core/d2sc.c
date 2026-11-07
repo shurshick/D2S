@@ -728,8 +728,7 @@ int main(int argc, char **argv) {
         if (wait < 0) { wait = 0; }
         wait = d2s_sched_wait_ms(s, t, wait);
         if (d2s_sched_sync_pending(s)) {
-            /* Пока проход по каталогу не закончен, круг цикла не ждёт: каждая
-               порция обязана идти сразу за чтением событий. */
+            /* Готовые порции идут сразу; ожидание ACK не должно крутить CPU. */
             wait = 0;
         }
         int pr = poll(pfd, 4, wait);

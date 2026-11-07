@@ -1,5 +1,13 @@
 # D2S 0.3: текущее состояние
 
+## В работе 07.11.2026: перенос a378e23, выпуск 0.5.1
+
+- База00f78c5 чистая перед началом. Последний upstream a378e230947ebfd011439e1cac0f1e994d883aae; относительно c38da9f восемь коммитов/восемь файлов.
+- Scoped three-way port: runtime без конфликтов; тест браузера объединяет empty-box fixture и новое семейство. Новые core/UI тесты RED против прежней реализации подтверждены. Focused GREEN (groups/retry/removal/restart, own optimizer/profiles, worker lifecycle/link/TCP, Telegram HTTPS, recheck/lifecycle) и все panel JS прошли. Реальный Chromium + C-panel responsive integration прошёл. ASan/UBSan идёт; далее полный CI.
+- REA недоступен, прежнее разрешение без REA действует. Ручная запись D2S-UPSTREAM-A378E23-20261107, docs/upstream-a378e23.md.
+- Wire22, установочные скрипты/сеть/Telegram/DNS не менялись. Наши optimizer/contact/TCP_INFO и шесть алгоритмов сохраняются. Ни каталоги, ни стратегии не сбрасывать.
+- После проверок: точный CI, signed0.5.1 четыре архитектуры, проверка публичных файлов, public update на Keenetic192.168.31.1 и OpenWrt192.168.1.250 с резервной копией и проверкой конфигурации/DoQ. Основной192.168.1.1 не администрировать. Не отменять CI/сборки.
+
 ## Завершено 07.11.2026: stable 0.5.0
 
 - Stable/latest d2s-v0.5.0; неизменяемый исходник2628c4dc2969ecb7b72542bfc11145081393c216.
