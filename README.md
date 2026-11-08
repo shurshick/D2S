@@ -76,7 +76,7 @@ opkg update && opkg install curl ca-bundle && curl -fsSL https://raw.githubuserc
 /opt/etc/init.d/S99d2s stop
 ```
 
-Настройки: `/opt/d2s/config`. Telegram: `TG_ENABLED=1`, автообновление: `AUTOUPDATE=1`. Для ограничения основного движка политикой Keenetic используется `KEENETIC_POLICY`; Telegram управляется отдельно.
+Настройки: `/opt/d2s/config`. Telegram: `TG_ENABLED=1`, автообновление: `AUTOUPDATE=1`.
 
 Журналы:
 
@@ -84,6 +84,40 @@ opkg update && opkg install curl ca-bundle && curl -fsSL https://raw.githubuserc
 tail -n 50 /opt/d2s/log/d2sc.log
 tail -n 50 /opt/d2s/log/whatsapp-media-dns.log
 ```
+
+## Настройки и совместимость
+
+### Политика доступа Keenetic
+
+Основной движок D2S можно ограничить устройствами выбранной политики Keenetic. Создайте политику с обычным провайдерским выходом, назначьте ей нужные устройства и добавьте в `/opt/d2s/config`:
+
+```sh
+KEENETIC_POLICY="Имя политики"
+```
+
+Затем перезапустите D2S:
+
+```sh
+/opt/etc/init.d/S99d2s restart
+```
+
+Если имя политики не найдено, основной движок не обрабатывает устройства. Чтобы вернуть обработку всей сети, удалите строку `KEENETIC_POLICY` и снова перезапустите D2S. Telegram-туннель и DNS-помощник используют отдельные правила и не обязаны следовать ограничению этой политики.
+
+### Windows и TCP timestamps
+
+Если на других устройствах сайт открывается, а на Windows есть зависания, для **диагностики отдельных TCP-стратегий** можно попробовать в терминале администратора:
+
+```bat
+netsh interface tcp set global timestamps=enabled
+```
+
+Если до проверки timestamps были выключены, вернуть прежнее состояние можно командой:
+
+```bat
+netsh interface tcp set global timestamps=disabled
+```
+
+Это не универсальное решение и не устраняет блокировки по IP. Включать timestamps всем пользователям заранее не требуется: D2S различает TCP-профили с меткой времени и без неё.
 
 ## Удаление
 
