@@ -75,13 +75,13 @@ int main(void) {
     a.groups->disabled=1;
     CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
     CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
-    CHECK(b.groups && b.groups->disabled && b.groups->disabled_at==0);
+    CHECK(b.groups && !b.groups->disabled && b.groups->blocked_contexts && b.groups->disabled_at==0);
     d2s_catalog_free(&b);
     a.groups->disabled_at=1700000000;
     CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
     CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
     CHECK(b.groups && b.groups->disabled_at==1700000000);
-    CHECK(b.groups && b.groups->disabled && b.groups->n_groups==0);
+    CHECK(b.groups && !b.groups->disabled && b.groups->blocked_contexts && b.groups->n_groups==0);
     CHECK(b.n_boxes==1 && b.boxes[0].n_plans==1 && b.boxes[0].plans[0].enabled);
     d2s_catalog_free(&b);
     a.groups->disabled=0;
@@ -94,8 +94,8 @@ int main(void) {
        any exclusions; new evidence stays learnable across another reload. */
     a.boxes[0].plans[0].enabled=1;
     memset(a.groups,0,sizeof *a.groups);
-    a.groups->frozen=1;a.groups->n_observations=D2S_GROUP_OBSERVATION_MAX;
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
+    a.groups->frozen=1;a.groups->n_observations=D2S_GROUP_NEGATIVE_MAX;
+    for(size_t i=0;i<D2S_GROUP_NEGATIVE_MAX;i++) {
         d2s_group_observation *v=&a.groups->observations[i];
         snprintf(v->name,sizeof v->name,"old%zu.example.net",i);
         v->key=key;v->at=1;
@@ -104,7 +104,7 @@ int main(void) {
     }
     CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
     CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
-    CHECK(b.groups && !b.groups->frozen && b.groups->n_observations==D2S_GROUP_OBSERVATION_MAX);
+    CHECK(b.groups && !b.groups->frozen && b.groups->n_observations==D2S_GROUP_NEGATIVE_MAX);
     for(int i=0;i<3;i++) {
         d2s_group_observation fresh={0};
         snprintf(fresh.name,sizeof fresh.name,"cdn%d.video.example.org",i);
@@ -118,7 +118,24 @@ int main(void) {
     CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
     CHECK(b.groups && !b.groups->frozen && d2s_group_match(b.groups,"next.video.example.org",&key));
     CHECK(b.n_boxes==1 && b.boxes[0].n_plans==1 && b.boxes[0].plans[0].enabled);
-    if(b.groups)for(size_t i=0;i<227;i++)CHECK(b.groups->observations[i].evidence==D2S_GROUP_DIRECT_CLEAR);
+    if(b.groups) {
+        size_t clear=0;
+        for(size_t i=0;i<b.groups->n_observations;i++)clear+=b.groups->observations[i].evidence==D2S_GROUP_DIRECT_CLEAR;
+        CHECK(clear==227);
+        for(int i=0;i<600;i++) {
+            d2s_group_observation fresh={0};
+            snprintf(fresh.name,sizeof fresh.name,"clear%d.scope%d.example.net",i,i);
+            fresh.key=key;fresh.evidence=2;fresh.at=2000+i;
+            CHECK(d2s_group_learn(b.groups,&fresh)>=0);
+        }
+        CHECK(d2s_catalog_save(&b,path,err,sizeof err)==0);
+        uint64_t mask=b.groups->blocked_contexts;
+        d2s_catalog_free(&b);
+        CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
+        CHECK(b.groups && b.groups->blocked_contexts==mask && !b.groups->disabled);
+        CHECK(!d2s_group_match(b.groups,"clear0.scope0.example.net",&key));
+        CHECK(d2s_group_match(b.groups,"next.video.example.org",&key));
+    }
     d2s_catalog_free(&a); d2s_catalog_free(&b);
     FILE *f=fopen(path,"w"); CHECK(f!=NULL);
     if(f) { fputs("{\"boxes\":[],\"domain_observations\":[{\"name\":\"a.example.com\",\"evidence\":255}]}",f); fclose(f); }

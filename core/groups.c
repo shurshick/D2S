@@ -3,8 +3,6 @@
 #include "include/d2s_groups.h"
 #include "../runtime/d2s_protocol.h"
 
-/* Seconds (observation `at` is wall-clock seconds, sched.c wall_s). */
-#define D2S_GROUP_VOTE_TTL_S (30*86400)
 
 int d2s_group_key_make(d2s_group_key *key,uint8_t transport,uint8_t family,
     uint8_t shape,const char *path,const char *origin) {
@@ -39,12 +37,67 @@ static int member(const char *name,const char *suffix) {
     size_t n=strlen(name),z=strlen(suffix);
     return n>=z && !strcmp(name+n-z,suffix) && (n==z || name[n-z-1]=='.');
 }
+static int negative(const d2s_group_observation *o) {
+    return (o->evidence & (D2S_GROUP_DIRECT_CLEAR|D2S_GROUP_PLAN_FAILED|D2S_GROUP_SCOPE_DENY))!=0;
+}
+static uint64_t context_bit(const d2s_group_key *k) {
+    return k->shape<32 ? UINT64_C(1) << (k->shape+(k->family==6?32:0)) : 0;
+}
+static int prohibited(const d2s_group_state *s,const char *suffix,const d2s_group_key *key) {
+    if(s->blocked_contexts & context_bit(key))return 1;
+    for(size_t i=0;i<s->n_observations;i++) {
+        const d2s_group_observation *o=&s->observations[i];
+        if(o->evidence==D2S_GROUP_SCOPE_DENY && d2s_group_key_same(&o->key,key) &&
+           (member(suffix,o->name)||member(o->name,suffix)))return 1;
+    }
+    return 0;
+}
+/* Compaction ONLY removes permission to generalize. No negative is forgotten:
+ * first replace an exact negative by its registrable-domain prohibition;
+ * if this cannot reclaim room, prohibit this protocol/family/shape entirely.
+ * Path and ECH origins are widened only in the conservative fallback. */
+static void compact_negative(d2s_group_state *s) {
+    size_t victim=s->n_observations;char base[256]={0};
+    for(size_t i=0;i<s->n_observations;i++)if(negative(&s->observations[i])) {
+        if(victim==s->n_observations)victim=i;
+        for(size_t j=i+1;j<s->n_observations;j++) {
+            if(!negative(&s->observations[j]) ||
+               !d2s_group_key_same(&s->observations[i].key,&s->observations[j].key))continue;
+            const char *suffix=s->observations[i].name;
+            while(suffix) {
+                if(member(s->observations[j].name,suffix) && strlen(suffix)>strlen(base)) {
+                    strcpy(base,suffix);victim=i;break;
+                }
+                suffix=strchr(suffix,'.');if(suffix)suffix++;
+            }
+        }
+    }
+    if(victim==s->n_observations)return;
+    d2s_group_observation limit=s->observations[victim];
+    /* No shared DNS suffix in this full context: the finite fallback widens
+       only the prohibition, never permission. */
+    if(!base[0])strcpy(base,limit.name);
+    strcpy(limit.name,base);limit.plan_id[0]=0;limit.evidence=D2S_GROUP_SCOPE_DENY;
+    size_t covered=0;
+    for(size_t i=0;i<s->n_observations;i++)
+        if(negative(&s->observations[i]) && d2s_group_key_same(&limit.key,&s->observations[i].key) &&
+           member(s->observations[i].name,base))covered++;
+    if(covered<2)s->blocked_contexts |= context_bit(&limit.key);
+    for(size_t i=0;i<s->n_observations;) {
+        const d2s_group_observation *o=&s->observations[i];
+        int remove=negative(o) && (covered<2 ? context_bit(&o->key)==context_bit(&limit.key) :
+            d2s_group_key_same(&o->key,&limit.key)&&member(o->name,base));
+        if(remove)s->observations[i]=s->observations[--s->n_observations];else i++;
+    }
+    if(covered>=2)s->observations[s->n_observations++]=limit;
+}
 /* Live votes for the seed plan. A vote that later failed this plan or
-   proved directly clear is stale: §3.7 returns a degraded family to the
+   proved directly clear is stale: Р’В§3.7 returns a degraded family to the
    direct path instead of inheriting an unverified plan. */
 static unsigned votes(const d2s_group_state *s,const char *suffix,
                        const d2s_group_observation *seed,int64_t *latest) {
     unsigned live=0,stale=0; *latest=0;
+    if(prohibited(s,suffix,&seed->key))return 0;
     for(size_t i=0;i<s->n_observations;i++) {
         const d2s_group_observation *o=&s->observations[i];
         if(!d2s_group_key_same(&o->key,&seed->key) || !member(o->name,suffix)) continue;
@@ -94,7 +147,7 @@ static void add_group(d2s_group_state *s,const char *suffix,
             s->groups[i]=s->groups[--s->n_groups];
         else i++;
     }
-    if(s->n_groups==D2S_GROUP_MAX) { s->frozen=1; return; }
+    if(s->n_groups==D2S_GROUP_MAX) return; /* area cap is not an admission stop */
     d2s_domain_group *g=&s->groups[s->n_groups++];
     memset(g,0,sizeof *g);
     strcpy(g->suffix,suffix); strcpy(g->plan_id,seed->plan_id);
@@ -118,26 +171,6 @@ static void rebuild(d2s_group_state *s) {
         if(best[0]) add_group(s,best,o,best_count,best_at);
     }
 }
-/* Only disposable evidence may leave the bounded journal. A failed plan,
- * a directly clear member, and admitted exceptions are never victims.
- * Prefer unknown noise, then the oldest plain positive vote. Rebuilding
- * after eviction may withdraw an area; it cannot invent a quorum. */
-static size_t positive_slot(const d2s_group_state *s) {
-    size_t victim=D2S_GROUP_OBSERVATION_MAX;
-    for(unsigned pass=D2S_GROUP_INCONCLUSIVE;pass;
-        pass=pass==D2S_GROUP_INCONCLUSIVE?D2S_GROUP_BLOCKED_CONFIRMED:0) {
-        for(size_t i=0;i<s->n_observations;i++)
-            if(s->observations[i].evidence==pass &&
-               (victim==D2S_GROUP_OBSERVATION_MAX ||
-                s->observations[i].at<s->observations[victim].at)) victim=i;
-        if(victim!=D2S_GROUP_OBSERVATION_MAX)break;
-    }
-    return victim;
-}
-static void refresh_admission(d2s_group_state *s) {
-    if(s->n_groups<D2S_GROUP_MAX && (s->n_observations<D2S_GROUP_OBSERVATION_MAX ||
-        positive_slot(s)!=D2S_GROUP_OBSERVATION_MAX)) s->frozen=0;
-}
 /* Group covering a normalized name, ignoring per-member exclusions. */
 static const d2s_domain_group *cover(const d2s_group_state *s,const char *norm,
                                      const d2s_group_key *key) {
@@ -150,7 +183,7 @@ static const d2s_domain_group *cover(const d2s_group_state *s,const char *norm,
     }
     return best;
 }
-int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
+static int learn_exact(d2s_group_state *s,const d2s_group_observation *o) {
     char name[256],base[256];
     if(!s || !valid(o) || d2s_domain_normalize(o->name,name) ||
        d2s_domain_base(name,base) || s->n_groups>D2S_GROUP_MAX ||
@@ -160,7 +193,8 @@ int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
     size_t slot=s->n_observations;
     size_t replace=s->n_observations,any=s->n_observations;
     for(size_t i=0;i<s->n_observations;i++)
-        if(!strcmp(s->observations[i].name,name) &&
+        if(s->observations[i].evidence!=D2S_GROUP_SCOPE_DENY &&
+           !strcmp(s->observations[i].name,name) &&
            d2s_group_key_same(&s->observations[i].key,&o->key)) {
             const d2s_group_observation *old=&s->observations[i];
             if(!strcmp(old->plan_id,o->plan_id)) { slot=i; break; }
@@ -173,76 +207,9 @@ int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
     if(slot==s->n_observations && any<s->n_observations) slot=any;
     if(slot==s->n_observations && replace<s->n_observations) slot=replace;
     if(slot==s->n_observations) {
-        if(o->evidence==D2S_GROUP_BLOCKED_CONFIRMED) {
-            if(slot==D2S_GROUP_OBSERVATION_MAX) {
-                slot=positive_slot(s);
-                if(slot==D2S_GROUP_OBSERVATION_MAX) {
-                    int changed=!s->frozen;s->frozen=1;return changed;
-                }
-            } else s->n_observations++;
-            s->observations[slot]=*o;strcpy(s->observations[slot].name,name);
-            /* This was an automatic capacity stop, not a user pause.
-               Do not clear disabled: a lost exclusion stays fail-closed. */
-            s->frozen=0;
-        } else if(s->disabled || s->frozen || slot==D2S_GROUP_OBSERVATION_MAX) {
-            int was_frozen=s->frozen;int changed=!was_frozen;s->frozen=1;
-            if(o->evidence!=D2S_GROUP_DIRECT_CLEAR && o->evidence!=D2S_GROUP_PLAN_FAILED) {
-                refresh_admission(s);
-                return was_frozen!=s->frozen;
-            }
-            /* A bounded budget must never discard a new exclusion while
-             * retaining a broad rule. Exact confirmed catalog bindings are
-             * independent and untouched; negative evidence is never evicted.
-             * Re-enabling: families re-learn only from confirmations newer
-               than the moment the journal lost an exclusion. */
-            if(s->disabled)
-                for(size_t i=0;i<s->n_observations;) {
-                    const d2s_group_observation *v=&s->observations[i];
-                    if(v->evidence==D2S_GROUP_BLOCKED_CONFIRMED && v->at<=s->disabled_at)
-                        s->observations[i]=s->observations[--s->n_observations];
-                    else i++;
-                }
-            size_t reclaim=s->n_observations;
-            /* Reclaim exactly one slot: the oldest expired unknown evidence,
-               else the oldest expired positive vote (expired: strictly more
-               than D2S_GROUP_VOTE_TTL_S older than this event), else the
-               first unknown evidence, else the first positive vote. */
-            for(unsigned pass=D2S_GROUP_INCONCLUSIVE;
-                reclaim==D2S_GROUP_OBSERVATION_MAX && pass;
-                pass=pass==D2S_GROUP_INCONCLUSIVE?D2S_GROUP_BLOCKED_CONFIRMED:0)
-                for(size_t i=0;i<s->n_observations;i++) {
-                    const d2s_group_observation *v=&s->observations[i];
-                    if(v->evidence==pass && o->at-v->at>D2S_GROUP_VOTE_TTL_S &&
-                       (reclaim==D2S_GROUP_OBSERVATION_MAX ||
-                        v->at<s->observations[reclaim].at)) reclaim=i;
-                }
-            if(reclaim==D2S_GROUP_OBSERVATION_MAX)
-                for(size_t i=0;i<s->n_observations;i++) {
-                    if(s->observations[i].evidence==D2S_GROUP_INCONCLUSIVE) { reclaim=i; break; }
-                    if(reclaim==D2S_GROUP_OBSERVATION_MAX &&
-                       s->observations[i].evidence==D2S_GROUP_BLOCKED_CONFIRMED) reclaim=i;
-                }
-            if(reclaim==D2S_GROUP_OBSERVATION_MAX) {
-                /* Historic votes may also carry negative evidence. Without
-                   room for this exclusion, fail closed for areas, never
-                   forget an exclusion or disturb exact catalog plans. */
-                changed |= !s->disabled; s->disabled=1; s->n_groups=0;
-                if(o->at>s->disabled_at) { s->disabled_at=o->at; changed=1; }
-                for(size_t i=0;i<s->n_observations;i++)
-                    if(s->observations[i].at>s->disabled_at) {
-                        s->disabled_at=s->observations[i].at; changed=1;
-                    }
-                return changed;
-            }
-            slot=reclaim;
-            if(slot==s->n_observations) s->n_observations++;
-            s->observations[slot]=*o; strcpy(s->observations[slot].name,name);
-            s->disabled=0; s->disabled_at=0; /* the new exclusion is retained */
-            if(s->n_observations<D2S_GROUP_OBSERVATION_MAX) s->frozen=0; /* room again */
-        } else {
-            s->observations[slot]=*o; strcpy(s->observations[slot].name,name);
-            s->n_observations++;
-        }
+        if(slot==D2S_GROUP_OBSERVATION_MAX)return -1;
+        s->observations[slot]=*o;strcpy(s->observations[slot].name,name);
+        s->n_observations++;
     } else {
         d2s_group_observation *old=&s->observations[slot];
         if(o->at<old->at || o->evidence==D2S_GROUP_INCONCLUSIVE) return 0;
@@ -267,15 +234,63 @@ int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
             const d2s_group_observation *other=&s->observations[i];
             if(i!=slot && !strcmp(other->name,name) &&
                d2s_group_key_same(&other->key,&o->key) &&
-               !(other->evidence&D2S_GROUP_PLAN_FAILED)) {
+               !(other->evidence&(D2S_GROUP_PLAN_FAILED|D2S_GROUP_SCOPE_DENY))) {
                 size_t last=--s->n_observations;
                 s->observations[i]=s->observations[last];
                 if(slot==last) slot=i;
             } else i++;
         }
     if(o->evidence!=D2S_GROUP_INCONCLUSIVE) rebuild(s);
-    refresh_admission(s);
     return 1;
+}
+/* Two independent admission budgets in a compact shared storage view. The
+ * view keeps existing exception/sync consumers exact; persistence splits it. */
+int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
+    char norm[256],base[256];
+    if(!s || !valid(o) || d2s_domain_normalize(o->name,norm) || d2s_domain_base(norm,base) ||
+       s->n_observations>D2S_GROUP_OBSERVATION_MAX)return -1;
+    if(o->evidence==D2S_GROUP_INCONCLUSIVE)return 0; /* not a learning vote */
+    int neg=o->evidence==D2S_GROUP_DIRECT_CLEAR || o->evidence==D2S_GROUP_PLAN_FAILED;
+    if(neg && prohibited(s,norm,&o->key))return 0;
+    size_t count=0,oldest=s->n_observations;
+    for(size_t i=0;i<s->n_observations;i++)if(negative(&s->observations[i])==neg) {
+        count++;
+        if(oldest==s->n_observations || s->observations[i].at<s->observations[oldest].at)oldest=i;
+    }
+    /* Replacing our own same-key record does not require another slot. */
+    int existing=0;
+    for(size_t i=0;i<s->n_observations;i++) {
+        const d2s_group_observation *v=&s->observations[i];
+        if(!strcmp(v->name,norm)&&d2s_group_key_same(&v->key,&o->key) && negative(v)==neg &&
+           (!neg || o->evidence==D2S_GROUP_DIRECT_CLEAR || !strcmp(v->plan_id,o->plan_id)))existing=1;
+    }
+    int compacted=0;
+    if(!existing && count >= (neg?D2S_GROUP_NEGATIVE_MAX:D2S_GROUP_POSITIVE_MAX)) {
+        compacted=1;
+        if(neg)compact_negative(s);
+        else { memmove(&s->observations[oldest],&s->observations[oldest+1],
+            (s->n_observations-oldest-1)*sizeof s->observations[0]);s->n_observations--; }
+    }
+    if(s->disabled)s->blocked_contexts=UINT64_MAX;
+    s->frozen=0;s->disabled=0;s->journal_version=2;
+    if(neg && prohibited(s,norm,&o->key)){rebuild(s);return 1;}
+    int changed=learn_exact(s,o);
+    /* A positive may become negative or vice versa on update. Enforce quotas
+       after the event too; compaction may conservatively withdraw an area. */
+    for(;;) {
+        size_t n=0;for(size_t i=0;i<s->n_observations;i++)n+=negative(&s->observations[i]);
+        if(n<=D2S_GROUP_NEGATIVE_MAX)break;
+        compact_negative(s);
+    }
+    for(;;) {
+        size_t n=0,v=s->n_observations;
+        for(size_t i=0;i<s->n_observations;i++)if(!negative(&s->observations[i])) {
+            n++;if(v==s->n_observations || s->observations[i].at<s->observations[v].at)v=i;
+        }
+        if(n<=D2S_GROUP_POSITIVE_MAX)break;
+        s->observations[v]=s->observations[--s->n_observations];
+    }
+    rebuild(s);s->frozen=0;return changed<0?changed:(changed||compacted);
 }
 int d2s_group_restore(d2s_group_state *s) {
     if(!s || s->n_observations>D2S_GROUP_OBSERVATION_MAX || s->disabled_at<0) return -1;
@@ -294,16 +309,25 @@ int d2s_group_restore(d2s_group_state *s) {
                 (test.evidence&D2S_GROUP_PLAN_FAILED))
             test.evidence=D2S_GROUP_PLAN_FAILED;
         char norm[256],base[256];
+        if(test.evidence==D2S_GROUP_SCOPE_DENY)test.evidence=D2S_GROUP_DIRECT_CLEAR;
         if(!valid(&test) || o->at<0 || d2s_domain_normalize(o->name,norm) ||
-           d2s_domain_base(norm,base)) return -1;
+           (o->evidence!=D2S_GROUP_SCOPE_DENY && d2s_domain_base(norm,base))) return -1;
         strcpy(o->name,norm);
         for(size_t j=0;j<i;j++)
-            if(!strcmp(s->observations[j].name,o->name) &&
+            if(s->observations[j].evidence!=D2S_GROUP_SCOPE_DENY && o->evidence!=D2S_GROUP_SCOPE_DENY &&
+               !strcmp(s->observations[j].name,o->name) &&
                d2s_group_key_same(&s->observations[j].key,&o->key) &&
                (!strcmp(s->observations[j].plan_id,o->plan_id) ||
                 !((s->observations[j].evidence|o->evidence)&D2S_GROUP_PLAN_FAILED))) return -1;
     }
-    rebuild(s); refresh_admission(s);return 0;
+    size_t neg=0;
+    for(size_t i=0;i<s->n_observations;i++)neg+=negative(&s->observations[i]);
+    if(neg>D2S_GROUP_NEGATIVE_MAX || s->n_observations-neg>D2S_GROUP_POSITIVE_MAX)return -1;
+    /* Lost legacy exclusions have no known scope. Preserve a conservative
+       barrier unless an explicit, backed-up new epoch is authorized. */
+    if(s->disabled)s->blocked_contexts=UINT64_MAX;
+    s->journal_version=2;s->disabled=0;s->frozen=0;
+    rebuild(s);return 0;
 }
 const d2s_domain_group *d2s_group_match(const d2s_group_state *s,
                                      const char *name,const d2s_group_key *key) {

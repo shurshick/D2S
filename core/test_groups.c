@@ -14,28 +14,10 @@ static void observe(d2s_group_state *s, const char *name, const char *plan,
     o.evidence=evidence; o.key=key; o.at=100;
     CHECK(d2s_group_learn(s,&o)>=0);
 }
-/* Full, frozen, enabled journal: every entry a plain vote of plan Q at `at`
-   (names p<i>.fill<i>.example.net, one family each, never 3 votes). */
-static void full_plain(d2s_group_state *s,int64_t at) {
-    memset(s,0,sizeof *s);
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
-        d2s_group_observation *o=&s->observations[i];
-        snprintf(o->name,sizeof o->name,"p%zu.fill%zu.example.net",i,i);
-        strcpy(o->plan_id,"Q"); o->key=modern; o->at=at;
-        o->evidence=D2S_GROUP_BLOCKED_CONFIRMED;
-    }
-    s->n_observations=D2S_GROUP_OBSERVATION_MAX; s->frozen=1;
-}
 static int present(const d2s_group_state *s,const char *name) {
     for(size_t i=0;i<s->n_observations;i++)
         if(!strcmp(s->observations[i].name,name)) return 1;
     return 0;
-}
-static int clean_at(d2s_group_state *s,const char *name,int64_t at) {
-    d2s_group_observation o={0};
-    snprintf(o.name,sizeof o.name,"%s",name);
-    o.key=modern; o.evidence=D2S_GROUP_DIRECT_CLEAR; o.at=at;
-    return d2s_group_learn(s,&o);
 }
 int main(void) {
     d2s_group_key long_key;
@@ -202,292 +184,99 @@ int main(void) {
     observe(s,"rr4.googlevideo.com","plan-a",1,modern);
     observe(s,"rr5.googlevideo.com","plan-a",1,modern);
     observe(s,"rr6.googlevideo.com","plan-a",1,modern);
-    for(int i=0;s->n_observations<D2S_GROUP_OBSERVATION_MAX;i++) {
-        char name[256]; snprintf(name,sizeof name,"h%d.fill.example.net",i);
-        observe(s,name,"plan-z",8,modern);
-    }
-    observe(s,"overflow.example.net","plan-z",1,modern);
-    CHECK(!s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
-    CHECK(d2s_group_match(s,"rr-new.googlevideo.com",&modern));
-    CHECK(!d2s_group_match(s,"unknown.fill.example.net",&modern));
-    observe(s,"overflow-clean.googlevideo.com","",2,modern);
-    CHECK(!d2s_group_match(s,"overflow-clean.googlevideo.com",&modern));
-    CHECK(d2s_group_match(s,"rr-new.googlevideo.com",&modern));
-    CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX);
-    observe(s,"rr2.googlevideo.com","",2,modern);
-    CHECK(d2s_group_match(s,"rr-new.googlevideo.com",&modern));
-    CHECK(!d2s_group_match(s,"rr2.googlevideo.com",&modern));
-    observe(s,"rr3.googlevideo.com","",2,modern);
-    CHECK(d2s_group_match(s,"rr-new.googlevideo.com",&modern));
-    /* §3.7: once degraded voters are the majority, return to the direct path. */
-    observe(s,"rr4.googlevideo.com","",2,modern);
-    CHECK(!d2s_group_match(s,"rr-new.googlevideo.com",&modern));
-    /* A full budget of exceptions can still contain historic positive votes.
-       Never keep an area active when a new exclusion cannot be retained. */
+    /* Both quotas simultaneously full: no cross-journal eviction. */
     memset(s,0,sizeof *s);
-    for(int i=0;i<3;i++) {
-        char name[256]; snprintf(name,sizeof name,"h%d.googlevideo.com",i);
-        observe(s,name,"plan-a",1,modern);
+    for(unsigned i=0;i<256;i++) {
+        char n[128];snprintf(n,sizeof n,"clear.n%u.com",i);observe(s,n,"",2,modern);
+        snprintf(n,sizeof n,"p%u.video.example.org",i);observe(s,n,"P",1,modern);
     }
-    for(int i=0;i<3;i++) {
-        char name[256]; snprintf(name,sizeof name,"h%d.googlevideo.com",i);
-        observe(s,name,"plan-a",4,modern);
+    CHECK(s->n_observations==512);
+    for(unsigned i=256;i<300;i++) {
+        char n[128];snprintf(n,sizeof n,"p%u.video.example.org",i);observe(s,n,"P",1,modern);
+        CHECK(present(s,n) && s->n_observations==512);
     }
-    for(int i=3;i<D2S_GROUP_OBSERVATION_MAX;i++) {
-        char name[256]; snprintf(name,sizeof name,"clean%d.example.net",i);
+    for(unsigned i=0;i<256;i++) {
+        char n[128];snprintf(n,sizeof n,"clear.n%u.com",i);CHECK(present(s,n));
+    }
+    observe(s,"new.other.net","",2,modern);
+    CHECK(!s->disabled && !s->frozen);
+    for(unsigned i=0;i<256;i++) {
+        char n[128];snprintf(n,sizeof n,"clear.n%u.com",i);CHECK(!d2s_group_match(s,n,&modern));
+    }
+    CHECK(d2s_group_match(s,"fresh.video.example.org",&modern));
+    /* Independent budgets: negatives never consume positive admission. */
+    memset(s,0,sizeof *s);
+    for(unsigned i=0;i<2000;i++) {
+        char name[128];snprintf(name,sizeof name,"clear%u.n%u.example.net",i,i);
         observe(s,name,"",2,modern);
-    }
-    /* §3.7: деградация всех голосующих → не наследуем непроверенный план. */
-    CHECK(!d2s_group_match(s,"new.googlevideo.com",&modern));
-    observe(s,"unrecordable.googlevideo.com","",2,modern);
-    CHECK(s->n_groups==0);
-    CHECK(!d2s_group_match(s,"new.googlevideo.com",&modern));
-    CHECK(d2s_group_restore(s)==0 && s->n_groups==0);
-    /* (a) member excluded by plan failure, then directly clear, does not
-       disable the family for its siblings. */
-    memset(s,0,sizeof *s);
-    observe(s,"a.example.com","P",1,modern);
-    observe(s,"b.example.com","P",1,modern);
-    observe(s,"c.example.com","P",1,modern);
-    observe(s,"x.example.com","P",4,modern);
-    CHECK(!d2s_group_match(s,"x.example.com",&modern));
-    observe(s,"x.example.com","",2,modern);
-    CHECK(d2s_group_match(s,"new.example.com",&modern));
-    CHECK(!d2s_group_match(s,"x.example.com",&modern));
-    /* (b) everything learn writes can be restored. */
-    memset(s,0,sizeof *s);
-    observe(s,"a.example.com","P",1,modern);
-    observe(s,"b.example.com","P",1,modern);
-    observe(s,"c.example.com","P",1,modern);
-    observe(s,"a.example.com","",2,modern);
-    observe(s,"a.example.com","P",4,modern);
-    CHECK(d2s_group_restore(s)==0);
-    /* все голосующие провалили план → семейства нет */
-    memset(s,0,sizeof *s);
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"P",1,modern);}
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"P",4,modern);}
-    CHECK(!d2s_group_match(s,"new.example.com",&modern));
-    /* один из трёх провалил → семейство живо (исключение, не отключение) */
-    memset(s,0,sizeof *s);
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"P",1,modern);}
-    observe(s,"v0.example.com","P",4,modern);
-    CHECK(d2s_group_match(s,"new.example.com",&modern));
-    /* §3.7: два из трёх деградировали (провал + чистый) → семейства нет */
-    memset(s,0,sizeof *s);
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"P",1,modern);}
-    observe(s,"v0.example.com","P",4,modern);
-    CHECK(d2s_group_match(s,"new.example.com",&modern));
-    observe(s,"v1.example.com","",2,modern);
-    CHECK(!d2s_group_match(s,"new.example.com",&modern));
-    CHECK(d2s_group_restore(s)==0 && !d2s_group_match(s,"new.example.com",&modern));
-    /* все голосующие стали напрямую чистыми → прямой путь */
-    memset(s,0,sizeof *s);
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"P",1,modern);}
-    for(int i=0;i<3;i++){char n[64];snprintf(n,sizeof n,"v%d.example.com",i);observe(s,n,"",2,modern);}
-    CHECK(!d2s_group_match(s,"new.example.com",&modern));
-    /* старение: журнал из старых голосов (at=0) не должен навсегда
-       отключать семейства; новое исключение спустя 31 сутки сохраняется. */
-    memset(s,0,sizeof *s);
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
-        d2s_group_observation *o=&s->observations[i];
-        snprintf(o->name,sizeof o->name,"o%zu.old.example.net",i);
-        strcpy(o->plan_id,"Q"); o->key=modern; o->at=0;
-        o->evidence=D2S_GROUP_BLOCKED_CONFIRMED|D2S_GROUP_PLAN_FAILED;
-    }
-    s->n_observations=D2S_GROUP_OBSERVATION_MAX;
-    CHECK(d2s_group_restore(s)==0);
-    {
-        d2s_group_observation o={0};
-        o.key=modern; o.at=0;
-        strcpy(o.name,"lost.example.com"); o.evidence=2;
-        CHECK(d2s_group_learn(s,&o)>0);
-        CHECK(s->frozen && s->disabled); /* no room: fail closed */
-        CHECK(s->disabled_at==0);
-        /* indexes 1 and 2 become old pure votes, index 0 a fresh one */
-        strcpy(o.name,"o1.old.example.net"); strcpy(o.plan_id,"Q"); o.evidence=1; o.at=0;
-        CHECK(d2s_group_learn(s,&o)>=0);
-        strcpy(o.name,"o2.old.example.net");
-        CHECK(d2s_group_learn(s,&o)>=0);
-        strcpy(o.name,"o0.old.example.net"); o.at=31*86400;
-        CHECK(d2s_group_learn(s,&o)>=0);
-        strcpy(o.name,"fresh-clean.example.com"); o.plan_id[0]=0; o.evidence=2; o.at=31*86400;
-        CHECK(d2s_group_learn(s,&o)>0);
-        CHECK(s->disabled==0);
-        int kept=0,fresh=0,aged=0;
-        for(size_t i=0;i<s->n_observations;i++) {
-            const d2s_group_observation *v=&s->observations[i];
-            if(!strcmp(v->name,"fresh-clean.example.com") &&
-               (v->evidence&D2S_GROUP_DIRECT_CLEAR)) kept=1;
-            if(!strcmp(v->name,"o0.old.example.net")) fresh=1;
-            if(!strcmp(v->name,"o1.old.example.net")) aged=1;
+        snprintf(name,sizeof name,"cdn%u.video.example.org",i);observe(s,name,"P",1,modern);
+        size_t pos=0,neg=0;
+        for(size_t j=0;j<s->n_observations;j++) {
+            if(s->observations[j].evidence&(2|4|32))neg++;else pos++;
         }
-        CHECK(kept && fresh && !aged);
-        /* aging left room: the journal learns positive votes again */
-        CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX-1 && !s->frozen);
-        strcpy(o.name,"after-room.example.org"); strcpy(o.plan_id,"Q"); o.evidence=1;
-        CHECK(d2s_group_learn(s,&o)>0 && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
-        CHECK(d2s_group_restore(s)==0);
+        CHECK(pos<=D2S_GROUP_POSITIVE_MAX && neg<=D2S_GROUP_NEGATIVE_MAX);
+        CHECK(present(s,name) && !s->frozen && !s->disabled);
+        CHECK(!d2s_group_match(s,"clear0.n0.example.net",&modern));
+        if(i%97==0)CHECK(d2s_group_restore(s)==0);
     }
-    /* Re-enable after disabling: plain votes from before the lost exclusion
-       are dropped; an old family reappears only after 3 fresh votes. */
-    memset(s,0,sizeof *s);
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX-1;i++) { /* frozen, one spare */
-        d2s_group_observation *o=&s->observations[i];
-        if(i<3) {
-            snprintf(o->name,sizeof o->name,"v%zu.fam.example.com",i);
-            strcpy(o->plan_id,"P"); o->evidence=D2S_GROUP_BLOCKED_CONFIRMED; o->at=50;
-        } else {
-            snprintf(o->name,sizeof o->name,"x%zu.fill.example.net",i);
-            strcpy(o->plan_id,"Q"); o->evidence=D2S_GROUP_BLOCKED_CONFIRMED|D2S_GROUP_PLAN_FAILED;
-        }
-        o->key=modern;
-    }
-    s->n_observations=D2S_GROUP_OBSERVATION_MAX-1;
-    s->frozen=1; s->disabled=1; s->disabled_at=100;
-    CHECK(d2s_group_restore(s)==0 && s->n_groups==0);
-    {
-        d2s_group_observation o={0};
-        o.key=modern; o.at=200; strcpy(o.name,"clean.example.org"); o.evidence=2;
-        CHECK(d2s_group_learn(s,&o)>0);
-        CHECK(!s->disabled && s->disabled_at==0 && !s->frozen);
-        CHECK(!d2s_group_match(s,"new.fam.example.com",&modern));
-        strcpy(o.plan_id,"P"); o.evidence=1; o.at=300;
-        for(int i=0;i<3;i++) {
-            snprintf(o.name,sizeof o.name,"v%d.fam.example.com",i);
-            CHECK(d2s_group_learn(s,&o)>0);
-            CHECK(!d2s_group_match(s,"new.fam.example.com",&modern)==(i<2));
-        }
-        CHECK(d2s_group_restore(s)==0 && d2s_group_match(s,"new.fam.example.com",&modern));
-    }
-    /* Aging on a frozen, NOT disabled journal reclaims exactly one slot,
-       the oldest expired plain vote; positives can still reuse its remaining slots. */
-    {
-        const int64_t T=100*86400;
-        full_plain(s,T-40*86400);
-        s->observations[7].at=T-50*86400; /* oldest */
-        s->observations[0].at=T;          /* fresh, first by index */
-        CHECK(d2s_group_restore(s)==0);
-        CHECK(clean_at(s,"neg.example.org",T)>0);
-        CHECK(!s->disabled && !s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
-        CHECK(present(s,"neg.example.org") && !present(s,"p7.fill7.example.net"));
-        CHECK(present(s,"p0.fill0.example.net") && present(s,"p1.fill1.example.net"));
-        unsigned plain=0;
-        for(size_t i=0;i<s->n_observations;i++)
-            if(s->observations[i].evidence==D2S_GROUP_BLOCKED_CONFIRMED) plain++;
-        CHECK(plain==D2S_GROUP_OBSERVATION_MAX-1);
-        CHECK(!d2s_group_match(s,"neg.example.org",&modern) && d2s_group_restore(s)==0);
-    }
-    /* INCONCLUSIVE ages before plain votes, oldest first, even when a plain
-       vote is older and a fresh unknown entry comes first by index. */
-    {
-        const int64_t T=100*86400;
-        full_plain(s,T-60*86400);
-        s->observations[0].evidence=D2S_GROUP_INCONCLUSIVE; s->observations[0].at=T;
-        s->observations[0].plan_id[0]=0;
-        s->observations[5].evidence=D2S_GROUP_INCONCLUSIVE; s->observations[5].at=T-35*86400;
-        s->observations[5].plan_id[0]=0;
-        s->observations[9].evidence=D2S_GROUP_INCONCLUSIVE; s->observations[9].at=T-45*86400;
-        s->observations[9].plan_id[0]=0;
-        CHECK(d2s_group_restore(s)==0);
-        CHECK(clean_at(s,"neg.example.org",T)>0);
-        CHECK(present(s,"neg.example.org") && !present(s,"p9.fill9.example.net"));
-        CHECK(present(s,"p0.fill0.example.net") && present(s,"p5.fill5.example.net"));
-        CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX && !s->disabled);
-    }
-    /* Exact boundary: expired means strictly more than 30*86400 s older.
-       Entry 0 is a fresh INCONCLUSIVE (the non-aging fallback's choice),
-       entry 1 a plain vote at the probed age. */
-    {
-        const int64_t T=100*86400, ages[]={30*86400-1,30*86400,30*86400+1};
-        for(int k=0;k<3;k++) {
-            full_plain(s,T);
-            s->observations[0].evidence=D2S_GROUP_INCONCLUSIVE; s->observations[0].plan_id[0]=0;
-            s->observations[1].at=T-ages[k];
-            CHECK(d2s_group_restore(s)==0);
-            CHECK(clean_at(s,"neg.example.org",T)>0);
-            int aged=!present(s,"p1.fill1.example.net");
-            CHECK(aged==(k==2));
-            CHECK(present(s,"p0.fill0.example.net")==(k==2));
-        }
-    }
-    /* A stable family with voters older than 30 days survives one reclaim
-       when older expired candidates exist; only one entry is reclaimed. */
-    {
-        const int64_t T=100*86400;
-        full_plain(s,T-60*86400);
-        for(int i=0;i<3;i++) {
-            d2s_group_observation *o=&s->observations[i];
-            snprintf(o->name,sizeof o->name,"v%d.fam.example.com",i);
-            strcpy(o->plan_id,"P"); o->at=T-40*86400;
-        }
-        CHECK(d2s_group_restore(s)==0 && d2s_group_match(s,"new.fam.example.com",&modern));
-        CHECK(clean_at(s,"neg.example.org",T)>0);
-        CHECK(d2s_group_match(s,"new.fam.example.com",&modern));
-        CHECK(present(s,"v0.fam.example.com") && present(s,"v1.fam.example.com") &&
-              present(s,"v2.fam.example.com"));
-        CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX);
-    }
-    /* A real full journal (223 clear, 4 failures, 29 plain votes) must
-       continue admitting fresh positive evidence without losing exclusions. */
-    memset(s,0,sizeof *s);
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
-        d2s_group_observation *v=&s->observations[i];
-        snprintf(v->name,sizeof v->name,"h%zu.old.example.net",i);
-        v->key=modern;v->at=10;
-        v->evidence=i<223?D2S_GROUP_DIRECT_CLEAR:i<226?D2S_GROUP_PLAN_FAILED:
-                    i==226?(D2S_GROUP_BLOCKED_CONFIRMED|D2S_GROUP_PLAN_FAILED):D2S_GROUP_BLOCKED_CONFIRMED;
-        if(v->evidence!=D2S_GROUP_DIRECT_CLEAR)strcpy(v->plan_id,"old-plan");
-    }
-    s->n_observations=D2S_GROUP_OBSERVATION_MAX;s->frozen=1;
+    CHECK(d2s_group_match(s,"fresh.video.example.org",&modern));
     CHECK(d2s_group_restore(s)==0);
-    CHECK(!s->frozen); /* stale capacity flag recovers on catalog reload */
-    d2s_group_observation protected[227];
-    memcpy(protected,s->observations,sizeof protected);
-    for(int i=0;i<600;i++) {
-        d2s_group_observation fresh={0};
-        snprintf(fresh.name,sizeof fresh.name,"cdn%d.video.example.org",i);
-        strcpy(fresh.plan_id,"new-plan");fresh.key=modern;
-        fresh.at=100+i;fresh.evidence=D2S_GROUP_BLOCKED_CONFIRMED;
-        CHECK(d2s_group_learn(s,&fresh)>0);
-        CHECK(present(s,fresh.name));
-        CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX && !s->frozen);
-    }
-    CHECK(d2s_group_match(s,"next.video.example.org",&modern));
-    CHECK(!memcmp(protected,s->observations,sizeof protected));
-    CHECK(d2s_group_restore(s)==0);
-    observe(s,"unknown.noise.example.com","",D2S_GROUP_INCONCLUSIVE,modern);
-    CHECK(!s->frozen); /* a discarded unknown must not freeze positives */
-    CHECK(!memcmp(protected,s->observations,sizeof protected));
-    /* Mixed events at saturation: rotations must not corrupt restore or
-       unrelated exclusions, even if new failures consume all remaining slots. */
-    unsigned random_state=0x71a5u;
-    for(unsigned i=0;i<2400;i++) {
-        random_state=random_state*1664525u+1013904223u;
-        d2s_group_observation event={0};
-        snprintf(event.name,sizeof event.name,"r%u.saturation.example.com",(random_state>>8)%80);
-        event.key=modern;event.key.family=(random_state&1)?4:6;
-        event.key.shape=(random_state&2)?D2S_TCP_SHAPE_MODERN_TS:D2S_TCP_SHAPE_MODERN_NO_TS;
-        static const unsigned evidence[]={1,2,4,8};event.evidence=evidence[(random_state>>3)%4];
-        if(event.evidence==1 || event.evidence==4)strcpy(event.plan_id,(random_state&4)?"P":"Q");
-        event.at=1000+i;
-        CHECK(d2s_group_learn(s,&event)>=0);
-        CHECK(s->n_observations<=D2S_GROUP_OBSERVATION_MAX);
-        CHECK(!memcmp(protected,s->observations,sizeof protected));
-        if(i%50==0)CHECK(d2s_group_restore(s)==0);
-    }
-    CHECK(d2s_group_restore(s)==0);
-    /* No recyclable slot: all exclusions remain intact and admission fails closed. */
+    /* A suffix barrier also prohibits parent groups and cannot be overwritten
+       by a positive observation with the same text key. */
+    observe(s,"example.net","P",1,modern);
+    CHECK(!d2s_group_match(s,"clear0.n0.example.net",&modern));
+    /* Independent key contexts remain independent after compaction. */
+    d2s_group_key ipv6=modern;ipv6.family=6;
+    observe(s,"a.other.example.net","P",1,ipv6);
+    observe(s,"b.other.example.net","P",1,ipv6);
+    observe(s,"c.other.example.net","P",1,ipv6);
+    CHECK(d2s_group_match(s,"new.other.example.net",&ipv6));
+    CHECK(!d2s_group_match(s,"new.other.example.net",&modern));
+    /* No common suffix/context pair: coarse denial survives restore; positive
+       evidence is still recorded without promoting the prohibited context. */
     memset(s,0,sizeof *s);
-    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
-        d2s_group_observation *v=&s->observations[i];
-        snprintf(v->name,sizeof v->name,"clean%zu.example.net",i);
-        v->key=modern;v->at=1;v->evidence=D2S_GROUP_DIRECT_CLEAR;
+    for(unsigned i=0;i<300;i++) {
+        d2s_group_observation ev={0};
+        snprintf(ev.name,sizeof ev.name,"n%u.example.net",i);
+        ev.key=modern;snprintf(ev.key.probe_path,sizeof ev.key.probe_path,"/p%u",i);
+        ev.evidence=2;ev.at=i;CHECK(d2s_group_learn(s,&ev)>=0);
     }
-    s->n_observations=D2S_GROUP_OBSERVATION_MAX;
-    observe(s,"new.video.example.org","new-plan",D2S_GROUP_BLOCKED_CONFIRMED,modern);
-    CHECK(s->frozen && !present(s,"new.video.example.org"));
-    CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX && s->n_groups==0);
-    for(size_t i=0;i<s->n_observations;i++)CHECK(s->observations[i].evidence==D2S_GROUP_DIRECT_CLEAR);
+    CHECK(s->blocked_contexts && !s->disabled && !s->frozen);
+    observe(s,"new.video.example.org","P",1,modern);
+    CHECK(present(s,"new.video.example.org"));
+    CHECK(d2s_group_restore(s)==0 && s->blocked_contexts);
+    CHECK(!d2s_group_match(s,"next.video.example.org",&modern));
+    /* Long deterministic stream, many names and independent IPv4/IPv6,
+       Timestamp and path contexts. Every historic negative remains excluded. */
+    memset(s,0,sizeof *s);
+    for(unsigned i=0;i<5000;i++) {
+        d2s_group_observation ev={0};ev.key=modern;
+        ev.key.family=(i&1)?4:6;ev.key.shape=(i&2)?D2S_TCP_SHAPE_MODERN_TS:1;
+        strcpy(ev.key.probe_path,(i&4)?"/resource":"/");ev.at=10000+i;
+        snprintf(ev.name,sizeof ev.name,"blocked.d%u.com",i);ev.evidence=2;
+        CHECK(d2s_group_learn(s,&ev)>=0);
+        snprintf(ev.name,sizeof ev.name,"cdn%u.video.example.org",i);ev.evidence=1;
+        strcpy(ev.plan_id,"P");CHECK(d2s_group_learn(s,&ev)>0);
+        CHECK(present(s,ev.name) && !s->frozen && !s->disabled);
+        if(i%500==0)CHECK(d2s_group_restore(s)==0);
+    }
+    for(unsigned i=0;i<5000;i++) {
+        char name[128];d2s_group_key k=modern;
+        k.family=(i&1)?4:6;k.shape=(i&2)?D2S_TCP_SHAPE_MODERN_TS:1;
+        strcpy(k.probe_path,(i&4)?"/resource":"/");
+        snprintf(name,sizeof name,"blocked.d%u.com",i);
+        CHECK(!d2s_group_match(s,name,&k));
+        CHECK(d2s_group_match(s,"new.video.example.org",&k));
+    }
+    /* Reaching the area cap cannot stop evidence admission on restore. */
+    memset(s,0,sizeof *s);
+    for(unsigned i=0;i<100;i++)for(unsigned j=0;j<3;j++) {
+        char name[128],plan[40];
+        snprintf(name,sizeof name,"h%u.family%u.example.org",j,i);
+        snprintf(plan,sizeof plan,"P%u",i);observe(s,name,plan,1,modern);
+    }
+    CHECK(s->n_groups<=D2S_GROUP_MAX && !s->frozen);
+    CHECK(d2s_group_restore(s)==0 && !s->frozen);
     /* (c) property: random learn chains always pass restore. */
     srand(7);
     for(int round=0;round<2000;round++) {

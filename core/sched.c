@@ -6540,6 +6540,16 @@ static void group_exception_status(const d2s_sched *s, size_t group_index,
 
 static void write_live_groups(FILE *f, const d2s_sched *s) {
     const d2s_group_state *state = s->cat->groups;
+    size_t negative_count=0,barriers=0;
+    if(state)for(size_t i=0;i<state->n_observations;i++) {
+        unsigned e=state->observations[i].evidence;
+        negative_count+=(e&(2|4|D2S_GROUP_SCOPE_DENY))!=0;
+        barriers+=e==D2S_GROUP_SCOPE_DENY;
+    }
+    fprintf(f,"  \"learning\": {\"version\":2,\"positive\":%zu,\"negative\":%zu,\"positive_limit\":%d,\"negative_limit\":%d,\"scope_barriers\":%zu,\"blocked_contexts\":\"%016llx\"},\n",
+        state?state->n_observations-negative_count:0,negative_count,
+        D2S_GROUP_POSITIVE_MAX,D2S_GROUP_NEGATIVE_MAX,barriers,
+        (unsigned long long)(state?state->blocked_contexts:0));
     fputs("  \"groups\": [", f);
     size_t count = state ? state->n_groups : 0;
     for (size_t i = 0; i < count; i++) {

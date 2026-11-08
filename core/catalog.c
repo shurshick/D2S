@@ -1071,10 +1071,25 @@ static int handle_catalog_key(jctx *j, const char *key, void *ctx, int depth, ch
         return parse_array(j, (void **)&out->boxes, &out->n_boxes, &cap,
                             sizeof(d2s_cat_box), elem_box, "boxes", depth + 1, err, errcap);
     }
-    if(!strcmp(key,"domain_observations") || !strcmp(key,"domain_groups_frozen") ||
+    if(!strcmp(key,"domain_observations") || !strcmp(key,"domain_positive_observations") ||
+       !strcmp(key,"domain_negative_observations") || !strcmp(key,"domain_journal_version") ||
+       !strcmp(key,"domain_blocked_contexts") || !strcmp(key,"domain_groups_frozen") ||
        !strcmp(key,"domain_groups_disabled") || !strcmp(key,"domain_groups_disabled_at")) {
         if(!out->groups) out->groups=calloc(1,sizeof *out->groups);
         if(!out->groups) { set_err(err,errcap,"memory: domain groups"); return -1; }
+        if(!strcmp(key,"domain_journal_version")) {
+            uint8_t v=0;if(jparse_u8(j,&v,"domain journal version",err,errcap))return -1;
+            if(v!=2){set_err(err,errcap,"unsupported domain journal version");return -1;}
+            out->groups->journal_version=v;return 0;
+        }
+        if(!strcmp(key,"domain_blocked_contexts")) {
+            char buf[17],*end;
+            if(jparse_string_fixed(j,buf,sizeof buf,"domain blocked contexts",err,errcap))return -1;
+            if(strlen(buf)!=16 || strspn(buf,"0123456789abcdefABCDEF")!=16) {
+                set_err(err,errcap,"invalid domain blocked contexts");return -1;
+            }
+            out->groups->blocked_contexts=(uint64_t)strtoull(buf,&end,16);return *end?-1:0;
+        }
         if(!strcmp(key,"domain_groups_frozen"))
             return jparse_bool_i(j,&out->groups->frozen,"domain_groups_frozen",err,errcap);
         if(!strcmp(key,"domain_groups_disabled"))
@@ -1485,8 +1500,19 @@ int d2s_catalog_save(const d2s_catalog *c, const char *path, char *err, size_t e
     if(c->groups) {
         fputs(",\n  \"domain_groups\": ",f);
         write_json_array(f,c->groups->groups,c->groups->n_groups,sizeof(d2s_domain_group),write_domain_group,1);
-        fputs(",\n  \"domain_observations\": ",f);
-        write_json_array(f,c->groups->observations,c->groups->n_observations,sizeof(d2s_group_observation),write_domain_observation,1);
+        fprintf(f,",\n  \"domain_journal_version\": 2,\n  \"domain_blocked_contexts\": \"%016llx\"",
+                (unsigned long long)c->groups->blocked_contexts);
+        for(unsigned neg=0;neg<2;neg++) {
+            fprintf(f,",\n  \"domain_%s_observations\": [",neg?"negative":"positive");
+            size_t count=0;
+            for(size_t i=0;i<c->groups->n_observations;i++) {
+                const d2s_group_observation *o=&c->groups->observations[i];
+                unsigned isneg=(o->evidence&(D2S_GROUP_DIRECT_CLEAR|D2S_GROUP_PLAN_FAILED|D2S_GROUP_SCOPE_DENY))!=0;
+                if(isneg!=neg)continue;
+                fputs(count++?",\n":"\n",f);write_domain_observation(f,o,2);
+            }
+            fputs(count?"\n  ]":"]",f);
+        }
         fprintf(f,",\n  \"domain_groups_frozen\": %s",c->groups->frozen?"true":"false");
         fprintf(f,",\n  \"domain_groups_disabled\": %s",c->groups->disabled?"true":"false");
         if(c->groups->disabled_at) {

@@ -16,8 +16,8 @@
     "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
   },
   "core/sched.c": {
-    "sha256": "299eaf3ffcd96b3da3a6347636d604135d9569ef052c63e9e9e1eace0046d911",
-    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
+    "sha256": "cc654c725c6b8b82f8c7d069e793c49d684613be435ca019be4801f4a677dbcb",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
     "sha256": "0d7390d79bf77f186124891c1911cb76a3aaa04bee49830f1bbf7c46d7af8902",
@@ -64,8 +64,8 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "core/catalog.c": {
-    "sha256": "b958086f2e779a7dbaadfe87e0e75ad37465e87c5b4ef47acef21af212610146",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "ca768718bf7e10017b0df7e95937fcdbb977cefa93f13de22514f872611f8279",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   },
   "core/httpsearch.c": {
     "sha256": "ac4569ddf7085304e3409fb44844300f3da32e4fa73c9eb7e6cd20aca8bd3419",
@@ -260,8 +260,8 @@
     "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/groups.c": {
-    "sha256": "69138353878aafebec79e89964830b951bbf518ff25657839ae7ec6ccaba18a5",
-    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
+    "sha256": "c3f7561108c80c85a87bcdd7d04268249e441d165444b728716e7c60e07fd1f9",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   },
   "core/include/d2s_compose_internal.h": {
     "sha256": "b8fffc2f4fb82794a00aefe9d769e98652c1d9e4fb1caeaab53643b971cd0db8",
@@ -276,8 +276,8 @@
     "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "core/test_groups.c": {
-    "sha256": "5e1df5017934fc715872b8f90f6fb50939b2dc7ebd608d9cc06064a560fc79fe",
-    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
+    "sha256": "e8d1dc8c8fa3143fc173fb5491c70acb504701580a97de6c70cc45b223463b87",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   },
   "datapath/include/d2s_ctl.h": {
     "sha256": "b7814e5fb266052257a51fe993cbf8195fc5a357663a5bcfea611f2c2f50fd2e",
@@ -308,7 +308,11 @@
     "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "core/test_groups_catalog.c": {
-    "sha256": "1c41651fe9e832e806e292ebcaa03f9b7b72f2ae3678fab5434f8049f7b0fe6f",
-    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
+    "sha256": "a67e0de47f51ab6987330ea96c24e19926e4d99a7efa8d85e1fdf9c93f902f1f",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
+  },
+  "core/include/d2s_groups.h": {
+    "sha256": "8f3c8cdd3ba35be28588711c682c3f60ec49fdadbf7b290ecbb2fa4bc5519614",
+    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   }
 }

@@ -2,8 +2,11 @@
 #define D2S_GROUPS_H
 #include <stddef.h>
 #include <stdint.h>
+#include <stdint.h>
 #define D2S_GROUP_MAX 64
-#define D2S_GROUP_OBSERVATION_MAX 256
+#define D2S_GROUP_POSITIVE_MAX 256
+#define D2S_GROUP_NEGATIVE_MAX 256
+#define D2S_GROUP_OBSERVATION_MAX (D2S_GROUP_POSITIVE_MAX + D2S_GROUP_NEGATIVE_MAX)
 typedef struct {
     uint8_t transport, family, shape;
     char probe_path[256], ech_origin[256];
@@ -17,6 +20,8 @@ enum {
 /* Additional provenance bit: clean evidence found after area admission.
  * It blocks this exact member, not already learned unrelated siblings. */
 #define D2S_GROUP_ADMITTED_EXCEPTION 16u
+/* Conservative suffix prohibition, never an allow rule. */
+#define D2S_GROUP_SCOPE_DENY 32u
 typedef struct {
     char name[256], plan_id[40];
     d2s_group_key key;
@@ -31,19 +36,23 @@ typedef struct {
 } d2s_domain_group;
 typedef struct {
     d2s_domain_group groups[D2S_GROUP_MAX];
+    /* Compact union view for scheduler exception consumers. Admission and
+       persistence use independent 256-entry positive/negative journals. */
     d2s_group_observation observations[D2S_GROUP_OBSERVATION_MAX];
     size_t n_groups, n_observations;
     int frozen, disabled;
     /* Wall-clock seconds of the newest evidence when areas were disabled:
        plain votes at or before it are dropped on re-enable. */
     int64_t disabled_at;
+    uint64_t blocked_contexts; /* fallback: bit shape + (family6 ? 32 : 0) */
+    unsigned journal_version;
 } d2s_group_state;
 int d2s_group_key_same(const d2s_group_key *a, const d2s_group_key *b);
 int d2s_group_key_make(d2s_group_key *key, uint8_t transport, uint8_t family,
     uint8_t shape, const char *path, const char *origin);
 int d2s_group_learn(d2s_group_state *s, const d2s_group_observation *o);
-/* Validate saved observations and derive active areas, never trust a saved
-   suffix alone. Preserves failure exceptions and frozen admission state. */
+/* Validate saved journals and derive areas; suffix snapshots are not authority.
+   Legacy lost exclusions become conservative context restrictions. */
 int d2s_group_restore(d2s_group_state *s);
 /* A member that neither the family plan nor its own search reached is
    unreachable, not evidence against the plan: drop its failure records for
