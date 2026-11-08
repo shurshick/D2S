@@ -1,20 +1,23 @@
 # D2S — текущее состояние
 
-## Подготовлено 08.11.2026: исправление WhatsApp ECH/Timestamp
+## Завершено 08.11.2026: WhatsApp ECH/Timestamp, локальный hotfix основного
 
-- Владелец воспроизвёл зависание/отсутствие CSS на основном шлюзе. Read-only
-  проверка версий/каталога и ограниченный packet capture подтвердили ECH+TS
-  и отсутствие применения подходящего TS-плана. См. docs/whatsapp-ech-timestamp.md.
-- Три fallback в plans.c учитывали только ECH_TCP. Добавлены TS/NO_TS варианты
-  без ослабления профиля; 12 RED до исправления, все GREEN после.
-- Datapath check, ASan/UBSan, 144000 старых differential lookup, HTTP/UDP
-  full-packet runtime, ARM64/ARMv7/MIPSel/MIPS BE/amd64 daemon+plan tests PASS.
-- Исходник перед работой 9290b82, незакоммиченных чужих изменений не было.
-  Кандидат d2s-v0.5.1-wa-ech-test1 ARM64 готов, на роутер не установлен.
-  Backup основного binary/config/catalog и captures приватно work/private;
-  временные tcpdump/libpcap и capture files с роутера удалены.
-- Публикации/тега нет. Стенд недоступен. Следующее: решение владельца о месте
-  полевой проверки; прежнее ограничение основного роутера для тестов действует.
+- Причина/исходник: 4c1d7c9, docs/whatsapp-ech-timestamp.md. Три fallback в
+  plans.c не учитывали ECH_TS/ECH_NO_TS. 12 RED до, весь datapath check GREEN
+  после; ASan/UBSan, 144000 прежних differential, runtime и 5 архитектур PASS.
+- Пользователь разрешил основной 192.168.1.1. Заменён только d2sd с резервной
+  копией /opt/d2s/wa-ech-backup-20261108 (также приватно на ПК). Штатный
+  engine-restart; TG не перезапускался. Config byte-exact, все46plan_id сохранены.
+- Кандидат с отдельным test1 release ID отвергнут handshake; немедленный откат
+  прошёл. Финальная сборка содержит исправление и общий release=d2s-v0.5.1,
+  wire22, SHA256 4f58323affd922ccf536382462e8fda7cb0e56f600ae0a30df9af4bf6c9d7674.
+  Датапат/контроллер connected/ready/external=1/1/1, очередь2000, PPE8/8.
+- Три холодных запуска настоящего WhatsApp: нормальные стили и чаты, без
+  прежнего зависания. Медиа/отправка/звонки в опыте не проверялись. Кэш и
+  авторизация не сбрасывались. Временные tcpdump/libpcap/captures удалены.
+- Публичный stable пока0.5.1 не содержит hotfix: источник не отправлялся,
+  релиз/тег не создавались. Панель основного показывает0.5.1; патч проверять
+  по хешу живого d2sd. Следующий шаг — решение владельца о публичном выпуске.
 
 ## Завершено 08.11.2026: HTTP fidelity / lookup measurement (без выпуска)
 

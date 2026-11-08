@@ -1,0 +1,31 @@
+{
+  "date": "2026-11-08",
+  "source_fix": "4c1d7c9",
+  "router": "primary Keenetic",
+  "authorization": "user explicitly approved primary installation and short D2S restart",
+  "wire": 22,
+  "release_id": "d2s-v0.5.1",
+  "original_sha256": "05a8ec8bf4fa8899a7dda87c9ad9c8c83dcb3c2f0231b78ba45a2ec1b908c808",
+  "installed_running_sha256": "4f58323affd922ccf536382462e8fda7cb0e56f600ae0a30df9af4bf6c9d7674",
+  "self_check": true,
+  "controller_connected_ready_external": [
+    1,
+    1,
+    1
+  ],
+  "datapath_connected_ready_external": [
+    1,
+    1,
+    1
+  ],
+  "config_byte_exact": true,
+  "unique_plan_ids_before": 46,
+  "unique_plan_ids_after": 46,
+  "missing_plan_ids": 0,
+  "telegram_pid_unchanged": true,
+  "whatsapp_cold_starts_visually_passed": 3,
+  "messages_files_calls_tested": false,
+  "cache_or_login_reset": false,
+  "release_published": false,
+  "note": "Separate test release ID rejected by handshake; immediately rolled back, rebuilt with matching release ID, final two-process health verified."
+}
