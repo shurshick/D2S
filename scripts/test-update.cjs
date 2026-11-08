@@ -24,8 +24,13 @@ assert(openssl, 'нужен OpenSSL 3');
 fs.symlinkSync(openssl, path.join(stub, 'openssl'));
 // curl: адрес → файл из feed/, как отдал бы GitHub.
 fs.writeFileSync(path.join(stub, 'curl'), `#!/bin/sh
-out=; url=; proxy=
-while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; --proxy) proxy=$2; shift 2 ;; --proto|--max-time|--connect-timeout) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac; done
+out=; url=; proxy=; max_time=0
+while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; --proxy) proxy=$2; shift 2 ;; --max-time) max_time=$2; shift 2 ;; --proto|--connect-timeout) shift 2 ;; -*) shift ;; *) url=$1; shift ;; esac; done
+# Two metadata files, each with proxy + direct fallback, must fit the
+# panel's 60-second action deadline. Archive downloads keep their own budget.
+case "$url" in */latest.json|*/latest.json.sig)
+  [ -z "\${MAX_METADATA_TIME:-}" ] || [ "$max_time" -le "$MAX_METADATA_TIME" ] || exit 28 ;;
+esac
 # Попытка через проводник на VPS — в свой журнал; GATE_DOWN=1 её роняет.
 if [ -n "$proxy" ]; then echo "$proxy $url" >> "${feed}/../gate.log"; [ -z "\${GATE_DOWN:-}" ] || exit 7; fi
 f="${feed}/\${url#https://example.test/}"
@@ -87,6 +92,9 @@ try {
 
   // Проверка: подписанный выпуск виден, поддельный — нет.
   release('r2');
+  assert.equal(spawnSync('/bin/sh', [updater, 'check'], {
+    env: { ...env, MAX_METADATA_TIME: '12' }, encoding: 'utf8'
+  }).status, 0, 'metadata fetch budgets exceed the panel action deadline');
   assert.equal(run('check').status, 0);
   let s = state();
   assert.equal(s.check_ok, true); assert.equal(s.current, 'r1'); assert.equal(s.latest.release_id, 'r2');

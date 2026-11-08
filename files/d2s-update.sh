@@ -95,15 +95,18 @@ fetch() {
     { [ -n "$GATE" ] &&
         curl -fsL --proto '=https' --proxy "$GATE" --connect-timeout 8 \
              --max-time "${3:-120}" -o "$2" "$1"; } ||
-        curl -fsL --proto '=https' --max-time "${3:-120}" -o "$2" "$1"
+        curl -fsL --proto '=https' --connect-timeout 8 --max-time "${3:-120}" -o "$2" "$1"
 }
 
 # Скачивает и проверяет latest.json в $WORK. Ноль — подпись сошлась.
 check() {
     mkdir -p "$WORK" || return 1
     rm -f "$WORK/latest.json.new" "$WORK/latest.json.sig"
-    if ! fetch "$LATEST/latest.json" "$WORK/latest.json.new" ||
-       ! fetch "$LATEST/latest.json.sig" "$WORK/latest.json.sig"; then
+    # Two files, each with proxy + direct fallback: at most 4 * 12s.
+    # Leave room for signature/state writes before the panel's 60s deadline.
+    # Archive downloads retain the separate 600s installation budget.
+    if ! fetch "$LATEST/latest.json" "$WORK/latest.json.new" 12 ||
+       ! fetch "$LATEST/latest.json.sig" "$WORK/latest.json.sig" 12; then
         check_error="не удалось скачать сведения о выпуске"; return 1
     fi
     printf -- '-----BEGIN PUBLIC KEY-----\n%s\n-----END PUBLIC KEY-----\n' "$KEY" > "$WORK/key.pem"
