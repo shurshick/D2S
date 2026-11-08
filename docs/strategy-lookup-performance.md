@@ -1,5 +1,8 @@
 # Strategy Lookup Performance — измерение и решение
 
+Этот отчёт фиксирует завершение benchmark-задачи. Последующее отдельное
+исправление ECH/Timestamp описано в [WhatsApp audit](whatsapp-ech-timestamp.md).
+
 ## Итог
 
 Рабочие `datapath/plans.c`, `session.c` и `include/d2s_plans.h` оставлены

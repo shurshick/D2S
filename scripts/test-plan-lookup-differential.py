@@ -26,9 +26,15 @@ def main():
     baseline = subprocess.check_output(["git", "-C", str(ROOT), "show",
                                         args.baseline + ":datapath/plans.c"], text=True)
     current = (args.candidate or ROOT / "datapath/plans.c").read_text()
+    # Freeze baseline regression coverage: later intentional bug fixes may add
+    # tests which correctly fail against the historical implementation.
+    original_tests = subprocess.check_output(["git", "-C", str(ROOT), "show",
+                                               args.baseline + ":datapath/test_plans.c"], text=True)
     traces = []
     with tempfile.TemporaryDirectory(prefix="d2s-differential-") as directory:
         tmp = Path(directory)
+        frozen_tests = tmp / "original_test_plans.c"
+        frozen_tests.write_text(original_tests)
         for label, code in (("baseline", baseline), ("current", current)):
             source, binary = tmp / (label + ".c"), tmp / label
             source.write_text(code)
@@ -37,7 +43,7 @@ def main():
             traces.append(trace)
             # Execute all existing lifecycle/priority tests against each implementation too.
             wrapper = tmp / (label + "-existing.c")
-            wrapper.write_text('#include "' + str(source) + '"\n#include "' + str(ROOT / 'datapath/test_plans.c') + '"\n')
+            wrapper.write_text('#include "' + str(source) + '"\n#include "' + str(frozen_tests) + '"\n')
             bench.build(source, binary, fixture=str(wrapper), sanitize=args.sanitize)
             subprocess.run([str(binary)], check=True, stdout=subprocess.DEVNULL)
         if traces[0] != traces[1]:

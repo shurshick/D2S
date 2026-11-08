@@ -1,5 +1,21 @@
 # D2S — текущее состояние
 
+## Подготовлено 08.11.2026: исправление WhatsApp ECH/Timestamp
+
+- Владелец воспроизвёл зависание/отсутствие CSS на основном шлюзе. Read-only
+  проверка версий/каталога и ограниченный packet capture подтвердили ECH+TS
+  и отсутствие применения подходящего TS-плана. См. docs/whatsapp-ech-timestamp.md.
+- Три fallback в plans.c учитывали только ECH_TCP. Добавлены TS/NO_TS варианты
+  без ослабления профиля; 12 RED до исправления, все GREEN после.
+- Datapath check, ASan/UBSan, 144000 старых differential lookup, HTTP/UDP
+  full-packet runtime, ARM64/ARMv7/MIPSel/MIPS BE/amd64 daemon+plan tests PASS.
+- Исходник перед работой 9290b82, незакоммиченных чужих изменений не было.
+  Кандидат d2s-v0.5.1-wa-ech-test1 ARM64 готов, на роутер не установлен.
+  Backup основного binary/config/catalog и captures приватно work/private;
+  временные tcpdump/libpcap и capture files с роутера удалены.
+- Публикации/тега нет. Стенд недоступен. Следующее: решение владельца о месте
+  полевой проверки; прежнее ограничение основного роутера для тестов действует.
+
 ## Завершено 08.11.2026: HTTP fidelity / lookup measurement (без выпуска)
 
 - База чистая 8ce411883f2d925d836f68829accaa180a4a767c, v0.5.1 source f499385.

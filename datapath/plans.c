@@ -462,6 +462,11 @@ static entry *find_addr(d2s_plantab *t, const uint8_t *addr, uint8_t family) {
 typedef struct { entry *shaped, *modern, *grandfather, *any; } name_hits;
 typedef struct { entry *shaped, *modern, *grandfather, *any; } addr_hits;
 
+static int shape_is_ech_tcp(uint8_t shape) {
+    return shape==D2S_PLAN_SHAPE_ECH_TCP || shape==D2S_PLAN_SHAPE_ECH_NO_TS ||
+           shape==D2S_PLAN_SHAPE_ECH_TS;
+}
+
 static uint8_t modern_shape_for_ech(uint8_t shape) {
     if (shape == D2S_PLAN_SHAPE_ECH_NO_TS) return D2S_PLAN_SHAPE_MODERN_NO_TS;
     if (shape == D2S_PLAN_SHAPE_ECH_TS) return D2S_PLAN_SHAPE_MODERN_TS;
@@ -1118,8 +1123,8 @@ const d2s_plan *d2s_plantab_find_target(d2s_plantab *t, const uint8_t *name, siz
         entry *e = NULL;
         if (sport_be != 0) {
             e = find_name_shape_port(t, name, len, seen_shape, sport_be, family);
-            if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP)
-                e = find_name_shape_port(t, name, len, D2S_PLAN_SHAPE_MODERN, sport_be, family);
+            if (!e && shape_is_ech_tcp(seen_shape))
+                e = find_name_shape_port(t, name, len, modern_shape_for_ech(seen_shape), sport_be, family);
             if (!e && seen_shape == D2S_PLAN_SHAPE_ANY) {
                 /* Probe-specific SET_NAME carries the verifier's known shape;
                    a segmented ClientHello may not reveal it in its first
@@ -1152,7 +1157,7 @@ const d2s_plan *d2s_plantab_find_target(d2s_plantab *t, const uint8_t *name, siz
         name_hits h;
         scan_name(t, name, len, seen_shape, family, &h);
         e = h.shaped;
-        if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) e = h.modern;
+        if (!e && shape_is_ech_tcp(seen_shape)) e = h.modern;
         if (!e && shape_transport(seen_shape) == 6) e = h.grandfather;
         if (!e && area_bypassed(t, name, len, seen_shape, family)) return NULL;
         if (!e) {
@@ -1221,7 +1226,7 @@ check_addr:;
     addr_hits a;
     scan_addr(t, addr, family, seen_shape, &a);
     entry *e = a.shaped;
-    if (!e && seen_shape == D2S_PLAN_SHAPE_ECH_TCP) e = a.modern;
+    if (!e && shape_is_ech_tcp(seen_shape)) e = a.modern;
     if (!e) e = a.grandfather;
     if (e) {
         e->last_used_ns = now_ns;

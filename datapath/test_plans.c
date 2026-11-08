@@ -59,6 +59,34 @@ static uint32_t addr(uint8_t a, uint8_t b, uint8_t c, uint8_t d) {
 }
 
 int main(void) {
+    /* Field WhatsApp/WebView: old generic TLS binding precedes a TS-specific
+       binding. ECH/GREASE must inherit the matching ordinary TLS profile,
+       never the generic entry or the opposite Timestamp profile. */
+    for (uint8_t family=4;family<=6;family+=2) {
+        const uint8_t name[]="static.whatsapp.test";
+        const uint8_t ip[16]={10,1,2,3,0,0,0,0,0,0,0,0,0,0,0,1};
+        uint8_t modern[]={D2S_PLAN_SHAPE_MODERN_NO_TS,D2S_PLAN_SHAPE_MODERN_TS};
+        uint8_t ech[]={D2S_PLAN_SHAPE_ECH_NO_TS,D2S_PLAN_SHAPE_ECH_TS};
+        for (size_t profile=0;profile<2;profile++) {
+            d2s_plantab *tab=d2s_plantab_new(8);
+            CHECK(!d2s_plantab_set_name_family(tab,name,sizeof name-1,1,mkplan(),D2S_PLAN_SHAPE_MODERN,0,family),"old generic fixture");
+            d2s_plan *specific=mkplan();
+            CHECK(!d2s_plantab_set_name_family(tab,name,sizeof name-1,2,specific,modern[profile],0,family),"specific Timestamp fixture");
+            CHECK(d2s_plantab_find_target(tab,name,sizeof name-1,NULL,family,3,ech[profile],0)==specific,"ECH inherits exact Timestamp name profile before old generic binding");
+            d2s_plan *probe=mkplan();
+            CHECK(!d2s_plantab_set_name_family(tab,name,sizeof name-1,4,probe,modern[profile],5555,family),"Timestamp probe fixture");
+            CHECK(d2s_plantab_find_target(tab,name,sizeof name-1,NULL,family,5,ech[profile],5555)==probe,"ECH verifier port inherits matching modern Timestamp profile");
+            CHECK(!d2s_plantab_find_target(tab,name,sizeof name-1,NULL,family,6,ech[1-profile],0),"opposite Timestamp name profile never inherited");
+            specific=mkplan();
+            CHECK(!d2s_plantab_set_addr_shaped(tab,ip,family,7,specific,modern[profile]),"Timestamp address fixture");
+            CHECK(d2s_plantab_find_target(tab,NULL,0,ip,family,8,ech[profile],0)==specific,"ECH inherits matching Timestamp address profile");
+            CHECK(!d2s_plantab_find_target(tab,NULL,0,ip,family,9,ech[1-profile],0),"opposite Timestamp address profile never inherited");
+            d2s_plan *dedicated=mkplan();
+            CHECK(!d2s_plantab_set_name_family(tab,name,sizeof name-1,10,dedicated,ech[profile],0,family),"dedicated ECH fixture");
+            CHECK(d2s_plantab_find_target(tab,name,sizeof name-1,NULL,family,11,ech[profile],0)==dedicated,"dedicated ECH name wins over ordinary TLS fallback");
+            d2s_plantab_free(tab);
+        }
+    }
     /* Entropy unavailable: keep packet plans usable, but do not invent proof. */
     {
         struct rlimit saved, closed;
