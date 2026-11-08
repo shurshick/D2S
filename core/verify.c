@@ -49,6 +49,15 @@
 #include "d2s_verify.h"
 #include "d2s_meas.h"
 
+static __thread int http_profile, http_diagnostic;
+static __thread d2s_http_profile_info http_info;
+const d2s_http_profile_info *d2s_verify_http_profile_get(void) { return &http_info; }
+void d2s_verify_http_profile_set(int profile) {
+    http_diagnostic = profile >= 0;
+    http_profile = profile == 1;
+    memset(&http_info,0,sizeof http_info);http_info.profile=http_profile;
+}
+
 static int64_t verify_now_ms(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -541,6 +550,10 @@ static int read_status_buf(uint8_t *buf, size_t capacity,
                             size_t end = v;
                             while (end < ln && line[end] != ';' && line[end] != ' ') end++;
                             html = span_eq_ascii_ci(line + v, end - v, "text/html");
+                            size_t n=http_diagnostic?ln-v:0;
+                            while(n && (line[v+n-1]==' ' || line[v+n-1]=='\t'))n--;
+                            if(n>=sizeof http_info.content_type)n=sizeof http_info.content_type-1;
+                            memcpy(http_info.content_type,line+v,n);http_info.content_type[n]=0;
                         } else if (span_eq_ascii_ci(line, kn, "content-length")) {
                             uint64_t x = 0; size_t digits = 0;
                             while (v < ln && line[v] >= '0' && line[v] <= '9') {
@@ -649,6 +662,13 @@ static int read_status_buf(uint8_t *buf, size_t capacity,
                     *conn_close = conn_token_close || (buf[7] == '0' && !conn_token_keep) ||
                         (!has_length && !chunked && code != 204 && code != 304);
                 }
+                if (http_diagnostic && !encoding && cloudflare_challenge) {
+                    static const char marker[] = "/cdn-cgi/challenge-platform/";
+                    for (size_t i=0; i+sizeof marker-1<=bs.prefix_len; i++)
+                        if (!memcmp(bs.prefix+i,marker,sizeof marker-1)) {
+                            *cloudflare_challenge=1; break;
+                        }
+                }
                 *http_reply = d2s_http_reply_classify(code, location, encoding,
                     bs.prefix, bs.prefix_len, got + (complete ? 0 : 1));
                 if (complete && bs.scan && resources && n_resources) {
@@ -705,6 +725,7 @@ static int read_status_rd(read_fn rd, void *sess, int wait_ms,
                           d2s_resource *resources, size_t *n_resources,
                           d2s_http_reply_result *http_reply, int *local_limit,
                           int *conn_close, char *err, size_t errcap) {
+    http_info.content_type[0] = 0;
     /* Буфер на куче: заголовки Meta ~8,4 КБ не влезали в прежние 8 КБ на
        стеке (задача 44). Тело читается теми же 8192 байтами с начала. */
     size_t capacity = D2S_VERIFY_HEADER_LIMIT + 1;
@@ -1358,6 +1379,21 @@ static int fd_peer_spoke(void *ctx) {
 }
 static long fd_packets(void *ctx) { return d2s_verify_packets_hook(*(int *)ctx); }
 
+/* Diagnostic reads have a total wall-clock and byte cap. Exhaustion of
+ * the local byte cap must never become an observed remote truncation. */
+typedef struct { read_fn read; void *session; size_t bytes; int limited; int64_t end; } http_diag_read;
+static long diagnostic_read(void *ctx,uint8_t *buf,size_t cap,int wait,char *err,size_t ec) {
+    http_diag_read *d=ctx;
+    int64_t left=d->end-verify_now_ms();
+    if(left<=0) { snprintf(err,ec,"diagnostic total timeout");return -1; }
+    if(d->bytes>=262144) { d->limited=1;snprintf(err,ec,"diagnostic local read limit");return -1; }
+    if(cap>262144-d->bytes)cap=262144-d->bytes;
+    if(left<wait)wait=(int)left;
+    long n=d->read(d->session,buf,cap,wait,err,ec);
+    if(n>0)d->bytes+=(size_t)n;
+    return n;
+}
+
 static void request_page_budget(read_fn rd, write_fn wr, void *sess,
                                 const char *host, int encoding,
                                 const char *initial_path,
@@ -1386,7 +1422,7 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
                                 int deadline_ms, int tls12,
                                 const budget_io *io, unsigned budget,
                                 d2s_ver_result *r, char *err, size_t errcap) {
-    if (!initial_path && host && !strcasecmp(host, "gateway.discord.gg")) {
+    if (!http_diagnostic && !initial_path && host && !strcasecmp(host, "gateway.discord.gg")) {
         request_gateway_websocket(rd,wr,sess,deadline_ms,r,err,errcap);
         return;
     }
@@ -1397,10 +1433,16 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
                                   encoding == 2 ? "gzip, deflate" : "identity";
     for (int redirects = 0; redirects <= 3; redirects++) {
         char req[2048];
-        int n = snprintf(req, sizeof req,
-                         "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\n"
-                         "Accept: */*\r\nAccept-Encoding: %s\r\nConnection: keep-alive\r\n\r\n",
-                         path, host, accept_encoding);
+        int n = http_profile ? snprintf(req,sizeof req,
+            "GET %s HTTP/1.1\r\nHost: %s\r\n"
+            "User-Agent: D2S-Probe/1.0 (HTTP navigation diagnostic)\r\n"
+            "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8\r\n"
+            "Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7\r\n"
+            "Sec-Fetch-Dest: document\r\nSec-Fetch-Mode: navigate\r\nSec-Fetch-Site: none\r\n"
+            "Accept-Encoding: %s\r\nConnection: close\r\n\r\n",path,host,accept_encoding)
+            : snprintf(req,sizeof req,
+            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\n"
+            "Accept: */*\r\nAccept-Encoding: %s\r\nConnection: keep-alive\r\n\r\n",path,host,accept_encoding);
         if (n <= 0 || (size_t)n >= sizeof req) {
             snprintf(r->reason, sizeof r->reason, "запрос не собрался: путь/имя слишком длинные");
             return;
@@ -1411,23 +1453,38 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
         }
         r->location[0] = '\0';
         d2s_http_reply_result http_reply;
-        int code = read_status_rd(rd, sess, deadline_ms,
+        http_diag_read diagnostic={rd,sess,0,0,verify_now_ms()+deadline_ms};
+        int code = read_status_rd(http_diagnostic ? diagnostic_read : rd,
+                                  http_diagnostic ? (void *)&diagnostic : sess, deadline_ms,
                                   &r->cloudflare_challenge, &r->body_bytes,
                                   &r->body_expected, &r->body_complete,
                                   &r->body_has_length, &r->body_chunked,
                                   &r->body_framing_valid, &r->body_encoding, r->location,
                                   sizeof r->location, r->resources, &r->n_resources,
                                   &http_reply, &r->local_limit, &r->conn_close, err, errcap);
+        if(diagnostic.limited)r->local_limit=1;
         r->status = code;
         r->http_outcome = http_reply.outcome;
         snprintf(r->http_evidence, sizeof r->http_evidence, "%s", http_reply.evidence);
-        if (r->cloudflare_challenge) { r->level = D2S_VER_CHALLENGE; return; }
+        if (r->cloudflare_challenge) {
+            r->level = D2S_VER_CHALLENGE;
+            if(http_diagnostic)snprintf(r->reason,sizeof r->reason,"explicit anti-bot challenge, page availability not established");
+            return;
+        }
         if (http_reply.outcome == D2S_HTTP_BLOCKED ||
             http_reply.outcome == D2S_HTTP_LEGAL_DENIAL) {
             r->level = http_reply.outcome == D2S_HTTP_BLOCKED ?
                 D2S_VER_BLOCKPAGE : D2S_VER_DENIED;
             snprintf(r->reason, sizeof r->reason, "HTTP отказ: %s", http_reply.evidence);
             return;
+        }
+        if(http_diagnostic && code>=300 && code<400) {
+            http_info.redirects=1;r->level=D2S_VER_HANDSHAKE;
+            snprintf(r->reason,sizeof r->reason,"diagnostic redirect recorded, destination not followed");return;
+        }
+        if(http_diagnostic && code && http_reply.outcome!=D2S_HTTP_POSITIVE) {
+            r->level=D2S_VER_HANDSHAKE;
+            snprintf(r->reason,sizeof r->reason,"HTTP %d: not evidence of ordinary page availability",code);return;
         }
         if (code >= 300 && code < 400) {
             char next[sizeof path];
@@ -1448,7 +1505,7 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
                 snprintf(r->reason, sizeof r->reason,
                          "HTTP %d, HTTPS redirect получен полностью (%llu байт); цель перехода не проверялась",
                          code, (unsigned long long)r->body_bytes);
-                if (io && budget)
+                if (io && budget && !http_diagnostic)
                     budget_tcp(rd, wr, sess, io, req, (size_t)n, deadline_ms, budget, r->conn_close, r);
                 return;
             }
@@ -1462,8 +1519,11 @@ static void request_page_budget(read_fn rd, write_fn wr, void *sess,
             snprintf(r->reason, sizeof r->reason,
                      "HTTP %d, тело загружено полностью (%llu байт)%s", code,
                      (unsigned long long)r->body_bytes, tls12 ? " по TLS 1.2" : "");
-            if (io && budget)
+            if (io && budget && !http_diagnostic)
                 budget_tcp(rd, wr, sess, io, req, (size_t)n, deadline_ms, budget, r->conn_close, r);
+        } else if (code && http_diagnostic && r->local_limit) {
+            snprintf(r->reason,sizeof r->reason,"local diagnostic read limit (%llu/%llu body bytes), remote truncation not established",
+                (unsigned long long)r->body_bytes,(unsigned long long)r->body_expected);
         } else if (code) {
             snprintf(r->reason, sizeof r->reason,
                      "HTTP %d, тело оборвалось (%llu/%llu байт): %.80s", code,

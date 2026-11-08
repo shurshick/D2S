@@ -1447,3 +1447,9 @@ test-tcp-layout: test_tcp_layout
 check: test-gateway-json
 test-gateway-json:
 	CC="$(CC)" python3 test_gateway_json.py
+
+# Explicit diagnostic profiles: loopback TLS fixture, never the public Internet.
+.PHONY: test-http-profiles
+check: test-http-profiles
+test-http-profiles: d2sfetch
+	python3 ../scripts/test-http-profiles.py

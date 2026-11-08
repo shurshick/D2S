@@ -24,6 +24,88 @@ static int fixture_write(void *ctx, const uint8_t *buf, size_t n,
     return 0;
 }
 
+
+/* Navigation profiles exercise the same production request writer and parser.
+ * The fixture chooses a response from the actual Accept header, not a mode flag. */
+typedef struct { fixture stream; const char *reply; char request[2048]; int choose, timeout; d2s_http_profile_info meta; } profile_fixture;
+static long profile_read(void *ctx,uint8_t *buf,size_t cap,int wait,char *err,size_t ec) {
+    profile_fixture *f=ctx;
+    if(f->timeout) { snprintf(err,ec,"fixture network timeout");return -1; }
+    return fixture_read(&f->stream,buf,cap,wait,err,ec);
+}
+static int profile_write(void *ctx,const uint8_t *buf,size_t n,char *err,size_t ec) {
+    profile_fixture *f=ctx;(void)err;(void)ec;
+    assert(n<sizeof f->request);memcpy(f->request,buf,n);f->request[n]=0;
+    f->stream.pos=0;
+    f->stream.reply=f->choose && strstr(f->request,"Accept: */*\r\n") ?
+        "HTTP/1.1 403 Forbidden\r\nContent-Type: text/html\r\nContent-Length: 3\r\n\r\nwaf" : f->reply;
+    return 0;
+}
+static d2s_ver_result profile_probe(profile_fixture *f,int profile) {
+    d2s_ver_result r={0};r.level=D2S_VER_HANDSHAKE;char err[200]="";
+    d2s_verify_http_profile_set(profile);
+    request_complete_page(profile_read,profile_write,f,"fixture.test",0,NULL,30000,0,&r,err,sizeof err);
+    f->meta=*d2s_verify_http_profile_get();
+    d2s_verify_http_profile_set(-1);
+    return r;
+}
+static void profile_checks(void) {
+    char *big=malloc(300200);assert(big);
+    int hn=snprintf(big,200,"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 300000\r\n\r\n");
+    memset(big+hn,'x',300000);big[hn+300000]=0;
+    struct { const char *reply; int status, complete, level, limit, timeout; } cases[]={
+        {"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok",200,1,D2S_VER_APPLICATION,0,0},
+        {"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\npartial",200,0,D2S_VER_HANDSHAKE,0,0},
+        {"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\na\r\npartial",200,0,D2S_VER_HANDSHAKE,0,0},
+        {"HTTP/1.1 429 Limited\r\nContent-Length: 0\r\n\r\n",429,1,D2S_VER_HANDSHAKE,0,0},
+        {"HTTP/1.1 503 Busy\r\nContent-Length: 0\r\n\r\n",503,1,D2S_VER_HANDSHAKE,0,0},
+        {"HTTP/1.1 451 Denied\r\nContent-Length: 0\r\n\r\n",451,1,D2S_VER_DENIED,0,0},
+        {"HTTP/1.1 403 Challenge\r\ncf-mitigated: challenge\r\nContent-Length: 0\r\n\r\n",403,1,D2S_VER_CHALLENGE,0,0},
+        {"HTTP/1.1 200 OK\r\nContent-Length: 29\r\n\r\n/cdn-cgi/challenge-platform/x",200,1,D2S_VER_CHALLENGE,0,0},
+        {"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n",302,1,D2S_VER_HANDSHAKE,0,0},
+        {"",0,0,D2S_VER_HANDSHAKE,0,1},
+        {big,200,0,D2S_VER_HANDSHAKE,1,0},
+        {"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",200,1,D2S_VER_APPLICATION,0,0},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: 3\r\n\r\nxyz",200,1,D2S_VER_APPLICATION,0,0},
+    };
+    for(int profile=0;profile<2;profile++) for(size_t i=0;i<sizeof cases/sizeof cases[0];i++) {
+        profile_fixture f={.stream={.fragment=7},.reply=cases[i].reply,.timeout=cases[i].timeout};
+        d2s_ver_result r=profile_probe(&f,profile);
+        if(r.status!=cases[i].status || r.body_complete!=cases[i].complete ||
+           (int)r.level!=cases[i].level || r.local_limit!=cases[i].limit) {
+            fprintf(stderr,"profile=%d fixture=%zu: status=%d complete=%d level=%d limit=%d %s\n",
+                profile,i,r.status,r.body_complete,r.level,r.local_limit,r.reason);abort();
+        }
+        assert(f.meta.profile==profile);
+        if(cases[i].timeout)assert(strstr(r.reason,"timeout"));
+        if(i==8)assert(f.meta.redirects==1 && !strcmp(r.location,"/next"));
+        if(i==10)assert(r.body_bytes<300000 && r.body_expected==300000);
+        if(i==12)assert(r.body_encoding==1);
+        assert(strstr(f.request,profile?"Sec-Fetch-Mode: navigate":"Accept: */*\r\n"));
+    }
+    /* Reproduce the misleading complete legacy 403 before testing the opt-in verdict. */
+    char *page=malloc(66000);assert(page);
+    int ph=snprintf(page,200,"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 65536\r\n\r\n");
+    memset(page+ph,'x',65536);page[ph+65536]=0;
+    profile_fixture f={.stream={.fragment=4096},.reply=page,.choose=1};
+    d2s_ver_result production=profile_probe(&f,-1);
+    assert(production.status==403 && production.body_complete && production.level==D2S_VER_APPLICATION);
+    assert(production.http_outcome==D2S_HTTP_NEUTRAL);
+    d2s_ver_result legacy=profile_probe(&f,0);
+    assert(!strcmp(f.meta.content_type,"text/html"));
+    d2s_ver_result navigation=profile_probe(&f,1);
+    assert(legacy.status==403 && legacy.body_bytes==3 && legacy.level==D2S_VER_HANDSHAKE);
+    assert(navigation.status==200 && navigation.body_bytes==65536 && navigation.body_complete && !navigation.local_limit);
+    /* Neither profile leaks into the next production request. */
+    production=profile_probe(&f,-1);assert(production.status==403 && production.level==D2S_VER_APPLICATION);
+    http_diag_read expired={.read=profile_read,.session=&f,.end=verify_now_ms()-1};
+    uint8_t byte;char error[80]="";
+    assert(diagnostic_read(&expired,&byte,1,1000,error,sizeof error)==-1);
+    assert(strstr(error,"timeout") && !expired.limited && !expired.bytes);
+    free(page);free(big);
+    puts("HTTP profiles: 26 framing/status/limit cases + Accept-sensitive comparison + legacy isolation passed");
+}
+
 typedef struct { fixture stream; char request[512]; size_t writes; } gateway_fixture;
 static long gateway_read(void *ctx, uint8_t *buf, size_t cap, int wait,
                          char *err, size_t errcap) {
@@ -599,7 +681,8 @@ static int budget_checks(void) {
     return fails;
 }
 
-int main(void) {
+int main(int argc,char **argv) {
+    if(argc==2 && !strcmp(argv[1],"--profiles-only")) { profile_checks();return 0; }
     struct { const char *reply; d2s_ver_level level; } cases[] = {
         {"HTTP/1.1 302 Found\r\nLocation: https://www.google.com/\r\nContent-Length: 0\r\n\r\n", D2S_VER_APPLICATION},
         {"HTTP/1.1 302 Found\r\nLocation: https://warning.rt.ru/\r\nContent-Length: 0\r\n\r\n", D2S_VER_BLOCKPAGE},
@@ -859,6 +942,7 @@ int main(void) {
             }
         }
     }
+    profile_checks();
     fails += budget_checks();
     if (fails) return 1;
     puts("Production HTTP reader: 76 fragments + 4 stylesheet + 4 ECH + long-header (TCP 4+limit, H3 3) + 6 failure-reason + 15 flow-budget (TCP 11, QUIC 4) checks passed without sockets");

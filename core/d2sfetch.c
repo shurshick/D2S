@@ -83,6 +83,7 @@ static void usage(void) {
         "  --port      порт, по умолчанию 443\n"
         "  --path      путь запроса, по умолчанию /\n"
         "  --wire N    длина приветствия на проводе, как у браузера\n"
+        "  --compare-http  два отдельных ограниченных HTTP-профиля; JSON, без переходов\n"
         "  --snapshot  взять длину у живого приветствия браузера: взвести\n"
         "              ловушку датапата и ждать (по умолчанию 60000 мс)\n"
         "  --ladder    вместо запроса страницы прогнать ТУ ЖЕ исходящую\n"
@@ -158,6 +159,7 @@ int main(int argc, char **argv) {
     const char *name = NULL, *ip = NULL, *path = "/";
     uint16_t port = 443;
     size_t wire = 0;
+    int compare_http=0;
     int tls12 = 0, deadline = 15000, ladder = 0, quic = 0, json = 0;
     uint32_t mark = 0;
     long snap_ms = 0;
@@ -165,7 +167,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         int last = i + 1 >= argc;
-        if (!strcmp(a, "--name") && !last) { name = argv[++i]; }
+        if (!strcmp(a,"--compare-http")) { compare_http=1; }
+        else if (!strcmp(a, "--name") && !last) { name = argv[++i]; }
         else if (!strcmp(a, "--ip") && !last) { ip = argv[++i]; }
         else if (!strcmp(a, "--path") && !last) { path = argv[++i]; }
         else if (!strcmp(a, "--port") && !last) { port = (uint16_t)atoi(argv[++i]); }
@@ -185,6 +188,9 @@ int main(int argc, char **argv) {
         else { usage(); return 2; }
     }
     if (!name || !name[0]) { usage(); return 2; }
+    if (compare_http && (quic || ladder || strcmp(path,"/"))) {
+        fprintf(stderr,"HTTP comparison requires TCP root navigation\n"); return 2;
+    }
 
     if (snap_ms > 0 && snapshot_wire(name, snap_ms, &wire) != 0) {
         return 1;  /* без живой длины мерить браузерным приветствием нечем */
@@ -219,6 +225,35 @@ int main(int argc, char **argv) {
             return 2;
         }
         ip = addr;
+    }
+
+    if(compare_http) {
+        int first_status=0,first_complete=0,differ=0; uint64_t first_body=0;
+        char first_type[96]="";
+        puts("{\"schema\":1,\"comparison\":[");
+        for(int profile=0;profile<2;profile++) {
+            d2s_verify_http_profile_set(profile);
+            d2s_ver_result v=d2s_verify_probe_path_on(-1,ip,port,name,deadline,wire,tls12,0,mark,NULL);
+            const d2s_http_profile_info *info=d2s_verify_http_profile_get();
+            printf("%s{\"profile\":\"%s\",\"http\":%d,\"tls\":%u,\"body\":%llu,\"expected\":%llu,\"complete\":%s,\"local_limit\":%s,\"level\":%d,\"http_outcome\":%d,\"content_type\":",
+                profile?",":"",profile?"navigation":"legacy",v.status,v.negotiated_tls,
+                (unsigned long long)v.body_bytes,(unsigned long long)v.body_expected,
+                v.body_complete?"true":"false",v.local_limit?"true":"false",v.level,v.http_outcome);
+            if (!profile) { first_status=v.status;first_complete=v.body_complete;
+                first_body=v.body_bytes;snprintf(first_type,sizeof first_type,"%s",info->content_type); }
+            else differ=first_status!=v.status || first_complete!=v.body_complete ||
+                first_body!=v.body_bytes || strcmp(first_type,info->content_type);
+            json_string(info->content_type);printf(",\"location\":");json_string(v.location);
+            printf(",\"redirects\":%u,\"framing_valid\":%s,\"chunked\":%s,\"has_length\":%s,\"encoding\":%d,\"failure\":",
+                info->redirects,v.body_framing_valid?"true":"false",v.body_chunked?"true":"false",
+                v.body_has_length?"true":"false",v.body_encoding);
+            json_string(v.local_limit?"local_limit":v.level==D2S_VER_CHALLENGE?"challenge":
+                v.level<D2S_VER_HANDSHAKE?"connection_or_tls":v.status>=300&&v.status<400?"redirect_not_followed":
+                !v.body_complete?"incomplete_response":v.http_outcome!=D2S_HTTP_POSITIVE?"http_denial_or_error":"none");
+            printf(",\"reason\":");json_string(v.reason);puts("}");d2s_verify_close(&v);
+        }
+        d2s_verify_http_profile_set(-1);
+        printf("],\"profiles_differ\":%s,\"conclusion\":\"Compare HTTP responses only; differences do not establish DPI or Chrome-equivalent availability\"}\n",differ?"true":"false");return 0;
     }
 
     struct timespec t0, t1;

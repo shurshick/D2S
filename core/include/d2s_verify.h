@@ -49,6 +49,16 @@
 #include "d2s_quicsnap.h"
 #include "d2s_resource.h"
 #include "d2s_http_reply.h"
+/* Explicit diagnostic selection only; -1 restores production legacy behavior.
+ * No Chrome TLS fingerprint or HTTP/2 is implied. Thread-local, never persisted. */
+typedef struct {
+    int profile; /* 0 legacy, 1 navigation */
+    unsigned redirects;
+    char content_type[96];
+} d2s_http_profile_info;
+void d2s_verify_http_profile_set(int profile);
+/* Thread-local metadata for the last explicit diagnostic; copy before reset. */
+const d2s_http_profile_info *d2s_verify_http_profile_get(void);
 /* Shared HTTP framing reader; transport owns the connection and request. */
 typedef long (*d2s_http_read_fn)(void *, uint8_t *, size_t, int, char *, size_t);
 typedef struct {

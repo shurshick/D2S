@@ -104,8 +104,8 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/verify.c": {
-    "sha256": "2bb1086092ef8e12512a263956c0f9dedf5962fe37fe1940912770d05a1f01b8",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "3ba2524395fe8e0319ed9ad29f43743695f21ba851c824b68d71f24fea9f8485",
+    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "core/include/d2s_verdict.h": {
     "sha256": "dfd5b4a50e72b6cc406aa8b58c9fce8288e9960faa202461f29ac98a968fd8f4",
@@ -252,8 +252,8 @@
     "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/test_verify_http.c": {
-    "sha256": "192f5e32a368670dc5230288797ae9cb5894149e7a63706c6958b11612456100",
-    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+    "sha256": "3d2c157b62711e4aaadc5414171e8e1d36f4db3634d72ed16c3c2e8811833228",
+    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "datapath/d2sd.c": {
     "sha256": "aeca58fab9df6f9ad95697c70ca55ffaa08e26b1d8958cd63173ae34d3027624",
@@ -272,8 +272,8 @@
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/include/d2s_verify.h": {
-    "sha256": "5b41ee6c1d7340e9909bc1f14530073984ac7054666a8091e28818419baab87e",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "00b58284dea884df7929e4f95c6a120426b8872a612f8712dac631ffd8d8f4c0",
+    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "core/test_groups.c": {
     "sha256": "a898ceb4844a24ef0e10779ed9c1e05fea5e70c1baf543088e05a6bf50c1839c",
@@ -302,5 +302,9 @@
   "datapath/ctlsrv.c": {
     "sha256": "fb0f360441b58eac3c5e1372bb3d8e35845945df25286ac63dc741c5b3f084ec",
     "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
+  },
+  "core/d2sfetch.c": {
+    "sha256": "4e9d7f1fa06238f88ee9ec58231572228bea64d6db3b63848a2210a4468cb82e",
+    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   }
 }
