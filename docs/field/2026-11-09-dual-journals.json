@@ -1,0 +1,24 @@
+{
+  "backup": "/opt/d2s/dual-journal-backup-20261109001515",
+  "controller_sha256": "17d2f38357ec979ad90dfaad7822273e7e06eef9beb4aa14c1874172537b7782",
+  "release": "d2s-v0.5.2",
+  "wire": 22,
+  "old_observations": 256,
+  "retained": 256,
+  "old_plan_ids": 65,
+  "new_epoch": true,
+  "datapath_pid_unchanged": true,
+  "telegram_pid_unchanged": true,
+  "config_byte_exact": true,
+  "source_commit": "6c1df0dbdd83b5c3d11e4f660a81668ca34d51b1",
+  "application_validation": "pending",
+  "live_after": {
+    "positive": 1,
+    "negative": 256,
+    "frozen": false,
+    "disabled": false,
+    "blocked_contexts": "0000000000000000",
+    "queue": 0,
+    "free_cpu_pct": 94
+  }
+}

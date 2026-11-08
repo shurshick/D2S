@@ -1,5 +1,33 @@
 # D2S — текущее состояние
 
+## 09.11.2026: два журнала обучения, тестовая установка на основном
+
+- Source6c1df0d: независимые квоты256positive/256negative, совместное компактное
+  представление для прежнихsync-consumers; на диске два массива version2.
+  Переполнение negative создаёт консервативный suffix deny, иначе bitmask
+  полногоTCP/QUIC/family/shape-контекста. Нельзя расширить обход на исключение.
+- Приёмpositiveнеблокируетсяотрицательнымбюджетом; cap64семейств не является
+  freezeприёма.512совместныхслотов, +208КиБ16байт/контроллер, не на пакет.
+  Подробности/границы: docs/dual-learning-journals.md.
+- Полныйcore/datapath/detectcheckPASS; REDстарыйкод;5000negative+5000positive,
+  прежние2000цепочек, независимостьконтекстов,512слотов,64семейства иsave/loadPASS.
+  ASan/UBSanPASS; ARM64/ARM/MIPSel/MIPSBE/amd64: группы/каталогQEMUPASS,
+  финальнаялинковкаконтроллера+self-checkPASS.
+- Владелец разрешил новуюэпоху с сохранением всех записанных исключений;
+  неизвестные события, которые потеряла стараяdisabled-версия, восстановить
+  нельзя. По умолчанию код для такогоlegacyделаетmaskall; одноразовыймигратор
+  снялlegacyбарьер по отдельному разрешению владельца.
+- Основной: backup /opt/d2s/dual-journal-backup-20261109001515 и приватноПК.
+  Все256наблюдений и65plan_id сохранены,configbyte-exact. Заменён толькоd2sc;
+  datapathPID1642 иTelegramнеперезапущены, обаpeer1/1/1. runtimeID0.5.2,
+  Wire22, SHA17d2f38357ec979ad90dfaad7822273e7e06eef9beb4aa14c1874172537b7782.
+- live.jsonсодержитlearning(version/counters/limits/barriers/mask), старая
+  панельнеобязанаотображатьэтиполя. Сразу послеустановкиpositive0/negative256,
+  frozen=false,disabled=false,mask0. Затем от реального трафика сохранён новый
+  positive1 при полныхnegative256, queue0,freeCPU94%. Приложенияпроверяетвладелец.
+- Публичного релиза, тега, push не было. Старыйконтроллер не читаетновые
+  журналы: откатыватьbinaryиcatalogвместе. Квитанция docs/field/2026-11-09-dual-journals.json.
+
 ## 08.11.2026: восстановлено обновление основного до0.5.2
 
 - На роутере GitHub latest.json не скачивался (timeout, API504). Metadata
