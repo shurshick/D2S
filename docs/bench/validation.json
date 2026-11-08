@@ -1,0 +1,117 @@
+{
+  "date": "2026-11-08",
+  "base": "8ce411883f2d925d836f68829accaa180a4a767c",
+  "http_commit": "3af9cfec92d55ab0ce76490fb7f00b41d8fce12e",
+  "native": {
+    "core_check": 0,
+    "datapath_check": 0,
+    "detect_check": 0,
+    "http_tls_cli": 0,
+    "http_reader_asan_ubsan": 0,
+    "differential_asan_ubsan": 0,
+    "pinned_network_guard": 0
+  },
+  "targets": {
+    "arm64": {
+      "linked": [
+        "d2sc",
+        "d2sfetch",
+        "d2sd",
+        "planlab",
+        "ctlprobe"
+      ],
+      "ran": [
+        "test_verify_http --profiles-only",
+        "test_plans",
+        "test_plans_differential",
+        "d2sfetch --version",
+        "d2sd --version"
+      ],
+      "wire": 22,
+      "exit": 0
+    },
+    "arm": {
+      "linked": [
+        "d2sc",
+        "d2sfetch",
+        "d2sd",
+        "planlab",
+        "ctlprobe"
+      ],
+      "ran": [
+        "test_verify_http --profiles-only",
+        "test_plans",
+        "test_plans_differential",
+        "d2sfetch --version",
+        "d2sd --version"
+      ],
+      "wire": 22,
+      "exit": 0
+    },
+    "mipsel": {
+      "linked": [
+        "d2sc",
+        "d2sfetch",
+        "d2sd",
+        "planlab",
+        "ctlprobe"
+      ],
+      "ran": [
+        "test_verify_http --profiles-only",
+        "test_plans",
+        "test_plans_differential",
+        "d2sfetch --version",
+        "d2sd --version"
+      ],
+      "wire": 22,
+      "exit": 0
+    },
+    "mips": {
+      "linked": [
+        "d2sc",
+        "d2sfetch",
+        "d2sd",
+        "planlab",
+        "ctlprobe"
+      ],
+      "ran": [
+        "test_verify_http --profiles-only",
+        "test_plans",
+        "test_plans_differential",
+        "d2sfetch --version",
+        "d2sd --version"
+      ],
+      "wire": 22,
+      "exit": 0
+    },
+    "amd64": {
+      "linked": [
+        "d2sc",
+        "d2sfetch",
+        "d2sd",
+        "planlab",
+        "ctlprobe"
+      ],
+      "ran": [
+        "test_verify_http --profiles-only",
+        "test_plans",
+        "test_plans_differential",
+        "d2sfetch --version",
+        "d2sd --version"
+      ],
+      "wire": 22,
+      "exit": 0
+    }
+  },
+  "notes": [
+    "QEMU for non-native targets; assertions enabled with -UNDEBUG",
+    "Full legacy HTTP reader suite ran natively; original 1-second fixture deadlines are unsuitable for QEMU byte-stream fixtures",
+    "Sanitizer harness permits an existing GCC O1 format-truncation warning in unchanged HTTP3 snprintf; ordinary O2 builds use Werror",
+    "No router deployment, source push, release or tag"
+  ],
+  "unchanged": {
+    "datapath/plans.c": "7ee1f377560ca92c513540ff6d351bfb16fed4c8ddedf7a3dc9a6c00e75bc2cb",
+    "datapath/session.c": "96366c5e35fbf2b64bf9c02ea9f654fafa0311310c5a3cb78133c075b99ab8df",
+    "datapath/include/d2s_plans.h": "50754b2c2a034815351e664bd2821d5cf679fcc64b2ce22aa306817b8623b420"
+  }
+}

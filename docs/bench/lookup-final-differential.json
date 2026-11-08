@@ -1,0 +1,10 @@
+{
+  "baseline": "8ce411883f2d925d836f68829accaa180a4a767c",
+  "baseline_sha256": "7ee1f377560ca92c513540ff6d351bfb16fed4c8ddedf7a3dc9a6c00e75bc2cb",
+  "current_sha256": "7ee1f377560ca92c513540ff6d351bfb16fed4c8ddedf7a3dc9a6c00e75bc2cb",
+  "sanitize": true,
+  "equal": true,
+  "lookups": 144000,
+  "trace_sha256": "4761ae7f89b109f6a4374404e4ab0e46498f1c4c84cc87a5f209000321ba1e4a",
+  "coverage": "all original test_plans against both sources; explicit hash collision, case, families, timestamps, trial isolation, suffix/bypass, LRU/delete/replace, expiry; deterministic mutation traces"
+}

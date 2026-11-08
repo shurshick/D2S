@@ -1,0 +1,65 @@
+diff --git a/datapath/plans.c b/datapath/plans.c
+index 5f3b532..4b50369 100644
+--- a/datapath/plans.c
++++ b/datapath/plans.c
+@@ -14,6 +14,9 @@ typedef struct {
+     uint8_t  name_len;
+     uint8_t  name[D2S_TARGET_NAME_MAX];
+     uint8_t addr[16];
++    /* Cheap rejection only. Equality still checks every case-folded byte.
++       Fits existing alignment padding before last_used_ns on target ABIs. */
++    uint32_t name_hash;
+     /* Давность последнего обращения — единственное, что нужно вытеснению по
+        LRU. Не индекс и не список: список давности стоил бы указателей на
+        каждую запись ради таблицы, которую и так обходят целиком раз на
+@@ -166,6 +169,16 @@ static int name_eq(const uint8_t *a, size_t alen, const uint8_t *b, size_t blen)
+     return 1;
+ }
+ 
++/* ASCII folding matches name_eq exactly; no allocation or domain normalization. */
++static uint32_t name_hash(const uint8_t *name,size_t len) {
++    uint32_t h=2166136261u;
++    for(size_t i=0;i<len;i++) {
++        uint8_t c=name[i];if(c>='A' && c<='Z')c=(uint8_t)(c-'A'+'a');
++        h=(h^c)*16777619u;
++    }
++    return h;
++}
++
+ static uint8_t shape_transport(uint8_t shape) {
+     if (shape == D2S_PLAN_SHAPE_QUIC) return 17;
+     if (shape == D2S_PLAN_SHAPE_MODERN || shape == D2S_PLAN_SHAPE_LEGACY ||
+@@ -471,13 +484,23 @@ static uint8_t modern_shape_for_ech(uint8_t shape) {
+ static void scan_name(d2s_plantab *t, const uint8_t *name, size_t len,
+                       uint8_t seen_shape, uint8_t family, name_hits *h) {
+     memset(h, 0, sizeof *h);
++    uint32_t hash=0;int hashed=0,compared=0;
+     for (size_t i = 0; i < t->used; i++) {
+         entry *e = &t->v[i];
+         if (e->kind != KEY_NAME || e->family != family || e->only_sport != 0 ||
+-            !name_eq(e->name, e->name_len, name, len)) continue;
++            e->shape == D2S_PLAN_SHAPE_HTTP || e->name_len != len) continue;
++        /* A sparse family/length bucket should pay no query-hash cost.
++           A verified equal name already supplies the query's folded hash. */
++        if (!hashed && !compared) {
++            compared=1;
++            if (!name_eq(e->name,e->name_len,name,len)) continue;
++            hash=e->name_hash;hashed=1;
++        } else {
++            if (!hashed) { hash=name_hash(name,len);hashed=1; }
++            if (e->name_hash!=hash || !name_eq(e->name,e->name_len,name,len)) continue;
++        }
+         /* Запись HTTP — не знание о TLS этого имени: «имя знаем, формы нет»
+            из-за неё заслонило бы приветствию адресный план. */
+-        if (e->shape == D2S_PLAN_SHAPE_HTTP) continue;
+         if (!h->any) h->any = e;
+         if (!h->shaped && e->shape == seen_shape) h->shaped = e;
+         if (!h->modern && e->shape == modern_shape_for_ech(seen_shape)) h->modern = e;
+@@ -654,6 +677,7 @@ int d2s_plantab_set_name_family(d2s_plantab *t, const uint8_t *name, size_t len,
+         e->family = family;
+         e->name_len = (uint8_t)len;
+         memcpy(e->name, name, len);
++        e->name_hash=name_hash(name,len);
+         e->shape = shape;
+         e->only_sport = sport_be;
+     }

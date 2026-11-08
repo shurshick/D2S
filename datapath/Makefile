@@ -542,4 +542,12 @@ test-ctlprobe: test_ctlprobe
 check: all test-hold test-udp-hold test-udp-release test-udp-path test-routemark test-capture test-parse test-apply test-tls test-wire test-wire-udp test-track test-session test-nat test-nl test-sched test-journal test-plans test-ctl test-stun-session test-quic-session test-ctlprobe
 
 clean:
-	rm -f *.o $(TESTS) test_ctlprobe test_raw_cap test_nfq_rcvbuf test_nfq_rcvbuf_unit planlab ctlprobe d2sd
+	rm -f *.o $(TESTS) test_plans_differential test_ctlprobe test_raw_cap test_nfq_rcvbuf test_nfq_rcvbuf_unit planlab ctlprobe d2sd
+
+# Only test code includes plans.c: assertions exercise cache collisions/lifecycle.
+.PHONY: test-plan-lookup
+check: test-plan-lookup
+test-plan-lookup: test_plans_differential
+	./test_plans_differential > /dev/null
+test_plans_differential: test_plans_differential.c plans.c plan_internal.h plan_parse.o plan_apply.o $(COREOBJ) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< plan_parse.o plan_apply.o $(COREOBJ) $(LDFLAGS)
