@@ -118,6 +118,26 @@ static void rebuild(d2s_group_state *s) {
         if(best[0]) add_group(s,best,o,best_count,best_at);
     }
 }
+/* Only disposable evidence may leave the bounded journal. A failed plan,
+ * a directly clear member, and admitted exceptions are never victims.
+ * Prefer unknown noise, then the oldest plain positive vote. Rebuilding
+ * after eviction may withdraw an area; it cannot invent a quorum. */
+static size_t positive_slot(const d2s_group_state *s) {
+    size_t victim=D2S_GROUP_OBSERVATION_MAX;
+    for(unsigned pass=D2S_GROUP_INCONCLUSIVE;pass;
+        pass=pass==D2S_GROUP_INCONCLUSIVE?D2S_GROUP_BLOCKED_CONFIRMED:0) {
+        for(size_t i=0;i<s->n_observations;i++)
+            if(s->observations[i].evidence==pass &&
+               (victim==D2S_GROUP_OBSERVATION_MAX ||
+                s->observations[i].at<s->observations[victim].at)) victim=i;
+        if(victim!=D2S_GROUP_OBSERVATION_MAX)break;
+    }
+    return victim;
+}
+static void refresh_admission(d2s_group_state *s) {
+    if(s->n_groups<D2S_GROUP_MAX && (s->n_observations<D2S_GROUP_OBSERVATION_MAX ||
+        positive_slot(s)!=D2S_GROUP_OBSERVATION_MAX)) s->frozen=0;
+}
 /* Group covering a normalized name, ignoring per-member exclusions. */
 static const d2s_domain_group *cover(const d2s_group_state *s,const char *norm,
                                      const d2s_group_key *key) {
@@ -153,10 +173,23 @@ int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
     if(slot==s->n_observations && any<s->n_observations) slot=any;
     if(slot==s->n_observations && replace<s->n_observations) slot=replace;
     if(slot==s->n_observations) {
-        if(s->frozen || slot==D2S_GROUP_OBSERVATION_MAX) {
-            int changed=!s->frozen; s->frozen=1;
-            if(o->evidence!=D2S_GROUP_DIRECT_CLEAR && o->evidence!=D2S_GROUP_PLAN_FAILED)
-                return changed;
+        if(o->evidence==D2S_GROUP_BLOCKED_CONFIRMED) {
+            if(slot==D2S_GROUP_OBSERVATION_MAX) {
+                slot=positive_slot(s);
+                if(slot==D2S_GROUP_OBSERVATION_MAX) {
+                    int changed=!s->frozen;s->frozen=1;return changed;
+                }
+            } else s->n_observations++;
+            s->observations[slot]=*o;strcpy(s->observations[slot].name,name);
+            /* This was an automatic capacity stop, not a user pause.
+               Do not clear disabled: a lost exclusion stays fail-closed. */
+            s->frozen=0;
+        } else if(s->disabled || s->frozen || slot==D2S_GROUP_OBSERVATION_MAX) {
+            int was_frozen=s->frozen;int changed=!was_frozen;s->frozen=1;
+            if(o->evidence!=D2S_GROUP_DIRECT_CLEAR && o->evidence!=D2S_GROUP_PLAN_FAILED) {
+                refresh_admission(s);
+                return was_frozen!=s->frozen;
+            }
             /* A bounded budget must never discard a new exclusion while
              * retaining a broad rule. Exact confirmed catalog bindings are
              * independent and untouched; negative evidence is never evicted.
@@ -241,6 +274,7 @@ int d2s_group_learn(d2s_group_state *s,const d2s_group_observation *o) {
             } else i++;
         }
     if(o->evidence!=D2S_GROUP_INCONCLUSIVE) rebuild(s);
+    refresh_admission(s);
     return 1;
 }
 int d2s_group_restore(d2s_group_state *s) {
@@ -269,7 +303,7 @@ int d2s_group_restore(d2s_group_state *s) {
                (!strcmp(s->observations[j].plan_id,o->plan_id) ||
                 !((s->observations[j].evidence|o->evidence)&D2S_GROUP_PLAN_FAILED))) return -1;
     }
-    rebuild(s); return 0;
+    rebuild(s); refresh_admission(s);return 0;
 }
 const d2s_domain_group *d2s_group_match(const d2s_group_state *s,
                                      const char *name,const d2s_group_key *key) {

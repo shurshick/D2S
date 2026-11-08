@@ -260,8 +260,8 @@
     "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
   },
   "core/groups.c": {
-    "sha256": "9e496eaab56b469c38ed0f008d3f028f953addf3e6c4cc5f242504f9ea189c6c",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "69138353878aafebec79e89964830b951bbf518ff25657839ae7ec6ccaba18a5",
+    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
   },
   "core/include/d2s_compose_internal.h": {
     "sha256": "b8fffc2f4fb82794a00aefe9d769e98652c1d9e4fb1caeaab53643b971cd0db8",
@@ -276,8 +276,8 @@
     "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "core/test_groups.c": {
-    "sha256": "a898ceb4844a24ef0e10779ed9c1e05fea5e70c1baf543088e05a6bf50c1839c",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "5e1df5017934fc715872b8f90f6fb50939b2dc7ebd608d9cc06064a560fc79fe",
+    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
   },
   "datapath/include/d2s_ctl.h": {
     "sha256": "b7814e5fb266052257a51fe993cbf8195fc5a357663a5bcfea611f2c2f50fd2e",
@@ -306,5 +306,9 @@
   "core/d2sfetch.c": {
     "sha256": "4e9d7f1fa06238f88ee9ec58231572228bea64d6db3b63848a2210a4468cb82e",
     "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
+  },
+  "core/test_groups_catalog.c": {
+    "sha256": "1c41651fe9e832e806e292ebcaa03f9b7b72f2ae3678fab5434f8049f7b0fe6f",
+    "reason": "docs/learning-journal-recovery.md#reviewed-engine-changes"
   }
 }

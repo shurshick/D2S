@@ -1,5 +1,32 @@
 # D2S — текущее состояние
 
+## 08.11.2026: исправлена автоматическая заморозка обучения
+
+- База чистая 30ca7d9. Только core/groups.c и регрессии, без изменения Wire22,
+  точных планов, правил подтверждения, сетевых служб и Telegram/WhatsApp.
+- На основном журнал256: 227 защищённых отрицательных/смешанных,29positive,
+  frozen=true, disabled=false, семейств0. Новые positive отбрасывались навсегда.
+- Новый positive заменяет старейший unknown, иначе старейший plain positive.
+  Отрицания/исключения не вытесняются; bounded RAM прежняя. Загрузка снимает
+  устаревший capacity freeze; disabled и полностью защищённое насыщение
+  остаются fail-closed. Подробности: docs/learning-journal-recovery.md.
+- RED старый код; GREEN core/datapath/detect check, ASan/UBSan, 600 новых
+  подтверждений +2400 смешанных событий, прежние2000цепочек, каталог save/load.
+  ARM64/ARM/amd64/MIPS/MIPSel: controller link+self-check+группы/каталог PASS.
+- На приватной копии настоящего каталога: до admitted0/frozen1, после
+  admitted1/frozen0; все227protected byte-exact, cap256. В живой каталог
+  искусственные события не добавлялись.
+- На основном192.168.1.1 установлен только d2sc, backup
+  /opt/d2s/learning-backup-20261108 (копия также приватно на ПК), штатный
+  engine-restart; оба peer connected/ready/external1/1/1, Wire22/release0.5.1.
+  SHA256 d2sc 47f3a7f57f6195bd8db1c74281079a19ddff870e0a19ffa46c4502ab9b24b84f.
+  WhatsApp d2sd и config byte-exact; панель/TG не перезапущены.
+- Живой каталог уже сохранил frozen=false и два новых positive; все227защищённых
+  byte-exact, все61plan_id сохранены. docs/field/2026-11-08-learning-recovery.json.
+  Повторная проверка YouTube отдельна:
+  разблокировка обучения не доказывает устранение всех задержек. Публичного
+  выпуска, тега и push не было.
+
 ## Завершено 08.11.2026: WhatsApp ECH/Timestamp, локальный hotfix основного
 
 - Причина/исходник: 4c1d7c9, docs/whatsapp-ech-timestamp.md. Три fallback в

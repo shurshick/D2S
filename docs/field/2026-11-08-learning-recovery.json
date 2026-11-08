@@ -1,0 +1,15 @@
+{
+  "observations_before": 256,
+  "observations_after": 256,
+  "frozen_before": true,
+  "frozen_after": false,
+  "disabled_after": false,
+  "protected_before": 227,
+  "protected_byte_exact_retained": 227,
+  "plan_ids_before": 61,
+  "plan_ids_retained": 61,
+  "new_observations": 2,
+  "new_positive": 2,
+  "groups_after": 0,
+  "controller_sha256": "47f3a7f57f6195bd8db1c74281079a19ddff870e0a19ffa46c4502ab9b24b84f"
+}

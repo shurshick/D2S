@@ -207,7 +207,7 @@ int main(void) {
         observe(s,name,"plan-z",8,modern);
     }
     observe(s,"overflow.example.net","plan-z",1,modern);
-    CHECK(s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
+    CHECK(!s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
     CHECK(d2s_group_match(s,"rr-new.googlevideo.com",&modern));
     CHECK(!d2s_group_match(s,"unknown.fill.example.net",&modern));
     observe(s,"overflow-clean.googlevideo.com","",2,modern);
@@ -360,7 +360,7 @@ int main(void) {
         CHECK(d2s_group_restore(s)==0 && d2s_group_match(s,"new.fam.example.com",&modern));
     }
     /* Aging on a frozen, NOT disabled journal reclaims exactly one slot,
-       the oldest expired plain vote; the journal stays full and frozen. */
+       the oldest expired plain vote; positives can still reuse its remaining slots. */
     {
         const int64_t T=100*86400;
         full_plain(s,T-40*86400);
@@ -368,7 +368,7 @@ int main(void) {
         s->observations[0].at=T;          /* fresh, first by index */
         CHECK(d2s_group_restore(s)==0);
         CHECK(clean_at(s,"neg.example.org",T)>0);
-        CHECK(!s->disabled && s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
+        CHECK(!s->disabled && !s->frozen && s->n_observations==D2S_GROUP_OBSERVATION_MAX);
         CHECK(present(s,"neg.example.org") && !present(s,"p7.fill7.example.net"));
         CHECK(present(s,"p0.fill0.example.net") && present(s,"p1.fill1.example.net"));
         unsigned plain=0;
@@ -427,6 +427,67 @@ int main(void) {
               present(s,"v2.fam.example.com"));
         CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX);
     }
+    /* A real full journal (223 clear, 4 failures, 29 plain votes) must
+       continue admitting fresh positive evidence without losing exclusions. */
+    memset(s,0,sizeof *s);
+    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
+        d2s_group_observation *v=&s->observations[i];
+        snprintf(v->name,sizeof v->name,"h%zu.old.example.net",i);
+        v->key=modern;v->at=10;
+        v->evidence=i<223?D2S_GROUP_DIRECT_CLEAR:i<226?D2S_GROUP_PLAN_FAILED:
+                    i==226?(D2S_GROUP_BLOCKED_CONFIRMED|D2S_GROUP_PLAN_FAILED):D2S_GROUP_BLOCKED_CONFIRMED;
+        if(v->evidence!=D2S_GROUP_DIRECT_CLEAR)strcpy(v->plan_id,"old-plan");
+    }
+    s->n_observations=D2S_GROUP_OBSERVATION_MAX;s->frozen=1;
+    CHECK(d2s_group_restore(s)==0);
+    CHECK(!s->frozen); /* stale capacity flag recovers on catalog reload */
+    d2s_group_observation protected[227];
+    memcpy(protected,s->observations,sizeof protected);
+    for(int i=0;i<600;i++) {
+        d2s_group_observation fresh={0};
+        snprintf(fresh.name,sizeof fresh.name,"cdn%d.video.example.org",i);
+        strcpy(fresh.plan_id,"new-plan");fresh.key=modern;
+        fresh.at=100+i;fresh.evidence=D2S_GROUP_BLOCKED_CONFIRMED;
+        CHECK(d2s_group_learn(s,&fresh)>0);
+        CHECK(present(s,fresh.name));
+        CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX && !s->frozen);
+    }
+    CHECK(d2s_group_match(s,"next.video.example.org",&modern));
+    CHECK(!memcmp(protected,s->observations,sizeof protected));
+    CHECK(d2s_group_restore(s)==0);
+    observe(s,"unknown.noise.example.com","",D2S_GROUP_INCONCLUSIVE,modern);
+    CHECK(!s->frozen); /* a discarded unknown must not freeze positives */
+    CHECK(!memcmp(protected,s->observations,sizeof protected));
+    /* Mixed events at saturation: rotations must not corrupt restore or
+       unrelated exclusions, even if new failures consume all remaining slots. */
+    unsigned random_state=0x71a5u;
+    for(unsigned i=0;i<2400;i++) {
+        random_state=random_state*1664525u+1013904223u;
+        d2s_group_observation event={0};
+        snprintf(event.name,sizeof event.name,"r%u.saturation.example.com",(random_state>>8)%80);
+        event.key=modern;event.key.family=(random_state&1)?4:6;
+        event.key.shape=(random_state&2)?D2S_TCP_SHAPE_MODERN_TS:D2S_TCP_SHAPE_MODERN_NO_TS;
+        static const unsigned evidence[]={1,2,4,8};event.evidence=evidence[(random_state>>3)%4];
+        if(event.evidence==1 || event.evidence==4)strcpy(event.plan_id,(random_state&4)?"P":"Q");
+        event.at=1000+i;
+        CHECK(d2s_group_learn(s,&event)>=0);
+        CHECK(s->n_observations<=D2S_GROUP_OBSERVATION_MAX);
+        CHECK(!memcmp(protected,s->observations,sizeof protected));
+        if(i%50==0)CHECK(d2s_group_restore(s)==0);
+    }
+    CHECK(d2s_group_restore(s)==0);
+    /* No recyclable slot: all exclusions remain intact and admission fails closed. */
+    memset(s,0,sizeof *s);
+    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
+        d2s_group_observation *v=&s->observations[i];
+        snprintf(v->name,sizeof v->name,"clean%zu.example.net",i);
+        v->key=modern;v->at=1;v->evidence=D2S_GROUP_DIRECT_CLEAR;
+    }
+    s->n_observations=D2S_GROUP_OBSERVATION_MAX;
+    observe(s,"new.video.example.org","new-plan",D2S_GROUP_BLOCKED_CONFIRMED,modern);
+    CHECK(s->frozen && !present(s,"new.video.example.org"));
+    CHECK(s->n_observations==D2S_GROUP_OBSERVATION_MAX && s->n_groups==0);
+    for(size_t i=0;i<s->n_observations;i++)CHECK(s->observations[i].evidence==D2S_GROUP_DIRECT_CLEAR);
     /* (c) property: random learn chains always pass restore. */
     srand(7);
     for(int round=0;round<2000;round++) {

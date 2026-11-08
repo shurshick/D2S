@@ -57,7 +57,7 @@ int main(void) {
     d2s_catalog_free(&b);
     a.groups->frozen=1;
     CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
-    CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0 && b.groups && b.groups->frozen);
+    CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0 && b.groups && !b.groups->frozen);
     CHECK(b.groups && d2s_group_match(b.groups,"never-seen.googlevideo.com",&key));
     d2s_catalog_free(&b);
     /* §3.7: a third degraded voter makes them the majority → retired,
@@ -89,6 +89,36 @@ int main(void) {
     CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
     CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
     CHECK(b.groups && !d2s_group_match(b.groups,"new.googlevideo.com",&key));
+    d2s_catalog_free(&b);
+    /* A saved capacity stop is recoverable without wiping exact plans or
+       any exclusions; new evidence stays learnable across another reload. */
+    a.boxes[0].plans[0].enabled=1;
+    memset(a.groups,0,sizeof *a.groups);
+    a.groups->frozen=1;a.groups->n_observations=D2S_GROUP_OBSERVATION_MAX;
+    for(size_t i=0;i<D2S_GROUP_OBSERVATION_MAX;i++) {
+        d2s_group_observation *v=&a.groups->observations[i];
+        snprintf(v->name,sizeof v->name,"old%zu.example.net",i);
+        v->key=key;v->at=1;
+        v->evidence=i<227?D2S_GROUP_DIRECT_CLEAR:D2S_GROUP_BLOCKED_CONFIRMED;
+        if(i>=227)strcpy(v->plan_id,"plan-test");
+    }
+    CHECK(d2s_catalog_save(&a,path,err,sizeof err)==0);
+    CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
+    CHECK(b.groups && !b.groups->frozen && b.groups->n_observations==D2S_GROUP_OBSERVATION_MAX);
+    for(int i=0;i<3;i++) {
+        d2s_group_observation fresh={0};
+        snprintf(fresh.name,sizeof fresh.name,"cdn%d.video.example.org",i);
+        strcpy(fresh.plan_id,"plan-test");fresh.key=key;fresh.at=200+i;
+        fresh.evidence=D2S_GROUP_BLOCKED_CONFIRMED;
+        CHECK(d2s_group_learn(b.groups,&fresh)>0);
+    }
+    CHECK(d2s_group_match(b.groups,"next.video.example.org",&key));
+    CHECK(d2s_catalog_save(&b,path,err,sizeof err)==0);
+    d2s_catalog_free(&b);
+    CHECK(d2s_catalog_load(path,&b,err,sizeof err)==0);
+    CHECK(b.groups && !b.groups->frozen && d2s_group_match(b.groups,"next.video.example.org",&key));
+    CHECK(b.n_boxes==1 && b.boxes[0].n_plans==1 && b.boxes[0].plans[0].enabled);
+    if(b.groups)for(size_t i=0;i<227;i++)CHECK(b.groups->observations[i].evidence==D2S_GROUP_DIRECT_CLEAR);
     d2s_catalog_free(&a); d2s_catalog_free(&b);
     FILE *f=fopen(path,"w"); CHECK(f!=NULL);
     if(f) { fputs("{\"boxes\":[],\"domain_observations\":[{\"name\":\"a.example.com\",\"evidence\":255}]}",f); fclose(f); }
