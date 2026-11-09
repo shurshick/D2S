@@ -49,11 +49,14 @@ const live = spawnSync('/bin/sh', ['-c', 'sleep 300 >/dev/null 2>&1 & echo $!'],
 const dead = '999999';
 
 // Выпуск: архив с «установщиком», который заменяет файлы и пишет pid-файлы.
-function release(id, { installOk = true, pid = live } = {}) {
+function release(id, { installOk = true, pid = live, catalogUpgrade = false } = {}) {
   const src = path.join(tmp, 'src-' + id);
   fs.mkdirSync(path.join(src, 'scripts'), { recursive: true });
   fs.writeFileSync(path.join(src, 'scripts/install.sh'), `#!/bin/sh
-printf '%s\\n' "$0" > "${tmp}/installer-path"
+${catalogUpgrade ? `D2S_UPDATING=1 sh "${updater}" snapshot || exit 1
+touch "${tmp}/snapshot-reached"
+printf 'new catalog schema' > "${dir}/state/catalog.json"
+` : ''}printf '%s\\n' "$0" > "${tmp}/installer-path"
 printf '%s\\n' "$D2S_RELEASE_ID" > "${dir}/release-id"
 printf 'binary ${id}\\n' > "${sbin}/d2sd"
 printf 'resolver ${id}\\n' > "${sbin}/d2s-resolver"
@@ -132,6 +135,26 @@ try {
   assert.deepEqual(read(initLog).trim().split('\n'), ['stop', 'start']);
   assert(!fs.existsSync(path.join(dir, '.update/previous.tar')));
 
+  // Old updater archive omits state; the new installer upgrades its snapshot.
+  {
+    const catalogPath = path.join(dir, 'state/catalog.json');
+    fs.writeFileSync(catalogPath, 'old catalog with all exceptions\n');
+    const legacyUpdater = path.join(tmp, 'legacy-updater.sh');
+    fs.writeFileSync(legacyUpdater, read(updater).replace('"$DIR/state/catalog.json" ', ''));
+    for (const [id, options] of [['schema-failure-installer', {installOk:false}], ['schema-failure-health', {pid:dead}]]) {
+      fs.rmSync(path.join(tmp, 'snapshot-reached'), {force:true});
+      release(id, {...options, catalogUpgrade:true});
+      assert.notEqual(spawnSync('/bin/sh', [legacyUpdater, 'install'], {env, encoding:'utf8'}).status, 0);
+      assert(fs.existsSync(path.join(tmp, 'snapshot-reached')), 'new installer snapshot hook did not run');
+      assert.equal(read(catalogPath), 'old catalog with all exceptions\n', 'old updater rollback lost the pre-upgrade catalog');
+      assert.equal(read(path.join(sbin, 'd2sd')), 'binary r2\n');
+    }
+    assert.notEqual(run('snapshot').status, 0, 'snapshot outside a transaction must fail');
+    const installerSource = read(path.join(__dirname, 'install.sh'));
+    const hook = installerSource.indexOf('sh "$TMP/d2s-update.sh" snapshot');
+    assert(hook > installerSource.indexOf('"$INIT" stop'));
+    assert(hook < installerSource.indexOf('install_atomic "$TMP/d2spanel"'));
+  }
   // Служба умерла после установки — тоже возврат.
   release('r4', { pid: dead });
   assert.notEqual(run('install').status, 0);

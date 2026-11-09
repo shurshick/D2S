@@ -135,13 +135,26 @@ do_check() {
     return 1
 }
 
-# Файлы, которые меняет установщик. Состояние, журнал и каталог знаний — нет.
+# Runtime and the catalog form one rollback unit when its format changes.
 installed_paths() {
     for p in "$RESOLVER_INIT" "$OBSERVER_INIT" "$SBIN/d2s-resolver" "$SBIN/d2s-dns-watch" "$SBIN/d2sfetch" "$SBIN/d2sd" "$SBIN/d2sc" "$SBIN/d2spanel" "$SBIN/d2stg" "$INIT" "$NDM_HOOK" \
-             "$DIR/config" "$DIR/release-id" "$DIR/release-arch" "$DIR/panel" "$DIR/files"; do
+             "$DIR/state/catalog.json" "$DIR/config" "$DIR/release-id" "$DIR/release-arch" "$DIR/panel" "$DIR/files"; do
         [ ! -e "$ROOT$p" ] || printf '%s\n' "${p#/}"
     done
     for p in "$ROOT$DIR"/*.sh; do [ ! -f "$p" ] || printf '%s\n' "${p#"$ROOT"/}"; done
+}
+
+snapshot() {
+    # Called by the NEW signed installer after stopping/flushing the old
+    # controller, before replacing files. Also upgrades an OLD updater's tar.
+    [ "${D2S_UPDATING:-}" = 1 ] && [ -s "$WORK/previous.tar" ] &&
+        [ -d "$WORK/lock" ] || return 1
+    umask 077
+    # shellcheck disable=SC2046
+    tar -cf "$WORK/previous.tar.new" -C "${ROOT:-/}" $(installed_paths) || {
+        rm -f "$WORK/previous.tar.new"; return 1;
+    }
+    mv -f "$WORK/previous.tar.new" "$WORK/previous.tar"
 }
 
 healthy() {
@@ -280,6 +293,7 @@ set_auto() {
 }
 
 case "${1:-}" in
+    snapshot) snapshot ;;
     check) do_check ;;
     install) do_install "${2:-}" ;;
     run) run ;;

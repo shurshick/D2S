@@ -11,7 +11,12 @@
   "telegram_pid_unchanged": true,
   "config_byte_exact": true,
   "source_commit": "6c1df0dbdd83b5c3d11e4f660a81668ca34d51b1",
-  "application_validation": "pending",
+  "application_validation": {
+    "confirmed_by_user": true,
+    "youtube_seek": true,
+    "telegram_file_send": true,
+    "whatsapp_file_send": true
+  },
   "live_after": {
     "positive": 1,
     "negative": 256,

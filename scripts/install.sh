@@ -640,6 +640,12 @@ if [ -x "$INIT" ]; then
     "$INIT" stop || say "прежняя версия остановилась с ошибкой — продолжаю"
 fi
 
+# Refresh an updater transaction with the flushed catalog, using the NEW
+# updater from this verified package. Older updaters did not back up state.
+if [ "${D2S_UPDATING:-}" = 1 ]; then
+    sh "$TMP/d2s-update.sh" snapshot || die "не сохранить каталог для отката — файлы не заменены"
+fi
+
 # --- атомарная замена ----------------------------------------------------
 #
 # Переименование в пределах одной ФС атомарно. Копирование поверх работающего
