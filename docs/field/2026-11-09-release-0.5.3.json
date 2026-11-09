@@ -1,0 +1,26 @@
+{
+  "release": "d2s-v0.5.3",
+  "source_commit": "e36cdf53c803acc74e5d68fea16f5a0b53cc7f91",
+  "ci_run": 42660265942,
+  "release_run": 42664559147,
+  "stable_latest": true,
+  "signature_verified": true,
+  "package_checks_passed": true,
+  "runtime_release_ids_checked": true,
+  "installer_rollback_hooks_match_source": true,
+  "assets": {
+    "arm64": {
+      "sha256": "4bebcf0d2b66d20c53399c0b47293129afc2d260717bedf645e8bd82463bd4f0"
+    },
+    "arm": {
+      "sha256": "0ed82f232039a6e399d8269071e2b6a40feb26f04b694646e710d7b210073613"
+    },
+    "mipsel": {
+      "sha256": "92014e84106c7f68f61f56128bbd7992b87f2f6cc653ea8937a934e4eb90ca23"
+    },
+    "amd64": {
+      "sha256": "6c0a952d76acbae3b2be1822113eb3c3f444f21945388af15fb75cc75ac625e5"
+    }
+  },
+  "main_router_actions": "none"
+}
