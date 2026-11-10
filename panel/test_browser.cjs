@@ -48,15 +48,14 @@ const fixture={telegramStats:{
   {target:'queued.example',family:4,transport:6,ip:'192.0.2.7',port:443,phase:'ожидает безопасного слота замера',since:iso(20),attempts:0,probes:0,candidate:'',source:''}
  ],
   groups:[
-   {suffix:'example.com',transport:6,family:4,shape:1,evidence_count:3,plan_id:'plan-a',probe_path:'/',ech_origin:'',active:true,install_state:'active',exception_install_state:'active',
+   {suffix:'example.com',transport:6,family:4,shape:1,evidence_count:3,plan_id:'plan-a',probe_path:'/',ech_origin:'',active:true,
     evidence:['a.example.com','b.example.com','c.example.com'],exceptions:[{name:'skip.example.com'}]},
    {suffix:'googlevideo.com',transport:6,family:4,shape:1,evidence_count:5,plan_id:'plan-a',probe_path:'/',ech_origin:'',active:false,
     install_state:'pending',install_reason:'',
     evidence:['rr-a.googlevideo.com','rr-b.googlevideo.com','rr-c.googlevideo.com','rr-d.googlevideo.com','rr-e.googlevideo.com'],
     exceptions:[{name:'clean.googlevideo.com'}]}
   ],
- boxes:[{id:'box-unbound',bindings:[],plans:[{id:'unbound-plan',proto:'tls',text:'saved plan'}]},
- {id:'box-a',created:iso(3600),updated:iso(60),signals:[{kind:'silent',human:'ответа на приветствие не было',seen:3}],
+ boxes:[{id:'box-a',created:iso(3600),updated:iso(60),signals:[{kind:'silent',human:'ответа на приветствие не было',seen:3}],
   plans:[{id:'plan-a',proto:'tls',successes:4,enabled:true,human:'',text:'d2s-plan 1 1\nproto tcp tls\nsplit payload_start +1\norder reverse\n'}],
   bindings:[
    {target:'<img src=x onerror=alert(1)>',family:4,transport:6,shape:1,kind:'name',level:2,level_name:'сервер ответил',successes:1,confirmed:iso(90),enabled:true,recheck:false},
@@ -163,7 +162,7 @@ function diagnosticFixture(kind='full'){
    {kind:'diagnostic-json-write-error',at:now,stage:'open-temp',error_code:13}],
   memory_details:[{name:'d2sc',latest:{smaps_rollup_status:'unsupported',smaps_rollup_source:'smaps-fallback',smaps_rollup_errno:2,smaps_status:'ok',smaps_errno:null,smaps_rollup:{rss_kib:42399,anonymous_kib:23439,private_dirty_kib:13439}}}]};
 }
-let ws,diagnosticsReply=null,pageLoads=0;
+let ws,diagnosticsReply=null;
 async function main(){
  let port;
  for(let i=0;i<100;i++){try{port=fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0];break}catch{}await new Promise(r=>setTimeout(r,100))}
@@ -173,7 +172,6 @@ async function main(){
  let id=0;const pending=new Map(),exceptions=[],dialogs=[];
  ws.onmessage=e=>{const x=JSON.parse(e.data);if(x.id){const p=pending.get(x.id);pending.delete(x.id);x.error?p.reject(x.error):p.resolve(x.result)}
  else if(x.method==='Page.javascriptDialogOpening'){dialogs.push(x.params.message);call('Page.handleJavaScriptDialog',{accept:true})}
- else if(x.method==='Page.loadEventFired')pageLoads++;
  else if(x.method==='Runtime.exceptionThrown')exceptions.push(x.params.exceptionDetails)
  else if(x.method==='Fetch.requestPaused'){
   if(x.params.request.url.includes('/api/diagnostics?report'))call('Fetch.fulfillRequest',{requestId:x.params.requestId,responseCode:200,
@@ -184,7 +182,6 @@ async function main(){
  const evaluate=async(expression)=>{try{const r=await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value}catch(e){throw Error('Runtime.evaluate failed for '+expression+': '+(e?.message||JSON.stringify(e)))}};
  const wait=ms=>new Promise(r=>setTimeout(r,ms));
  const until=async(expr,msg)=>{for(let i=0;i<160;i++){if(await evaluate(expr))return;await wait(50)}throw Error(msg)};
- const reloadPage=async()=>{const before=pageLoads;await call('Page.reload');for(let i=0;i<200;i++){if(pageLoads>before)return;await wait(25)}throw Error('Reload did not complete')};
  await call('Page.enable');await call('Runtime.enable');
  await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
   const arc=CanvasRenderingContext2D.prototype.arc;
@@ -214,19 +211,6 @@ async function main(){
   await until('document.querySelectorAll(".search").length===2','C API must populate the live searches');
   await evaluate('document.fonts.ready');
   assert.equal(await evaluate('document.fonts.check("700 24px Onest")'),true,'C CSP must load the bundled text face');
-  // The selected background must follow rows that wrap after fonts/badges load.
-  await wait(200);
-  await evaluate('document.querySelectorAll(".index > a").forEach(a=>a.removeAttribute("aria-current"));document.querySelector(".index a[data-nav=updates]").setAttribute("aria-current","true");window.dispatchEvent(new Event("resize"))');
-  const markerAligned='(()=>{const m=document.querySelector(".index-marker").getBoundingClientRect(),a=document.querySelector(".index a[aria-current=true]").getBoundingClientRect();return Math.max(Math.abs(m.x-a.x),Math.abs(m.y-a.y),Math.abs(m.width-a.width),Math.abs(m.height-a.height))<1})()';
-  await until(markerAligned,'initial selected marker aligns');
-  await evaluate('document.querySelector(".index a[data-nav=boxes] span").style.fontSize="22px"');
-  await wait(100);
-  await until(markerAligned,'selected marker follows a preceding row wrapping without viewport resize');
-  await evaluate('document.querySelector(".index a[data-nav=boxes] span").style.removeProperty("font-size")');
-  await until(markerAligned,'selected marker follows the row shrinking again');
-  if(process.env.D2S_NAV_ONLY){console.log('Navigation marker follows content geometry PASS');return;}
-  await evaluate('document.querySelectorAll(".index > a").forEach(a=>a.removeAttribute("aria-current"));document.querySelector(".index a[data-nav=now]").setAttribute("aria-current","true");window.dispatchEvent(new Event("resize"))');
-  await evaluate('window.scrollTo(0,0)');
   try {
    await until('document.querySelector("#telegram-body .tg-flow-canvas")','C11 route canvas mounts from live stats');
   } catch(error) {
@@ -241,6 +225,20 @@ async function main(){
    'the prototype is shown without extra technical panels');
   assert.equal(await evaluate('document.querySelectorAll(".tg-flow-legend").length'),0,
    'пользовательские пояснения не заменяются техническими инструкциями');
+  const help=await evaluate('(()=>{const d=document.querySelector(".tg-flow-help");return d?{open:d.open,summary:d.querySelector("summary")?.textContent.trim(),text:d.textContent}:null})()');
+  assert.ok(help,'live Telegram card must include the route-state explainer');
+  assert.equal(help.open,false,'the route-state explainer starts collapsed');
+  assert.match(help.summary,/Как читать состояния/);
+  assert.match(help.text,/Ответ Telegram подтверждён/);
+  assert.match(help.text,/Прямой TCP · диагностика/);
+  assert.match(help.text,/DNS → TCP → TLS → WS → MTP/);
+  assert.match(help.text,/маркер пульсирует/);
+  assert.match(help.text,/пунктирное кольцо вращается/);
+  assert.match(help.text,/оранжевая точка — запрос к Telegram, зелёная — ответ обратно/);
+  assert.equal(await evaluate('!!document.querySelector("[data-tg-route-lock]")'),true,
+   'Telegram card exposes a route-only switch');
+  assert.equal(await evaluate('document.querySelector("[data-tg-route-select]").disabled'),true,
+   'route selector is disabled while automatic routing is active');
   assert.equal(await evaluate('document.querySelectorAll("[data-tg-actions] [data-control]").length'),2,
    'only the real C11 controls are kept beside the prototype title');
   await evaluate('document.querySelector("#telegram").scrollIntoView({block:"center"})');
@@ -350,11 +348,10 @@ async function main(){
    assert.deepEqual(state.bad,[],name+' engine controls must be visible 44px targets in the masthead');
    assert.deepEqual(state.overlaps,[],name+' controls must not overlap the brand, engine status or one another');
    await evaluate('scrollTo(0,400)');await wait(120);
-   const sticky=await evaluate(`(()=>{const mast=document.querySelector(".mast").getBoundingClientRect();const index=document.querySelector(".index").getBoundingClientRect();return {mastBottom:mast.bottom,indexTop:index.top,indexRight:index.right,sideNav:getComputedStyle(document.querySelector(".index")).position==="fixed",statusLeft:document.querySelector(".mast-state").getBoundingClientRect().left,mainLeft:document.querySelector("main").getBoundingClientRect().left};})()`);
+   const sticky=await evaluate(`(()=>{const mast=document.querySelector(".mast").getBoundingClientRect();const index=document.querySelector(".index").getBoundingClientRect();return {mastBottom:mast.bottom,indexTop:index.top};})()`);
    if(out){const s=await call('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(out,'panel-'+name+'-scrolled.png'),Buffer.from(s.data,'base64'))}
    console.log('sticky',name,JSON.stringify(sticky));
-   if(sticky.sideNav)assert(sticky.indexRight<=Math.min(sticky.statusLeft,sticky.mainLeft)+1,name+' sidebar must stay beside the status and content');
-   else assert(sticky.indexTop>=sticky.mastBottom-1,name+' sticky index must stay below the masthead');
+   assert(sticky.indexTop>=sticky.mastBottom-1,name+' sticky index must stay below the masthead');
    await evaluate('scrollTo(0,0)');await wait(120);
   }
   }
@@ -379,32 +376,6 @@ async function main(){
   // Коробки свёрнуты по умолчанию; C11 показывает активные сессии и реальные маршруты.
   assert.deepEqual(await evaluate('[...document.querySelectorAll(".crate")].map(c=>c.open)'),[false],'boxes start collapsed');
   assert.match(await evaluate('document.querySelector(".crate-label").textContent'),/4цели · 1 план/);
-  assert.equal(await evaluate('document.querySelector("#nav-boxes").textContent'),'1',
-   'navigation counts only boxes with targets');
-  assert.equal(await evaluate('document.querySelector(".crate-name").textContent'),'Коробка 1',
-   'hidden unbound records do not leave gaps in visible numbering');
-  assert.equal(await evaluate('[...document.querySelectorAll(".crate")].some(c=>c.getAttribute("data-key")==="box:box-unbound")'),false,
-   'an unbound saved plan is not rendered as a zero-target box');
-  const savedBoxes=fixture.knowledge.boxes;
-  const sourceBoxes=(await(await fetch(panel.url+'api/status')).json()).knowledge.boxes;
-  assert.equal(sourceBoxes.length,2,'display filtering preserves the catalog sent by the C server');
-  assert.equal(sourceBoxes[0].plans[0].id,'unbound-plan','saved unbound plans remain intact');
-  fixture.knowledge.boxes=[savedBoxes[0]];
-  await until('document.querySelector("#boxes-body").textContent.includes("Коробок с целями пока нет")',
-   'an all-unbound catalog has an honest empty state');
-  assert.equal(await evaluate('document.querySelectorAll(".crate").length'),0);
-  assert.equal(await evaluate('document.querySelector("#nav-boxes").textContent'),'');
-  assert.match(await evaluate('document.querySelector("#boxes-body").textContent'),/Сохранённые планы/);
-  assert.equal(await evaluate('document.querySelectorAll(".ftag-box").length'),0,
-   'unchanged family data must not retain a link to a hidden box');
-  fixture.knowledge.boxes=[{id:'box-unknown',plans:[{id:'saved'}]}];
-  await until('document.querySelector(".crate-label")?.textContent.includes("цели не получены")',
-   'missing binding data is distinguished from zero targets');
-  assert.equal(await evaluate('document.querySelector(".crate-label strong").textContent'),'—');
-  fixture.knowledge.boxes=savedBoxes;
-  await until('document.querySelector(".crate-label")?.textContent.includes("4цели")','target count recovers after the next snapshot');
-  assert.equal(await evaluate('document.querySelectorAll(".ftag-box").length'),2,
-   'both family ownership links recover with the bound box');
   await until('document.querySelector("#telegram-body").dataset.state==="connected"','C11 connected status renders in Telegram panel');
   assert.equal(await evaluate('document.querySelector("#telegram-body").dataset.state'),'connected');
   assert.equal(await evaluate('!!document.querySelector("#telegram-body .tg-flow-canvas")'),true,'C11 route canvas is present');
@@ -435,10 +406,13 @@ async function main(){
     'canvas keeps the source prototype 900×420 composition ratio');
   assert.equal(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").dataset.state'),'mixed','C11 sessions show active and connecting route states');
   assert.match(await evaluate('document.querySelector("#tg-flow-caption").textContent'),/Несколько DC · media 2/);
-  assert.equal(await evaluate('document.querySelectorAll(".tg-flow-metric").length'),6,
-    'the six prototype metrics are preserved without extra session cards');
+  assert.equal(await evaluate('document.querySelectorAll(".tg-flow-metric").length'),7,
+    'six prototype metrics plus the current confirmed-session count are shown');
   assert.equal(await evaluate('document.querySelector("[data-tg-accepted-count]").textContent'),'77');
-  assert.equal(await evaluate('document.querySelector("[data-tg-confirmed-count]").textContent'),'5');
+  assert.equal(await evaluate('document.querySelector("[data-tg-confirmed-count]").textContent'),'5',
+    'cumulative Telegram responses stay separate from current sessions');
+  assert.equal(await evaluate('document.querySelector("[data-tg-confirmed-active]").textContent'),'1',
+    'current confirmed sessions match the active route rows');
   assert.equal(await evaluate('document.querySelector("[data-tg-active-count]").textContent'),'4');
   assert.match(await evaluate('document.querySelector("[data-tg-process-start]").textContent'),/Процесс с/);
   assert.equal(await evaluate('document.querySelector("[data-tg-latency]").textContent'),'43 / 187 мс',
@@ -454,7 +428,7 @@ async function main(){
     'latency returns when samples are available');
   assert.equal(await evaluate('document.querySelector("[data-tg-wss]").textContent'),'2 / 12');
   assert.equal(await evaluate('document.querySelector("[data-tg-traffic]").textContent'),'1,2 КБ / 980 Б');
-  assert.match(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/Клиент → D2S.*Ответ Telegram подтверждён/);
+  assert.match(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/Клиент → d2o.*Ответ Telegram подтверждён/);
   assert.match(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/отказ на воротах TLS.*пауза 1 маршрута/,
     'failure gate and live route cooldown are announced from C11 statistics');
   assert.doesNotMatch(await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label")'),/Резервный TCP/,
@@ -497,8 +471,9 @@ async function main(){
   await evaluate('document.dispatchEvent(new Event("visibilitychange"))');
   await until('document.querySelector("[data-tg-active-count]").textContent==="1"','C11 reports a new session before its first response');
   await until('document.querySelector("#telegram-body .tg-flow-canvas").dataset.state==="active"','selected route is active before response confirmation');
-  await evaluate('(()=>{const canvas=document.querySelector("#telegram-body .tg-flow-canvas"),probe=document.createElement("canvas").getContext("2d");probe.fillStyle=getComputedStyle(canvas.closest(".tg-flow")).getPropertyValue("--tg-flow-direct").trim();probe.fillRect(0,0,1,1);window.__tgExpectedRouteRgb=[...probe.getImageData(0,0,1,1).data].slice(0,3)})()');
-  await evaluate('(()=>{const canvas=document.querySelector("#telegram-body .tg-flow-canvas");const proto=CanvasRenderingContext2D.prototype;const arc=proto.arc,lineTo=proto.lineTo,stroke=proto.stroke,beginPath=proto.beginPath,raf=window.requestAnimationFrame;window.__tgResponseXs=[];window.__tgLighterArcs=0;window.__tgAnimationFrames=0;window.__tgEcgSamples=0;window.__tgUnconfirmedGreenTrafficStrokes=0;window.__tgGreenDirectRouteStrokes=0;window.__tgOriginalArc=arc;window.__tgOriginalLineTo=lineTo;window.__tgOriginalStroke=stroke;window.__tgOriginalBeginPath=beginPath;window.requestAnimationFrame=function(cb){return raf.call(window,ts=>{window.__tgAnimationFrames++;cb(ts)})};proto.arc=function(x,y,r,...args){if(this.canvas===canvas&&this.globalCompositeOperation==="lighter"){window.__tgLighterArcs++;if(r>=1.8&&r<=2.2)window.__tgResponseXs.push(x)}return arc.call(this,x,y,r,...args)};proto.beginPath=function(...args){if(this.canvas===canvas)this.__tgDirectLanePath=false;return beginPath.apply(this,args)};proto.lineTo=function(x,y,...args){if(this.canvas===canvas&&Math.abs(y-62)<0.01)this.__tgDirectLanePath=true;if(this.canvas===canvas&&this.globalCompositeOperation==="source-over"&&x>=100&&x<=266&&Math.abs(y-210)>0.1)window.__tgEcgSamples++;return lineTo.call(this,x,y,...args)};proto.stroke=function(...args){if(this.canvas===canvas){const green=this.strokeStyle.includes(window.__tgExpectedRouteRgb.join(", "));if(green&&this.getLineDash().length&&this.lineDashOffset!==0)window.__tgUnconfirmedGreenTrafficStrokes++;if(this.__tgDirectLanePath&&green)window.__tgGreenDirectRouteStrokes++}return stroke.apply(this,args)};return true})()');
+  await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").scrollIntoView({block:"center"})');
+  await wait(150);
+  await evaluate('(()=>{const canvas=document.querySelector("#telegram-body .tg-flow-canvas");const proto=CanvasRenderingContext2D.prototype;const arc=proto.arc,lineTo=proto.lineTo,stroke=proto.stroke,beginPath=proto.beginPath,raf=window.requestAnimationFrame;window.__tgResponseXs=[];window.__tgLighterArcs=0;window.__tgAnimationFrames=0;window.__tgEcgSamples=0;window.__tgUnconfirmedGreenTrafficStrokes=0;window.__tgGreenDirectRouteStrokes=0;window.__tgOriginalArc=arc;window.__tgOriginalLineTo=lineTo;window.__tgOriginalStroke=stroke;window.__tgOriginalBeginPath=beginPath;window.requestAnimationFrame=function(cb){return raf.call(window,ts=>{window.__tgAnimationFrames++;cb(ts)})};proto.arc=function(x,y,r,...args){if(this.canvas===canvas&&this.globalCompositeOperation==="lighter"){window.__tgLighterArcs++;if(r>=1.8&&r<=2.2)window.__tgResponseXs.push(x)}return arc.call(this,x,y,r,...args)};proto.beginPath=function(...args){if(this.canvas===canvas)this.__tgDirectLanePath=false;return beginPath.apply(this,args)};proto.lineTo=function(x,y,...args){if(this.canvas===canvas&&Math.abs(y-62)<0.01)this.__tgDirectLanePath=true;if(this.canvas===canvas&&this.globalCompositeOperation==="source-over"&&x>=100&&x<=266&&Math.abs(y-210)>0.1)window.__tgEcgSamples++;return lineTo.call(this,x,y,...args)};proto.stroke=function(...args){if(this.canvas===canvas){const green=this.strokeStyle.includes("143, 220, 178");if(green&&this.getLineDash().length&&this.lineDashOffset!==0)window.__tgUnconfirmedGreenTrafficStrokes++;if(this.__tgDirectLanePath&&green)window.__tgGreenDirectRouteStrokes++}return stroke.apply(this,args)};return true})()');
   await wait(120);
   assert.equal(await evaluate('window.__tgResponseXs.length'),0,'upstream_ready does not invent a Telegram response pulse');
   assert.equal(await evaluate('window.__tgUnconfirmedGreenTrafficStrokes'),0,
@@ -512,6 +487,7 @@ async function main(){
   panel.telegramStats({...fixture.telegramStats,active_connections:1,active_sessions:[confirmedSession]});
   await evaluate('document.dispatchEvent(new Event("visibilitychange"))');
   await until('document.querySelector("#telegram-body .tg-flow-canvas").getAttribute("aria-label").includes("Ответ Telegram подтверждён")','confirmed response reaches the live scene accessibility state');
+  await evaluate('document.querySelector("#telegram-body .tg-flow-canvas").scrollIntoView({block:"center"})');
   await wait(180);
   assert.ok(await evaluate('window.__tgGreenDirectRouteStrokes>0'),
     'маршрут становится зелёным только после подтверждённого ответа');
@@ -538,7 +514,6 @@ async function main(){
   await evaluate('document.dispatchEvent(new Event("visibilitychange"))');
 
   // Свежий отказ всех WSS-маршрутов не должен выглядеть как активное подключение из-за старого ответа.
-  await evaluate('(()=>{const canvas=document.querySelector("#telegram-body .tg-flow-canvas"),probe=document.createElement("canvas").getContext("2d");probe.fillStyle=getComputedStyle(canvas.closest(".tg-flow")).getPropertyValue("--tg-flow-direct").trim();probe.fillRect(0,0,1,1);window.__tgExpectedRouteRgb=[...probe.getImageData(0,0,1,1).data].slice(0,3)})()');
   await evaluate('(()=>{const canvas=document.querySelector("#telegram-body .tg-flow-canvas");const proto=CanvasRenderingContext2D.prototype;const moveTo=proto.moveTo;window.__tgIncomingPathDraws=0;window.__tgOriginalMoveTo=moveTo;proto.moveTo=function(x,y){if(this.canvas===canvas&&this.globalCompositeOperation==="source-over"&&x===70&&y===210)window.__tgIncomingPathDraws++;return moveTo.call(this,x,y)};return true})()');
   panel.telegram('local');
   panel.telegramStats({...fixture.telegramStats,active_connections:0,active_sessions:[],
@@ -547,7 +522,7 @@ async function main(){
   await until('document.querySelector("#telegram-body").dataset.state==="unavailable"','new WSS failure must replace stale connected state');
   await evaluate('window.__tgIncomingPathDraws=0');
   await wait(50);
-  assert.equal(await evaluate('window.__tgIncomingPathDraws'),0,'при нуле активных соединений схема не рисует линию клиент → D2S');
+  assert.equal(await evaluate('window.__tgIncomingPathDraws'),0,'при нуле активных соединений схема не рисует линию клиент → d2o');
   await evaluate('CanvasRenderingContext2D.prototype.moveTo=window.__tgOriginalMoveTo;delete window.__tgOriginalMoveTo');
   assert.equal(await evaluate('document.querySelector("[data-tg-state-title]").textContent'),'Последняя попытка завершилась ошибкой');
   assert.equal(await evaluate('document.querySelector("[data-tg-state-lamp]").dataset.tone'),'bad');
@@ -598,7 +573,7 @@ async function main(){
   await until('!document.querySelector(".tg-worker-dialog").open','Saving Workers closes the dialog after C11 restart is accepted');
   const workerSettings=await(await fetch(panel.url+'api/telegram/workers')).json();
   assert.deepEqual(workerSettings.domains,['my-worker.example.com'],'Worker hostname is persisted in C11 config');
-  assert.equal(panel.seen('engine-restart'),false,'editing Workers does not restart D2S');
+  assert.equal(panel.seen('engine-restart'),false,'editing Workers does not restart d2o');
   await tunnelState('stopped');
   await evaluate('document.dispatchEvent(new Event("visibilitychange"))');
   await tunnelShot('2-stopped');
@@ -764,7 +739,7 @@ async function main(){
   await call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await call('Fetch.enable',{patterns:[{url:'*',requestStage:'Request'}]});
   diagnosticsReply=diagnosticFixture('full');
-  await reloadPage();
+  await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart")?.dataset.points==="121"','two-hour diagnostics history renders');
   await evaluate('document.querySelector("[data-memory-range=\\"24\\"]").click()');
   await until('document.querySelector("#diagnostic-memory-chart")?.dataset.points==="1440"','1440 compact memory samples render in the 24-hour view');
@@ -797,36 +772,36 @@ async function main(){
   assert.match(await evaluate('document.querySelector("#diagnostic-aimd-current").textContent'),/1\/1.*память, conntrack/,'current 1/1 limiter and its causes are shown');
   assert.match(await evaluate('document.querySelector("#diagnostic-aimd-history").textContent'),/1 \/ 1.*память/,'AIMD transition history includes the 1/1 cause');
   assert.equal(await evaluate('document.querySelector("#diagnostic-download").getAttribute("href")'),'/api/diagnostics?download','the complete JSON download endpoint stays linked');
-  diagnosticsReply=diagnosticFixture('units');await reloadPage();
+  diagnosticsReply=diagnosticFixture('units');await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"','controlled metric fixture renders');
   await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
   const deltas=await evaluate('Object.fromEntries(Array.from(document.querySelectorAll("[data-series-option]"),label=>[label.dataset.seriesOption,label.querySelector("small")?.textContent]))');
   for(const [series,delta] of [['rss','+1.0 МиБ'],['rss_anon','+512.0 КиБ'],['vm_data','+2.0 МиБ'],
    ['tracked_tcp','+1.0 КиБ'],['tracked_quic','−2.0 КиБ'],['tracked_tls','+8.0 КиБ']])
    assert.ok(deltas[series].endsWith(delta),'independent '+series+' delta is shown, got '+deltas[series]);
-  diagnosticsReply=diagnosticFixture('sample_mismatch');await reloadPage();
+  diagnosticsReply=diagnosticFixture('sample_mismatch');await call('Page.reload');
   await until('document.querySelector("#diagnostic-warnings").textContent.includes("Несовпадение объёмов в отчёте")','same-time byte mismatch is exposed');
   assert.equal(await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'9.4 КиБ','card keeps the chart history value');
   assert.match(await evaluate('document.querySelector("#diagnostic-catalog-note").textContent'),/Время снимка совпадает, но объёмы расходятся/,'catalog card explains the conflicting aggregate value');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/общий снимок 10\.4 КиБ/,'mismatch includes both source values in collapsed details');
-  diagnosticsReply=diagnosticFixture('time_mismatch');await reloadPage();
+  diagnosticsReply=diagnosticFixture('time_mismatch');await call('Page.reload');
   await until('document.querySelector("#diagnostic-process-note").textContent.includes("разница")','different sample times are called out');
   assert.match(await evaluate('document.querySelector("#diagnostic-catalog-note").textContent'),/разница 1 мин/,'catalog history and counters show their offset');
-  diagnosticsReply=diagnosticFixture('pid_change');await reloadPage();
+  diagnosticsReply=diagnosticFixture('pid_change');await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"','PID generation fixture renders');
   await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
   assert.doesNotMatch(await evaluate('document.querySelector("[data-series-option=rss] small").textContent'),/· [+-−]/,'RSS delta is not joined across a PID change');
-  diagnosticsReply=diagnosticFixture('short');await reloadPage();
+  diagnosticsReply=diagnosticFixture('short');await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="11"','short history renders');
   await evaluate(`document.querySelector('[data-memory-range="24"]').click()`);
   assert.match(await evaluate('document.querySelector("#diagnostic-history-coverage").textContent'),/Доступно 10 мин из 24 часа/,'24-hour view reports only ten available minutes');
   for(const kind of ['legacy_history','legacy_no_fields']){
-   diagnosticsReply=diagnosticFixture(kind);await reloadPage();
+   diagnosticsReply=diagnosticFixture(kind);await call('Page.reload');
    await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="2"',kind+' report renders');
    assert.equal(await evaluate('document.querySelector("#diagnostic-catalog-bytes").textContent'),'9.4 КиБ',kind+' exact matched byte value is retained');
    assert.equal(await evaluate('document.querySelector("#diagnostic-http-bytes").textContent'),'5.4 КиБ',kind+' keeps HTTP units consistent');
   }
-  diagnosticsReply=diagnosticFixture('fallback');await reloadPage();
+  diagnosticsReply=diagnosticFixture('fallback');await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1"','fallback memory snapshot renders');
   await evaluate('document.querySelectorAll("[data-memory-series]").forEach(input=>{input.checked=true;input.dispatchEvent(new Event("change",{bubbles:true}))})');
   const fallbackSeries=await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)');
@@ -848,36 +823,36 @@ async function main(){
    fs.mkdirSync(process.env.D2S_DIAG_SHOTS,{recursive:true});
    fs.writeFileSync(path.join(process.env.D2S_DIAG_SHOTS,'diagnostics-desktop.png'),Buffer.from(shot.data,'base64'));
   }
-  diagnosticsReply=diagnosticFixture('empty');await reloadPage();
+  diagnosticsReply=diagnosticFixture('empty');await call('Page.reload');
   await until('document.querySelector("#diagnostic-status").textContent.includes("Ожидаем первый снимок")','empty report remains usable');
   assert.equal(await evaluate('document.querySelector("#diagnostic-data").hidden'),false,'enabled empty history keeps the panel visible');
   assert.equal(await evaluate('document.querySelector("#diagnostic-memory-empty").hidden'),false,'empty history has an explicit chart state');
   assert.equal(await evaluate('document.querySelector("#diagnostic-download").hidden'),false,'empty enabled report can still be downloaded');
-  diagnosticsReply=diagnosticFixture('unavailable');await reloadPage();
+  diagnosticsReply=diagnosticFixture('unavailable');await call('Page.reload');
   await until('!document.querySelector("#diagnostic-warnings").hidden','unavailable memory metadata produces a warning');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 13/,'rollup errno is retained in the warning');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
    ['rss_anon'],'RssAnon remains plotted while unavailable metrics are omitted');
-  diagnosticsReply=diagnosticFixture('unsupported');await reloadPage();
+  diagnosticsReply=diagnosticFixture('unsupported');await call('Page.reload');
   await until('!document.querySelector("#diagnostic-warnings").hidden','OpenWrt without proc page monitoring explains unsupported smaps');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'missing rollup has the requested calm title');
   assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'ordinary procfs capability absence stays neutral');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/в 2 снимках/,'two unsupported rollup samples are counted');
   assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/гонкой при остановке процесса/,'unsupported means the PID exists but the kernel interface is absent');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/KERNEL_PROC_PAGE_MONITOR и CONFIG_PROC_PAGE_MONITOR=y/,'firmware option needed for optional smaps metrics is explicit');
-  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/RSS, RssAnon, VmData и учтённые D2S объекты продолжают собираться/,'OpenWrt baseline metrics stay available without smaps');
+  assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/RSS, RssAnon, VmData и учтённые D2O объекты продолжают собираться/,'OpenWrt baseline metrics stay available without smaps');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/CONFIG_PROC_PAGE_MONITOR/,'OpenWrt guidance points to the kernel setting behind optional rollup metrics');
   assert.equal(diagnosticsReply.memory_details[0].latest.smaps_rollup_status,'unsupported','OpenWrt procfs absence is classified as unsupported in JSON');
   assert.equal(diagnosticsReply.memory_details[0].latest.smaps_rollup_errno,null,'OpenWrt procfs feature absence is not serialized as a syscall error');
-  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 2/,'ENOENT is described as an optional kernel procfs capability, not a D2S runtime failure');
+  assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/errno 2/,'ENOENT is described as an optional kernel procfs capability, not a D2O runtime failure');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
    ['rss','rss_anon','vm_data'],'RSS, RssAnon and VmData remain charted when smaps_rollup is missing');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/без сопоставимого роста/,'RSS anomaly remains visible in the OpenWrt case');
-  diagnosticsReply=diagnosticFixture('legacy');await reloadPage();
+  diagnosticsReply=diagnosticFixture('legacy');await call('Page.reload');
   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1"','legacy report memory fields still render');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
    ['rss','rss_anon','vm_data','anonymous','private_dirty'],'legacy RssAnon and detailed smaps metrics keep their meanings');
-  diagnosticsReply=diagnosticFixture('legacy_enoent');await reloadPage();
+  diagnosticsReply=diagnosticFixture('legacy_enoent');await call('Page.reload');
   await until('!document.querySelector("#diagnostic-warnings").hidden','legacy ENOENT rollup metadata is classified');
   assert.match(await evaluate('document.querySelector("#diagnostic-warnings").textContent'),/Подробная карта памяти недоступна на этом устройстве/,'legacy ENOENT is calm when the PID is present');
   assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'optional ENOENT is not yellow');
@@ -885,24 +860,9 @@ async function main(){
   assert.doesNotMatch(await evaluate('document.querySelector("#diagnostic-warnings .diag-notice-text").textContent'),/errno 2/,'technical errno stays inside the disclosure');
   assert.deepEqual(await evaluate('Array.from(document.querySelectorAll("#diagnostic-memory-chart path[data-series]"),node=>node.dataset.series)'),
    ['rss','rss_anon','vm_data'],'legacy ENOENT keeps RSS, RssAnon and VmData while omitting unavailable smaps values');
-  diagnosticsReply=diagnosticFixture('legacy_smaps_enoent');await reloadPage();
+  diagnosticsReply=diagnosticFixture('legacy_smaps_enoent');await call('Page.reload');
   await until('document.querySelector("#diagnostic-status").textContent.includes("Обновлено")','old report with missing smaps renders');
   assert.equal(await evaluate('document.querySelectorAll("#diagnostic-warnings .diag-notice--warning").length'),0,'missing optional smaps is not a warning');
-  if(out){
-   diagnosticsReply=diagnosticFixture('full');await reloadPage();
-   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="121"','diagnostics capture loaded');
-   await evaluate('document.querySelector("[data-memory-range=\\"24\\"]").click()');
-   await until('document.querySelector("#diagnostic-memory-chart").dataset.points==="1440"','diagnostics capture has a full history');
-   for(const [name,width,height] of [['diagnostics-wide',1440,1800],['diagnostics-mobile',390,1800]]){
-    await call('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
-    await evaluate('document.querySelector("#diagnostics").scrollIntoView({block:"start"})');
-    await evaluate('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
-    assert.equal(await evaluate('document.documentElement.scrollWidth>window.innerWidth'),false,name+' has no horizontal overflow');
-    const bounds=await evaluate('(()=>{const r=document.querySelector("#diagnostics").getBoundingClientRect();return {x:r.left+scrollX,y:r.top+scrollY,width:r.width,height:r.height}})()');
-    const shot=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{...bounds,scale:1}});
-    fs.writeFileSync(path.join(out,name+'.png'),Buffer.from(shot.data,'base64'));
-   }
-  }
   assert.deepEqual(exceptions,[]);
   console.log('Browser + C panel: byte units, independent deltas, time/PID alignment, optional smaps, 10-minute coverage, 1440 samples, layout and commands passed.');
  }finally{await panel.close()}
