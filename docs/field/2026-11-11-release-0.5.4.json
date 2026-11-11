@@ -1,0 +1,42 @@
+{
+  "release": "d2s-v0.5.4",
+  "source": "9bce30bcc6a2d14e2dd923d27bf386603dea4308",
+  "ci_run": 42969835345,
+  "release_run": 42970201176,
+  "url": "https://github.com/shurshick/D2S/releases/tag/d2s-v0.5.4",
+  "stable_latest": true,
+  "router_deployed": false,
+  "upstream_commits": [
+    "91741be7b10a5ce8166efa964ac4c07d7d1ee7d5",
+    "636b0353127391dc3cb40bab9000406bb651ffd0",
+    "3c5b29a8ba8f31cdfe5f11c30c37c2ad8ff5f885",
+    "9046e60ef980e4961ee65cf6e2a2daa960cee5c6"
+  ],
+  "checks": [
+    "Telegram/panel unit and ASan/UBSan PASS",
+    "installer and OpenWrt fixtures PASS",
+    "isolated install/update/keep-state uninstall PASS",
+    "namespace and upstream network guard PASS",
+    "exact-source GitHub integration and engine proof PASS",
+    "four architectures build and QEMU launch PASS",
+    "downloaded package completeness and RAM preflight PASS",
+    "Ed25519 signature and SHA256SUMS PASS",
+    "packaged static source equality and five main runtime release IDs PASS",
+    "local MTProto and preserved Meta media feature flags in all Telegram binaries PASS",
+    "tag matches source SHA PASS"
+  ],
+  "limitations": [
+    "No router access or deployment",
+    "No live Telegram application test",
+    "No local Linux Chrome visual QA"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "7d398067b88ad823e8592589e3e8b04966fe469640f741f21493e7b6a6465e29",
+    "d2s-arm.tar.gz": "ddd6ada7cf62be79a8ba183839e7a647c0344d9b14573329e1a74c3b6daebcd5",
+    "d2s-arm64.tar.gz": "68757fe681323a42df7892f4beb781d45a58402f1e21f86572eb6ab65d3b2a76",
+    "d2s-mipsel.tar.gz": "91ed439e3b8acf2be589e2503a68236c0adc1e6925c8a5d4acb052baa9556a8e",
+    "latest.json": "0cdec85eee4a7b8627038e1506805c8fc2fc23b6750578f7bd41393609ec3400",
+    "latest.json.sig": "91019b0a7be281014124f8569edcbd532cfc2f40ec23c998b390d4c859cdf4f2",
+    "SHA256SUMS": "3bf0412126beaa3d1a3fb9ed059927e8872a502b75968678ac979f47a1b2cdab"
+  }
+}
