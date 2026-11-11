@@ -2,6 +2,7 @@
 # Isolated tests: fake NDM/IP tools, no router access and no DNS changes.
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+node "$ROOT/scripts/test-proxy-secret.cjs"
 TEMP=$(mktemp -d)
 trap 'rm -rf "$TEMP"' EXIT INT TERM
 python3 "$ROOT/tests/keenetic/test-lan.py" "$ROOT/files/d2s-lan.sh"

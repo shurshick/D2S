@@ -24,7 +24,6 @@ jobs:
       - run: python3 scripts/test-release-gate.py
       - run: sh scripts/test-s99-firewall-stub.sh
       - run: sh scripts/test-tg-firewall-nft.sh
-      - run: node scripts/test-proxy-secret.cjs
       - run: node scripts/test-install-release.cjs
       - run: node scripts/test-install-openwrt.cjs
       - run: python3 scripts/test-bootstrap.py
