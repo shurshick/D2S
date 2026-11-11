@@ -32,3 +32,11 @@ scripts/test-proxy-secret.cjs проверяет реальный блок ус�
 
 Тест добавлен в GitHub integration. Изолированная полная установка использует
 настоящий openssl rand вместо безусловно успешной заглушки OpenSSL.
+
+## Подготовка выпуска
+
+Два запуска engine CI остановились до тестов при установке qemu-user:
+Temporary failure resolving azure.archive.ubuntu.com. В runner-only настройке
+известного apt mirror list это зеркало заменено стандартным archive.ubuntu.com.
+Та же настройка используется сборкой пакетов; подпись, release gate и runtime
+не меняются. Изменение workflow штатно требует новой проверки engine proof.
