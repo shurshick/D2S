@@ -19,6 +19,8 @@ function hasPath(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 try {
+  const openssl = ['/opt/homebrew/opt/openssl@3/bin/openssl', '/usr/local/opt/openssl@3/bin/openssl', '/usr/bin/openssl'].find(p => fs.existsSync(p));
+  assert(openssl, 'OpenSSL required for installer RNG fixture');
   // Ordinary utilities, minus everything a stock OpenWrt image lacks or that a
   // stub below provides.
   const sys = path.join(tmp, 'sys');
@@ -59,7 +61,7 @@ case "$1" in
        for p in "$@"; do
          case "$p" in
            curl) cp '${path.join(tmp, 'curl-double')}' '${bin}/curl' ;;
-           openssl-util) printf '#!/bin/sh\\nexit 0\\n' > '${bin}/openssl'; chmod +x '${bin}/openssl' ;;
+           openssl-util) ln -sf '${openssl}' '${bin}/openssl' ;;
          esac
        done ;;
 esac
@@ -79,7 +81,7 @@ case "$1" in
        for p in "$@"; do
          case "$p" in
            curl) cp '${path.join(tmp, 'curl-double')}' '${bin}/curl' ;;
-           openssl-util) printf '#!/bin/sh\\nexit 0\\n' > '${bin}/openssl'; chmod +x '${bin}/openssl' ;;
+           openssl-util) ln -sf '${openssl}' '${bin}/openssl' ;;
          esac
        done ;;
 esac
@@ -264,7 +266,7 @@ echo "/dev/root 100692 18544 $avail 19% /"`));
   };
   fs.rmSync(path.join(bin, 'openssl'));
   refuse({ APK_HAVE: 'curl', APK_ADD_RC: '1' }, /apk update && apk add kmod-nft-queue .*openssl-util/, 'package failure');
-  put(path.join(bin, 'openssl'), sh('exit 0'));
+  put(path.join(bin, 'openssl'), sh(`exec '${openssl}' \"$@\"`));
   refuse({ APK_HAVE: have, NFT_CHECK_RC: '1' }, /nftables не принимает правила D2S/, 'kernel without nft queue');
   reset();
   refuse({ APK_HAVE: have, DF_AVAIL: '10' }, /мало места .* USB/, 'no room for the runtime');

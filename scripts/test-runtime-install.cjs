@@ -14,9 +14,10 @@ function fixture(name, contents, mode = 0o755) {
 }
 try {
   fs.mkdirSync(path.join(tmp, 'bin'));
-  for (const command of ['curl', 'ip', 'ipset', 'openssl']) {
+  for (const command of ['curl', 'ip', 'ipset']) {
     fs.writeFileSync(path.join(tmp, 'bin', command), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   }
+  fs.writeFileSync(path.join(tmp, 'bin/openssl'), '#!/bin/sh\n[ \"$1\" != rand ] || exec /usr/bin/openssl \"$@\"\nexit 0\n', {mode: 0o755});
   // iptables doubles: no d2s chains; filter OUTPUT holds RST-drop rules left
   // by a killed d2s process (owner PID gone), a foreign one and a live owner's.
   for (const command of ['iptables', 'ip6tables']) {

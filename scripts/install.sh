@@ -781,7 +781,9 @@ esac
 # Секрет локального MTProto-прокси нужен для ручного подключения Telegram по
 # tg://proxy; без него listener принимает только прозрачные соединения.
 if ! grep -q '^[[:space:]]*TG_PROXY_SECRET=' "$DIR/config"; then
-    TG_PROXY_SECRET=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+    # Use the already required OpenSSL RNG: router BusyBox od may lack -N/-t.
+    TG_PROXY_SECRET=$(openssl rand -hex 16 2>/dev/null) ||
+        die "не удалось создать секрет локального Telegram-прокси"
     [ ${#TG_PROXY_SECRET} -eq 32 ] ||
         die "не удалось создать секрет локального Telegram-прокси"
     case "$TG_PROXY_SECRET" in
