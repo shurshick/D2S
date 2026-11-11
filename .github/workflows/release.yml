@@ -46,10 +46,6 @@ jobs:
         run: '[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]'
       - name: Install pinned compiler and build dependencies
         run: |
-          # The Azure mirror can fail DNS even while GitHub and Ubuntu are reachable.
-          if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt
-          fi
           sudo apt-get update -qq
           sudo apt-get install -y libssl-dev zlib1g-dev qemu-user
           python3 -m pip install --target "$RUNNER_TEMP/zig" ziglang==0.16.0
