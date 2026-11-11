@@ -1,0 +1,44 @@
+{
+  "source": "0e06b9273e047a2172db344a10938278a77e4ac7",
+  "ci_run": 43047815486,
+  "fix_commit": "b256c710f0087fda0f2d48edc5ec50298d292a8f",
+  "dns_commit": "0e06b9273e047a2172db344a10938278a77e4ac7",
+  "integration_job": 130616397540,
+  "router_deployed": false,
+  "integration_verified": true,
+  "dns_fallback_observed": [
+    "azure.archive.ubuntu.com",
+    "archive.ubuntu.com",
+    "security.ubuntu.com"
+  ],
+  "release": "d2s-v0.5.5",
+  "release_run": 43051857379,
+  "url": "https://github.com/shurshick/D2S/releases/tag/d2s-v0.5.5",
+  "stable_latest": true,
+  "ci_success": true,
+  "release_success": true,
+  "checks": [
+    "Full core/datapath/detect engine regression PASS",
+    "GitHub integration PASS",
+    "Validated HTTPS DNS fallback observed for all three Ubuntu hosts on actual runner",
+    "Four architecture builds and QEMU launches PASS",
+    "Downloaded package completeness and RAM preflight PASS",
+    "Ed25519 signature and SHA256SUMS PASS",
+    "Packaged static source equality and runtime release IDs PASS",
+    "Local MTProto and preserved Meta media feature flags PASS",
+    "Release tag equals checked source SHA PASS"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "ddd37d9c23b233dddad4aecce7abf7a46eaab4352bd82ab98eafbd562b1935ab",
+    "d2s-arm.tar.gz": "828b138a2e37d454a5239c4cf6a585653f85ede515c2ca1b7b0b1ed8c1f5d79a",
+    "d2s-arm64.tar.gz": "a963ef513f41f0a4cb0537b9f5ab4c667c691fd57ef9fae64aa91a0d4a324410",
+    "d2s-mipsel.tar.gz": "3f7f701d4451c24732b66cbaf5d02b3b4232c18eb958008917d5426d18821fe7",
+    "latest.json": "518a75d19a8f429be51f2e82e5c40490890cfffab8c6ec4ec1b021c1fddc9557",
+    "latest.json.sig": "cbd30e756f7a90c5beb9b0e8bca477e2f56279577180b31485592ea7f5e89e14",
+    "SHA256SUMS": "9fb9579b5c65ef548cb4edcad091c93c1cf72d329fa2bee78271c62fb6d4bb44"
+  },
+  "limitations": [
+    "No router access or deployment",
+    "No live Telegram application test"
+  ]
+}
