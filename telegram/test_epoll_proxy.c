@@ -2149,7 +2149,7 @@ static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
         .cert_path = cert_path,
         .key_path = key_path,
         .expected_sni = "worker.test",
-        .expected_path = "/apiws?dst=149.154.167.91&dc=4",
+        .expected_path = "/apiws?dst=149.154.167.91&dc=4&media=1",
         .expect_binary_subprotocol = 0,
         .expect_no_browser_headers = 1
     };
@@ -2266,7 +2266,7 @@ static void test_async_route_dns_waits_before_worker(void) {
         .cert_path = cert_path,
         .key_path = key_path,
         .expected_sni = "worker.test",
-        .expected_path = "/apiws?dst=149.154.167.91&dc=4",
+        .expected_path = "/apiws?dst=149.154.167.91&dc=4&media=1",
         .expect_binary_subprotocol = 0,
         .expect_no_browser_headers = 1
     };
