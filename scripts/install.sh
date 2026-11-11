@@ -562,6 +562,10 @@ case "$TG_VERSION" in
     *) die "скачанный d2stg устарел: в нём нет локального Telegram-прокси" ;;
 esac
 case "$TG_VERSION" in
+    *telegram-local-proxy*) ;;
+    *) die "скачанный d2stg устарел: в нём нет локального MTProto-прокси с секретом" ;;
+esac
+case "$TG_VERSION" in
     *instagram-ip-probe*) ;;
     *) die "скачанный d2stg устарел: нет проверки доступности Instagram IP" ;;
 esac
@@ -774,6 +778,21 @@ case "$TG_MODE_CURRENT" in
     local) ;;
     *) die "неизвестное значение TG_MODE в $DIR/config" ;;
 esac
+# Секрет локального MTProto-прокси нужен для ручного подключения Telegram по
+# tg://proxy; без него listener принимает только прозрачные соединения.
+if ! grep -q '^[[:space:]]*TG_PROXY_SECRET=' "$DIR/config"; then
+    TG_PROXY_SECRET=$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')
+    [ ${#TG_PROXY_SECRET} -eq 32 ] ||
+        die "не удалось создать секрет локального Telegram-прокси"
+    case "$TG_PROXY_SECRET" in
+        *[!0-9a-f]*) die "некорректный секрет локального Telegram-прокси" ;;
+    esac
+    printf '\n# Секрет локального MTProto-прокси для ручного подключения по tg://proxy.\nTG_PROXY_SECRET=%s\n' \
+        "$TG_PROXY_SECRET" >> "$DIR/config" ||
+        die "не сохранить секрет локального Telegram-прокси"
+    chmod 0600 "$DIR/config" || die "не защитить права конфигурации"
+    say "создан секрет локального Telegram-прокси"
+fi
 # WhatsApp DNS pins come from the loopback-only local C resolver.
 # Checking 18 names can wait on silent edges, so the installer does not run it.
 # A success younger than a day is kept: a release must not send the whole

@@ -845,6 +845,11 @@ main { min-width: 0; padding-bottom: 80px; }
 .tg-flow-canvas { display: block; width: 100%; height: auto; aspect-ratio: 900 / 420; color: var(--tg-flow-text); }
 .tg-flow-caption { min-height: 1.4em; margin: 14px 2px 0; color: var(--tg-flow-muted); font-size: 12px; }
 .tg-flow-summary { display: grid; gap: 4px; min-width: 0; margin-top: 10px; }
+.tg-proxy-link { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; margin-top: 10px; padding: 8px 10px; border: 1px solid var(--tg-flow-line); border-radius: 9px; background: var(--tg-flow-card-alt); }
+.tg-proxy-link[hidden] { display: none; }
+.tg-proxy-link-value { flex: 1 1 240px; min-width: 0; color: var(--ok); font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+.tg-proxy-link-copy { min-height: 30px; padding: 5px 11px; border: 1px solid var(--tg-flow-line); border-radius: 99px; background: transparent; color: var(--tg-flow-text); font: 600 12px/1.2 Onest, system-ui, sans-serif; cursor: pointer; }
+.tg-proxy-link-copy:disabled { opacity: .45; cursor: default; }
 .tg-flow-last-success, .tg-flow-last-warning { margin: 0; color: var(--tg-flow-muted); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere; }
 .tg-flow-last-success { color: var(--ok); }
 .tg-flow-last-warning { color: var(--warn); }

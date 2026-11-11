@@ -37,12 +37,13 @@ exit 1
   fixture('scripts/architecture.sh', '#!/bin/sh\nprintf "amd64\\n"\n');
   for (const name of ['check-cpu.sh', 'select-panel-ip.sh']) fixture(`scripts/${name}`, '#!/bin/sh\nexit 0\n');
   fixture('builds/d2spanel-linux-amd64', '#!/bin/sh\necho features=telegram-control\n');
-  fixture('builds/d2stg-linux-amd64', '#!/bin/sh\necho features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v3\n');
+  fixture('builds/d2stg-linux-amd64', '#!/bin/sh\necho features=telegram-local-tcp-epoll,telegram-local-proxy,instagram-ip-probe,meta-hosts-v3\n');
+  for (const name of ['d2s-resolver', 'd2s-dns-watch']) fixture(`builds/${name}-linux-amd64`, '#!/bin/sh\nexit 0\n');
   fixture('builds/d2sd-linux-amd64', '#!/bin/sh\nexit 0\n');
   for (const name of ['d2sc','d2sfetch']) fixture(`builds/${name}-linux-amd64`, '#!/bin/sh\nexit 2\n');
   fixture('files/S99d2s', '#!/bin/sh\nprintf "service-%s\\n" "$1" >> "$CALLS"\n[ "$1" != status ] || echo "датапат: работает"\nexit 0\n');
   fixture('files/config', 'PANEL_LISTEN=192.168.1.1:8090\nTG_ENABLED=0\nTG_MODE=local\n');
-  for (const name of ['d2s-fw-heal.sh', 'd2s-ppe-deoffload.sh', '001-d2s.sh', 'd2s-tg-firewall.sh', 'd2s-tg-watchdog.sh', 'd2s-instagram-dns-scheduler.sh']) fixture(`files/${name}`, '#!/bin/sh\nexit 0\n');
+  for (const name of ['d2s-meta-dns-core.sh', 'd2s-meta-dns-library.sh', 'd2s-meta-dns-scheduler-core.sh', 'd2s-whatsapp-media.sh', 'S96d2s-resolver', 'S97d2s-dns-watch', 'd2s-lan.sh', 'd2s-fw-heal.sh', 'd2s-ppe-deoffload.sh', '001-d2s.sh', 'd2s-tg-firewall.sh', 'd2s-tg-watchdog.sh', 'd2s-instagram-dns-scheduler.sh']) fixture(`files/${name}`, '#!/bin/sh\nexit 0\n');
   fixture('files/d2s-instagram-dns.sh', '#!/bin/sh\nprintf "dns-%s\\n" "$1" >> "$CALLS"\n');
   fixture('files/d2s-log-maintenance.sh', fs.readFileSync(path.join(root, 'files/d2s-log-maintenance.sh')));
   fixture('files/d2s-update.sh', fs.readFileSync(path.join(root, 'files/d2s-update.sh')));
@@ -77,6 +78,13 @@ exit 1
   fs.mkdirSync(path.join(tmp, 'opt/sbin'), { recursive: true });
   fs.writeFileSync(path.join(tmp, 'opt/sbin/d2shttp'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
   const installOut = run('install');
+  const configPath = path.join(tmp, 'opt/d2s/config');
+  const secret = fs.readFileSync(configPath, 'utf8').match(/^TG_PROXY_SECRET=([0-9a-f]{32})$/m)?.[1];
+  assert(secret, 'installer must generate a 16-byte local proxy secret');
+  assert.equal(fs.statSync(configPath).mode & 0o777, 0o600);
+  assert(!installOut.includes(secret), 'installer must not print the proxy secret');
+  run('install');
+  assert(fs.readFileSync(configPath, 'utf8').includes(`TG_PROXY_SECRET=${secret}`), 'upgrade must preserve the secret');
   assert(!fs.existsSync(path.join(tmp, 'opt/sbin/d2shttp')), 'upgrade must remove the old d2shttp proxy binary');
   // The first DNS refresh (15 names, possibly silent edges) must not hold the
   // installer: the service's scheduler runs it in the background with a log.
@@ -103,7 +111,7 @@ exit 1
   // A d2stg without the 15-name certificate check would silently skip WhatsApp/fbcdn.
   const tgFixture = path.join(tmp, 'source/builds/d2stg-linux-amd64');
   const tgCurrent = fs.readFileSync(tgFixture);
-  fs.writeFileSync(tgFixture, '#!/bin/sh\necho features=telegram-local-tcp-epoll,instagram-ip-probe,meta-hosts-v2\n');
+  fs.writeFileSync(tgFixture, '#!/bin/sh\necho features=telegram-local-tcp-epoll,telegram-local-proxy,instagram-ip-probe,meta-hosts-v2\n');
   const stale = spawnSync('/bin/sh', [path.join(tmp, 'install.sh')], { env, encoding: 'utf8', timeout: 10000 });
   assert.notEqual(stale.status, 0, 'installer must reject a d2stg without the Meta host list check');
   assert.match(stale.stdout + stale.stderr, /d2stg устарел/);
