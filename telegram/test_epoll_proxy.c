@@ -3,6 +3,7 @@
 
 void tg_epoll_proxy_test_set_ping_interval_ms(uint64_t interval_ms);
 #include "tg_mtproto.h"
+#include "tg_limits.h"
 #include "tg_stats_socket.h"
 #include "tg_tls.h"
 #include "tg_ws.h"
@@ -26,6 +27,8 @@ void tg_epoll_proxy_test_set_ping_interval_ms(uint64_t interval_ms);
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/epoll.h>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/un.h>
@@ -52,6 +55,16 @@ int __real_connect(int fd, const struct sockaddr *address, socklen_t length);
 int __real_epoll_ctl(int epoll_fd, int operation, int fd,
                      struct epoll_event *event);
 int __real_clock_gettime(clockid_t clock_id, struct timespec *time);
+
+static int accept_error;
+int __real_accept4(int fd, struct sockaddr *address, socklen_t *length, int flags);
+int __wrap_accept4(int fd, struct sockaddr *address, socklen_t *length, int flags) {
+    if (accept_error) {
+        errno = accept_error;
+        return -1;
+    }
+    return __real_accept4(fd, address, length, flags);
+}
 
 static atomic_uint_fast64_t test_monotonic_offset_ms;
 
@@ -138,6 +151,8 @@ typedef struct {
     int accept_any_handshake;
     int local_proxy_bridge;
     unsigned response_delay_ms;
+    size_t media_chunks;
+    int repeat_response;
     uint8_t handshake[TG_MTPROTO_HANDSHAKE_LEN];
     size_t handshake_len;
     uint8_t expected_packet[12];
@@ -419,10 +434,10 @@ static X509 *make_wss_test_cert(EVP_PKEY *key) {
     X509_EXTENSION_free(extension);
     extension = X509V3_EXT_conf_nid(NULL, NULL, NID_subject_alt_name,
         "DNS:kws4.web.telegram.org,DNS:kws4-1.web.telegram.org,"
-        "DNS:worker.test,DNS:kws4.cfproxy.test,DNS:kws4-1.cfproxy.test,"
+        "DNS:kws3-1.cfproxy.test,DNS:worker.test,DNS:kws4.cfproxy.test,DNS:kws4-1.cfproxy.test,"
         "DNS:kws4.cfproxy-a.test,DNS:kws4-1.cfproxy-a.test,"
         "DNS:kws4.cfproxy-b.test,DNS:kws4-1.cfproxy-b.test,"
-        "DNS:kws203-1.cfproxy.test,IP:127.0.0.1");
+        "DNS:kws2.cfproxy.test,DNS:kws2-1.cfproxy.test,DNS:kws203-1.cfproxy.test,IP:127.0.0.1");
     assert(extension && X509_add_ext(cert, extension, -1) == 1);
     X509_EXTENSION_free(extension);
     assert(X509_sign(cert, key, EVP_sha256()) > 0);
@@ -483,6 +498,27 @@ static int write_server_frame(SSL *ssl, uint8_t opcode,
     }
     if (payload_len) memcpy(frame + header, payload, payload_len);
     return ssl_write_exact(ssl, frame, header + payload_len);
+}
+
+#define TEST_MEDIA_CHUNK 16384u
+
+static void write_media_chunks(SSL *ssl, const wss_server_fixture *fixture) {
+    if (!fixture->media_chunks) return;
+    tg_mtproto_ctr cipher = {0};
+    assert(tg_mtproto_direct_server_stream_cipher(fixture->handshake, &cipher) == 0);
+    uint8_t response[sizeof(fixture->response_packet)];
+    memcpy(response, fixture->response_packet, fixture->response_packet_len);
+    assert(tg_mtproto_ctr_xor(&cipher, response, fixture->response_packet_len) == 0);
+    uint8_t frame[4u + TEST_MEDIA_CHUNK] = {0x82, 126, 0x40, 0};
+    for (size_t i = 0; i < fixture->media_chunks; ++i) {
+        /* Intermediate framing, followed by deterministic payload bytes. */
+        memset(frame + 4u, (uint8_t)(i + 1u), TEST_MEDIA_CHUNK);
+        const uint8_t packet_length[] = {0xfc, 0x3f, 0, 0};
+        memcpy(frame + 4u, packet_length, sizeof(packet_length));
+        assert(tg_mtproto_ctr_xor(&cipher, frame + 4u, TEST_MEDIA_CHUNK) == 0);
+        assert(ssl_write_exact(ssl, frame, sizeof(frame)) == 0);
+    }
+    tg_mtproto_ctr_destroy(&cipher);
 }
 
 static void serve_direct_wss_connection(wss_server_fixture *fixture, int fd) {
@@ -711,6 +747,14 @@ static void serve_direct_wss_connection(wss_server_fixture *fixture, int fd) {
         assert(write_server_frame(ssl, TG_WS_BINARY,
                                   fixture->response_packet,
                                   fixture->response_packet_len) == 0);
+        write_media_chunks(ssl, fixture);
+        if (fixture->repeat_response) {
+            assert(read_masked_client_frame(ssl, &opcode, payload, sizeof(payload),
+                                            &payload_len) == 0);
+            assert(opcode == TG_WS_BINARY && payload_len == 12);
+            assert(write_server_frame(ssl, TG_WS_BINARY, fixture->response_packet,
+                                      fixture->response_packet_len) == 0);
+        }
         assert(read_masked_client_frame(ssl, &opcode, payload, sizeof(payload),
                                         &payload_len) == 0);
         assert(opcode == TG_WS_CLOSE && payload_len == 0);
@@ -728,16 +772,6 @@ static void *serve_direct_wss(void *opaque) {
     assert(fd >= 0);
     fixture->accepted_count = 1;
     serve_direct_wss_connection(fixture, fd);
-    return NULL;
-}
-
-static void *serve_hedged_wss(void *opaque) {
-    wss_server_fixture *fixture = opaque;
-    int first = accept(fixture->listener, NULL, NULL);
-    assert(first >= 0);
-    fixture->accepted_count = 1;
-    fixture->expected_sni = "kws4-1.web.telegram.org";
-    serve_direct_wss_connection(fixture, first);
     return NULL;
 }
 
@@ -1827,7 +1861,7 @@ static void test_epoll_wss_transport_ack_keeps_route_selected(void) {
 }
 
 static void test_epoll_hedged_wss_commits_one_route_before_payload(
-    tg_mtproto_proto proto) {
+    tg_mtproto_proto proto, int adaptive) {
     char directory[] = "/tmp/d2s-tg-wss-hedge-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
@@ -1850,6 +1884,7 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
                               .key_path = key_path,
                               .expect_binary_subprotocol = 1};
     atomic_init(&wss.complete, 0);
+    wss.expected_sni = adaptive ? "kws4-1.cfproxy.test" : "kws4-1.web.telegram.org";
     uint8_t handshake[64];
     make_wss_test_handshake(proto, 4, 1, handshake);
     memcpy(wss.handshake, handshake, sizeof(handshake));
@@ -1872,7 +1907,7 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
     tg_mtproto_ctr_destroy(&decrypt);
     tg_mtproto_ctr_destroy(&encrypt);
     pthread_t wss_thread;
-    assert(pthread_create(&wss_thread, NULL, serve_hedged_wss, &wss) == 0);
+    assert(pthread_create(&wss_thread, NULL, serve_direct_wss, &wss) == 0);
 
     int listener = create_listener(&proxy_port);
     proxy_fixture fixture = {0};
@@ -1881,7 +1916,13 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
     SSL_CTX *tls_context = tg_tls_client_context(cert_path);
     assert(tls_context);
     tg_config routing = {0};
-    routing.ws_routing = TG_WS_ROUTING_HEDGED;
+    routing.ws_routing = adaptive ? TG_WS_ROUTING_ADAPTIVE : TG_WS_ROUTING_HEDGED;
+    if (adaptive) {
+        routing.cf_proxy_domain_count = 1;
+        strcpy(routing.cf_proxy_domains[0], "cfproxy.test");
+        set_ipv4(&fixture.direct_upstream, "192.0.2.200", 443);
+        hold_pending_connect = 1;
+    }
     routing.ws_hedge_delay_ms = 125;
     routing.ws_hedge_limit = 1;
     tg_epoll_proxy_config config = {
@@ -1895,7 +1936,10 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
         .tls_context = tls_context,
         .routing_config = &routing,
         .original_destination = original_destination,
-        .select_target = select_target,
+        .select_target = adaptive ? NULL : select_target,
+        .select_route = adaptive ? select_pending_test_route : NULL,
+        .resolve_domain = adaptive ? resolve_test_route_domain : NULL,
+        .route_context = &fixture,
         .context = &fixture,
     };
     tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
@@ -1932,9 +1976,13 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
     assert(session->id > 0 && session->has_dc && session->dc == 4);
     assert(session->has_media && session->is_media);
     assert(session->stage == TG_ROUTE_SESSION_STAGE_FIRST_WSS_BINARY_RESPONSE);
-    assert(session->direct_state == TG_ROUTE_SESSION_FIRST_BINARY_RESPONSE);
-    assert(session->direct_transport == TG_ROUTE_SESSION_TRANSPORT_DIRECT_WSS);
-    assert(session->selected_transport == TG_ROUTE_SESSION_TRANSPORT_DIRECT_WSS);
+    if (adaptive) {
+        assert(session->fallback_state == TG_ROUTE_SESSION_FIRST_BINARY_RESPONSE);
+        assert(session->selected_transport == TG_ROUTE_SESSION_TRANSPORT_CLOUDFLARE_PROXY);
+    } else {
+        assert(session->direct_state == TG_ROUTE_SESSION_FIRST_BINARY_RESPONSE);
+        assert(session->selected_transport == TG_ROUTE_SESSION_TRANSPORT_DIRECT_WSS);
+    }
     assert(session->telegram_response_seen);
     assert(session->bytes_from_clients >= wss.expected_packet_len);
     assert(session->bytes_from_upstreams >= wss.response_packet_len);
@@ -1987,7 +2035,12 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
     atomic_store(&runner.stop, 1);
     assert(pthread_join(proxy_thread, NULL) == 0);
     assert(tg_epoll_proxy_get_stats(proxy, &route_stats) == 0);
-    assert(route_stats.wss_attempts == 1 && route_stats.wss_responses == 1);
+    /* D2S keeps CF primary for media: an immediately working CF route needs
+       no losing direct attempt. The branch-race fixture below checks alternates. */
+    assert(route_stats.wss_attempts >= 1u &&
+           route_stats.wss_attempts <= 2u && route_stats.wss_responses == 1);
+    hold_pending_connect = 0;
+    pending_connect_fd = -1;
     tg_epoll_proxy_destroy(proxy);
     close(listener);
     close(wss.listener);
@@ -3275,7 +3328,7 @@ static void test_epoll_wss_sends_ping(void) {
     assert(rmdir(directory) == 0);
 }
 
-static void run_local_proxy_bridge(int packet_framing) {
+static void run_local_proxy_bridge(int packet_framing, int adaptive) {
     char directory[] = "/tmp/d2s-tg-local-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
@@ -3359,7 +3412,12 @@ static void run_local_proxy_bridge(int packet_framing) {
     tg_config routing = {0};
     routing.ws_routing = TG_WS_ROUTING_CF_FIRST;
     if (packet_framing) {
-        routing.route_only = TG_ROUTE_ONLY_DIRECT;
+        routing.route_only = adaptive ? TG_ROUTE_ONLY_AUTO : TG_ROUTE_ONLY_DIRECT;
+        if (adaptive) {
+            routing.ws_routing = TG_WS_ROUTING_HEDGED;
+            routing.ws_hedge_limit = 1;
+            routing.ws_hedge_delay_ms = 1;
+        }
     } else {
         routing.cf_worker_domain_count = 1;
         memcpy(routing.cf_worker_domains[0], "worker.test",
@@ -3446,15 +3504,362 @@ static void run_local_proxy_bridge(int packet_framing) {
 }
 
 static void test_local_proxy_secret_bridges_transport(void) {
-    run_local_proxy_bridge(0);
+    run_local_proxy_bridge(0, 0);
 }
 
 static void test_local_proxy_packet_framing(void) {
-    run_local_proxy_bridge(1);
+    run_local_proxy_bridge(1, 0);
+    run_local_proxy_bridge(1, 1);
 }
 
-int main(void) {
+static void test_adaptive_races_alternates_in_both_wss_branches(void) {
+    uint16_t client_port, target_port;
+    int listener = create_listener(&client_port);
+    int target = create_listener(&target_port);
+    proxy_fixture fixture = {0};
+    set_ipv4(&fixture.original, "149.154.167.51", 443);
+    set_ipv4(&fixture.upstream, "127.0.0.1", target_port);
+    fixture.cf_proxy_b_upstream = fixture.upstream;
+    SSL_CTX *tls_context = SSL_CTX_new(TLS_client_method());
+    assert(tls_context);
+    tg_config routing = {
+        .ws_routing = TG_WS_ROUTING_ADAPTIVE,
+        .ws_hedge_delay_ms = 125, .ws_hedge_limit = 1,
+        .cf_proxy_domain_count = 2,
+        .cf_proxy_domains = {"cfproxy-a.test", "cfproxy-b.test"}
+    };
+    tg_epoll_proxy_config config = {
+        .listener_fd = listener, .queue_bytes = 4096,
+        .memory_budget_bytes = 16 * 1024 * 1024, .configured_max_connections = 8,
+        .handshake_timeout_ms = 5000, .idle_timeout_ms = 6000,
+        .enable_direct_wss = 1, .tls_context = tls_context, .routing_config = &routing,
+        .original_destination = original_destination, .select_route = select_pending_test_route,
+        .resolve_domain = resolve_test_route_domain, .route_context = &fixture,
+        .context = &fixture
+    };
+    tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
+    assert(proxy);
+    int client = connect_to_listener(client_port);
+    assert(send(client, test_handshake, sizeof(test_handshake), 0) ==
+           (ssize_t)sizeof(test_handshake));
+    step_many(proxy, 5);
+    for (unsigned i = 0; i < 3; ++i) {
+        atomic_fetch_add(&test_monotonic_offset_ms, 126u);
+        step_many(proxy, 3);
+    }
+    tg_epoll_proxy_stats stats;
+    assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
+    assert(stats.wss_attempts == 4 && stats.active_wss_connections == 4);
+    assert(fixture.cf_proxy_a_resolve_calls == 1 && fixture.cf_proxy_b_resolve_calls == 1);
+    close(client);
+    tg_epoll_proxy_destroy(proxy);
+    close(target);
+    close(listener);
+    SSL_CTX_free(tls_context);
+    atomic_store(&test_monotonic_offset_ms, 0);
+}
+
+static void test_listener_recovery_preserves_runtime(void) {
+    uint16_t port, replacement_port;
+    int listener = create_listener(&port);
+    proxy_fixture fixture = {0};
+    set_ipv4(&fixture.original, "149.154.167.51", 443);
+    tg_epoll_proxy_config config = {
+        .listener_fd = listener, .queue_bytes = 4096,
+        .memory_budget_bytes = 1024 * 1024, .configured_max_connections = 4,
+        .handshake_timeout_ms = 1000, .idle_timeout_ms = 5000,
+        .original_destination = original_destination, .select_target = select_target,
+        .context = &fixture
+    };
+    tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
+    assert(proxy);
+    int pending = connect_to_listener(port);
+    accept_error = EMFILE;
+    for (unsigned i = 0; i < 6; ++i) {
+        assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+        atomic_fetch_add(&test_monotonic_offset_ms, 501u);
+        assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+    }
+    accept_error = EIO;
+    for (unsigned i = 0; i < 4; ++i) {
+        assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+        atomic_fetch_add(&test_monotonic_offset_ms, 51u);
+        assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+    }
+    assert(tg_epoll_proxy_step(proxy, 0) == TG_EPOLL_REBIND_LISTENER);
+    assert(tg_epoll_proxy_set_listener(proxy, -1) == 0);
+    close(listener);
+    close(pending);
+    accept_error = 0;
+    int replacement = create_listener(&replacement_port);
+    assert(tg_epoll_proxy_set_listener(proxy, replacement) == 0);
+    int client = connect_to_listener(replacement_port);
+    assert(tg_epoll_proxy_step(proxy, 100) > 0);
+    assert(tg_epoll_proxy_active_connections(proxy) == 1);
+    close(client);
+    tg_epoll_proxy_destroy(proxy);
+    close(replacement);
+    atomic_store(&test_monotonic_offset_ms, 0);
+}
+
+static void test_small_fd_limit_keeps_a_client_slot(void) {
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        const struct rlimit fd_limit = {.rlim_cur = 48, .rlim_max = 48};
+        assert(setrlimit(RLIMIT_NOFILE, &fd_limit) == 0);
+        uint16_t port;
+        int listener = create_listener(&port);
+        SSL_CTX *tls_context = SSL_CTX_new(TLS_client_method());
+        assert(tls_context);
+        const tg_config routing = {.ws_hedge_limit = 8};
+        tg_epoll_proxy_config config = {
+            .listener_fd = listener,
+            .queue_bytes = 65536,
+            .memory_budget_bytes = 8u * 1024u * 1024u,
+            .configured_max_connections = 1,
+            .handshake_timeout_ms = 1000,
+            .idle_timeout_ms = 5000,
+            .enable_direct_wss = 1,
+            .tls_context = tls_context,
+            .routing_config = &routing,
+            .select_target = select_target
+        };
+        tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
+        assert(proxy && tg_epoll_proxy_max_connections(proxy) == 1);
+        tg_epoll_proxy_destroy(proxy);
+        SSL_CTX_free(tls_context);
+        close(listener);
+        _exit(0);
+    }
+    int status;
+    assert(waitpid(child, &status, 0) == child);
+    assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+typedef struct {
+    wss_server_fixture upstream[4];
+    tg_listener_destination targets[4];
+    int fail_dc4_proxy;
+} memory_recovery_fixture;
+
+static int resolve_memory_test_route(void *opaque, const char *hostname,
+                                     tg_listener_destination *out) {
+    memory_recovery_fixture *fixture = opaque;
+    /* DC4 media must fail both Proxy variants before reaching Worker. */
+    if (fixture->fail_dc4_proxy && strcmp(hostname, "kws4.cfproxy.test") == 0)
+        return -1;
+    for (size_t i = 0; i < 4; ++i) {
+        if (strcmp(hostname, fixture->upstream[i].expected_sni) == 0) {
+            *out = fixture->targets[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void receive_exact_client(int fd, uint8_t *data, size_t len) {
+    while (len) {
+        ssize_t received = recv(fd, data, len, 0);
+        assert(received > 0);
+        data += (size_t)received;
+        len -= (size_t)received;
+    }
+}
+
+typedef struct {
+    int fd;
+    wss_server_fixture *upstream;
+} media_test_client;
+
+static void *read_media_test_client(void *opaque) {
+    const media_test_client *client = opaque;
+    wss_server_fixture *upstream = client->upstream;
+    uint8_t data[TEST_MEDIA_CHUNK];
+    receive_exact_client(client->fd, data, upstream->response_packet_len);
+    assert(memcmp(data, upstream->response_packet, upstream->response_packet_len) == 0);
+    if (!upstream->media_chunks) return NULL;
+    tg_mtproto_ctr cipher = {0};
+    assert(tg_mtproto_direct_server_stream_cipher(upstream->handshake, &cipher) == 0);
+    assert(tg_mtproto_ctr_xor(&cipher, data, upstream->response_packet_len) == 0);
+    for (size_t i = 0; i < upstream->media_chunks; ++i) {
+        receive_exact_client(client->fd, data, sizeof(data));
+        assert(tg_mtproto_ctr_xor(&cipher, data, sizeof(data)) == 0);
+        assert(memcmp(data, (uint8_t[]){0xfc, 0x3f, 0, 0}, 4) == 0);
+        for (size_t j = 4; j < sizeof(data); ++j) assert(data[j] == (uint8_t)(i + 1u));
+    }
+    tg_mtproto_ctr_destroy(&cipher);
+    return NULL;
+}
+
+static void test_media_after_low_memory_start(size_t media_chunks) {
+    char directory[] = "/tmp/d2s-tg-memory-XXXXXX", cert_path[256], key_path[256];
+    assert(mkdtemp(directory));
+    assert(snprintf(cert_path, sizeof(cert_path), "%s/cert.pem", directory) > 0);
+    assert(snprintf(key_path, sizeof(key_path), "%s/key.pem", directory) > 0);
+    EVP_PKEY *key = make_wss_test_key();
+    X509 *cert = make_wss_test_cert(key);
+    FILE *file = fopen(cert_path, "w");
+    assert(file && PEM_write_X509(file, cert) == 1);
+    fclose(file);
+    file = fopen(key_path, "w");
+    assert(file && PEM_write_PrivateKey(file, key, NULL, NULL, 0, NULL, NULL) == 1);
+    fclose(file);
+    X509_free(cert);
+    EVP_PKEY_free(key);
+
+    memory_recovery_fixture fixture = {0};
+    static const char *const sni[] = {
+        "kws4.cfproxy.test", "kws2.cfproxy.test", "kws2-1.cfproxy.test", "kws3-1.cfproxy.test"
+    };
+    static const uint32_t dc[] = {4, 2, 2, 3};
+    pthread_t upstream_threads[4], readers[2];
+    media_test_client clients[4];
+    for (size_t i = 0; i < 4; ++i) {
+        uint16_t port;
+        wss_server_fixture *upstream = &fixture.upstream[i];
+        upstream->listener = create_listener(&port);
+        upstream->cert_path = cert_path;
+        upstream->key_path = key_path;
+        upstream->expected_sni = sni[i];
+        upstream->expected_path = "/apiws";
+        upstream->expect_binary_subprotocol = 1;
+        upstream->expect_no_browser_headers = 0;
+        upstream->media_chunks = i >= 2 ? media_chunks : 0;
+        upstream->repeat_response = i < 2;
+        upstream->handshake_len = sizeof(upstream->handshake);
+        atomic_init(&upstream->complete, 0);
+        make_wss_test_handshake(TG_MTPROTO_INTERMEDIATE, dc[i], i >= 2,
+                                upstream->handshake);
+        prepare_wss_response(upstream, upstream->handshake, TG_MTPROTO_INTERMEDIATE);
+        memcpy(upstream->expected_packet, (uint8_t[]){8,0,0,0,1,2,3,4,5,6,7,8}, 12);
+        tg_mtproto_ctr decrypt = {0}, encrypt = {0};
+        assert(tg_mtproto_direct_stream_ciphers(upstream->handshake, &decrypt, &encrypt) == 0);
+        assert(tg_mtproto_ctr_xor(&encrypt, upstream->expected_packet, 12) == 0);
+        tg_mtproto_ctr_destroy(&decrypt);
+        tg_mtproto_ctr_destroy(&encrypt);
+        set_ipv4(&fixture.targets[i], "127.0.0.1", port);
+        assert(pthread_create(&upstream_threads[i], NULL, serve_direct_wss, upstream) == 0);
+    }
+
+    uint16_t proxy_port;
+    int listener = create_listener(&proxy_port);
+    proxy_fixture target = {0};
+    set_ipv4(&target.original, "149.154.167.51", 443);
+    target.upstream = fixture.targets[0];
+    tg_config routing = {.ws_routing = TG_WS_ROUTING_CF_FIRST, .route_only = TG_ROUTE_ONLY_CF_PROXY};
+    routing.cf_proxy_domain_count = 1;
+    routing.cf_worker_domain_count = 1;
+    memcpy(routing.cf_proxy_domains[0], "cfproxy.test", sizeof("cfproxy.test"));
+    memcpy(routing.cf_worker_domains[0], "worker.test", sizeof("worker.test"));
+    SSL_CTX *tls = tg_tls_client_context(cert_path);
+    assert(tls);
+    const size_t mib = 1024u * 1024u, total = 128u * mib, configured = 32;
+    const size_t cold = 8u * mib, recovered = 48u * mib;
+    tg_epoll_proxy_config config = {
+        .listener_fd = listener,
+        .queue_bytes = 64u * 1024u,
+        .configured_max_connections = configured,
+        .initial_connection_limit = tg_limits_policy_connections(
+            tg_limits_soft_nofile(), total, cold, configured),
+        .memory_budget_bytes = tg_limits_runtime_memory_budget(total, cold),
+        .handshake_timeout_ms = 3000,
+        .idle_timeout_ms = 30000,
+        .enable_direct_wss = 1,
+        .tls_context = tls,
+        .routing_config = &routing,
+        .resolve_domain = resolve_memory_test_route,
+        .route_context = &fixture,
+        .original_destination = original_destination,
+        .select_target = select_target,
+        .context = &target
+    };
+    tg_epoll_proxy *proxy = tg_epoll_proxy_create(&config);
+    assert(proxy && tg_epoll_proxy_max_connections(proxy) == 2);
+    proxy_runner runner = {.server = proxy};
+    atomic_init(&runner.stop, 0);
+    pthread_t proxy_thread;
+    uint64_t media_started_us = 0;
+    assert(pthread_create(&proxy_thread, NULL, run_proxy, &runner) == 0);
+    for (size_t i = 0; i < 4; ++i) {
+        if (i == 2) {
+            atomic_store(&runner.stop, 1);
+            assert(pthread_join(proxy_thread, NULL) == 0);
+            assert(tg_epoll_proxy_active_connections(proxy) == 2);
+            fixture.fail_dc4_proxy = 1;
+            tg_epoll_proxy_update_limits(proxy,
+                tg_limits_policy_connections(tg_limits_soft_nofile(),
+                                             total, recovered, configured),
+                tg_limits_runtime_memory_budget(total, recovered));
+            atomic_store(&runner.stop, 0);
+            assert(pthread_create(&proxy_thread, NULL, run_proxy, &runner) == 0);
+            media_started_us = test_monotonic_us();
+        }
+        clients[i].fd = connect_to_listener(proxy_port);
+        clients[i].upstream = &fixture.upstream[i];
+        struct timeval timeout = {.tv_sec = 10};
+        assert(setsockopt(clients[i].fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0);
+        assert(send(clients[i].fd, fixture.upstream[i].handshake, 64, MSG_NOSIGNAL) == 64);
+        assert(send(clients[i].fd, fixture.upstream[i].expected_packet, 12, MSG_NOSIGNAL) == 12);
+        if (i < 2) read_media_test_client(&clients[i]);
+        else assert(pthread_create(&readers[i - 2], NULL, read_media_test_client, &clients[i]) == 0);
+    }
+    uint64_t text_latency_us = 0;
+    /* Send a second valid transport packet on each established text stream
+     * while the media readers and writers are running. */
+    for (size_t i = 0; i < 2; ++i) {
+        wss_server_fixture *upstream = clients[i].upstream;
+        uint8_t packet[] = {8, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+        uint8_t discarded[sizeof(packet)] = {0};
+        tg_mtproto_ctr decrypt = {0}, encrypt = {0};
+        assert(tg_mtproto_direct_stream_ciphers(upstream->handshake, &decrypt, &encrypt) == 0);
+        assert(tg_mtproto_ctr_xor(&encrypt, discarded, sizeof(discarded)) == 0);
+        assert(tg_mtproto_ctr_xor(&encrypt, packet, sizeof(packet)) == 0);
+        tg_mtproto_ctr_destroy(&decrypt);
+        tg_mtproto_ctr_destroy(&encrypt);
+        uint64_t sent_us = test_monotonic_us();
+        assert(send(clients[i].fd, packet, sizeof(packet), MSG_NOSIGNAL) == (ssize_t)sizeof(packet));
+        read_media_test_client(&clients[i]);
+        uint64_t elapsed_us = test_monotonic_us() - sent_us;
+        if (elapsed_us > text_latency_us) text_latency_us = elapsed_us;
+    }
+    for (size_t i = 0; i < 2; ++i) assert(pthread_join(readers[i], NULL) == 0);
+    uint64_t media_elapsed_us = test_monotonic_us() - media_started_us;
+    for (size_t i = 0; i < 4; ++i) {
+        assert(shutdown(clients[i].fd, SHUT_WR) == 0);
+        assert(pthread_join(upstream_threads[i], NULL) == 0);
+        assert(atomic_load(&fixture.upstream[i].complete) == 1);
+        close(clients[i].fd);
+        close(fixture.upstream[i].listener);
+    }
+    atomic_store(&runner.stop, 1);
+    assert(pthread_join(proxy_thread, NULL) == 0);
+    tg_epoll_proxy_stats stats;
+    assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
+    assert(stats.wss_responses == 4 && stats.cf_wss_responses == 4);
+    assert(stats.buffer_bytes_peak < mib);
+    printf("mixed traffic: 4/4, media 2/2, WSS buffer peak %zu bytes, "
+           "media %zu bytes in %" PRIu64 " us, text max RTT %" PRIu64 " us\n",
+           stats.buffer_bytes_peak, 2u * TEST_MEDIA_CHUNK * media_chunks,
+           media_elapsed_us, text_latency_us);
+    tg_epoll_proxy_destroy(proxy);
+    SSL_CTX_free(tls);
+    close(listener);
+    unlink(key_path);
+    unlink(cert_path);
+    assert(rmdir(directory) == 0);
+}
+
+int main(int argc, char **argv) {
     (void)signal(SIGPIPE, SIG_IGN);
+    if (argc == 2) {
+        test_media_after_low_memory_start((size_t)strtoul(argv[1], NULL, 10));
+        return 0;
+    }
+    test_media_after_low_memory_start(512);
+    test_small_fd_limit_keeps_a_client_slot();
+    test_listener_recovery_preserves_runtime();
+    test_adaptive_races_alternates_in_both_wss_branches();
     test_epoll_bridge_preserves_handshake_and_half_close();
     test_https_passthrough_keeps_bytes_and_mtproto_stats_separate();
     test_epoll_many_concurrent_tcp_clients();
@@ -3468,10 +3873,11 @@ int main(void) {
     test_self_dial_target_is_rejected();
     test_epoll_wss_forwards_unrecognized_binary_response();
     test_epoll_wss_transport_ack_keeps_route_selected();
-    test_epoll_hedged_wss_commits_one_route_before_payload(TG_MTPROTO_ABRIDGED);
-    test_epoll_hedged_wss_commits_one_route_before_payload(TG_MTPROTO_INTERMEDIATE);
+    test_epoll_hedged_wss_commits_one_route_before_payload(TG_MTPROTO_ABRIDGED, 0);
+    test_epoll_hedged_wss_commits_one_route_before_payload(TG_MTPROTO_INTERMEDIATE, 0);
+    test_epoll_hedged_wss_commits_one_route_before_payload(TG_MTPROTO_INTERMEDIATE, 1);
     test_epoll_hedged_wss_commits_one_route_before_payload(
-        TG_MTPROTO_PADDED_INTERMEDIATE);
+        TG_MTPROTO_PADDED_INTERMEDIATE, 0);
     test_epoll_wss_partial_request_is_not_replayed();
     test_epoll_wss_partial_response_does_not_replay_request();
     test_epoll_cf_worker_uses_raw_stream_framing();
