@@ -112,6 +112,16 @@ typedef struct {
     size_t buffer_bytes_current;
     size_t buffer_bytes_peak;
     size_t buffer_bytes_limit;
+    uint64_t accept_limit_rejections;
+    uint64_t accept_fd_exhaustion;
+    uint64_t allocation_failures;
+    uint64_t buffer_budget_rejections;
+    uint64_t buffer_size_rejections;
+    uint64_t wss_read_pauses;
+    uint64_t wss_read_resumes;
+    uint64_t wss_paused_timeouts;
+    size_t wss_reads_paused;
+    uint64_t wss_oldest_pause_ms;
     uint64_t connections_started;
     uint64_t bytes_from_clients;
     uint64_t bytes_from_upstreams;
@@ -205,7 +215,7 @@ tg_epoll_proxy *tg_epoll_proxy_create(const tg_epoll_proxy_config *config);
 int tg_epoll_proxy_set_listener(tg_epoll_proxy *server, int listener_fd);
 /* Call on the event-loop thread. Existing connections are not evicted. */
 void tg_epoll_proxy_update_limits(tg_epoll_proxy *server, size_t connection_limit,
-                                  size_t memory_budget_bytes);
+                                  size_t memory_headroom_bytes, size_t memory_ceiling_bytes);
 int tg_epoll_proxy_step(tg_epoll_proxy *server, int timeout_ms);
 void tg_epoll_proxy_destroy(tg_epoll_proxy *server);
 size_t tg_epoll_proxy_active_connections(const tg_epoll_proxy *server);

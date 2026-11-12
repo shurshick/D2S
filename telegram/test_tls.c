@@ -367,6 +367,27 @@ static void test_websocket_upgrade_rejects_invalid_accept_value(void) {
     assert(state.failed && consumed == sizeof(response) - 1u);
 }
 
+static void test_worker_5222_requires_port_ack(void) {
+    const char *protocols[] = {"", "Sec-WebSocket-Protocol: binary\r\n",
+        "Sec-WebSocket-Protocol: d2o-tcp-5222-v1\r\n"};
+    for (size_t i = 0; i < 3; ++i) {
+        tg_ws_upgrade_state state = {0};
+        assert(tg_ws_upgrade_start_ex(&state, "worker.test", "/d2o/apiws/5222?dst=149.154.167.51",
+            "d2o-tcp-5222-v1", NULL, NULL) == 0);
+        size_t length, consumed;
+        assert(tg_ws_upgrade_pending(&state, &length));
+        assert(tg_ws_upgrade_advance(&state, length) == 0);
+        char source[128], accept[40], response[512];
+        int n = snprintf(source, sizeof(source), "%s258EAFA5-E914-47DA-95CA-C5AB0DC85B11", state.key);
+        uint8_t digest[SHA_DIGEST_LENGTH]; unsigned digest_len;
+        assert(EVP_Digest(source, (size_t)n, digest, &digest_len, EVP_sha1(), NULL) == 1);
+        assert(EVP_EncodeBlock((unsigned char *)accept, digest, (int)digest_len) == 28);
+        n = snprintf(response, sizeof(response), "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n%s\r\n", accept, protocols[i]);
+        int result = tg_ws_upgrade_feed(&state, (const uint8_t *)response, (size_t)n, &consumed);
+        assert(result == (i == 2 ? 1 : -1));
+    }
+}
+
 static void test_websocket_upgrade_rejects_invalid_state_and_controls(void) {
     tg_ws_upgrade_state state = {0};
     assert(tg_ws_upgrade_start(&state, "kws2.web.telegram.org", "/apiws") == 0);
@@ -569,6 +590,7 @@ static void test_websocket_partial_write_retains_memory_budget(void) {
 }
 
 int main(void) {
+    test_worker_5222_requires_port_ack();
     test_websocket_partial_write_retains_memory_budget();
     test_websocket_tiny_frames_charge_allocations();
     test_tls_client_preparation_is_nonblocking();

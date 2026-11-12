@@ -293,7 +293,7 @@ static int resolve_test_route_domain(void *opaque, const char *domain,
         strcmp(domain, "kws4.cfproxy.test") != 0 &&
         strcmp(domain, "kws4-1.cfproxy.test") != 0 &&
         strcmp(domain, "kws203-1.cfproxy.test") != 0) return -1;
-    *out = fixture->upstream;
+    *out = !strcmp(domain,"worker.test") && fixture->worker_upstream.port ? fixture->worker_upstream : fixture->upstream;
     return 0;
 }
 
@@ -335,7 +335,7 @@ static int select_local_proxy_route(
     if (tg_mtproto_parse_secret(handshake, fixture->local_secret,
                                 fixture->local_secret_len, &parsed) != 0)
         return -1;
-    selection->upstream = fixture->worker_upstream;
+    selection->upstream = fixture->upstream;
     selection->dc_id = parsed.dc_id;
     selection->is_media = parsed.is_media;
     selection->proto = parsed.proto;
@@ -618,19 +618,21 @@ static void serve_direct_wss_connection(wss_server_fixture *fixture, int fd) {
         tg_mtproto_ctr relay_enc = {0}, relay_dec = {0};
         assert(tg_mtproto_build_raw_ciphers(fixture->handshake, &relay_enc,
                                             &relay_dec) == 0);
-        int packet_rc = read_masked_client_frame(ssl, &opcode, payload,
-                                                 sizeof(payload), &payload_len);
-        assert(packet_rc == 0 && opcode == TG_WS_BINARY);
-        assert(payload_len == fixture->bridge_packet_len);
-        assert(tg_mtproto_ctr_xor(&relay_enc, payload, payload_len) == 0);
-        assert(memcmp(payload, fixture->bridge_packet, payload_len) == 0);
-        uint8_t response[sizeof(fixture->response_packet)];
-        assert(fixture->response_packet_len <= sizeof(response));
-        memcpy(response, fixture->response_packet, fixture->response_packet_len);
-        assert(tg_mtproto_ctr_xor(&relay_dec, response,
-                                  fixture->response_packet_len) == 0);
-        assert(write_server_frame(ssl, TG_WS_BINARY, response,
-                                  fixture->response_packet_len) == 0);
+        for(unsigned round=0;round<3;round++) {
+            int packet_rc = read_masked_client_frame(ssl, &opcode, payload,
+                                                     sizeof(payload), &payload_len);
+            assert(packet_rc == 0 && opcode == TG_WS_BINARY);
+            assert(payload_len == fixture->bridge_packet_len);
+            assert(tg_mtproto_ctr_xor(&relay_enc, payload, payload_len) == 0);
+            assert(memcmp(payload, fixture->bridge_packet, payload_len) == 0);
+            uint8_t response[sizeof(fixture->response_packet)];
+            assert(fixture->response_packet_len <= sizeof(response));
+            memcpy(response, fixture->response_packet, fixture->response_packet_len);
+            assert(tg_mtproto_ctr_xor(&relay_dec, response,
+                                      fixture->response_packet_len) == 0);
+            assert(write_server_frame(ssl, TG_WS_BINARY, response,
+                                      fixture->response_packet_len) == 0);
+        }
         tg_mtproto_ctr_destroy(&relay_enc);
         tg_mtproto_ctr_destroy(&relay_dec);
         atomic_store(&fixture->complete, 1);
@@ -1725,7 +1727,6 @@ static void test_epoll_wss_forwards_unrecognized_binary_response(void) {
     tg_mtproto_ctr_destroy(&encrypt);
     assert(send(client, encrypted_packet, sizeof(encrypted_packet), 0) ==
            (ssize_t)sizeof(encrypted_packet));
-    assert(shutdown(client, SHUT_WR) == 0);
 
     uint8_t response[sizeof(invalid_response)];
     size_t received = 0;
@@ -1740,9 +1741,16 @@ static void test_epoll_wss_forwards_unrecognized_binary_response(void) {
     assert(recv(client, &extra, sizeof(extra), 0) == 0);
     assert(pthread_join(wss_thread, NULL) == 0);
     assert(atomic_load(&wss.complete) == 1 && fixture.routes == 1);
-    close(client);
+    /* Leave the client write side open after upstream EOF. It must release
+     * the slot on the close deadline instead of keeping it until idle. */
     atomic_store(&runner.stop, 1);
     assert(pthread_join(proxy_thread, NULL) == 0);
+    assert(tg_epoll_proxy_active_connections(proxy) == 1);
+    atomic_store(&test_monotonic_offset_ms, 3100u);
+    assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+    atomic_store(&test_monotonic_offset_ms, 0);
+    assert(tg_epoll_proxy_active_connections(proxy) == 0);
+    close(client);
     tg_epoll_proxy_stats route_stats;
     assert(tg_epoll_proxy_get_stats(proxy, &route_stats) == 0);
     assert(route_stats.wss_attempts == 1 && route_stats.wss_responses == 0 &&
@@ -2247,7 +2255,39 @@ static void test_epoll_wss_partial_response_does_not_replay_request(void) {
     assert(rmdir(directory) == 0);
 }
 
-static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
+int tg_epoll_proxy_test_worker_pool_take(int fd, SSL *ssl,
+                                      const char *hostname, const char *path);
+
+static void test_worker_pool_requires_exact_target(void) {
+    uint16_t port;
+    int listener = create_listener(&port);
+    int fd = connect_to_listener(port);
+    int peer = accept(listener, NULL, NULL);
+    assert(peer >= 0);
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    assert(ctx);
+    SSL *ssl = SSL_new(ctx);
+    assert(ssl && SSL_set_fd(ssl, fd) == 1);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "worker.test",
+        "/apiws?dst=149.154.167.151&dc=2&media=1") == 0);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "worker.test",
+        "/apiws?dst=149.154.167.51&dc=2&media=0") == 0);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "worker.test",
+        "/apiws?dst=149.154.167.51&dc=4&media=1") == 0);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "worker.test",
+        "/d2o/apiws/5222?dst=149.154.167.51&dc=2&media=1") == 0);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "other.test",
+        "/apiws?dst=149.154.167.51&dc=2&media=1") == 0);
+    assert(tg_epoll_proxy_test_worker_pool_take(fd, ssl, "worker.test",
+        "/apiws?dst=149.154.167.51&dc=2&media=1") == 1);
+    SSL_free(ssl);
+    SSL_CTX_free(ctx);
+    close(peer);
+    close(fd);
+    close(listener);
+}
+
+static void test_epoll_cf_worker_uses_raw_stream_framing(const char *address) {
     char directory[] = "/tmp/d2s-tg-worker-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
@@ -2264,13 +2304,14 @@ static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
     X509_free(cert);
     EVP_PKEY_free(key);
 
+    char expected_path[160];snprintf(expected_path,sizeof expected_path,"/apiws?dst=%s&dc=4&media=1",address);
     uint16_t ws_port, proxy_port;
     wss_server_fixture worker = {
         .listener = create_listener(&ws_port),
         .cert_path = cert_path,
         .key_path = key_path,
         .expected_sni = "worker.test",
-        .expected_path = "/apiws?dst=149.154.167.91&dc=4&media=1",
+        .expected_path = expected_path,
         .expect_binary_subprotocol = 0,
         .expect_no_browser_headers = 1
     };
@@ -2291,7 +2332,8 @@ static void test_epoll_cf_worker_uses_raw_stream_framing(void) {
 
     int listener = create_listener(&proxy_port);
     proxy_fixture fixture = {0};
-    set_ipv4(&fixture.original, "149.154.167.51", 443);
+    fixture.original.family=strchr(address,':')?AF_INET6:AF_INET;fixture.original.port=443;
+    assert(inet_pton(fixture.original.family,address,fixture.original.address)==1);
     set_ipv4(&fixture.upstream, "127.0.0.1", ws_port);
     SSL_CTX *tls_context = tg_tls_client_context(cert_path);
     assert(tls_context);
@@ -2387,7 +2429,7 @@ static void test_async_route_dns_waits_before_worker(void) {
         .cert_path = cert_path,
         .key_path = key_path,
         .expected_sni = "worker.test",
-        .expected_path = "/apiws?dst=149.154.167.91&dc=4&media=1",
+        .expected_path = "/apiws?dst=149.154.167.51&dc=4&media=1",
         .expect_binary_subprotocol = 0,
         .expect_no_browser_headers = 1
     };
@@ -3328,7 +3370,7 @@ static void test_epoll_wss_sends_ping(void) {
     assert(rmdir(directory) == 0);
 }
 
-static void run_local_proxy_bridge(int packet_framing, int adaptive) {
+static void run_local_proxy_bridge(int packet_framing, int racing) {
     char directory[] = "/tmp/d2s-tg-local-XXXXXX";
     char cert_path[256], key_path[256];
     assert(mkdtemp(directory) != NULL);
@@ -3405,20 +3447,19 @@ static void run_local_proxy_bridge(int packet_framing, int adaptive) {
     proxy_fixture fixture = {0};
     set_ipv4(&fixture.worker_upstream, "127.0.0.1", ws_port);
     fixture.upstream = fixture.worker_upstream;
+    if(!packet_framing)set_ipv4(&fixture.upstream,"149.154.167.91",443);
     memcpy(fixture.local_secret, secret, sizeof(secret));
     fixture.local_secret_len = sizeof(secret);
     SSL_CTX *tls_context = tg_tls_client_context(cert_path);
     assert(tls_context);
     tg_config routing = {0};
-    routing.ws_routing = TG_WS_ROUTING_CF_FIRST;
+    routing.ws_routing = racing ? TG_WS_ROUTING_HEDGED : TG_WS_ROUTING_CF_FIRST;
+    routing.ws_hedge_limit = racing ? 1 : 0;
+    routing.ws_hedge_delay_ms = 125;
     if (packet_framing) {
-        routing.route_only = adaptive ? TG_ROUTE_ONLY_AUTO : TG_ROUTE_ONLY_DIRECT;
-        if (adaptive) {
-            routing.ws_routing = TG_WS_ROUTING_HEDGED;
-            routing.ws_hedge_limit = 1;
-            routing.ws_hedge_delay_ms = 1;
-        }
+        routing.route_only = racing ? TG_ROUTE_ONLY_AUTO : TG_ROUTE_ONLY_DIRECT;
     } else {
+        routing.route_only = TG_ROUTE_ONLY_WORKER;
         routing.cf_worker_domain_count = 1;
         memcpy(routing.cf_worker_domains[0], "worker.test",
                sizeof("worker.test"));
@@ -3471,25 +3512,29 @@ static void run_local_proxy_bridge(int packet_framing, int adaptive) {
     assert(tg_mtproto_build_client_ciphers(secret_handshake, secret,
                                            sizeof(secret), &client_dec,
                                            &client_enc) == 0);
-    uint8_t wire[sizeof(plaintext)];
-    memcpy(wire, plaintext, plaintext_len);
-    assert(tg_mtproto_ctr_xor(&client_dec, wire, plaintext_len) == 0);
-    sent = 0;
-    while (sent < plaintext_len) {
-        ssize_t n = send(client, wire + sent, plaintext_len - sent, 0);
-        assert(n > 0);
-        sent += (size_t)n;
+    /* Multiple rounds verify bridge counters after promotion, including
+     * packet lengths which end partway through an AES block. */
+    for(unsigned round=0;round<3;round++) {
+        uint8_t wire[sizeof(plaintext)];
+        memcpy(wire, plaintext, plaintext_len);
+        assert(tg_mtproto_ctr_xor(&client_dec, wire, plaintext_len) == 0);
+        sent = 0;
+        while (sent < plaintext_len) {
+            ssize_t n = send(client, wire + sent, plaintext_len - sent, 0);
+            assert(n > 0);
+            sent += (size_t)n;
+        }
+        uint8_t response[sizeof(response_plain)];
+        size_t received = 0;
+        while (received < response_len) {
+            ssize_t n = recv(client, response + received,
+                             response_len - received, 0);
+            assert(n > 0);
+            received += (size_t)n;
+        }
+        assert(tg_mtproto_ctr_xor(&client_enc, response, response_len) == 0);
+        assert(memcmp(response, response_plain, response_len) == 0);
     }
-    uint8_t response[sizeof(response_plain)];
-    size_t received = 0;
-    while (received < response_len) {
-        ssize_t n = recv(client, response + received,
-                         response_len - received, 0);
-        assert(n > 0);
-        received += (size_t)n;
-    }
-    assert(tg_mtproto_ctr_xor(&client_enc, response, response_len) == 0);
-    assert(memcmp(response, response_plain, response_len) == 0);
     tg_mtproto_ctr_destroy(&client_dec);
     tg_mtproto_ctr_destroy(&client_enc);
     close(client);
@@ -3505,6 +3550,7 @@ static void run_local_proxy_bridge(int packet_framing, int adaptive) {
 
 static void test_local_proxy_secret_bridges_transport(void) {
     run_local_proxy_bridge(0, 0);
+    run_local_proxy_bridge(0, 1);
 }
 
 static void test_local_proxy_packet_framing(void) {
@@ -3786,11 +3832,30 @@ static void test_media_after_low_memory_start(size_t media_chunks) {
             atomic_store(&runner.stop, 1);
             assert(pthread_join(proxy_thread, NULL) == 0);
             assert(tg_epoll_proxy_active_connections(proxy) == 2);
+            /* Under pressure there is no room for another session, but the
+             * already allocated buffers must remain usable. */
+            size_t ceiling = tg_limits_runtime_memory_budget(total, total);
+            size_t admission = tg_limits_policy_admission(tg_limits_soft_nofile(),
+                total, 0, configured, tg_epoll_proxy_active_connections(proxy));
+            tg_epoll_proxy_update_limits(proxy, admission, 0, ceiling);
+            tg_epoll_proxy_stats pressure;
+            assert(tg_epoll_proxy_get_stats(proxy, &pressure) == 0);
+            assert(pressure.buffer_bytes_current > 0);
+            assert(pressure.buffer_bytes_limit == pressure.buffer_bytes_current);
+            assert(pressure.max_connections == 2 && pressure.active_connections == 2);
+            int rejected = connect_to_listener(proxy_port);
+            assert(tg_epoll_proxy_step(proxy, 0) >= 0);
+            uint8_t byte;
+            assert(recv(rejected, &byte, sizeof(byte), MSG_DONTWAIT) == 0);
+            close(rejected);
+            assert(tg_epoll_proxy_get_stats(proxy, &pressure) == 0);
+            assert(pressure.accept_limit_rejections == 1);
             fixture.fail_dc4_proxy = 1;
             tg_epoll_proxy_update_limits(proxy,
                 tg_limits_policy_connections(tg_limits_soft_nofile(),
                                              total, recovered, configured),
-                tg_limits_runtime_memory_budget(total, recovered));
+                tg_limits_runtime_memory_budget(total, recovered),
+                tg_limits_runtime_memory_budget(total, total));
             atomic_store(&runner.stop, 0);
             assert(pthread_create(&proxy_thread, NULL, run_proxy, &runner) == 0);
             media_started_us = test_monotonic_us();
@@ -3838,6 +3903,8 @@ static void test_media_after_low_memory_start(size_t media_chunks) {
     assert(tg_epoll_proxy_get_stats(proxy, &stats) == 0);
     assert(stats.wss_responses == 4 && stats.cf_wss_responses == 4);
     assert(stats.buffer_bytes_peak < mib);
+    assert(stats.buffer_budget_rejections == 0 && stats.allocation_failures == 0);
+    assert(stats.wss_read_pauses == stats.wss_read_resumes && stats.wss_reads_paused == 0);
     printf("mixed traffic: 4/4, media 2/2, WSS buffer peak %zu bytes, "
            "media %zu bytes in %" PRIu64 " us, text max RTT %" PRIu64 " us\n",
            stats.buffer_bytes_peak, 2u * TEST_MEDIA_CHUNK * media_chunks,
@@ -3880,7 +3947,10 @@ int main(int argc, char **argv) {
         TG_MTPROTO_PADDED_INTERMEDIATE, 0);
     test_epoll_wss_partial_request_is_not_replayed();
     test_epoll_wss_partial_response_does_not_replay_request();
-    test_epoll_cf_worker_uses_raw_stream_framing();
+    test_epoll_cf_worker_uses_raw_stream_framing("149.154.167.51");
+    test_epoll_cf_worker_uses_raw_stream_framing("149.154.167.43");
+    test_epoll_cf_worker_uses_raw_stream_framing("2001:67c:4e8:f004::a");
+    test_worker_pool_requires_exact_target();
     test_local_proxy_secret_bridges_transport();
     test_local_proxy_packet_framing();
     test_epoll_wss_sends_ping();

@@ -2,11 +2,13 @@
 #define D2S_TG_MEMORY_BUDGET_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
     size_t limit;
     size_t used;
     size_t peak;
+    uint64_t rejections, allocation_failures, size_rejections;
 } tg_memory_budget;
 
 int tg_memory_budget_reserve(tg_memory_budget *budget, size_t bytes);
