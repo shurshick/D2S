@@ -1,0 +1,45 @@
+{
+  "release": "d2s-v0.5.6",
+  "source": "62cb965003c3d75a012a4bc371d0c858551f83d2",
+  "ci_run": 43230092954,
+  "release_run": 43230563154,
+  "stable_latest": true,
+  "router_deployed": false,
+  "checks": [
+    "Telegram unit and ASan/UBSan PASS",
+    "Local secret MTProto with hedged policy RED before sequential exception, GREEN after",
+    "Panel test/test-js PASS",
+    "Namespace and upstream network guard PASS",
+    "Exact-source GitHub integration and engine proof PASS",
+    "ARM64/ARM/MIPSel/amd64 builds and QEMU launch PASS",
+    "Downloaded package completeness and RAM preflight PASS",
+    "Packaged source equality, release IDs and preserved MTProto/Meta feature flags PASS",
+    "Ed25519 and SHA256SUMS PASS",
+    "Tag equals source SHA PASS"
+  ],
+  "lab_fixture": {
+    "transport": "local synthetic CF Proxy TLS/WebSocket",
+    "clients": 4,
+    "media_clients": 2,
+    "media_bytes": 16777216,
+    "wss_buffer_peak_bytes": 361472,
+    "total_memory_simulated_bytes": 134217728,
+    "available_cold_bytes": 8388608,
+    "available_recovered_bytes": 50331648,
+    "scope": "buffer accounting only; not total RSS or router performance"
+  },
+  "limits": [
+    "Parallel route race applies to transparent mode; secret MTProto is sequential",
+    "No live router/app verification",
+    "ZeroDNS and Worker 5222 excluded"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "4e1993a4eac0b3ef5de3ad09b1c8a24332d15b198a21863f1100c50709f64376",
+    "d2s-arm.tar.gz": "bd2ee0e2e553fe181f6aa0568ebc0691f2db9c34464ef7e78f4262a3cd5625a6",
+    "d2s-arm64.tar.gz": "989a1f6efc057db7edcc2fd3d3d3e3f7d23a20160f27362bd9d2e2083db3002a",
+    "d2s-mipsel.tar.gz": "ffe66f2247d16ffda5f9260fbb6dd2c1d2daf26a7380ac4e8aac27528b5162d1",
+    "latest.json": "b6dc5d4d0008396362bd8961c04c225bc9029f758a97c8817598df375a917056",
+    "latest.json.sig": "e19e51881bb399a41e8ecb2970b74d5b36e6ef3bb2641498531e414c76a00cd1",
+    "SHA256SUMS": "6a69d355ec54dcaac3c0f88a303ac7203d90b8f56dd162c1eed276d2f2948520"
+  }
+}
