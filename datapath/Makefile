@@ -72,6 +72,12 @@ test-nfq-rcvbuf-linux: test_nfq_rcvbuf test_nfq_rcvbuf_unit
 
 all: planlab ctlprobe
 
+# Real UDP GSO delivery; requires Linux CAP_NET_ADMIN and an isolated netns.
+.PHONY: test-nfq-gso-linux
+test-nfq-gso-linux:
+	$(CC) $(CFLAGS) -o /tmp/d2s-test-nfq-gso test_nfq_gso.c nfq.c nl.c $(LDFLAGS)
+	sh ../scripts/test-nfq-gso.sh
+
 HDR += include/d2s_packet.h
 HDR += $(CORE_DIR)/include/d2s_ip6frag_send.h
 

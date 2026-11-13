@@ -169,6 +169,10 @@ int main(void) {
         CHECK(o[28] == D2S_NFQNL_COPY_PACKET, "copy_mode не на своём месте");
         CHECK(o[29] == 0 && o[30] == 0 && o[31] == 0,
               "хвост выравнивания не обнулён: наружу уходит чужая память");
+        CHECK(o[44] == 0 && o[45] == 0 && o[46] == 0 && o[47] == 1,
+              "queue must not request raw GSO aggregates");
+        CHECK(o[52] == 0 && o[53] == 0 && o[54] == 0 && o[55] == 5,
+              "queue must explicitly clear GSO while setting fail-open");
 
         CHECK(d2s_nl_cfg_params(o, 40, 1, 4, 0xFFFF, D2S_NFQNL_COPY_PACKET,
                                 1024, 1, 1) == 0,
@@ -439,6 +443,21 @@ int main(void) {
         uint8_t one = 0;
         d2s_nl_iter_init(&it, &one, 0);
         CHECK(d2s_nl_next(&it, &m) == 0, "из пустого буфера что-то взялось");
+    }
+
+    /* Offload metadata is independent from checksum verification. Do not
+       confuse NFQA_SKB_INFO bits with NFQA_CFG_FLAGS (GSO has another bit). */
+    {
+        d2s_nl_pkt p = {0};
+        CHECK(!d2s_nl_packet_offloaded(&p), "ordinary packet bypassed");
+        p.skb_info = D2S_NFQA_SKB_CSUM_NOTVERIFIED;
+        CHECK(!d2s_nl_packet_offloaded(&p), "unverified checksum is not unfinished");
+        p.skb_info = D2S_NFQA_SKB_CSUMNOTREADY;
+        CHECK(d2s_nl_packet_offloaded(&p), "unfinished checksum must stay in kernel");
+        p.skb_info = D2S_NFQA_SKB_GSO;
+        CHECK(d2s_nl_packet_offloaded(&p), "aggregate must stay in kernel");
+        p.skb_info |= D2S_NFQA_SKB_CSUM_NOTVERIFIED;
+        CHECK(d2s_nl_packet_offloaded(&p), "combined flags lost aggregate");
     }
 
     if (fails) {

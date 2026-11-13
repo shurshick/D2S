@@ -195,6 +195,7 @@ static struct {
     uint64_t emitted_now;      /* ушло сразу, без задержки */
     uint64_t emitted_late;     /* ушло из очереди отложенных */
     uint64_t truncated;        /* ядро отдало кусок пакета */
+    uint64_t offload_bypass;   /* unexpected aggregate/checksum: kernel owns original */
     uint64_t no_payload;       /* атрибута с пакетом не было вовсе */
     uint64_t no_hdr;           /* некому отвечать вердиктом */
     uint64_t verdict_fail;
@@ -1620,6 +1621,17 @@ int main(int argc, char **argv) {
 
                     st.seen++;
                     st.bytes += np.payload_len;
+                    /* Before ICMP, holds, learning and plan execution. Never
+                     * rewrite/drop a partial interpretation of an aggregate. */
+                    if (d2s_nl_packet_offloaded(&np)) {
+                        st.offload_bypass++;
+                        if ((st.offload_bypass & (st.offload_bypass - 1)) == 0)
+                            fprintf(stderr, "d2sd: NFQUEUE offload metadata=0x%x: "
+                                    "original accepted via kernel, bypass=%llu\n",
+                                    np.skb_info, (unsigned long long)st.offload_bypass);
+                        (void)send_original_verdict(&hc, np.id, D2S_NF_ACCEPT);
+                        continue;
+                    }
                     /* ICMP идёт в очередь только как time-exceeded (S99d2s,
                        D2S_IN) и к сессии отношения не имеет. */
                     if (icmp_step(q, &np, t)) {

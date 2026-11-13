@@ -256,8 +256,8 @@
     "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
   },
   "datapath/d2sd.c": {
-    "sha256": "aeca58fab9df6f9ad95697c70ca55ffaa08e26b1d8958cd63173ae34d3027624",
-    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+    "sha256": "05d4f1118e8625aa490abf70a87422a2d0ef603f13270839a35fb05602477da8",
+    "reason": "docs/nfqueue-offload-safety.md"
   },
   "core/groups.c": {
     "sha256": "c3f7561108c80c85a87bcdd7d04268249e441d165444b728716e7c60e07fd1f9",
@@ -314,5 +314,13 @@
   "core/include/d2s_groups.h": {
     "sha256": "8f3c8cdd3ba35be28588711c682c3f60ec49fdadbf7b290ecbb2fa4bc5519614",
     "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
+  },
+  "datapath/include/d2s_nl.h": {
+    "sha256": "121d424aaa46546540e0ecfcd16643c7a4582f869d9e1f10d490aff48570fc7b",
+    "reason": "docs/nfqueue-offload-safety.md"
+  },
+  "datapath/test_nl.c": {
+    "sha256": "fa7b1445dca47b894278c7ae0df7d58df475e13a5e890cb2e715fbf00c0be563",
+    "reason": "docs/nfqueue-offload-safety.md"
   }
 }

@@ -78,6 +78,11 @@
 #define D2S_NFQA_CFG_F_CONNTRACK  (1u << 1)
 #define D2S_NFQA_CFG_F_GSO        (1u << 2)
 
+/* NFQA_SKB_INFO: these are packet metadata, not queue configuration flags. */
+#define D2S_NFQA_SKB_CSUMNOTREADY (1u << 0)
+#define D2S_NFQA_SKB_GSO          (1u << 1)
+#define D2S_NFQA_SKB_CSUM_NOTVERIFIED (1u << 2)
+
 /* linux/netfilter.h */
 #define D2S_NF_DROP   0
 #define D2S_NF_ACCEPT 1
@@ -137,6 +142,14 @@ typedef struct {
      * таким пакетом нельзя — мы рассуждали бы о куске, считая его целым. */
     int truncated;
 } d2s_nl_pkt;
+
+/* The queue requests normalized packets. If the kernel nevertheless sends an
+ * aggregate or unfinished checksum, only the original kernel path may own it:
+ * inspecting/reinjecting the first datagram can discard the aggregate tail.
+ * CSUM_NOTVERIFIED alone is not an unfinished checksum and is safe to inspect. */
+static inline int d2s_nl_packet_offloaded(const d2s_nl_pkt *p) {
+    return p && (p->skb_info & (D2S_NFQA_SKB_GSO | D2S_NFQA_SKB_CSUMNOTREADY)) != 0;
+}
 
 /* 0 — разобрано (даже если атрибутов не хватило: смотреть have_*).
  * -1 — тело короче nfgenmsg, разбирать нечего. */
