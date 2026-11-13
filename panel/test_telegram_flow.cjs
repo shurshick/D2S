@@ -52,6 +52,12 @@ assert.deepEqual(flow.prototypeGeometry, {
   assert.deepEqual(flow.collectConfirmedTrafficDeltas(previous, [next]), [],
     "повторный poll без новых байтов не рисует пакеты");
   assert.deepEqual(flow.collectConfirmedTrafficDeltas(previous, [
+    { ...next, selected_transport: "cloudflare_proxy", bytes_from_clients: 9000 },
+  ]), [], "байты предыдущего маршрута не переносятся на новый");
+  assert.deepEqual(flow.collectConfirmedTrafficDeltas(previous, [
+    { ...next, bytes_from_clients: null },
+  ]), [], "пропущенный счётчик не превращается в ноль");
+  assert.deepEqual(flow.collectConfirmedTrafficDeltas(previous, [
     { ...next, bytes_from_clients: 3, bytes_from_upstreams: 2 },
   ]), [], "сброс счётчиков не выдаётся за новые пакеты");
   const unconfirmed = session({ id: 92, dc: 2, selected_transport: "direct_wss",
@@ -317,6 +323,15 @@ assert.deepEqual(flow.prototypeGeometry, {
   }));
   assert.equal(confirmed.hasConfirmedResponse, true);
   assert.match(confirmed.statusLabel, /Ответ Telegram подтверждён/);
+  const paused = flow.summarizeTelegramFlow(snapshot({active_connections: 1,
+    active_sessions: [{...confirmed.sessions[0], read_paused: true, is_media: true,
+      no_progress_ms: 4300}]}));
+  assert.equal(paused.lanes[1].readPaused, 1);
+  assert.match(paused.caption, /Чтение приостановлено: 1.*4\.3 с/);
+  const legacy = flow.summarizeTelegramFlow(snapshot({active_connections: 3,
+    active_sessions: confirmed.sessions, route_sessions_truncated: true, wss_reads_paused: 2}));
+  assert.equal(legacy.lanes[1].readPaused, 0);
+  assert.match(legacy.caption, /Чтение приостановлено: 2.*Показано сессий: 1 из 3/);
 }
 
 {
@@ -340,3 +355,67 @@ assert.deepEqual(flow.motionProfile, {
   rippleDurationMs: 1200,
 }, "реальный поток движется спокойно и ограничивает визуальный шум");
 console.log("telegram flow: active sessions and route states match C11 snapshots");
+
+{
+  // Keep the final 110 particles from a large poll, as in the live canvas.
+  // They must be visible before the next poll replaces them.
+  let timestamp = 1000, nextFrame, paintedPackets = 0, paintedResponses = 0;
+  const ctx = new Proxy({
+    fillRect(x, y, width, height) {
+      if (height === 2.4 && !this.fillStyle.endsWith(",0)")) ++paintedPackets;
+    },
+    arc(x, y, radius) {
+      if (this.globalCompositeOperation === "lighter" && radius === 4.4) ++paintedResponses;
+    },
+  }, { get(target, key) { return target[key] ?? (() => {}); } });
+  const canvas = {
+    style: {}, dataset: {}, getContext: () => ctx, closest: () => null,
+    getBoundingClientRect: () => ({ width: 900 }), setAttribute() {},
+  };
+  const { runInNewContext } = require("node:vm");
+  const { readFileSync } = require("node:fs");
+  const scope = {
+    D2STelegramFlow: flow, performance: { now: () => timestamp },
+    getComputedStyle() { return { getPropertyValue() { return ""; } }; },
+    document: { hidden: false, addEventListener() {}, removeEventListener() {} },
+    requestAnimationFrame(callback) { nextFrame = callback; return 1; },
+    cancelAnimationFrame() { nextFrame = null; },
+    addEventListener() {}, removeEventListener() {},
+  };
+  runInNewContext(readFileSync(require.resolve("../internal/web/assets/telegram-flow-prototype.js"), "utf8"), scope);
+  const scene = scope.D2STelegramPrototype.mountTelegramFlow(canvas);
+  function advance(ms) {
+    // D2S caps an individual animation step: model real frames, not a tab
+    // sleeping for a second and receiving only one callback.
+    for (let elapsed = 0; elapsed < ms; elapsed += 16) {
+      timestamp += 16; nextFrame(timestamp);
+    }
+  }
+  const sessions = Array.from({ length: 64 }, (_, id) => session({
+    id: id + 1, dc: 4, is_media: true, selected_transport: "cloudflare_worker",
+    telegram_response_seen: true, bytes_from_clients: 0, bytes_from_upstreams: 0,
+    events: [{ sequence: 1, age_ms: 10, transport: "cloudflare_worker", state: "connected" }],
+  }));
+  scene.update(snapshot({ active_connections: sessions.length, active_sessions: sessions }));
+  const traffic = sessions.map(item => ({
+    ...item, bytes_from_clients: 8192, bytes_from_upstreams: 8192,
+  }));
+  advance(1000);
+  scene.update(snapshot({ active_connections: traffic.length, active_sessions: traffic }));
+  advance(1000);
+  assert.ok(paintedPackets > 0, "пакеты большого снимка видны до следующего опроса");
+
+  // The C11 ring may have evicted everything after the previous cursor.
+  traffic[0].events = [{ sequence: 12, age_ms: 20, transport: "cloudflare_worker",
+    state: "first_binary_response" }];
+  scene.update(snapshot({ active_connections: traffic.length, active_sessions: traffic }));
+  advance(100);
+  assert.ok(paintedResponses > 0, "свежий ответ виден после переполнения кольца событий");
+  scene.update(snapshot({process_generation: 100, active_connections: traffic.length, active_sessions: traffic}));
+  paintedPackets = 0;
+  scene.update(snapshot({process_generation: 101, active_connections: traffic.length,
+    active_sessions: traffic.map(item => ({...item, bytes_from_clients: 9000}))}));
+  advance(1000);
+  assert.equal(paintedPackets, 0, "новое поколение процесса сбрасывает анимацию старого");
+  scene.destroy();
+}

@@ -10,6 +10,9 @@
 #define D2S_DIAG_LIMIT_SLOTS 8u
 #define D2S_DIAG_MEMORY_SITE_COUNT 6u
 #define D2S_DIAG_MADVISE_ERRNO_SLOTS 4u
+#define D2S_DIAG_TG_HISTORY 1440u
+#define D2S_DIAG_TG_JSON_MAX (256u*1024u)
+#define D2S_DIAG_TG_FIELD_COUNT 67u
 enum {
     D2S_DIAG_MEM_SCHED_TCP_WORKER_ARG,
     D2S_DIAG_MEM_TLS12_SESSION,
@@ -64,6 +67,7 @@ typedef struct {
 } d2s_diag_counts;
 typedef void (*d2s_diag_limit_observer)(void *, int64_t, const d2s_diag_counts *);
 typedef struct d2s_diag d2s_diag;
+typedef struct d2s_diag_telegram d2s_diag_telegram;
 d2s_diag *d2s_diag_new(void);
 void d2s_diag_free(d2s_diag *d);
 size_t d2s_diag_bytes(const d2s_diag *d);
@@ -80,7 +84,15 @@ void d2s_diag_memory_release(unsigned site,size_t bytes,int tracked);
 void d2s_diag_memory_alloc_failure(unsigned site);
 void d2s_diag_memory_snapshot(d2s_diag_mem_site out[D2S_DIAG_MEMORY_SITE_COUNT]);
 void d2s_diag_memory_counts(d2s_diag_counts *counts);
+void d2s_diag_set_controller(d2s_diag *d, long pid, const d2s_diag_mem_site *memory);
 void d2s_diag_set_madvise(d2s_diag *d,const d2s_diag_madvise *stats);
 void d2s_diag_record_write_error(d2s_diag *d,const char *stage,int error);
 int d2s_diag_write(const d2s_diag *d,FILE *f);
+void d2s_diag_set_enabled(d2s_diag *d,int enabled);
+d2s_diag_telegram *d2s_diag_telegram_new(void);
+void d2s_diag_telegram_free(d2s_diag_telegram *d);
+int d2s_diag_telegram_record(d2s_diag_telegram *d,int64_t mono_ms,const char *json,size_t len);
+void d2s_diag_telegram_proc(FILE *f,const char *proc,long pid);
+void d2s_diag_telegram_error(d2s_diag_telegram *d,int error);
+int d2s_diag_write_combined(const d2s_diag *d,const d2s_diag_telegram *tg,FILE *f);
 #endif

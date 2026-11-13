@@ -1,15 +1,15 @@
 {
   "core/d2sc.c": {
-    "sha256": "144444a6b7d42b5c61e7d3ef3d0822bc18db140577d2c11ec3d971507176a49b",
-    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
+    "sha256": "f3fc0cab88fd740b34f7af22b6841d840c1d5fc5989371c5485c04dff647cf9e",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/diagnostics.c": {
-    "sha256": "65117734e3898ac07c9619c8242c870c2d58b614520a79a02092abc67f420ea7",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "fdbb37ad7e807b50e4089e3c77364548906623431439cf530bca36ece841ea00",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/include/d2s_diagnostics.h": {
-    "sha256": "faadf1efa5ff3338ec5999b09213a79737304af66a037eb47d65b0b0be695445",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "638c3b9906dc78764be67b25fc37d0aed1e3631e0fea1edc459286f61f744f72",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/include/d2s_sched.h": {
     "sha256": "81df14323728dee5f8bb7f0023d0766f5ebf6e599d24e34549fff44f39d38438",
@@ -20,8 +20,8 @@
     "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
   },
   "core/test_diagnostics.c": {
-    "sha256": "0d7390d79bf77f186124891c1911cb76a3aaa04bee49830f1bbf7c46d7af8902",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "981975cb3160566a1a3ff2037d397bf7b3d9003127eaa09b24cb51c0e492943b",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/test_sched.c": {
     "sha256": "267b001162efb4eaa77fb4630cb2c18c2d28a1dcf1b523c221c38b4468f39552",
@@ -88,8 +88,8 @@
     "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
   },
   "core/test_diagnostics_runtime.c": {
-    "sha256": "5d8088e359c31eaaba8262342337f41717d4109de92d03399577a03f609bed87",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "41bd8d8c8c40a43fd66bcb8b0841a2b4f0b8e3d94e88dc5aaaf0c3c8c7992500",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/test_httpsearch.c": {
     "sha256": "f0a147504483826492e03c6f6afb9d974fd40a399810a40631a89ca7004f6ee7",
@@ -332,8 +332,8 @@
     "reason": "docs/tx-probe-timeout.md"
   },
   "core/test_verify.c": {
-    "sha256": "b01584f79f05bb303c575137a44a988946f839ad2526ce5393eba7d1a7e898b2",
-    "reason": "docs/tx-probe-timeout.md"
+    "sha256": "29f44d5d5758b6ad355c31a07948713549d18b59e26663d413bc63fba1d47ed5",
+    "reason": "docs/upstream-cd88413.md"
   },
   "core/test_volume_context.c": {
     "sha256": "8908394e68c48264b169179cd3444cde3bb7e976e843b7840733acd5da771f2c",
@@ -342,5 +342,9 @@
   "core/volume.c": {
     "sha256": "d51914e921c55f43c761c5fe14234e3e57a763d91920c49aa90a254c13efffe2",
     "reason": "docs/tx-probe-timeout.md"
+  },
+  "core/tls13core.c": {
+    "sha256": "d33d39d9a1d9fa93d7ce34b08bf5f8adcbcab6a739a65f6b601069fc0314e622",
+    "reason": "docs/upstream-cd88413.md"
   }
 }

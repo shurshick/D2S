@@ -47,6 +47,7 @@ RELEASE=$DIR
 # ограничено локальной loopback-привязкой и командами из фиксированного списка.
 BIN=/opt/sbin/d2sc
 PANELBIN=/opt/sbin/d2spanel
+DIAGBIN=/opt/sbin/d2sdiag
 PANEL_ASSETS=$RELEASE/panel
 DPBIN=/opt/sbin/d2sd
 CONF=$DIR/config
@@ -56,6 +57,7 @@ LOG=$DIR/log
 DP_PID=$RUN/d2sd.pid
 CT_PID=$RUN/d2s.pid
 PN_PID=$RUN/d2s-panel.pid
+DIAG_PID=$RUN/d2sdiag.pid
 # Прежний прокси открытого HTTP (d2shttp, до задачи 51): его pid-файл и
 # правила снимаются при остановке и запуске — миграция со старой версии.
 HU_PID=$RUN/d2s-http.pid
@@ -1368,15 +1370,24 @@ start_panel() {
             --listen "$PANEL_LISTEN" --state-dir "$STATE_DIR" --mode "$MODE" \
             --queue "$QUEUE_NUM" --service /opt/etc/init.d/S99d2s \
             --engine-pid "$DP_PID" --controller-pid "$CT_PID" \
-            --telegram-stats "$TG_STATS_SOCKET" \
+            --telegram-stats /tmp/d2s-diagnostics/telegram.json \
             "$@" --log "$LOG/panel.log" \
             || { say "панель не запустилась — обход это не затрагивает"; return 1; }
+    fi
+}
+
+start_diag() {
+    prepare_runtime
+    if [ -x "$DIAGBIN" ] && ! running "$DIAG_PID" d2sdiag; then
+        spawn_daemon -S -b -m -p "$DIAG_PID" -x "$DIAGBIN" -- "$TG_STATS_SOCKET" \
+            || say "сборщик диагностики не запустился"
     fi
 }
 
 start() {
     start_engine || return $?
     telegram_start || say "Telegram tunnel не поднят; D2S продолжает работу независимо"
+    start_diag
     start_panel
     for extra_init in /opt/etc/init.d/S96d2s-resolver /opt/etc/init.d/S97d2s-dns-watch; do
         [ ! -x "$extra_init" ] || "$extra_init" start || say "дополнительная DNS-служба не запущена; основной движок продолжает работу"
@@ -1525,6 +1536,7 @@ stop() {
     stop_pidfile "$UPD_PID" || return 1
     telegram_stop || return 1
     engine_stop || return 1
+    stop_pidfile "$DIAG_PID" || say "не удалось остановить сборщик диагностики"
     stop_pidfile "$PN_PID" || return 1
     stop_pidfile "$LM_PID" || return 1
     rst_rules_down all
@@ -1639,6 +1651,9 @@ case "$1" in
     telegram-enable) telegram_enable ;;
     telegram-disable) telegram_disable ;;
     telegram-restart) telegram_restart ;;
+    diag-start) start_diag ;;
+    diag-stop) stop_pidfile "$DIAG_PID" ;;
+    diag-restart) stop_pidfile "$DIAG_PID" && start_diag ;;
     telegram-reapply) telegram_reapply ;;
     status)  status ;;
     reapply) reapply ;;

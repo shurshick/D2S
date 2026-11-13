@@ -99,6 +99,7 @@ exit 0`));
     sh('printf "arch %s %s\\n" "$1" "$2" >> "$CALLS"; printf "amd64\\n"'));
   for (const name of ['check-cpu.sh', 'select-panel-ip.sh']) fixture(`scripts/${name}`, sh('exit 0'));
   fixture('builds/d2spanel-linux-amd64', sh('echo features=telegram-control'));
+  fixture('builds/d2sdiag-linux-amd64', '#!/bin/sh\nexit 0\n');
   fixture('builds/d2stg-linux-amd64', sh('echo features=telegram-local-tcp-epoll,telegram-local-proxy,instagram-ip-probe,meta-hosts-v3'));
   fixture('builds/d2sd-linux-amd64', sh('exit 0'));
   fixture('builds/d2sc-linux-amd64', sh('exit 2'));

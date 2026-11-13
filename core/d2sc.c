@@ -34,7 +34,7 @@
 #include "d2s_sched.h"
 #include "d2s_arm.h"
 #include "d2s_diagnostics.h"
-#include "../runtime/d2s_diagnostics_files.h"
+#include "diag_transport.h"
 #include "d2s_httpsprobe.h"
 #include "d2s_httpsearch.h"
 #include "d2s_plantlv.h"
@@ -411,61 +411,60 @@ static int offline_self_check(void) {
 }
 
 /* Ограниченный необязательный наблюдатель; его состояние не влияет на поиск. */
-static d2s_diag *diagnostics;
-static void diagnostic_event(void *ctx,const d2s_diag_event *e) {
-    (void)ctx;d2s_diag_record(diagnostics,e);
+static int diagnostic_sender = -1;
+static long diagnostic_pid;
+static int diagnostic_enabled;
+
+static void diagnostic_event(void *ctx, const d2s_diag_event *e) {
+    (void)ctx;
+    d2s_diag_event_message message = {
+        .header = {D2S_DIAG_IPC_VERSION, D2S_DIAG_IPC_EVENT, diagnostic_pid},
+        .id = e->id, .elapsed_ms = e->elapsed_ms, .queue_ms = e->queue_ms,
+        .probe_units = e->probe_units, .family = e->family, .trigger = e->trigger,
+        .shape = e->shape
+    };
+#define COPY(field) if (e->field) snprintf(message.field, sizeof(message.field), "%s", e->field)
+    COPY(target); COPY(protocol); COPY(outcome); COPY(reason);
+    COPY(ip); COPY(path); COPY(kind);
+#undef COPY
+    d2s_diag_send(diagnostic_sender, D2S_DIAG_INPUT, &message, sizeof(message));
 }
-static void diagnostic_limit(void *ctx,int64_t mono,const d2s_diag_counts *c) {
-    (void)ctx;d2s_diag_record_limit(diagnostics,mono,c);
+
+static void diagnostic_limit(void *ctx, int64_t now, const d2s_diag_counts *counts) {
+    (void)ctx;
+    d2s_diag_counts_message message = {
+        .header = {D2S_DIAG_IPC_VERSION, D2S_DIAG_IPC_LIMIT, diagnostic_pid},
+        .monotonic_ms = now, .counts = *counts
+    };
+    d2s_diag_send(diagnostic_sender, D2S_DIAG_INPUT, &message, sizeof(message));
 }
-static void diagnostic_tick(d2s_sched *s,int64_t now) {
-    static int64_t checked=-1000,written=-60000;
-    if(now>=checked && now-checked<1000)return;
-    checked=now;
-    if(!d2s_diag_enabled(D2S_DIAG_DIR)) {
-        /* Если выгрузка совпала с выключением, очистить её в следующем цикле. */
-        if(diagnostics) (void)d2s_diag_toggle(D2S_DIAG_DIR,0);
-        d2s_diag_memory_enable(0);d2s_diag_free(diagnostics);diagnostics=NULL;
-        d2s_sched_diagnostics(s,NULL,NULL);
-        d2s_sched_limit_diagnostics(s,NULL,NULL);
-        d2s_httpsearch_diagnostics(g_hs,NULL,NULL);
-        return;
+
+static void diagnostic_tick(d2s_sched *s, int64_t now) {
+    static int64_t next;
+    if (now < next) return;
+    next = now + 1000;
+    int enabled = diagnostic_sender >= 0 && d2s_diag_enabled(D2S_DIAG_DIR);
+    if (enabled != diagnostic_enabled) {
+        diagnostic_enabled = enabled;
+        d2s_diag_memory_enable(enabled);
+        if (enabled) d2s_sched_diagnostic_madvise_reset(s);
+        d2s_sched_diagnostics(s, enabled ? diagnostic_event : NULL, NULL);
+        d2s_sched_limit_diagnostics(s, enabled ? diagnostic_limit : NULL, NULL);
+        d2s_httpsearch_diagnostics(g_hs, enabled ? diagnostic_event : NULL, NULL);
     }
-    if(!diagnostics) {
-        diagnostics=d2s_diag_new();if(!diagnostics)return;
-        d2s_sched_diagnostic_madvise_reset(s);
-        d2s_diag_memory_enable(1);
-        d2s_sched_diagnostics(s,diagnostic_event,NULL);
-        d2s_sched_limit_diagnostics(s,diagnostic_limit,NULL);
-        d2s_httpsearch_diagnostics(g_hs,diagnostic_event,NULL);
-        written=now-60000;
-    }
-    if(now>=written && now-written<60000)return;
-    written=now;
-    d2s_diag_counts counts;d2s_sched_diagnostic_counts(s,&counts);
-    d2s_httpsearch_diagnostic_counts(g_hs,&counts);
-    d2s_diag_memory_counts(&counts);
-    d2s_diag_madvise madvise;d2s_sched_diagnostic_madvise(s,&madvise);d2s_diag_set_madvise(diagnostics,&madvise);
-    d2s_diag_sample(diagnostics,now,&counts,"/proc","/opt/d2s/run");
-    char path[512],tmp[512];
-    if(d2s_diag_path(path,sizeof path,D2S_DIAG_DIR,"report.json") ||
-       d2s_diag_path(tmp,sizeof tmp,D2S_DIAG_DIR,"report.new")){
-        d2s_diag_record_write_error(diagnostics,"path",errno);return;
-    }
-    /* Каталог закрыт; незавершённый файл никогда не отдаётся через панель. */
-    if(unlink(tmp)&&errno!=ENOENT)d2s_diag_record_write_error(diagnostics,"remove-old-temp",errno);
-    int fd=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);
-    if(fd<0){d2s_diag_record_write_error(diagnostics,"open-temp",errno);return;}
-    FILE *f=fdopen(fd,"w");if(!f){int error=errno;close(fd);unlink(tmp);d2s_diag_record_write_error(diagnostics,"fdopen",error);return;}
-    int bad=0;
-    if(d2s_diag_write(diagnostics,f)){d2s_diag_record_write_error(diagnostics,"serialize",errno);bad=1;}
-    long size=ftell(f);
-    if(size<0){d2s_diag_record_write_error(diagnostics,"size",errno);bad=1;}
-    else if((unsigned long)size>D2S_DIAG_REPORT_MAX){d2s_diag_record_write_error(diagnostics,"size-limit",EFBIG);bad=1;}
-    if(fclose(f)){d2s_diag_record_write_error(diagnostics,"flush-close",errno);bad=1;}
-    if(bad||!d2s_diag_enabled(D2S_DIAG_DIR)){unlink(tmp);return;}
-    if(rename(tmp,path)){d2s_diag_record_write_error(diagnostics,"rename",errno);unlink(tmp);}
+    if (!enabled) return;
+    d2s_diag_counts_message message = {
+        .header = {D2S_DIAG_IPC_VERSION, D2S_DIAG_IPC_COUNTS, diagnostic_pid},
+        .monotonic_ms = now
+    };
+    d2s_sched_diagnostic_counts(s, &message.counts);
+    d2s_httpsearch_diagnostic_counts(g_hs, &message.counts);
+    d2s_diag_memory_counts(&message.counts);
+    d2s_sched_diagnostic_madvise(s, &message.madvise);
+    d2s_diag_memory_snapshot(message.memory);
+    d2s_diag_send(diagnostic_sender, D2S_DIAG_INPUT, &message, sizeof(message));
 }
+
 
 int main(int argc, char **argv) {
     int optimize=0;
@@ -715,6 +714,8 @@ int main(int argc, char **argv) {
     uint64_t dirty = cat.revision; /* catalog contents changed since last save */
     int link_lost = 0;
 
+    diagnostic_sender = d2s_diag_sender();
+    diagnostic_pid = (long)getpid();
     while (!stop_asked) {
         (void)d2s_runtime_heartbeat(health_path, greeting.release_id, 1, 1, 1);
         struct pollfd pfd[4];
@@ -925,7 +926,8 @@ int main(int argc, char **argv) {
     d2s_hs_runner_free(g_hr);
     d2s_httpsearch_free(g_hs);
     d2s_sched_free(s);
-    d2s_diag_memory_enable(0);d2s_diag_free(diagnostics);diagnostics=NULL;
+    d2s_diag_memory_enable(0);
+    if (diagnostic_sender >= 0) close(diagnostic_sender);
     if (cat.revision != dirty) {
         if (save_atomic(&cat, catpath, err, sizeof err) != 0) {
             fprintf(stderr, "d2sc: каталог не сохранён на выходе: %s\n", err);

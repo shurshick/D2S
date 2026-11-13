@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "../runtime/d2s_runtime.h"
 #include "server.h"
+#include "../runtime/d2s_diagnostics_files.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -482,13 +483,7 @@ int main(int argc, char **argv) {
         int n = snprintf(live_path, sizeof live_path, "%s/live.json", state_dir);
         if (n < 0 || (size_t)n >= sizeof live_path) { return 2; }
     }
-    char default_telegram_stats_path[768];
-    if (!telegram_stats_path) {
-        int n = snprintf(default_telegram_stats_path, sizeof default_telegram_stats_path,
-                         "%s/telegram.stats.sock", state_dir);
-        if (n < 0 || (size_t)n >= sizeof default_telegram_stats_path) { return 2; }
-        telegram_stats_path = default_telegram_stats_path;
-    }
+    if (!telegram_stats_path) telegram_stats_path = D2S_DIAG_DIR "/telegram.json";
     return serve(listen_addr, live_path, asset_dir, config_path, mode,
                  state_dir, queue, service_path, engine_pid_path,
                  controller_pid_path, telegram_pid_path, telegram_status_path,

@@ -6,7 +6,7 @@ with tempfile.TemporaryDirectory() as temp:
     repo=Path(temp)
     def git(*args): return subprocess.check_output(["git","-C",str(repo),*args],stderr=subprocess.STDOUT,text=True)
     git("init","-q");git("config","user.email","test@example.invalid");git("config","user.name","CI test")
-    paths=["core/input.c","datapath/input.c","detect/input.c","runtime/input.h","scripts/test-d2sfetch-cli.py",".github/workflows/check.yml","scripts/ci-ubuntu-dns.py"]
+    paths=["core/input.c","datapath/input.c","detect/input.c","runtime/input.h","scripts/test-d2sfetch-cli.py","scripts/test-diag-collector.py",".github/workflows/check.yml","scripts/ci-ubuntu-dns.py"]
     for rel in paths:
         p=repo/rel;p.parent.mkdir(parents=True,exist_ok=True);p.write_text("fixture\n")
     keyscript=repo/"scripts/ci-engine-key.sh";keyscript.write_bytes((root/"scripts/ci-engine-key.sh").read_bytes())

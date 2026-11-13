@@ -25,6 +25,7 @@ DIR=$TEST_DIR/d2s; RUN=$DIR/run; LOG=$DIR/log; STATE_DIR=$DIR/state
 RUNTIME_DIR=$TEST_DIR/runtime; LIVE=$RUNTIME_DIR/live.json
 CONF=$DIR/config; SOCK=$RUN/socket
 DP_PID=$RUN/dp.pid; CT_PID=$RUN/ct.pid; PN_PID=$RUN/panel.pid
+DIAG_PID=$RUN/diag.pid; DIAGBIN=$TEST_DIR/no-collector
 HU_PID=$RUN/http.pid; HL_PID=$RUN/heal.pid; LM_PID=$RUN/log-maintenance.pid
 TG_PID=$RUN/tg.pid; TG_WD_PID=$RUN/tg-watchdog.pid; DNS_SCHED_PID=$RUN/dns-scheduler.pid
 TG_STATUS=$STATE_DIR/telegram.status; TG_FIREWALL=$TEST_DIR/no-tg-firewall

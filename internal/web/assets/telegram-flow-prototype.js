@@ -100,7 +100,7 @@ function mountTelegramFlow(canvas) {
   const parts = [], sparks = [], ripples = [], spikes = [];
   const hub = { pulse: 0, angle: 0 }, client = { pulse: 0 };
   let view = api.summarizeTelegramFlow(null);
-  let processStartedAt = 0, acceptedConnections = null;
+  let processId = 0, processStartedAt = 0, processGeneration = 0, acceptedConnections = null;
   let now = performance.now(), lastFrame = now, canvasWidth = 900;
   let pixelRatio = 1, inView = true, destroyed = false, frameId = 0;
 
@@ -146,7 +146,7 @@ function mountTelegramFlow(canvas) {
       const current = item.tries[lane.key];
       if (current) current.state = "ok";
     } else if (event.state === "selected") {
-      item.selectedTransport = event.transport;
+      delete item.tries[lane.key];
       lane.winT = at;
       parts.push({ kind: "win", lane, path: fullPath(lane, item.dc), t0: at, dur: 900 });
       hub.pulse = Math.max(hub.pulse, 0.8);
@@ -178,12 +178,18 @@ function mountTelegramFlow(canvas) {
 
   function readEvents(snapshot) {
     if (!snapshot) return;
+    const pid = Number(snapshot.process_id) || 0;
     const started = Number(snapshot.process_started_at) || 0;
+    const generation = Number(snapshot.process_generation) || 0;
     const accepted = Number(snapshot.accepted_connections) || 0;
-    const restarted = started && ((processStartedAt && started !== processStartedAt)
-      || (acceptedConnections !== null && accepted < acceptedConnections));
+    const restarted = (pid && processId && pid !== processId)
+      || (generation && processGeneration && generation !== processGeneration)
+      || (started && processStartedAt && started !== processStartedAt)
+      || (acceptedConnections !== null && accepted < acceptedConnections);
     if (restarted) resetProcess();
+    if (pid) processId = pid;
     if (started) processStartedAt = started;
+    if (generation) processGeneration = generation;
     acceptedConnections = accepted;
     const live = new Set();
     (Array.isArray(snapshot.active_sessions) ? snapshot.active_sessions : []).forEach(session => {
@@ -200,10 +206,20 @@ function mountTelegramFlow(canvas) {
         return;
       }
       const oldest = events.length ? Number(events[0].sequence) || newest : newest;
-      if (previous < oldest - 1) { cursors.set(id, newest); return; }
-      events.filter(event => Number(event.sequence) > previous).slice()
+      const gap = previous < oldest - 1;
+      events.filter(event => Number(event.sequence) > previous &&
+        (event.age_ms == null ? !gap : (Number(event.age_ms) >= 0 &&
+          Number(event.age_ms) <= (EVENT_WINDOW[event.state] || 0)))).slice()
         .sort((a, b) => a.sequence - b.sequence).forEach(event => processEvent(item, event));
       cursors.set(id, newest);
+    });
+    sessions.forEach(item => {
+      const session = item.session;
+      Object.entries(item.tries).forEach(([transport, attempt]) => {
+        const connecting = (session.direct_transport === transport && session.direct_state === "connecting")
+          || (session.fallback_transport === transport && session.fallback_state === "connecting");
+        if (attempt.state === "run" && !connecting) delete item.tries[transport];
+      });
     });
     for (const id of sessions.keys()) if (!live.has(id)) sessions.delete(id);
     for (const id of cursors.keys()) if (!live.has(id)) cursors.delete(id);
@@ -220,7 +236,7 @@ function mountTelegramFlow(canvas) {
       const count = Math.min(8, Math.max(1, Math.ceil(delta.bytes / 1024)));
       for (let index = 0; index < count; index += 1) {
         const representedBytes = delta.bytes / count;
-        parts.push({ kind: "pkt", lane, path, t0: now + deltaIndex * 55 + index * 45,
+        parts.push({ kind: "pkt", id: delta.id, lane, path, t0: now + Math.min(500, deltaIndex * 55) + index * 45,
           dur: 2400 + Math.random() * 1000, back: delta.direction === "response",
           dc: delta.dc, size: 4 + Math.min(8, Math.log2(1 + representedBytes / 256)) });
       }
@@ -234,13 +250,15 @@ function mountTelegramFlow(canvas) {
       lane.counts = state.counts || {};
       lane.selected = Number(lane.counts.selected) || 0;
       lane.confirmed = Number(state.confirmed) || 0;
+      lane.readPaused = Number(state.readPaused) || 0;
       lane.connecting = (Number(lane.counts.connecting) || 0) + (Number(lane.counts.race) || 0);
       lane.cooldownCount = Number(state.cooldownCount) || 0;
       lane.coolUntil = now + Math.max(0, Number(state.cooldownRemainingMs) || 0);
       lane.failStage = Number(state.failureStage) || 0;
-      if (Number.isFinite(Number(state.failureAgeMs))) lane.failT = now - Number(state.failureAgeMs);
+      if (Number.isFinite(state.failureAgeMs)) lane.failT = now - state.failureAgeMs;
       else if (state.status !== "failed") lane.failT = -1e9;
-      if (lane.failStage >= 1 && lane.failStage <= 5) lane.gate[lane.failStage - 1] = now;
+      if (lane.failStage >= 1 && lane.failStage <= 5)
+        lane.gate[lane.failStage - 1] = lane.failT;
     });
     dcs.forEach((dc, index) => Object.assign(dc, view.dcActivity[index] ||
       { active: 0, media: 0, confirmed: 0 }, {
@@ -262,11 +280,12 @@ function mountTelegramFlow(canvas) {
     const description = activeLanes.map(lane => {
       const states = Object.entries(lane.counts || {}).filter(([, count]) => Number(count) > 0)
         .map(([state, count]) => `${STATE_ACCESSIBLE[state] || state}: ${count}`).join(", ");
+      const paused = lane.readPaused ? `, чтение приостановлено: ${lane.readPaused}` : "";
       const gate = api.failureGateIndex(lane.failureStage);
       const failure = gate === null ? "" : `, отказ на воротах ${GATE_ACCESSIBLE[gate]}`;
       const cooldown = lane.cooldownCount
         ? `, пауза ${lane.cooldownCount} маршрута, ещё ${Math.ceil(lane.cooldownRemainingMs)} мс` : "";
-      return `${lane.label} — ${states || STATE_ACCESSIBLE[lane.status] || "резерв"}${failure}${cooldown}`;
+      return `${lane.label} — ${states || STATE_ACCESSIBLE[lane.status] || "резерв"}${paused}${failure}${cooldown}`;
     }).join("; ")
       || "Сейчас нет активных маршрутов";
     const confirmed = view.state !== "stale"
@@ -296,6 +315,11 @@ function mountTelegramFlow(canvas) {
       hub.pulse = 0; client.pulse = 0;
     } else {
       readEvents(snapshot);
+      for (let i = parts.length - 1; i >= 0; --i) {
+        const part = parts[i], item = sessions.get(part.id);
+        if (part.kind === "pkt" && item?.session.selected_transport !== part.lane.key)
+          parts.splice(i, 1);
+      }
       readTraffic(snapshot);
     }
     setRouteState(snapshot);
@@ -382,13 +406,15 @@ function mountTelegramFlow(canvas) {
     for (const lane of lanes) {
       const cool = lane.coolUntil > now, live = lane.selected || lane.connecting;
       const responseConfirmed = lane.selected > 0 && lane.confirmed >= lane.selected;
+      const readingPaused = lane.selected > 0 && lane.readPaused >= lane.selected;
       lane.glow += ((responseConfirmed ? 1 : live ? 0.5 : 0) - lane.glow) * 0.08;
       const colorLane = view.state === "stale" ? COLORS.rule
         : cool && !lane.selected ? COLORS.bad
-          : responseConfirmed ? COLORS.ok : live ? COLORS.sig : COLORS.rule;
+          : readingPaused ? COLORS.warn : responseConfirmed ? COLORS.ok : live ? COLORS.sig : COLORS.rule;
       let alpha = 0.2, width = 2, dash = null;
       if (lane.connecting && !lane.selected) { alpha = 0.5; dash = [6, 8]; }
       if (lane.selected) { alpha = 0.55 + 0.35 * Math.min(1, lane.selected / 3); width = 3.4; }
+      if (readingPaused) dash = [5, 6];
       if (cool && !lane.selected) { alpha = 0.4; dash = [3, 9]; }
       const winner = Math.max(0, 1 - (now - lane.winT) / 1200);
       if (lane.glow > 0.05) { context.shadowColor = rgba(colorLane, 0.9); context.shadowBlur = 10 * lane.glow; }
@@ -403,7 +429,8 @@ function mountTelegramFlow(canvas) {
         if (showGates && !compact) text(GN[gate], x, lane.y + (lane.y < 210 ? -12 : 19),
           9, COLORS.mute, 0.35 + pulse * 0.6);
       }
-      const label = lane.selected ? `активен · ${lane.selected}`
+      const label = lane.selected ? (lane.readPaused ? `пауза чтения ${lane.readPaused}/${lane.selected}`
+        : `ответ ${lane.confirmed}/${lane.selected}`)
         : lane.connecting ? "подключение" : cool ? "пауза" : "резерв";
       const titleOffset = compact ? (lane.y < 210 ? -20 : 20) : (lane.y < 210 ? -26 : 36);
       const stateOffset = compact ? (lane.y < 210 ? -42 : 42) : (lane.y < 210 ? -39 : 49);
@@ -567,8 +594,7 @@ function mountTelegramFlow(canvas) {
     for (const item of sessions.values()) for (const key of Object.keys(item.tries)) {
       const particle = item.tries[key], lane = particle.lane, age = now - particle.t0;
       if (particle.state === "run") {
-        particle.f = lane.gates[0] * 0.55
-          + (lane.gates[4] - lane.gates[0] * 0.55) * (1 - Math.exp(-age / 1100)) * 0.92;
+        particle.f = lane.gates[0] * 0.55 * (1 - Math.exp(-Math.max(0, age) / 300));
       } else if (particle.state === "ok") particle.f += (1 - particle.f) * Math.min(1, delta * 7);
       else if (particle.state === "fail") {
         const stop = particle.gate === null ? lane.gates[0] * 0.55 : lane.gates[particle.gate] - 0.004;
@@ -584,10 +610,6 @@ function mountTelegramFlow(canvas) {
           }
         }
       } else if (particle.state === "cancel") particle.f -= delta * 0.5;
-      for (let gate = 0; gate < 5; gate += 1) {
-        if (particle.gate !== null && particle.f >= lane.gates[gate] - 0.002 && particle.state !== "cancel")
-          lane.gate[gate] = Math.max(lane.gate[gate], now);
-      }
       if ((particle.state === "ok" && particle.f > 0.985)
           || (particle.state === "cancel" && now - particle.ft > 600)
           || (particle.state === "fail" && now - particle.ft > 1800)) delete item.tries[key];

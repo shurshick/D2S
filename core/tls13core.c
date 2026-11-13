@@ -72,12 +72,17 @@ static int ascii_lower(int c) { return (c >= 'A' && c <= 'Z') ? c + 32 : c; }
  * расширяла бы совпадение там, где сегодня оно сузилось бы честно. */
 static int name_matches(const char *pat, size_t plen, const char *host) {
     size_t hlen = strlen(host);
+    /* One terminal root label is an absolute DNS name. Do not silently
+       normalize malformed repeated trailing dots as the donor does. */
+    if (plen && pat[plen - 1] == '.') plen--;
+    if (hlen && host[hlen - 1] == '.') hlen--;
     if (plen == 0 || hlen == 0) { return 0; }
+    if (pat[plen - 1] == '.' || host[hlen - 1] == '.') return 0;
     if (plen > 2 && pat[0] == '*' && pat[1] == '.') {
-        const char *dot = strchr(host, '.');
+        const char *dot = memchr(host, '.', hlen);
         if (!dot || dot == host) { return 0; }
         const char *rest = dot + 1;
-        size_t rlen = strlen(rest);
+        size_t rlen = hlen - (size_t)(rest - host);
         if (rlen != plen - 2) { return 0; }
         for (size_t i = 0; i < rlen; i++) {
             if (ascii_lower((unsigned char)rest[i]) != ascii_lower((unsigned char)pat[2 + i])) {

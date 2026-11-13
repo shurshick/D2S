@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict');
-const {summary,memoryRows,rowsInRange,seriesEndpoints,formatBytes,coverageText}=require('../internal/web/assets/diagnostics.js');
+const {summary,memoryRows,rowsInRange,seriesEndpoints,formatBytes,coverageText,telegramRows}=require('../internal/web/assets/diagnostics.js');
 assert.match(summary({}),/первый снимок/);
 const samples=[{at:1,bindings:2,plans:1,processes:[{name:'d2sc',pid:1,rss_kib:1024}]},
  {at:2,bindings:3,plans:1,processes:[{name:'d2sc',pid:2,rss_kib:512}]}];
@@ -61,4 +61,38 @@ assert.equal(memoryRows(legacyHistory)[0].catalog,10*1024,'old positional KiB fi
 const noTime={memory_history:{fields,time_base:[null,null],samples:[encode({rss_kib:1024,at_delta_s:0,mono_delta_s:0})]}};
 assert.equal(memoryRows(noTime)[0].time,null,'missing time bases do not become zero');
 assert.match(coverageText(rowsInRange(memoryRows(noTime),24,60000),24),/Время снимков отсутствует/);
+const tgRows=telegramRows({memory_history:{fields:['at_delta_s','mono_delta_s','rss_kib','rss_hwm_kib','rss_anon_kib',
+ 'vm_data_kib','vm_swap_kib','smaps_pss_kib','smaps_private_dirty_kib','mem_available_kib','mem_total_kib'],
+ time_base:[1700000000,500],samples:[[0,0,2048,3072,1024,4096,0,800,64,8192,131072],
+  [60,60,3072,4096,1536,6144,2,1200,96,7168,131072]]}});
+assert.equal(tgRows[0].rss,2*1024*1024);
+assert.equal(tgRows[1].rss_anon,1536*1024);
+assert.equal(tgRows[1].rss_hwm,4096*1024,'peak RSS is retained in history');
+assert.equal(tgRows[1].vm_swap,2*1024,'VmSwap is retained in history');
+assert.equal(tgRows[1].smaps_pss,1200*1024,'PSS is retained in history');
+assert.equal(tgRows[1].smaps_private_dirty,96*1024,'Private_Dirty is retained in history');
+assert.equal(tgRows[1].mem_available,7168*1024,'system headroom is retained in history');
+assert.equal(tgRows[1].time,560);
+const unavailableTelegram=telegramRows({memory_history:{fields:['at_delta_s','mono_delta_s','vm_swap_kib','smaps_private_dirty_kib'],
+ time_base:[1700000000,500],samples:[[0,0,'unavailable','unavailable']]}});
+assert.equal(unavailableTelegram[0].vm_swap,null,'unavailable VmSwap is not rendered as zero');
+assert.equal(unavailableTelegram[0].smaps_private_dirty,null,'unavailable smaps is not rendered as zero');
+const trafficFields=['at_delta_s','mono_delta_s','process_id','process_started_at','bytes_from_clients','bytes_from_upstreams'];
+const trafficRows=telegramRows({memory_history:{fields:trafficFields,time_base:[1700000000,1000],samples:[
+ [0,0,42,1700000000,1000,500],[60,60,42,1700000000,4000,2000],
+ [120,120,42,1700000060,10,10],[180,180,42,1700000060,1010,1010]]}});
+assert.equal(trafficRows[1].client_rate,50,'rates use the same process generation');
+assert.equal(trafficRows[1].upstream_rate,25);
+assert.equal(trafficRows[2].client_rate,null,'reused PID with a new start time does not create a negative rate');
+assert.equal(trafficRows[3].client_rate,1000/60,'rates resume within the new generation');
+const generationFields=['at_delta_s','mono_delta_s','process_id','process_started_at','process_generation',
+ 'bytes_from_clients','bytes_from_upstreams','active_connections','fd_count','tls_objects','worker_pool_entries',
+ 'proxy_struct_bytes','connection_struct_bytes','retired_connection_struct_bytes','worker_pool_struct_bytes'];
+const generationRows=telegramRows({memory_history:{fields:generationFields,time_base:[1700000000,1000],samples:[
+ [0,0,42,1700000000,111,1000,500,2,8,3,1,2048,1024,0,512],
+ [60,60,42,1700000000,222,10,10,0,4,0,0,2048,0,0,512]]}});
+assert.equal(generationRows[1].client_rate,null,'a new process generation breaks rates even if PID and wall start time were reused');
+assert.equal(generationRows[1].process_generation,222);
+assert.equal(generationRows[1].worker_pool_bytes,512,'worker pool allocations are retained in compact history');
+assert.equal(generationRows[1].active_connections,0);
 console.log('сводка диагностики панели прошла');

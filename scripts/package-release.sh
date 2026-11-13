@@ -25,7 +25,7 @@ assets=
 for arch in $ARCHES; do
     tree="$STAGE/$arch"
     mkdir -p "$tree/builds" "$tree/scripts"
-    for bin in d2sd d2sc d2sfetch d2spanel d2stg d2s-resolver d2s-dns-watch; do
+    for bin in d2sd d2sc d2sdiag d2sfetch d2spanel d2stg d2s-resolver d2s-dns-watch; do
         test -s "$BUILDS/$bin-linux-$arch" || { echo "нет $BUILDS/$bin-linux-$arch" >&2; exit 1; }
         cp "$BUILDS/$bin-linux-$arch" "$tree/builds/"
     done

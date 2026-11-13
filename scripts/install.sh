@@ -499,6 +499,7 @@ say "загрузка"
 fetch "scripts/select-panel-ip.sh" "$TMP/select-panel-ip.sh"
 fetch "builds/d2spanel-linux-$ARCH" "$TMP/d2spanel"
 fetch "builds/d2sc-linux-$ARCH" "$TMP/d2sc"
+fetch "builds/d2sdiag-linux-$ARCH" "$TMP/d2sdiag"
 fetch "builds/d2sfetch-linux-$ARCH" "$TMP/d2sfetch"
 fetch "builds/d2sd-linux-$ARCH" "$TMP/d2sd"
 fetch "builds/d2stg-linux-$ARCH" "$TMP/d2stg"
@@ -540,7 +541,7 @@ for face in onest jbmono; do
     fetch "internal/web/assets/fonts/OFL-$face.txt" "$TMP/panel/OFL-$face.txt"
 done
 
-chmod +x "$TMP/d2spanel" "$TMP/d2sc" "$TMP/d2sfetch" "$TMP/d2sd" "$TMP/d2stg" \
+chmod +x "$TMP/d2spanel" "$TMP/d2sc" "$TMP/d2sdiag" "$TMP/d2sfetch" "$TMP/d2sd" "$TMP/d2stg" \
          "$TMP/S99d2s" "$TMP/d2s-fw-heal.sh" "$TMP/d2s-ppe-deoffload.sh" "$TMP/d2s-log-maintenance.sh" "$TMP/d2s-update.sh" "$TMP/001-d2s.sh" \
          "$TMP/d2s-tg-firewall.sh" "$TMP/d2s-tg-watchdog.sh" \
          "$TMP/d2s-instagram-dns.sh" "$TMP/d2s-instagram-dns-scheduler.sh"
@@ -550,6 +551,7 @@ for bin in d2s-resolver d2s-dns-watch; do
     chmod 0755 "$TMP/$bin"
     "$TMP/$bin" --version >/dev/null || die "не запускается $bin — прежняя версия не изменена"
 done
+"$TMP/d2sdiag" --self-check >/dev/null || die "сборщик диагностики не запускается — прежняя версия не изменена"
 PANEL_VERSION=$("$TMP/d2spanel" --version 2>/dev/null) || die "скачанный d2spanel не запускается на этой системе"
 case "$PANEL_VERSION" in
     *features=telegram-control*) ;;
@@ -604,7 +606,7 @@ if [ "$FW" = nft ]; then
     opt_fs=/opt; [ -d "$opt_fs" ] || opt_fs=/
     avail_kb=$(df -kP "$opt_fs" 2>/dev/null | awk 'NR == 2 { print $4 }')
     new_kb=$(du -sk "$TMP" | awk '{ print $1 }')
-    old_kb=$(du -sk "$SBIN/d2sd" "$SBIN/d2sc" "$SBIN/d2sfetch" "$SBIN/d2spanel" "$SBIN/d2stg" "$DIR/panel" 2>/dev/null |
+    old_kb=$(du -sk "$SBIN/d2sd" "$SBIN/d2sc" "$SBIN/d2sdiag" "$SBIN/d2sfetch" "$SBIN/d2spanel" "$SBIN/d2stg" "$DIR/panel" 2>/dev/null |
         awk '{ s += $1 } END { print s + 0 }')
     big_kb=$(du -sk "$TMP/d2stg" | awk '{ print $1 }')
     need_kb=$((new_kb - old_kb + big_kb))
@@ -668,6 +670,7 @@ install_data_atomic() {
 }
 install_atomic "$TMP/d2spanel" "$SBIN/d2spanel"
 install_atomic "$TMP/d2sc"   "$SBIN/d2sc"
+install_atomic "$TMP/d2sdiag" "$SBIN/d2sdiag"
 install_atomic "$TMP/d2sfetch" "$SBIN/d2sfetch"
 install_atomic "$TMP/d2sd"   "$SBIN/d2sd"
 # Прокси открытого HTTP (d2shttp) больше не нужен: вставку провайдера в

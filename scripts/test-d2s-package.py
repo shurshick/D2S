@@ -18,7 +18,7 @@ for arch, asset in metadata['assets'].items():
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == asset['sha256']
     with tarfile.open(archive) as tar:
         files = {m.name.removeprefix('./'): m for m in tar.getmembers() if m.isfile()}
-        for bin in ('d2sd', 'd2sc', 'd2sfetch', 'd2spanel', 'd2stg', 'd2s-resolver', 'd2s-dns-watch'):
+        for bin in ('d2sd', 'd2sc', 'd2sdiag', 'd2sfetch', 'd2spanel', 'd2stg', 'd2s-resolver', 'd2s-dns-watch'):
             assert files[f'builds/{bin}-linux-{arch}'].size > 0
         for path in ('scripts/install.sh', 'files/S99d2s', 'files/S96d2s-resolver', 'files/S97d2s-dns-watch',
                      'files/d2s-lan.sh', 'files/d2s-meta-dns-core.sh', 'files/d2s-meta-dns-library.sh',

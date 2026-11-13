@@ -552,61 +552,25 @@ static void telegram_stats_value(const d2s_panel_config *cfg,
                                  char out[TELEGRAM_STATS_MAX]) {
     snprintf(out, TELEGRAM_STATS_MAX, "null");
     if (!cfg || !cfg->telegram_stats_path) return;
-    struct sockaddr_un address;
-    memset(&address, 0, sizeof(address));
-    size_t path_length = strlen(cfg->telegram_stats_path);
-    if (!path_length || path_length >= sizeof(address.sun_path)) return;
-    address.sun_family = AF_UNIX;
-    memcpy(address.sun_path, cfg->telegram_stats_path, path_length + 1);
-
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    int fd = open(cfg->telegram_stats_path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
     if (fd < 0) return;
-    int flags = fcntl(fd, F_GETFL);
-    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+    struct stat st;
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || st.st_uid != geteuid() ||
+        st.st_size <= 0 || st.st_size >= TELEGRAM_STATS_MAX ||
+        time(NULL) - st.st_mtime > 5 || st.st_mtime > time(NULL) + 1) {
         close(fd);
         return;
     }
-    int connected = connect(fd, (struct sockaddr *)&address, sizeof(address));
-    if (connected != 0 && errno != EINPROGRESS && errno != EAGAIN &&
-        errno != EWOULDBLOCK) {
-        close(fd);
-        return;
-    }
-    long long deadline = monotonic_ms() + 1250;
-    if (connected != 0) {
-        struct pollfd ready = {.fd = fd, .events = POLLOUT};
-        int remaining = (int)(deadline - monotonic_ms());
-        int rc = remaining > 0 ? poll(&ready, 1, remaining) : 0;
-        int error = 0;
-        socklen_t error_length = sizeof(error);
-        if (rc <= 0 || getsockopt(fd, SOL_SOCKET, SO_ERROR, &error,
-                                  &error_length) != 0 || error) {
-            close(fd);
-            return;
-        }
-    }
-
     char raw[TELEGRAM_STATS_MAX];
     size_t used = 0;
-    int complete = 0;
-    while (monotonic_ms() < deadline) {
-        struct pollfd ready = {.fd = fd, .events = POLLIN};
-        int remaining = (int)(deadline - monotonic_ms());
-        int rc = poll(&ready, 1, remaining);
-        if (rc < 0 && errno == EINTR) continue;
-        if (rc <= 0 || (ready.revents & (POLLERR | POLLNVAL))) break;
-        if (used >= sizeof(raw) - 1) break;
-        ssize_t n = read(fd, raw + used, sizeof(raw) - 1 - used);
-        if (n > 0) {
-            used += (size_t)n;
-            continue;
-        }
-        if (n == 0) { complete = 1; break; }
-        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) continue;
-        break;
+    while (used < (size_t)st.st_size) {
+        ssize_t n = read(fd, raw + used, (size_t)st.st_size - used);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        used += (size_t)n;
     }
     close(fd);
-    if (!complete || !used) return;
+    if (used != (size_t)st.st_size) return;
     raw[used] = '\0';
     if (!json_valid_object(raw, raw + used)) return;
     char active[21], maximum[21], started[21], accepted[21];
@@ -1633,20 +1597,37 @@ static int api_diagnostics(int fd,const d2s_panel_config *cfg,const char *req,
     if(!strcmp(method,"POST")) {
         if(!cfg||!cfg->control_enabled||!d2s_panel_same_origin(req))
             return diagnostic_response(fd,403,"Forbidden","application/json","{\"error\":\"требуется запрос с того же источника\"}",sizeof "{\"error\":\"требуется запрос с того же источника\"}"-1);
-        if(strcmp(action,"enable")&&strcmp(action,"disable"))
+        int telegram_action=!strcmp(action,"telegram-enable")||!strcmp(action,"telegram-disable");
+        if(strcmp(action,"enable")&&strcmp(action,"disable")&&!telegram_action)
             return diagnostic_response(fd,400,"Bad Request","application/json","{}",2);
-        if(d2s_diag_toggle(dir,!strcmp(action,"enable")))
+        int enable=!strcmp(action,"enable")||!strcmp(action,"telegram-enable");
+        int toggle_result=telegram_action?d2s_diag_telegram_toggle(dir,enable):d2s_diag_toggle(dir,enable);
+        if(toggle_result)
             return diagnostic_response(fd,500,"Internal Server Error","application/json","{\"error\":\"не удалось изменить состояние диагностики\"}",sizeof "{\"error\":\"не удалось изменить состояние диагностики\"}"-1);
-        const char *body=d2s_diag_enabled(dir)?"{\"enabled\":true}":"{\"enabled\":false}";
-        return diagnostic_response(fd,200,"OK","application/json",body,strlen(body));
+        char body[96];int n=snprintf(body,sizeof body,"{\"enabled\":%s,\"telegram_enabled\":%s}",
+            d2s_diag_enabled(dir)?"true":"false",d2s_diag_telegram_enabled(dir)?"true":"false");
+        return n>0&&(size_t)n<sizeof body?diagnostic_response(fd,200,"OK","application/json",body,(size_t)n):
+            diagnostic_response(fd,500,"Internal Server Error","application/json","{}",2);
     }
     if(strcmp(method,"GET"))return diagnostic_response(fd,405,"Method Not Allowed","text/plain","",0);
-    if(!d2s_diag_enabled(dir))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":false}",17);
-    if(!strcmp(action,"status"))return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":true}",16);
+    int general_enabled=d2s_diag_enabled(dir),telegram_enabled=d2s_diag_telegram_enabled(dir);
+    if(!general_enabled&&!telegram_enabled)return diagnostic_response(fd,200,"OK","application/json","{\"enabled\":false,\"telegram_enabled\":false}",sizeof "{\"enabled\":false,\"telegram_enabled\":false}"-1);
+    if(!strcmp(action,"status")) {
+        char body[96];int n=snprintf(body,sizeof body,"{\"enabled\":%s,\"telegram_enabled\":%s}",
+            general_enabled?"true":"false",telegram_enabled?"true":"false");
+        return n>0&&(size_t)n<sizeof body?diagnostic_response(fd,200,"OK","application/json",body,(size_t)n):
+            diagnostic_response(fd,500,"Internal Server Error","application/json","{}",2);
+    }
     char path[512];struct stat st;
     if(d2s_diag_path(path,sizeof path,dir,"report.json"))return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
     int in=open(path,O_RDONLY|O_NOFOLLOW);
-    if(in<0)return diagnostic_response(fd,503,"Service Unavailable","application/json","{\"enabled\":true,\"pending\":true}",31);
+    if(in<0) {
+        char pending[112];int n=snprintf(pending,sizeof pending,
+            "{\"enabled\":%s,\"telegram_enabled\":%s,\"pending\":true}",
+            general_enabled?"true":"false",telegram_enabled?"true":"false");
+        return n>0&&(size_t)n<sizeof pending?diagnostic_response(fd,503,"Service Unavailable","application/json",pending,(size_t)n):
+            diagnostic_response(fd,503,"Service Unavailable","application/json","{}",2);
+    }
     if(fstat(in,&st)||!S_ISREG(st.st_mode)||st.st_size<0||(uint64_t)st.st_size>D2S_DIAG_REPORT_MAX) {
         close(in);return diagnostic_response(fd,500,"Internal Server Error","text/plain","",0);
     }

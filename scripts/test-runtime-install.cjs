@@ -38,6 +38,7 @@ exit 1
   fixture('scripts/architecture.sh', '#!/bin/sh\nprintf "amd64\\n"\n');
   for (const name of ['check-cpu.sh', 'select-panel-ip.sh']) fixture(`scripts/${name}`, '#!/bin/sh\nexit 0\n');
   fixture('builds/d2spanel-linux-amd64', '#!/bin/sh\necho features=telegram-control\n');
+  fixture('builds/d2sdiag-linux-amd64', '#!/bin/sh\nexit 0\n');
   fixture('builds/d2stg-linux-amd64', '#!/bin/sh\necho features=telegram-local-tcp-epoll,telegram-local-proxy,instagram-ip-probe,meta-hosts-v3\n');
   for (const name of ['d2s-resolver', 'd2s-dns-watch']) fixture(`builds/${name}-linux-amd64`, '#!/bin/sh\nexit 0\n');
   fixture('builds/d2sd-linux-amd64', '#!/bin/sh\nexit 0\n');

@@ -1147,6 +1147,15 @@ int main(int argc,char **argv) {
             { "*.пример",      "стенд.пример", 1,  "подстановочная первая метка" },
             { "*.пример",      "пример",       0,  "подстановка не покрывает голый домен" },
             { NULL,            "стенд.пример", -1, "сертификата нет вовсе" },
+            { "example.org", "EXAMPLE.org.", 1, "absolute FQDN" },
+            { "example.org.", "example.org", 1, "absolute certificate FQDN" },
+            { "*.example.org", "a.example.org.", 1, "wildcard absolute FQDN" },
+            { "*.example.org.", "a.example.org", 1, "absolute wildcard" },
+            { "*.example.org", "a.b.example.org.", 0, "wildcard remains one label" },
+            { "*.example.org", "example.org.", 0, "wildcard does not cover apex" },
+            { "example.org", "other.org.", 0, "different absolute name" },
+            { "example.org", "example.org..", 0, "multiple trailing dots rejected" },
+            { "example.org..", "example.org", 0, "malformed certificate name rejected" },
         };
         for (size_t i = 0; i < sizeof cn / sizeof cn[0]; i++) {
             struct stand s;

@@ -1,10 +1,15 @@
 #define _DARWIN_C_SOURCE
 static char diagnostic_test_dir[]="/tmp/d2s-diag-runtime-XXXXXX";
 #define D2S_DIAG_DIR diagnostic_test_dir
+static char diagnostic_test_socket[108];
+#define D2S_DIAG_INPUT diagnostic_test_socket
 #define main d2sc_test_main
 #include "d2sc.c"
 #undef main
 #include <assert.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 static int path_overflows(const char *dir,const char *name) {
     char out[2];volatile size_t cap=sizeof out;
     int (*volatile join_path)(char *,size_t,const char *,const char *)=d2s_diag_path;
@@ -14,29 +19,39 @@ int main(void) {
     assert(mkdtemp(diagnostic_test_dir));
     errno=0;assert(path_overflows(D2S_DIAG_DIR,"report.json")<0);
     assert(errno==ENAMETOOLONG);
-    d2s_catalog cat={0};d2s_sched *s=d2s_sched_new(&cat,-1,0);assert(s);
-    d2s_diag_counts counts;
-    d2s_sched_diagnostic_counts(s,&counts);
-    assert(counts.tasks==0 && counts.task_states[0]==64);
-    assert(counts.workers_running==0 && counts.workers_join_pending==0);
-    assert(counts.workers_started==0 && counts.workers_joined==0);
-    diagnostic_tick(s,1000);assert(!diagnostics);
-    for(int i=0;i<10;i++) {
-        int64_t now=2000+(int64_t)i*4000;
-        assert(d2s_diag_toggle(D2S_DIAG_DIR,1)==0);
-        diagnostic_tick(s,now);assert(diagnostics);
-        char p[512];assert(!d2s_diag_path(p,sizeof p,D2S_DIAG_DIR,"report.json"));
-        struct stat st;assert(!stat(p,&st));assert(st.st_size>0&&st.st_size<D2S_DIAG_REPORT_MAX);
-        assert((st.st_mode&077)==0);
-        assert(d2s_diag_sample_count(diagnostics)==1);
-        diagnostic_tick(s,now+1000);assert(d2s_diag_sample_count(diagnostics)==1);
-        assert(d2s_diag_toggle(D2S_DIAG_DIR,0)==0);
-        assert(stat(p,&st)<0);
-        /* Выгрузка может совпасть с выключением панели; следующий цикл удалит файл. */
-        FILE *late=fopen(p,"w");assert(late);fputs("{}",late);assert(!fclose(late));
-        diagnostic_tick(s,now+2000);assert(!diagnostics);
-        assert(stat(p,&st)<0);
-    }
-    d2s_sched_free(s);d2s_catalog_free(&cat);assert(rmdir(D2S_DIAG_DIR)==0);
-    puts("переключение, очистка и атомарная выгрузка диагностики пройдены");return 0;
+    char *path = diagnostic_test_socket;
+    assert(d2s_diag_path(path, sizeof(diagnostic_test_socket), D2S_DIAG_DIR, "input.sock") == 0);
+    struct sockaddr_un address;
+    assert(d2s_diag_address(&address, path) == 0);
+    int receiver = socket(AF_UNIX, SOCK_DGRAM, 0);
+    assert(receiver >= 0);
+    assert(bind(receiver, (struct sockaddr *)&address, sizeof(address)) == 0);
+    diagnostic_sender = d2s_diag_sender();
+    diagnostic_pid = getpid();
+    assert(diagnostic_sender >= 0);
+    d2s_catalog cat = {0};
+    d2s_sched *s = d2s_sched_new(&cat, -1, 0);
+    assert(s);
+    diagnostic_tick(s, 1000);
+    d2s_diag_counts_message message;
+    assert(recv(receiver, &message, sizeof(message), MSG_DONTWAIT) < 0);
+    assert(d2s_diag_toggle(D2S_DIAG_DIR, 1) == 0);
+    diagnostic_tick(s, 2000);
+    assert(recv(receiver, &message, sizeof(message), MSG_DONTWAIT) == sizeof(message));
+    assert(message.header.kind == D2S_DIAG_IPC_COUNTS);
+    assert(message.counts.tasks == 0);
+    /* Leave the receiver stalled until its bounded queue fills. */
+    for (int i = 3; i <= 200; ++i) diagnostic_tick(s, 1000 * i);
+    close(receiver);
+    assert(unlink(path) == 0);
+    diagnostic_tick(s, 201000);
+    assert(d2s_diag_toggle(D2S_DIAG_DIR, 0) == 0);
+    diagnostic_tick(s, 202000);
+    assert(!diagnostic_enabled);
+    close(diagnostic_sender);
+    d2s_sched_free(s);
+    d2s_catalog_free(&cat);
+    assert(rmdir(D2S_DIAG_DIR) == 0);
+    puts("diagnostic sender: bounded, nonblocking, optional");
+    return 0;
 }

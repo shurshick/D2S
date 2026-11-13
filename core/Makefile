@@ -82,7 +82,7 @@ HDR += include/d2s_tls12.h
 HDR += include/d2s_resource.h
 HDR += include/d2s_http_reply.h
 HDR += include/d2s_domain.h include/d2s_groups.h
-HDR += include/d2s_diagnostics.h ../runtime/d2s_diagnostics_files.h
+HDR += include/d2s_diagnostics.h ../runtime/d2s_diagnostics_files.h diag_transport.h ../runtime/d2s_diag_ipc.h
 HDR += optimize.inc
 HDR += include/d2s_quality.h include/d2s_learning.h
 diagnostics.o: diagnostics.c include/d2s_diagnostics.h
@@ -218,7 +218,7 @@ check: test-ech
 
 .PHONY: all check san gcc-warn cross clean d2sask-aarch64 d2sc-linux-arm64 d2sfetch-linux-arm64 d2svoice-linux-arm64 test-meas test-verdict test-crypto test-quicwire test-h3 test-quic test-quichello test-quicprobe test-quic-fresh-repeats test-quic-arm-data test-quic-arms test-ipfrag test-quic-original-arms test-quic-run-order test-hello test-catalog test-match test-compose test-link test-d2sask test-plantlv test-sched test-rst-trigger test-voice-sched test-verify FORCE
 
-all: meas.o verdict.o crypto.o quic.o quicprobe.o quicsnap.o quicsnap_reseal.o quicarms.o ipfrag.o net4.o props.o hello.o catalog.o groups.o domain.o match.o compose.o measured.o link.o plantlv.o x25519.o tls13.o tls13core.o volume.o sched.o quichello.o verify.o tls12.o p256.o quicconn.o quicwire.o h3.o d2sask d2sc d2sfetch d2svoice
+all: d2sdiag meas.o verdict.o crypto.o quic.o quicprobe.o quicsnap.o quicsnap_reseal.o quicarms.o ipfrag.o net4.o props.o hello.o catalog.o groups.o domain.o match.o compose.o measured.o link.o plantlv.o x25519.o tls13.o tls13core.o volume.o sched.o quichello.o verify.o tls12.o p256.o quicconn.o quicwire.o h3.o d2sask d2sc d2sfetch d2svoice
 
 
 meas.o: meas.c $(HDR)
@@ -1453,3 +1453,20 @@ test-gateway-json:
 check: test-http-profiles
 test-http-profiles: d2sfetch
 	python3 ../scripts/test-http-profiles.py
+
+DIAG_SOURCES = d2sdiag.c diagnostics.c
+DIAG_HEADERS = diag_transport.h include/d2s_diagnostics.h ../runtime/d2s_diag_ipc.h ../runtime/d2s_diagnostics_files.h ../runtime/d2s_runtime.h
+d2sdiag: $(DIAG_SOURCES) $(DIAG_HEADERS)
+	$(CC) $(CFLAGS) -std=c11 -o $@ $(DIAG_SOURCES)
+.PHONY: d2sdiag-release
+d2sdiag-release: $(DIAG_SOURCES) $(DIAG_HEADERS)
+	@mkdir -p $(BUILDDIR)
+	$(ZIG) cc -target $(TARGET) $(TARGET_FLAGS) $(CFLAGS) -std=c11 -static -Wl,-S -o $(BUILDDIR)/d2sdiag-linux-$(ARCH) $(DIAG_SOURCES)
+clean-diag-collector:
+	$(RM) d2sdiag
+clean: clean-diag-collector
+
+.PHONY: test-diag-collector
+check: test-diag-collector
+test-diag-collector:
+	cd .. && python3 scripts/test-diag-collector.py

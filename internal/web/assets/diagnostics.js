@@ -245,12 +245,12 @@
     chart.dataset.points = String(rows.length);
     chart.setAttribute("aria-label", "Память d2sc, период " + hours + " часа, точек: " + rows.length);
     if (!rows.length || !active.length || !all.length) {
-      chart.hidden = true;
+      chart.setAttribute("hidden", "");
       empty.hidden = false;
       empty.textContent = !active.length && rows.length ? "Выберите доступный показатель памяти." : "Для выбранного периода нет доступных снимков памяти.";
       return { rows: rows, delta: null, axisUnit: null };
     }
-    chart.hidden = false; empty.hidden = true;
+    chart.removeAttribute("hidden"); empty.hidden = true;
     var left = 68, right = 948, top = 16, bottom = 218;
     var min = Math.min.apply(Math, all), max = Math.max.apply(Math, all);
     var scale = max >= 1048576 ? 1048576 : max >= 1024 ? 1024 : 1;
@@ -594,16 +594,339 @@
       "Снимков памяти: " + countWithCapacity(list(memory.samples).length, memory.capacity) +
       extras;
   }
+  function telegramRows(tg) {
+    var memory=tg&&tg.memory_history||{}, fields=list(memory.fields), rows=list(memory.samples), base=list(memory.time_base);
+    var wall=number(base[0]),mono=number(base[1]);
+    function field(row,key) { var index=fields.indexOf(key);return index<0?null:number(row[index]); }
+    return rows.map(function(row) {
+      if(!Array.isArray(row))return null;
+      var atDelta=field(row,"at_delta_s"),monoDelta=field(row,"mono_delta_s");
+      var at=wall===null||atDelta===null?null:wall+atDelta;
+      var time=mono!==null&&monoDelta!==null?mono+monoDelta:at;
+      return {at:at,time:time,process_id:field(row,"process_id"),process_started_at:field(row,"process_started_at"),
+        process_generation:field(row,"process_generation"),
+        rss:kibBytes(field(row,"rss_kib")),rss_hwm:kibBytes(field(row,"rss_hwm_kib")),
+        rss_anon:kibBytes(field(row,"rss_anon_kib")),vm_data:kibBytes(field(row,"vm_data_kib")),
+        vm_swap:kibBytes(field(row,"vm_swap_kib")),smaps_pss:kibBytes(field(row,"smaps_pss_kib")),
+        smaps_private_dirty:kibBytes(field(row,"smaps_private_dirty_kib")),
+        mem_available:kibBytes(field(row,"mem_available_kib")),mem_total:kibBytes(field(row,"mem_total_kib")),
+        known_bytes:field(row,"memory_accounted_allocations_bytes"),buffer_current:field(row,"buffer_bytes_current"),
+        proxy_bytes:field(row,"proxy_struct_bytes"),connection_bytes:field(row,"connection_struct_bytes"),
+        retired_connection_bytes:field(row,"retired_connection_struct_bytes"),
+        worker_pool_bytes:field(row,"worker_pool_struct_bytes"),
+        active_connections:field(row,"active_connections"),fd_count:field(row,"fd_count"),
+        tls_objects:field(row,"tls_objects"),worker_pool_tls_objects:field(row,"worker_pool_tls_objects"),
+        worker_pool_entries:field(row,"worker_pool_entries"),
+        buffer_bytes_limit:field(row,"buffer_bytes_limit"),memory_ceiling_bytes:field(row,"memory_ceiling_bytes"),
+        max_connections:field(row,"max_connections"),soft_nofile_limit:field(row,"soft_nofile_limit"),
+        bytes_from_clients:field(row,"bytes_from_clients"),bytes_from_upstreams:field(row,"bytes_from_upstreams"),
+        http_403:field(row,"http_403"),http_501:field(row,"http_501"),http_502:field(row,"http_502"),
+        wss_attempts:field(row,"wss_attempts"),wss_failures:field(row,"wss_failures"),wss_responses:field(row,"wss_responses"),
+        cf_wss_responses:field(row,"cf_wss_responses"),buffer_budget_rejections:field(row,"buffer_budget_rejections"),
+        accept_fd_exhaustion:field(row,"accept_fd_exhaustion"),
+        client_response_latency_p50_us:field(row,"client_response_latency_p50_us"),
+        client_response_latency_p95_us:field(row,"client_response_latency_p95_us")};
+    }).filter(Boolean).map(function(row,index,rows){
+      var previous=index?rows[index-1]:null,elapsed=previous&&number(row.time)!==null&&number(previous.time)!==null
+        ?row.time-previous.time:0;
+      if(previous&&elapsed>0&&sameTelegramProcess(row,previous)){
+        var clients=number(row.bytes_from_clients),previousClients=number(previous.bytes_from_clients);
+        var upstreams=number(row.bytes_from_upstreams),previousUpstreams=number(previous.bytes_from_upstreams);
+        row.client_rate=clients!==null&&previousClients!==null&&clients>=previousClients?(clients-previousClients)/elapsed:null;
+        row.upstream_rate=upstreams!==null&&previousUpstreams!==null&&upstreams>=previousUpstreams?(upstreams-previousUpstreams)/elapsed:null;
+      }else row.client_rate=row.upstream_rate=null;
+      return row;
+    });
+  }
+  function sameTelegramProcess(a,b) {
+    if(number(a.process_id)===null||a.process_id!==b.process_id)return false;
+    var generationA=number(a.process_generation),generationB=number(b.process_generation);
+    if(generationA!==null||generationB!==null)return generationA!==null&&generationA===generationB;
+    return number(a.process_started_at)!==null&&a.process_started_at===b.process_started_at;
+  }
+  function telegramCounterDelta(rows,key) {
+    var total=0,found=false;
+    for(var i=1;i<rows.length;i++){
+      var previous=rows[i-1],current=rows[i],before=number(previous[key]),after=number(current[key]);
+      if(!sameTelegramProcess(previous,current)||before===null||after===null||after<before)continue;
+      total+=after-before;found=true;
+    }
+    return found?total:null;
+  }
+  function telegramLimitChanges(tg) {
+    var fields=[{key:"buffer_bytes_limit",label:"Буферы",bytes:true},
+      {key:"memory_ceiling_bytes",label:"Потолок памяти",bytes:true},
+      {key:"max_connections",label:"Максимум соединений"},
+      {key:"soft_nofile_limit",label:"Предел FD"}],previous={},changes=[];
+    telegramRows(tg).forEach(function(row){fields.forEach(function(item){
+      var value=number(row[item.key]);if(value===null)return;
+      if(Object.prototype.hasOwnProperty.call(previous,item.key)&&previous[item.key]!==value)
+        changes.push({at:row.at,label:item.label,from:previous[item.key],to:value,bytes:item.bytes});
+      previous[item.key]=value;
+    });});
+    return changes;
+  }
+  function telegramSessionRate(session,key) {
+    var bytes=number(session[key]),age=number(session.age_ms);
+    return bytes===null||age===null||age<=0?null:bytes*1000/age;
+  }
+  function drawTelegramChart(doc,tg,hours,chartId,emptyId,series,title,suffix,seriesAttribute,breakOnNull) {
+    var chart=doc.getElementById(chartId),empty=doc.getElementById(emptyId);
+    if(!chart||!empty)return;
+    var memory=tg&&tg.memory_history||{},all=telegramRows(tg),rows=rowsInRange(all,hours,number(memory.sample_interval_ms)||60000);
+    var active=series.filter(function(item){
+      var input=doc.querySelector('['+seriesAttribute+'="'+item.key+'"]');
+      var available=rows.some(function(row){return number(row[item.key])!==null;});
+      if(input){input.parentNode.hidden=!available;item.checked=input.checked;}
+      else if(item.checked===undefined)item.checked=true;
+      return available&&item.checked;
+    });
+    chart.replaceChildren();chart.dataset.points=String(rows.length);
+    chart.setAttribute("aria-label",title+" Telegram прокси за "+hours+" часа, точек: "+rows.length);
+    var values=[];active.forEach(function(item){rows.forEach(function(row){if(number(row[item.key])!==null)values.push(row[item.key]);});});
+    if(!rows.length||!values.length){chart.setAttribute("hidden","");empty.hidden=false;return;}
+    chart.removeAttribute("hidden");empty.hidden=true;
+    var left=68,right=948,top=16,bottom=218,min=Math.min.apply(Math,values),max=Math.max.apply(Math,values);
+    var scale=max>=1048576?1048576:max>=1024?1024:1,unit=(scale===1048576?"МиБ":scale===1024?"КиБ":"Б")+suffix;
+    if(min===max){var pad=Math.max(min*.08,128);min=Math.max(0,min-pad);max+=pad;}else{var margin=(max-min)*.08;min=Math.max(0,min-margin);max+=margin;}
+    for(var tick=0;tick<=4;tick++){
+      var y=top+(bottom-top)*tick/4;chart.appendChild(svg(doc,"line",{x1:left,x2:right,y1:y,y2:y,"class":"diag-gridline"}));
+      var label=svg(doc,"text",{x:left-8,y:y+4,"text-anchor":"end"});label.textContent=((max-(max-min)*tick/4)/scale).toFixed(scale===1?0:1);chart.appendChild(label);
+    }
+    chart.appendChild(svg(doc,"line",{x1:left,x2:right,y1:bottom,y2:bottom,"class":"diag-axis"}));
+    var first=rows[0].time,last=rows[rows.length-1].time;
+    var start=svg(doc,"text",{x:left,y:248,"text-anchor":"start"}),end=svg(doc,"text",{x:right,y:248,"text-anchor":"end"});
+    start.textContent=timeLabel(rows[0].at);end.textContent=timeLabel(rows[rows.length-1].at);chart.appendChild(start);chart.appendChild(end);
+    active.forEach(function(item){
+      var points=[],previous=null;
+      function flush(){
+        var style="diag-line diag-line-"+item.color;
+        if(points.length===1){
+          var xy=points[0].slice(1).split(",");
+          chart.appendChild(svg(doc,"circle",{"class":style,cx:xy[0],cy:xy[1],r:2}));
+        }else if(points.length){
+          chart.appendChild(svg(doc,"path",{"class":style,d:points.join(" ")}));
+        }
+        points=[];
+      }
+      rows.forEach(function(row,index){var value=number(row[item.key]);
+        if(previous&&!sameTelegramProcess(previous,row))flush();
+        if(value===null){if(breakOnNull)flush();previous=row;return;}
+        var x=number(row.time)!==null&&first!==null&&last!==null&&last>first?left+(right-left)*(row.time-first)/(last-first):left+(right-left)*index/Math.max(1,rows.length-1);
+        var y=bottom-(bottom-top)*(value-min)/(max-min);points.push((points.length?"L":"M")+x.toFixed(1)+","+y.toFixed(1));previous=row;
+      });
+      flush();
+    });
+    return {rows:rows,unit:unit};
+  }
+  function drawTelegramMemory(doc,tg,hours) {
+    var result=drawTelegramChart(doc,tg,hours,"telegram-diagnostic-memory-chart","telegram-diagnostic-memory-empty",
+      [{key:"rss",color:"rss"},{key:"rss_anon",color:"rss_anon"},
+       {key:"rss_hwm",color:"tracked_tcp"},{key:"vm_data",color:"vm_data"},
+       {key:"vm_swap",color:"tracked_tls"},{key:"smaps_pss",color:"anonymous"},
+       {key:"smaps_private_dirty",color:"private_dirty"},{key:"mem_available",color:"http"},
+       {key:"known_bytes",color:"tracked_tcp"},
+       {key:"buffer_current",color:"snapshot"},{key:"proxy_bytes",color:"http"},
+       {key:"connection_bytes",color:"anonymous"},{key:"retired_connection_bytes",color:"private_dirty"},
+       {key:"worker_pool_bytes",color:"tracked_quic"}],"Память","","data-tg-memory-series",true);
+    var memory=tg&&tg.memory_history||{};
+    if(result){setText(doc,"telegram-diagnostic-memory-interval","Снимок раз в "+Math.floor((number(memory.sample_interval_ms)||60000)/60000)+" мин · ось в "+result.unit);
+      setText(doc,"telegram-diagnostic-history-coverage",coverageText(result.rows,hours));}
+  }
+  function drawTelegramTraffic(doc,tg,hours) {
+    return drawTelegramChart(doc,tg,hours,"telegram-diagnostic-traffic-chart","telegram-diagnostic-traffic-empty",
+      [{key:"client_rate",color:"rss"},{key:"upstream_rate",color:"rss_anon"}],
+      "Скорость передачи","/с","data-tg-traffic-series",true);
+  }
+  function drawTelegramResources(doc,tg,hours) {
+    return drawTelegramChart(doc,tg,hours,"telegram-diagnostic-resource-chart","telegram-diagnostic-resource-empty",
+      [{key:"active_connections",color:"rss"},{key:"fd_count",color:"rss_anon"},
+       {key:"tls_objects",color:"tracked_tls"},{key:"worker_pool_tls_objects",color:"private_dirty"},
+       {key:"worker_pool_entries",color:"http"}],
+      "Ресурсы","","data-tg-resource-series",true);
+  }
+  function telegramLatestValue(latest,key) { return number(latest&&latest[key]); }
+  function telegramUnavailable(value) { return value===null||value===undefined||value==="unavailable"?"—":null; }
+  function telegramBytes(value) { return telegramUnavailable(number(value))||formatBytes(value); }
+  function telegramKib(value) { return telegramUnavailable(number(value))||formatKib(value); }
+  function telegramCountText(value) { return telegramUnavailable(number(value))||pretty(value); }
+  function telegramAgeText(value) { return telegramUnavailable(number(value))||formatAge(value); }
+  function telegramPretty(value) { return telegramUnavailable(value)||pretty(value); }
+  function telegramTime(value) { return telegramUnavailable(number(value))||timeLabel(value); }
+  function telegramMetricRows(doc, list, entries) {
+    list.replaceChildren();
+    entries.forEach(function(entry) {
+      if (entry[1] === null) return;
+      var row = doc.createElement("div"), label = doc.createElement("dt"), value = doc.createElement("dd");
+      label.textContent = entry[0];
+      value.textContent = entry[1];
+      row.append(label, value);
+      list.appendChild(row);
+    });
+  }
+  function telegramStatusLabel(value) {
+    var labels = {fresh:"Актуальна",expired:"Срок истёк",clock_skew:"Расхождение часов",
+      loaded:"Загружена",loaded_last_good:"Загружена рабочая копия",never:"Ещё не запускалось",
+      success:"Успешно",running:"В процессе",no_snapshot:"Снимка пока нет",
+      http_error:"Ошибка HTTP",discovery_failed:"Не удалось получить карту",
+      install_failed:"Не удалось сохранить карту",thread_start_failed:"Не удалось начать обновление"};
+    return labels[value] || telegramPretty(value);
+  }
+  function renderTelegramMetrics(doc, data, latest, history) {
+    var formats = {k:telegramKib,b:telegramBytes,n:telegramCountText,age:telegramAgeText,time:telegramTime,
+      status:telegramStatusLabel,yes:function(v){return v?"Да":"Нет";},
+      us:function(v){return (v/1000).toFixed(1)+" мс";},delta:formatDeltaBytes};
+    Array.from(data.querySelectorAll("[data-tg-field]")).forEach(function(element){
+      var key=element.dataset.tgField, value=latest[key], limit=latest[element.dataset.limit];
+      var available=value!==null&&value!==undefined&&value!=="unavailable";
+      var fmt=formats[element.dataset.format];
+      if(element.dataset.format==="us" && latest.client_response_latency_samples===0)available=false;
+      element.parentNode.hidden=!available;
+      element.textContent=available?fmt(value)+(limit===null||limit===undefined?"":" / "+fmt(limit)):"";
+    });
+    var smaps=latest.smaps_rollup_status;
+    setText(doc,"tg-diag-smaps-status",smaps==="ok"?"":smaps==="unsupported"?
+      "PSS и разбивка страниц недоступны: ядро не предоставляет smaps_rollup.":
+      (smaps==="parse_error"||smaps==="parse-error")?"Не удалось разобрать smaps_rollup.":
+      "Снимок smaps_rollup недоступен."+(number(latest.smaps_rollup_errno)===null?"":" Код "+latest.smaps_rollup_errno+"."));
+    var rate=history[history.length-1];
+    telegramMetricRows(doc,doc.getElementById("tg-diag-rate-details"),[
+      ["От клиента за минутный интервал", rate&&rate.client_rate!==null?telegramBytes(rate.client_rate)+"/с":null],
+      ["От сервера за минутный интервал", rate&&rate.upstream_rate!==null?telegramBytes(rate.upstream_rate)+"/с":null]
+    ]);
+    var errorKeys=["http_403","http_501","http_502","wss_failures"];
+    telegramMetricRows(doc,doc.getElementById("tg-diag-period-errors"),errorKeys.map(function(key,i){
+      var value=telegramCounterDelta(history,key);
+      return [["Новые HTTP 403","Новые HTTP 501","Новые HTTP 502","Новые ошибки WSS"][i],value===null?null:telegramCountText(value)];
+    }));
+    var stages=latest.failure_by_stage||{};
+    telegramMetricRows(doc,doc.getElementById("tg-diag-stage-failures"),Object.keys(stages)
+      .filter(function(key){return stages[key]>0;}).map(function(key){return [key,telegramCountText(stages[key])];}));
+  }
+  function renderTelegram(doc,tg,enabled,range) {
+    var state=doc.getElementById("telegram-diagnostic-state"),data=doc.getElementById("telegram-diagnostic-data");
+    if(!state||!data)return;
+    state.textContent=enabled?"Сбор включён":"Сбор выключен";state.dataset.enabled=String(enabled);data.hidden=!enabled;
+    if(!enabled){setText(doc,"telegram-diagnostic-status","Сбор выключен. Включите его, чтобы записывать память и состояние Telegram прокси.");return;}
+    tg=tg||{};var latest=tg.latest||null,history=telegramRows(tg),last=history[history.length-1];
+    var failed=tg.collection_status==="socket_unavailable";
+    var error=number(tg.last_error)===null?"":" (код "+tg.last_error+")";
+    data.hidden=!latest;
+    if(!latest){
+      setText(doc,"telegram-diagnostic-status",failed?
+        "Не удалось получить статистику Telegram-прокси"+error+". Повторяем подключение автоматически.":
+        "Ожидаем первый снимок Telegram-прокси.");
+      return;
+    }
+    setText(doc,"telegram-diagnostic-status",(failed?
+      "Текущий срез недоступен"+error+". Ниже последний успешный снимок. ":
+      "Снимков памяти: "+countWithCapacity(history.length,(tg.memory_history||{}).capacity)+" · ")+
+      "последнее чтение: "+(number(tg.last_sample_at)===null?"—":new Date(tg.last_sample_at*1000).toLocaleTimeString())+
+      (tg.collection_failures?" · ошибок чтения: "+tg.collection_failures:""));
+    drawTelegramMemory(doc,tg,range);drawTelegramTraffic(doc,tg,range);drawTelegramResources(doc,tg,range);
+    renderTelegramMetrics(doc,data,latest,history);
+    function renderRecords(id, emptyId, records, fields) {
+      var container=doc.getElementById(id);
+      var open = new Set(Array.from(container.querySelectorAll("details[open]")).map(function(node){return node.dataset.record;}));
+      container.replaceChildren();
+      records.forEach(function(record) {
+        var details=doc.createElement("details"), summary=doc.createElement("summary"), body=doc.createElement("dl");
+        var entries=fields(record);
+        summary.textContent=entries.shift()[1];
+        details.dataset.record=record.id===undefined?summary.textContent:record.id;
+        details.open=open.has(details.dataset.record);
+        details.className="tg-diag-record";
+        body.className="tg-diag-metrics";
+        telegramMetricRows(doc,body,entries);
+        details.append(summary,body);
+        container.appendChild(details);
+      });
+      doc.getElementById(emptyId).hidden=records.length>0;
+    }
+    var routeHealth=Array.isArray(latest.route_health);
+    var dcCard=doc.getElementById("tg-diag-dc-card");
+    if(dcCard)dcCard.hidden=Array.from(dcCard.querySelectorAll("[data-tg-field]"))
+      .every(function(element){return element.parentNode.hidden;});
+    setText(doc,"tg-diag-routes-empty",routeHealth?"Пока нет данных маршрута.":
+      "Маршрутов на паузе в снимке нет.");
+    setText(doc,"tg-diag-route-title",routeHealth?"Маршруты":"Маршруты на паузе");
+    renderRecords("tg-diag-routes","tg-diag-routes-empty",routeHealth?latest.route_health:list(latest.route_cooldowns),function(route){
+      var ports=number(route.client_port)>0&&number(route.upstream_port)>0?route.client_port+" → "+route.upstream_port:null;
+      var pause=routeHealth?route.cooldown_remaining_ms:route.remaining_ms;
+      return [["", "DC "+telegramPretty(route.dc)+" · "+(route.is_media?"Медиа":"Основной")+" · "+telegramPretty(route.transport)],
+        ["Порты",ports],["Попытки",number(route.attempts)===null?null:telegramCountText(route.attempts)],
+        ["Ответы",number(route.responses)===null?null:telegramCountText(route.responses)],
+        ["Ошибки",number(route.failures)===null?null:telegramCountText(route.failures)],
+        ["Пауза",number(pause)>0?telegramAgeText(pause):null]];
+    });
+    renderRecords("tg-diag-sessions","tg-diag-sessions-empty",list(latest.active_sessions),function(session){
+      var kind=session.is_media===true?"Медиа":session.is_media===false?"Основная":"Тип неизвестен";
+      var fromClient=telegramSessionRate(session,"bytes_from_clients"), fromUpstream=telegramSessionRate(session,"bytes_from_upstreams");
+      return [["","#"+telegramPretty(session.id)+" · DC "+telegramPretty(session.dc)+" · "+kind],
+        ["Маршрут",session.selected_transport||session.direct_transport||session.fallback_transport||null],
+        ["Возраст",number(session.age_ms)===null?null:telegramAgeText(session.age_ms)],
+        ["От клиента",telegramBytes(session.bytes_from_clients)+(fromClient===null?"":" · "+telegramBytes(fromClient)+"/с")],
+        ["От сервера",telegramBytes(session.bytes_from_upstreams)+(fromUpstream===null?"":" · "+telegramBytes(fromUpstream)+"/с")],
+        ["Первый ответ",number(session.first_response_latency_ms)===null?null:telegramAgeText(session.first_response_latency_ms)],
+        ["Без прогресса",number(session.no_progress_ms)===null?null:telegramAgeText(session.no_progress_ms)],
+        ["Очередь к клиенту",number(session.client_queue_bytes)===null?null:telegramBytes(session.client_queue_bytes)+" / "+telegramBytes(session.client_queue_capacity_bytes)],
+        ["Очередь к серверу",number(session.upstream_queue_bytes)===null?null:telegramBytes(session.upstream_queue_bytes)+" / "+telegramBytes(session.upstream_queue_capacity_bytes)],
+        ["Основной маршрут",session.direct_state+(session.direct_transport?" · "+session.direct_transport:"")],
+        ["Запасной маршрут",session.fallback_state+(session.fallback_transport?" · "+session.fallback_transport:"")],
+        ["Состояние",session.read_paused?"Чтение приостановлено":session.stage]];
+    });
+    var problems=doc.getElementById("tg-diag-problems");problems.replaceChildren();
+    list(latest&&latest.problem_sessions).slice().reverse().slice(0,8).forEach(function(problem){var li=doc.createElement("li");
+      li.textContent="DC "+telegramPretty(problem.dc)+" · "+telegramPretty(problem.failure_stage)+
+        (problem.http_status?" HTTP "+problem.http_status:"")+" · "+telegramPretty(problem.transport)+
+        " · клиент/сервер "+telegramBytes(problem.bytes_from_clients)+" / "+telegramBytes(problem.bytes_from_upstreams);problems.appendChild(li);
+    });
+    if(!Array.isArray(latest.problem_sessions)&&number(latest.last_failure_stage)>0){
+      var failure=doc.createElement("li"), flow=root.D2STelegramFlow;
+      var lastFailure=flow&&flow.summarizeTelegramFlow(latest).latestFailure;
+      if(lastFailure){failure.textContent="Последняя ошибка: "+lastFailure.stage+" · "+lastFailure.dc+
+        " · "+lastFailure.route+" · "+telegramAgeText(lastFailure.ageMs)+" назад";problems.appendChild(failure);}
+    }
+    if(!problems.children.length){var empty=doc.createElement("li");empty.className="diag-transition-empty";
+      empty.textContent=Array.isArray(latest.problem_sessions)?"Зафиксированных ошибок нет.":"Последняя ошибка не указана в снимке.";problems.appendChild(empty);}
+    var limitHistory=doc.getElementById("tg-diag-limit-history"),changes=telegramLimitChanges(tg).slice(-20).reverse();
+    limitHistory.replaceChildren();
+    if(!changes.length){var emptyLimit=doc.createElement("li"),limitValues=["buffer_bytes_limit","memory_ceiling_bytes","max_connections","soft_nofile_limit"];
+      emptyLimit.className="diag-transition-empty";
+      emptyLimit.textContent=history.some(function(row){return limitValues.some(function(key){return number(row[key])!==null;});})
+        ?"Изменений за сохранённые снимки нет.":"Лимиты в снимке отсутствуют.";limitHistory.appendChild(emptyLimit);}
+    changes.forEach(function(change){var row=doc.createElement("li"),strong=doc.createElement("strong"),label=doc.createElement("span"),time=doc.createElement("small");
+      var format=change.bytes?formatBytes:pretty;strong.textContent=change.label+": "+format(change.from)+" → "+format(change.to);
+      label.textContent="Изменение между снимками";time.textContent=number(change.at)===null?"":new Date(change.at*1000).toLocaleString();
+      row.appendChild(strong);row.appendChild(label);row.appendChild(time);limitHistory.appendChild(row);
+    });
+  }
   if (typeof module === "object" && module.exports) module.exports = {
     summary: summary, memoryRows: memoryRows, rowsInRange: rowsInRange,
-    seriesEndpoints: seriesEndpoints, formatBytes: formatBytes, coverageText: coverageText
+    seriesEndpoints: seriesEndpoints, formatBytes: formatBytes, coverageText: coverageText,
+    telegramRows: telegramRows
   };
   if (!root.document || !root.fetch) return;
   function boot() {
-    var doc = root.document, toggle = doc.getElementById("diagnostic-toggle"), status = doc.getElementById("diagnostic-status"), download = doc.getElementById("diagnostic-download");
-    if (!toggle || !status || !download) return;
-    var enabled = false, busy = false, range = 2, currentReport = {};
-    function redraw() { render(currentReport, enabled, range); }
+    var doc = root.document, toggle = doc.getElementById("diagnostic-toggle"), tgToggle = doc.getElementById("telegram-diagnostic-toggle"), status = doc.getElementById("diagnostic-status"), download = doc.getElementById("diagnostic-download");
+    if (!toggle || !tgToggle || !status || !download) return;
+    var enabled = false, telegramEnabled = false, busy = false, range = 2, telegramRange = 2, currentReport = {};
+    function redraw() { render(currentReport, enabled, range);renderTelegram(doc,currentReport.telegram_diagnostics,telegramEnabled,telegramRange); }
+    var tabs=Array.prototype.slice.call(doc.querySelectorAll("[data-diagnostic-tab]"));
+    var selectedTab;
+    function selectTab(name,focus) {
+      selectedTab=name;
+      tabs.forEach(function(tab){var selected=tab.dataset.diagnosticTab===name;tab.setAttribute("aria-selected",String(selected));tab.tabIndex=selected?0:-1;
+        var panel=doc.querySelector('[data-diagnostic-panel="'+tab.dataset.diagnosticTab+'"]');if(panel)panel.hidden=!selected;if(selected&&focus)tab.focus();});
+    }
+    tabs.forEach(function(tab,index){
+      tab.addEventListener("click",function(){selectTab(tab.dataset.diagnosticTab,false);});
+      tab.addEventListener("keydown",function(event){var target=index;
+        if(event.key==="ArrowRight")target=(index+1)%tabs.length;else if(event.key==="ArrowLeft")target=(index+tabs.length-1)%tabs.length;
+        else if(event.key==="Home")target=0;else if(event.key==="End")target=tabs.length-1;else return;
+        event.preventDefault();selectTab(tabs[target].dataset.diagnosticTab,true);
+      });
+    });
     doc.querySelectorAll("[data-memory-range]").forEach(function (button) {
       button.addEventListener("click", function () {
         range = Number(button.dataset.memoryRange);
@@ -612,26 +935,53 @@
       });
     });
     doc.querySelectorAll("[data-memory-series]").forEach(function (input) { input.addEventListener("change", redraw); });
+    doc.querySelectorAll("[data-tg-memory-range]").forEach(function(button){button.addEventListener("click",function(){
+      telegramRange=Number(button.dataset.tgMemoryRange);
+      doc.querySelectorAll("[data-tg-memory-range]").forEach(function(item){item.setAttribute("aria-pressed",String(item===button));});redraw();
+    });});
+    doc.querySelectorAll("[data-tg-memory-series]").forEach(function(input){input.addEventListener("change",redraw);});
+    doc.querySelectorAll("[data-tg-resource-series]").forEach(function(input){input.addEventListener("change",redraw);});
     function refresh() {
-      return root.fetch("/api/diagnostics?report", { cache: "no-store" }).then(function (r) {
-        if (!r.ok && r.status !== 503) throw new Error("Ошибка HTTP " + r.status);
-        return r.json();
-      }).then(function (r) {
-        currentReport = r || {}; enabled = currentReport.enabled === true;
+      return root.fetch("/api/diagnostics?status",{cache:"no-store"}).then(function(statusResponse){
+        if(!statusResponse.ok)throw new Error("Ошибка HTTP "+statusResponse.status);return statusResponse.json();
+      }).then(function(flags){return root.fetch("/api/diagnostics?report",{cache:"no-store"}).then(function(reportResponse){
+        if(!reportResponse.ok&&reportResponse.status!==503)throw new Error("Ошибка HTTP "+reportResponse.status);
+        return reportResponse.json().then(function(report){report=report||{};report.general_enabled=flags.enabled===true;
+          report.telegram_enabled=flags.telegram_enabled===true;return report;});
+      });}).then(function (r) {
+        currentReport = r || {};
+        enabled = typeof currentReport.general_enabled==="boolean"?currentReport.general_enabled:
+          currentReport.enabled===true&&currentReport.telegram_enabled!==true;
+        telegramEnabled = currentReport.telegram_enabled===true;
         toggle.textContent = enabled ? "Выключить и удалить историю" : "Включить сбор";
-        download.hidden = !enabled || !!currentReport.pending;
+        tgToggle.textContent = telegramEnabled ? "Выключить и удалить историю Telegram" : "Включить сбор Telegram";
+        download.hidden = !(enabled||telegramEnabled) || !!currentReport.pending;
         redraw();
       }).catch(function () { status.textContent = "Не удалось прочитать состояние диагностики."; });
     }
-    toggle.addEventListener("click", function () {
-      if (busy) return; busy = true; toggle.disabled = true;
-      root.fetch("/api/diagnostics?" + (enabled ? "disable" : "enable"), { method: "POST", cache: "no-store" }).then(function (r) {
+    function switchCollector(isTelegram) {
+      if (busy) return;busy=true;toggle.disabled=true;tgToggle.disabled=true;
+      var on=isTelegram?telegramEnabled:enabled;
+      var action=isTelegram?(on?"telegram-disable":"telegram-enable"):(on?"disable":"enable");
+      root.fetch("/api/diagnostics?"+action,{method:"POST",cache:"no-store"}).then(function (r) {
         if (!r.ok) throw new Error("Ошибка HTTP " + r.status);
         return refresh();
-      }).catch(function () { status.textContent = "Не удалось переключить сбор. Требуется доступ к управлению этой панелью."; })
-        .finally(function () { busy = false; toggle.disabled = false; });
-    });
-    refresh(); root.setInterval(function () { if (!busy && !doc.hidden) refresh(); }, 60000);
+      }).catch(function () { setText(doc,isTelegram?"telegram-diagnostic-status":"diagnostic-status","Не удалось переключить сбор. Требуется доступ к управлению этой панелью."); })
+        .finally(function () { busy=false;toggle.disabled=false;tgToggle.disabled=false; });
+    }
+    toggle.addEventListener("click",function(){switchCollector(false);});
+    tgToggle.addEventListener("click",function(){switchCollector(true);});
+    selectTab("general",false);
+    refresh();
+    var lastRefresh=Date.now();
+    root.setInterval(function () {
+      var waiting=selectedTab==="telegram"&&telegramEnabled&&
+        !(currentReport.telegram_diagnostics||{}).latest;
+      if(!busy&&!doc.hidden&&(waiting||Date.now()-lastRefresh>=60000)){
+        lastRefresh=Date.now();
+        refresh();
+      }
+    },5000);
   }
   if (root.document.readyState === "loading") root.document.addEventListener("DOMContentLoaded", boot); else boot();
 })(typeof window !== "undefined" ? window : this);

@@ -65,6 +65,9 @@ fi
 
 # Defense in depth when init has already been removed: stop only the owned
 # Telegram PID and remove only the two D2S-owned redirect rule sets.
+if [ -f "$DIR/run/d2sdiag.pid" ]; then
+    start-stop-daemon -K -q -p "$DIR/run/d2sdiag.pid" -x "$SBIN/d2sdiag" 2>/dev/null || true
+fi
 if [ -f "$DIR/run/d2stg.pid" ]; then
     start-stop-daemon -K -q -p "$DIR/run/d2stg.pid" 2>/dev/null || true
 fi
@@ -198,7 +201,7 @@ rm -f "$PREFIX/etc/ndm/netfilter.d/001-d2s.sh"
 rm -f "$PREFIX/etc/init.d/S96d2s-resolver" "$PREFIX/etc/init.d/S97d2s-dns-watch" "$SBIN/d2s-resolver" "$SBIN/d2s-dns-watch"
 rm -f "$DIR/d2s-lan.sh" "$DIR/d2s-meta-dns-core.sh" "$DIR/d2s-meta-dns-library.sh" "$DIR/d2s-meta-dns-scheduler-core.sh" "$DIR/d2s-whatsapp-media.sh"
 rm -f /tmp/d2s/whatsapp-media-observed.txt
-rm -f "$PREFIX/etc/init.d/S99d2s" "$PREFIX/etc/init.d/S98d2s-update" "$SBIN/d2s" "$SBIN/d2spanel" "$SBIN/d2sc" "$SBIN/d2sfetch" "$SBIN/d2sd" "$SBIN/d2stg" "$SBIN/d2shttp"
+rm -f "$PREFIX/etc/init.d/S99d2s" "$PREFIX/etc/init.d/S98d2s-update" "$SBIN/d2s" "$SBIN/d2spanel" "$SBIN/d2sc" "$SBIN/d2sdiag" "$SBIN/d2sfetch" "$SBIN/d2sd" "$SBIN/d2stg" "$SBIN/d2shttp"
 # Remove only d2sc snapshots explicitly named as D2S pre-install/work backups.
 # These were created during router development and are not user configuration.
 rm -f "$SBIN"/d2sc.before-d2s-* "$SBIN"/d2sc.pre-goal-* "$SBIN"/d2sc.pre-sched-*
