@@ -96,12 +96,12 @@
     "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
   },
   "core/tls12.c": {
-    "sha256": "aecb85b5bfb69c415573ba8c859319de6f3683a9fac5efc68c51517ab93971f1",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "aa451945da72754acc18f0612a13b370394461a64e9ba0ad8e2f916e00ba3109",
+    "reason": "docs/tx-probe-timeout.md"
   },
   "core/tls13.c": {
-    "sha256": "136c7129e3d4eefaa1b1d2313ee2367fc687243418fb93e8acd5c10d9df68857",
-    "reason": "docs/diagnostics-8e2c981.md#reviewed-engine-changes"
+    "sha256": "b6f9ee94ac6558d99cee2ac9e28744078b6983a27e3e7a49ce6591e7b24f366e",
+    "reason": "docs/tx-probe-timeout.md"
   },
   "core/verify.c": {
     "sha256": "3ba2524395fe8e0319ed9ad29f43743695f21ba851c824b68d71f24fea9f8485",
@@ -322,5 +322,25 @@
   "datapath/test_nl.c": {
     "sha256": "fa7b1445dca47b894278c7ae0df7d58df475e13a5e890cb2e715fbf00c0be563",
     "reason": "docs/nfqueue-offload-safety.md"
+  },
+  "core/include/d2s_tls12.h": {
+    "sha256": "ae4896c1361d6b31e72c8adc8e79c54019b0dc73091b9ce56d61f4a0530ab79b",
+    "reason": "docs/tx-probe-timeout.md"
+  },
+  "core/include/d2s_tls13.h": {
+    "sha256": "01bc1eb1bba511ab637cd4b4b133c51833356f164709ae7b011c77a62208b846",
+    "reason": "docs/tx-probe-timeout.md"
+  },
+  "core/test_verify.c": {
+    "sha256": "b01584f79f05bb303c575137a44a988946f839ad2526ce5393eba7d1a7e898b2",
+    "reason": "docs/tx-probe-timeout.md"
+  },
+  "core/test_volume_context.c": {
+    "sha256": "8908394e68c48264b169179cd3444cde3bb7e976e843b7840733acd5da771f2c",
+    "reason": "docs/tx-probe-timeout.md"
+  },
+  "core/volume.c": {
+    "sha256": "d51914e921c55f43c761c5fe14234e3e57a763d91920c49aa90a254c13efffe2",
+    "reason": "docs/tx-probe-timeout.md"
   }
 }

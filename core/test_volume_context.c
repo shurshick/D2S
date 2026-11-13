@@ -23,6 +23,8 @@ static int short_then_hint, hint_status;
 static int retry_outcome;
 static const char *hint_host, *hint_for_path, *cut_path, *last_path;
 static int expected_gzip_call = 2;
+static int tx_failure_mode, tx_steps;
+static size_t tx_reply_offset;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "volume-context:%d: %s\n", __LINE__, #c); failures++; } } while (0)
 
 static int mark_ok(int fd, uint32_t mark) {
@@ -34,28 +36,39 @@ int d2s_tls_connect(int fd, const char *sni, int ms, size_t wire,
                     d2s_tls **out, char *err, size_t cap) {
     (void)fd; (void)sni; (void)ms; *out = NULL;
     CHECK(!expected_legacy && wire == expected_wire); modern_calls++;
+    if (tx_failure_mode) { *out = (d2s_tls *)&tx_steps; return 0; }
     snprintf(err, cap, "TX reset"); return -1;
 }
 int d2s_tls12_connect(int fd, const char *sni, int ms, size_t wire,
                       d2s_tls12 **out, char *err, size_t cap) {
     (void)fd; (void)sni; (void)ms; *out = NULL;
     CHECK(expected_legacy && wire == expected_wire); legacy_calls++;
+    if (tx_failure_mode) { *out = (d2s_tls12 *)&tx_steps; return 0; }
     snprintf(err, cap, "TX reset"); return -1;
 }
 int d2s_tls_write(d2s_tls *t, const uint8_t *b, size_t n, char *e, size_t c) {
+    if (tx_failure_mode) { tx_steps++; tx_reply_offset = 0; return 0; }
     (void)t; (void)b; (void)n; (void)e; (void)c; CHECK(0); return -1;
 }
 int d2s_tls12_write(d2s_tls12 *t, const uint8_t *b, size_t n, char *e, size_t c) {
+    if (tx_failure_mode) { tx_steps++; tx_reply_offset = 0; return 0; }
     (void)t; (void)b; (void)n; (void)e; (void)c; CHECK(0); return -1;
 }
 long d2s_tls_read(d2s_tls *t, uint8_t *b, size_t n, int ms, char *e, size_t c) {
+    if (tx_failure_mode) {
+        static const char reply[] = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\n";
+        if (tx_steps <= 4) { *b = (uint8_t)reply[tx_reply_offset++]; return 1; }
+        errno = tx_failure_mode == 2 ? ECONNRESET : ETIMEDOUT;
+        snprintf(e, c, "synthetic read failure"); return -1;
+    }
     (void)t; (void)b; (void)n; (void)ms; (void)e; (void)c; CHECK(0); return -1;
 }
 long d2s_tls12_read(d2s_tls12 *t, uint8_t *b, size_t n, int ms, char *e, size_t c) {
+    if (tx_failure_mode) return d2s_tls_read((d2s_tls *)t, b, n, ms, e, c);
     (void)t; (void)b; (void)n; (void)ms; (void)e; (void)c; CHECK(0); return -1;
 }
-void d2s_tls_free(d2s_tls *t) { (void)t; CHECK(0); }
-void d2s_tls12_free(d2s_tls12 *t) { (void)t; CHECK(0); }
+void d2s_tls_free(d2s_tls *t) { (void)t; CHECK(tx_failure_mode); }
+void d2s_tls12_free(d2s_tls12 *t) { (void)t; CHECK(tx_failure_mode); }
 
 d2s_ver_result d2s_verify_probe_baseline(const char *ip, uint16_t port,
     const char *sni, int ms, size_t wire, int legacy, int encoding, uint32_t mark) {
@@ -64,6 +77,11 @@ d2s_ver_result d2s_verify_probe_baseline(const char *ip, uint16_t port,
           wire == expected_wire && mark == 0x2f);
     CHECK(encoding == (baseline_calls == expected_gzip_call));
     d2s_ver_result r = {0};
+    if (tx_failure_mode && tx_failure_mode != 3) {
+        r.fd = -1; r.status = 404; r.body_complete = 1;
+        r.level = D2S_VER_APPLICATION; r.body_framing_valid = r.body_has_length = 1;
+        r.body_bytes = r.body_expected = 9; baseline_calls++; return r;
+    }
     if (unmeasured_rx || early_rx) {
         r.fd = -1; r.level = D2S_VER_HANDSHAKE; r.name_ok = 1;
         r.negotiated_tls = expected_legacy ? 0x0303 : 0x0304;
@@ -349,6 +367,40 @@ int main(void) {
     probe_response_volume(&same, "127.0.0.1", 443, "context.test", 0, 1536, 0x2f, hint_for_path);
     CHECK(baseline_calls == 1 && !same.rx_cut && same.rx_short);
     short_then_hint = 0; hint_host = NULL; expected_gzip_call = 2;
+    /* Four HEAD replies, then timeout; GET is a complete 9-byte 404.
+       A deadline is not a cut, and independent paired RX proof must survive. */
+    for (int legacy = 0; legacy < 2; legacy++) {
+        for (int mode = 1; mode <= 3; mode++) {
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            struct sockaddr_in a = {0};
+            a.sin_family = AF_INET; a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            socklen_t len = sizeof a;
+            CHECK(fd >= 0 && bind(fd, (struct sockaddr *)&a, len) == 0);
+            CHECK(getsockname(fd, (struct sockaddr *)&a, &len) == 0 && listen(fd, 2) == 0);
+            tx_failure_mode = mode; tx_steps = 0; baseline_calls = 0;
+            expected_legacy = legacy; expected_wire = 512; expected_path = NULL;
+            d2s_vol_result r = d2s_volume_probe("127.0.0.1", ntohs(a.sin_port),
+                "context.test", 0, legacy, expected_wire, 0x2f);
+            CHECK(tx_steps == 5 && r.at_kb == 15);
+            CHECK(r.verdict == (mode == 2 ? D2S_VOL_CUT : D2S_VOL_SHORT));
+            CHECK(mode == 3 ? r.rx_cut : !r.rx_cut);
+            close(fd);
+        }
+    }
+    tx_failure_mode = 0;
+    /* The real plaintext reader also distinguishes a local deadline from
+       complete headers and orderly peer closure. */
+    {
+        int pair[2]; char err[160];
+        CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0);
+        CHECK(drain_head_plain(pair[0], 5, err, sizeof err) == -2);
+        const char response[] = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+        CHECK(write(pair[1], response, sizeof response - 1) == sizeof response - 1);
+        CHECK(drain_head_plain(pair[0], 50, err, sizeof err) == 0);
+        close(pair[1]);
+        CHECK(drain_head_plain(pair[0], 50, err, sizeof err) == -1);
+        close(pair[0]);
+    }
     if (failures) return 1;
     puts("test_volume_context: OK"); return 0;
 }

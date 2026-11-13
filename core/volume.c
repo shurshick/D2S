@@ -321,7 +321,8 @@ static int connect_bounded(const char *ip, uint16_t port, uint32_t mark,
     return fd;
 }
 
-/* Читает заголовки ответа до пустой строки. 0 — прочитано, -1 — обрыв. */
+/* 0 — headers complete; -1 — failure/closure; -2 — local read deadline.
+   A deadline is not evidence of an on-wire byte-budget cut. */
 static int drain_head_tls(d2s_tls *t, d2s_tls12 *t12, int wait_ms, char *reason, size_t cap) {
     char line[4096];
     size_t n = 0;
@@ -329,11 +330,13 @@ static int drain_head_tls(d2s_tls *t, d2s_tls12 *t12, int wait_ms, char *reason,
     int64_t deadline = now_ms() + wait_ms;
     for (;;) {
         int64_t left = deadline - now_ms();
-        if (left <= 0) { snprintf(reason, cap, "ответа нет"); return -1; }
+        if (left <= 0) { snprintf(reason, cap, "ответа нет (тайм-аут)"); return -2; }
         uint8_t c;
+        errno = 0;
         long r = t12 ? d2s_tls12_read(t12, &c, 1, (int)left, reason, cap)
                      : d2s_tls_read(t, &c, 1, (int)left, reason, cap);
         if (r <= 0) {
+            if (r < 0 && errno == ETIMEDOUT) { return -2; }
             if (r == 0) { snprintf(reason, cap, "соединение закрыто"); }
             return -1;
         }
@@ -353,14 +356,20 @@ static int drain_head_plain(int fd, int wait_ms, char *reason, size_t cap) {
     int seen_cr = 0;
     int64_t deadline = now_ms() + wait_ms;
     for (;;) {
-        if (now_ms() >= deadline) { snprintf(reason, cap, "ответа нет"); return -1; }
+        int64_t left = deadline - now_ms();
+        if (left <= 0) { snprintf(reason, cap, "ответа нет (тайм-аут)"); return -2; }
         struct pollfd p;
         p.fd = fd; p.events = POLLIN; p.revents = 0;
-        int pr = poll(&p, 1, (int)(deadline - now_ms()));
-        if (pr <= 0) { snprintf(reason, cap, "ответа нет"); return -1; }
+        int pr = poll(&p, 1, (int)left);
+        if (pr == 0) { snprintf(reason, cap, "ответа нет (тайм-аут)"); return -2; }
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            snprintf(reason, cap, "poll: %s", strerror(errno)); return -1;
+        }
         uint8_t c;
         ssize_t r = recv(fd, &c, 1, 0);
         if (r <= 0) {
+            if (r < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
             snprintf(reason, cap, r == 0 ? "соединение закрыто" : "чтение: %s", strerror(errno));
             return -1;
         }
@@ -674,18 +683,24 @@ d2s_vol_result d2s_volume_probe_path(const char *ip, uint16_t port, const char *
             if (written != 0) {
                 snprintf(res.reason, sizeof res.reason, "%s", err);
                 bad = 1;
-            } else if (drain_head_tls(tls, tls_legacy, read_timeout, err, sizeof err) != 0) {
-                snprintf(res.reason, sizeof res.reason, "%s", err);
-                bad = 1;
+            } else {
+                int drained = drain_head_tls(tls, tls_legacy, read_timeout, err, sizeof err);
+                if (drained != 0) {
+                    snprintf(res.reason, sizeof res.reason, "%s", err);
+                    bad = drained == -2 ? 2 : 1;
+                }
             }
         } else {
             ssize_t w = send(fd, req, (size_t)n, 0);
             if (w != n) {
                 snprintf(res.reason, sizeof res.reason, "запрос не ушёл: %s", strerror(errno));
                 bad = 1;
-            } else if (drain_head_plain(fd, read_timeout, err, sizeof err) != 0) {
-                snprintf(res.reason, sizeof res.reason, "%s", err);
-                bad = 1;
+            } else {
+                int drained = drain_head_plain(fd, read_timeout, err, sizeof err);
+                if (drained != 0) {
+                    snprintf(res.reason, sizeof res.reason, "%s", err);
+                    bad = drained == -2 ? 2 : 1;
+                }
             }
         }
         if (bad) {
@@ -693,6 +708,15 @@ d2s_vol_result d2s_volume_probe_path(const char *ip, uint16_t port, const char *
             if (i == 0) {
                 /* Умерли на первом же запросе — мишень недоступна, а не блок. */
                 res.verdict = D2S_VOL_UNREACHABLE;
+            } else if (bad == 2) {
+                /* Fallout report 14.11: padded HEAD timed out at nominal
+                   15 KiB; GET returned a complete 9-byte 404. Neither proves
+                   a volume cut. Keep independent paired RX proof below. */
+                res.verdict = D2S_VOL_SHORT;
+                char detail[sizeof res.reason];
+                snprintf(detail, sizeof detail, "%s", res.reason);
+                snprintf(res.reason, sizeof res.reason,
+                         "TX тайм-аут, бюджет обрыва не измерен: %.90s", detail);
             } else if (sent_kb >= D2S_VOL_MIN_KB) {
                 res.verdict = D2S_VOL_CUT;
             } else {

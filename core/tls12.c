@@ -124,6 +124,7 @@ static int read_exact(d2s_tls12 *t, uint8_t *buf, size_t n, int body, int64_t de
         int64_t left = deadline - now_ms();
         if (left <= 0) {
             say(err, errcap, "не дождались %zu байт за отведённое время", n - got);
+            errno = ETIMEDOUT;
             return -1;
         }
         struct pollfd p;

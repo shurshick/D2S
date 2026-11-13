@@ -55,7 +55,7 @@ int d2s_tls_ech_accepted(const d2s_tls *t);
 int d2s_tls_write(d2s_tls *t, const uint8_t *buf, size_t n, char *err, size_t errcap);
 
 /* Читает до cap байт прикладных данных. Возвращает число прочитанных (>0),
- * 0 — сессия закрыта той стороной, -1 — отказ (в том числе тайм-аут).
+ * 0 — сессия закрыта той стороной, -1 — отказ (при read deadline errno=ETIMEDOUT).
  * Записи не-прикладных типов (смена шифра, тревога) обрабатываются внутри и
  * наружу не выдаются; тревога close_notify даёт 0, а не отказ. */
 long d2s_tls_read(d2s_tls *t, uint8_t *buf, size_t cap, int wait_ms,

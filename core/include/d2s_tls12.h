@@ -65,7 +65,7 @@ int d2s_tls12_write(d2s_tls12 *t, const uint8_t *buf, size_t n,
                     char *err, size_t errcap);
 
 /* Читает прикладные данные. Больше нуля — сколько прочитано, 0 — конец,
- * -1 — отказ с причиной. */
+ * -1 — отказ с причиной; при истечении read deadline errno=ETIMEDOUT. */
 long d2s_tls12_read(d2s_tls12 *t, uint8_t *buf, size_t cap, int wait_ms,
                     char *err, size_t errcap);
 

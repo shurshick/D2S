@@ -46,6 +46,8 @@
 #include "d2s_crypto.h" /* то же расписание ключей, что у клиента, с другой стороны */
 #include "d2s_meas.h"   /* d2s_mark_hook — им проверяется «обращение непомеченное» */
 #include "d2s_tls13core.h"
+#include "d2s_tls13.h"
+#include "d2s_tls12.h"
 #include "d2s_verify.h"
 #include "d2s_hello.h"
 
@@ -793,6 +795,23 @@ static void test_rx_wire_progress(void) {
     }
 }
 int main(int argc,char **argv) {
+    /* The production TLS readers must expose deadlines without parsing
+       translated human-readable error strings. No public network involved. */
+    for (int legacy = 0; legacy < 2; legacy++) {
+        int pair[2];
+        CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, pair) == 0, "deadline socketpair");
+        char err[160]; int rc;
+        errno = 0;
+        if (legacy) {
+            d2s_tls12 *tls = NULL;
+            rc = d2s_tls12_connect(pair[0], "timeout.test", 20, 0, &tls, err, sizeof err);
+        } else {
+            d2s_tls *tls = NULL;
+            rc = d2s_tls_connect(pair[0], "timeout.test", 20, 0, &tls, err, sizeof err);
+        }
+        CHECK(rc != 0 && errno == ETIMEDOUT, "TLS deadline must report ETIMEDOUT");
+        close(pair[0]); close(pair[1]);
+    }
     test_rx_wire_progress();
     if(argc==2&&!strcmp(argv[1],"--wire-progress-only"))return fails?1:0;
     const char *html = "<head><!-- <link rel='stylesheet' href='//bad.test/a.css'> -->"
