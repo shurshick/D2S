@@ -16,6 +16,9 @@ t0fox/d2o cd8841307d9d1514dd1d5ff2b0896863dad147f9; просмотрены 43 к
 DNS health/автонастройка, donor sched.c/verify.c и Telegram C11 runtime не
 заменялись. Сохранены наши MTProto cipher clone, ограничения ресурсов и
 Worker target. Включены подготовленные 5282a18 (offload) и 76dae4b (TX timeout).
+В наш Telegram добавлены только поля статистики read_paused/no_progress_ms.
+Время прогресса обновляется при учёте реальных байтов, без нового вызова часов
+на пакет. WSS ping/pong его не обнуляют; сетевые решения и таймеры прежние.
 
 ## Адаптация
 

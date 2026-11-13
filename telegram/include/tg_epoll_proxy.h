@@ -81,6 +81,8 @@ typedef struct {
     uint64_t next_event_sequence;
     uint64_t bytes_from_clients;
     uint64_t bytes_from_upstreams;
+    uint64_t no_progress_ms;
+    uint8_t read_paused;
     tg_route_session_event events[TG_EPOLL_MAX_ROUTE_EVENTS];
 } tg_active_route_session;
 

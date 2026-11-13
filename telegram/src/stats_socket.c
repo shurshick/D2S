@@ -77,6 +77,7 @@ static int append_active_sessions(char *buffer, size_t capacity, size_t *used,
             ",\"is_media\":%s,\"stage\":\"%s\",\"direct_state\":\"%s\","
             "\"direct_transport\":%s%s%s,\"fallback_state\":\"%s\","
             "\"fallback_transport\":%s%s%s,\"selected_transport\":%s%s%s,"
+            "\"read_paused\":%s,\"no_progress_ms\":%" PRIu64 ","
             "\"telegram_response_seen\":%s,\"bytes_from_clients\":%" PRIu64
             ",\"bytes_from_upstreams\":%" PRIu64 ",\"events\":[",
             session->has_media ? (session->is_media ? "true" : "false") : "null",
@@ -85,6 +86,7 @@ static int append_active_sessions(char *buffer, size_t capacity, size_t *used,
             route_state_name(session->fallback_state),
             fallback ? "\"" : "null", fallback ? fallback : "", fallback ? "\"" : "",
             selected ? "\"" : "null", selected ? selected : "", selected ? "\"" : "",
+            session->read_paused ? "true" : "false", session->no_progress_ms,
             session->telegram_response_seen ? "true" : "false",
             session->bytes_from_clients, session->bytes_from_upstreams) != 0)
             return -1;

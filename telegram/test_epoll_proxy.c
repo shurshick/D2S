@@ -2033,6 +2033,8 @@ static void test_epoll_hedged_wss_commits_one_route_before_payload(
         ",\"bytes_from_upstreams\":%" PRIu64 ",\"events\":[",
         session->bytes_from_clients, session->bytes_from_upstreams) > 0);
     assert(strstr(stats_json, expected_session_bytes) != NULL);
+    assert(strstr(stats_json, "\"read_paused\":false") != NULL);
+    assert(strstr(stats_json, "\"no_progress_ms\":") != NULL);
     close(stats_client);
     tg_stats_socket_close(&stats_socket);
 

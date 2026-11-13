@@ -183,6 +183,7 @@ struct proxy_connection {
     size_t handshake_len;
     uint64_t handshake_deadline_ms;
     uint64_t last_activity_ms;
+    uint64_t last_payload_progress_ms; /* telemetry only; excludes WSS ping/pong */
     uint64_t next_ping_ms;
     uint64_t wss_read_paused_at_ms;
     uint64_t upstream_connect_deadline_ms;
@@ -355,6 +356,7 @@ static void route_session_add_bytes(proxy_connection *connection,
         ? &owner->route_session.bytes_from_clients
         : &owner->route_session.bytes_from_upstreams;
     add_bytes(total, amount);
+    if (amount) owner->last_payload_progress_ms = connection->last_activity_ms;
 }
 
 static uint8_t route_session_transport_for(const proxy_connection *connection,
@@ -2551,8 +2553,8 @@ static int receive_client(proxy_connection *connection) {
         ssize_t n = recv(connection->client_fd, buffer, capacity, 0);
         if (n > 0) {
             add_bytes(&connection->server->bytes_from_clients, (size_t)n);
-            route_session_add_bytes(connection, 1, (size_t)n);
             connection->last_activity_ms = monotonic_ms();
+            route_session_add_bytes(connection, 1, (size_t)n);
             if (!connection->handshake_done) {
                 memcpy(connection->handshake + connection->handshake_len,
                        buffer, (size_t)n);
@@ -2618,8 +2620,8 @@ static int receive_upstream(proxy_connection *connection) {
         ssize_t n = recv(connection->upstream_fd, buffer, capacity, 0);
         if (n > 0) {
             add_bytes(&connection->server->bytes_from_upstreams, (size_t)n);
-            route_session_add_bytes(connection, 0, (size_t)n);
             connection->last_activity_ms = monotonic_ms();
+            route_session_add_bytes(connection, 0, (size_t)n);
             if (connection->local_proxy &&
                 (tg_mtproto_ctr_xor(&connection->relay_decrypt, buffer,
                                     (size_t)n) != 0 ||
@@ -2982,8 +2984,8 @@ static int queue_wss_response(void *opaque, const uint8_t *payload,
                           TG_MTPROTO_MAX_PACKET) != 0)
         return -1;
     add_bytes(&connection->server->bytes_from_upstreams, payload_len);
-    route_session_add_bytes(connection, 0, payload_len);
     connection->last_activity_ms = monotonic_ms();
+    route_session_add_bytes(connection, 0, payload_len);
     if (connection->to_client.len < connection->server->config.queue_bytes)
         return 0;
     connection->wss_read_paused_at_ms = connection->last_activity_ms;
@@ -3906,6 +3908,11 @@ int tg_epoll_proxy_get_stats(const tg_epoll_proxy *server,
             continue;
         size_t at = out->active_sessions_count++;
         out->active_sessions[at] = connection->route_session;
+        out->active_sessions[at].read_paused =
+            connection->ws_pump.read_paused && !connection->upstream_eof;
+        uint64_t progress = connection->last_payload_progress_ms
+            ? connection->last_payload_progress_ms : connection->accepted_at_us / 1000u;
+        out->active_sessions[at].no_progress_ms = now >= progress ? now - progress : 0;
     }
     for (size_t i = 1; i < out->active_sessions_count; ++i) {
         tg_active_route_session value = out->active_sessions[i];
