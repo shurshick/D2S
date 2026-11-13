@@ -1,0 +1,39 @@
+{
+  "release": "d2s-v0.5.7",
+  "source": "0021e3dba2b6085ed68871a3cde59eb4b7e675e7",
+  "ci_run": 43277945580,
+  "release_run": 43278438110,
+  "stable_latest": true,
+  "router_deployed": false,
+  "next_sources": [
+    "756595da58942e6b2bf5f1c40ebb5f7acd45b8d6",
+    "a2b99f75500183dca71c4c585901a155a0487f69"
+  ],
+  "checks": [
+    "Telegram unit and ASan/UBSan PASS",
+    "Secret MTProto sequential/parallel packet framing and bidirectional multi-packet bridge PASS",
+    "Exact Worker destination, IPv6 and 5222 subprotocol acknowledgement PASS",
+    "Admission, retained buffers and terminal session regression PASS",
+    "Panel test/test-js, namespace and upstream network guard PASS",
+    "Exact-source GitHub integration and engine proof PASS",
+    "ARM64/ARM/MIPSel/amd64 builds and QEMU launch PASS",
+    "Downloaded package completeness, RAM preflight and source equality PASS",
+    "Packaged release IDs and MTProto/Meta feature flags PASS",
+    "Ed25519 and SHA256SUMS PASS",
+    "Tag equals source SHA; stable latest API PASS"
+  ],
+  "limits": [
+    "No live router/app verification",
+    "External Worker is not deployed automatically; 5222 requires compatible port acknowledgement",
+    "Core, datapath, learning, firewall, DNS and WhatsApp unchanged"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "5b72ac6a821d81c320eccbb87768dba33ef94dfa699283e71b803dbcc322f73a",
+    "d2s-arm.tar.gz": "bccb816956b0201bd3ffc9a979e7053dc16574ebc2c0fa5dcb900d44f74d5c23",
+    "d2s-arm64.tar.gz": "b5cbb60a595eb26cc6b7c6277f8cf125c4c72c2232a6162b158796ad4870304b",
+    "d2s-mipsel.tar.gz": "be6e094050088245fa1b1a1d3b1ead4c3093b2435a027df85170d879fd119862",
+    "latest.json": "582b71c78344e4965338a680f87a0bb2e7ee641177953cc79bbb0e4fb8ce850b",
+    "latest.json.sig": "c9f56f49620b7c337ad5294d0662a0f7e9259e5553ec17c47c71c1bb27fb6fda",
+    "SHA256SUMS": "8244e2ce3fb8fea62731c5478eb0a547c5efb43bcd641c00f4b41b69688cb662"
+  }
+}

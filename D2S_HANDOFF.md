@@ -1,5 +1,20 @@
 # D2S — текущее состояние
 
+## Опубликован 14.11.2026: стабильный D2S 0.5.7
+
+- Source 0021e3dba2b6085ed68871a3cde59eb4b7e675e7; latest d2s-v0.5.7.
+- Перенесены исправления Telegram из Next rc4.9: admission, сохранение буферов,
+  освобождение слотов, точный Worker target и клонирование MTProto cipher contexts.
+- Ручной secret MTProto теперь поддерживает параллельный выбор; ограничение
+  последовательного режима из 0.5.6 снято. Worker 5222 требует port ack.
+- Telegram test/san, panel test/test-js и guards PASS. CI 43277945580 и release
+  43278438110 PASS. Четыре архитектуры/QEMU, скачанные архивы, Ed25519, SHA256,
+  исходники и release IDs проверены. Stable/latest подтверждён GitHub API.
+- docs/upstream-telegram-774afa6.md и docs/field/2026-11-14-release-0.5.7.json.
+- Core/datapath, обучение, WhatsApp и firewall не менялись. Роутеры не трогали;
+  живую работу приложений не проверяли. Получен отдельный журнал Fallout 76:
+  probe-confirmed при live=unknown не доказывает исправную работу игры.
+
 ## Опубликован 12.11.2026: стабильный D2S 0.5.6
 
 - Source 62cb965003c3d75a012a4bc371d0c858551f83d2; latest d2s-v0.5.6.
