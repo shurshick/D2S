@@ -1552,6 +1552,8 @@ status() {
                       || echo "  контроллер: не работает"
     running "$PN_PID" && echo "  панель: работает (pid $(cat "$PN_PID"))" \
                       || echo "  панель: не работает"
+    running "$DIAG_PID" && echo "  сборщик диагностики: работает (pid $(cat "$DIAG_PID"))" \
+                        || echo "  сборщик диагностики: не работает"
     running "$TG_PID" && echo "  Telegram tunnel: работает (pid $(cat "$TG_PID"))" \
                        || echo "  Telegram tunnel: не работает (enabled=${TG_ENABLED:-0})"
     running "$DNS_SCHED_PID" && echo "  Instagram DNS: суточное обновление запланировано (pid $(cat "$DNS_SCHED_PID"))" \

@@ -25,10 +25,11 @@ DIR=$TEST_DIR/d2s; RUN=$DIR/run; LOG=$DIR/log; STATE_DIR=$DIR/state
 RUNTIME_DIR=$TEST_DIR/runtime; LIVE=$RUNTIME_DIR/live.json
 CONF=$DIR/config; SOCK=$RUN/socket
 DP_PID=$RUN/dp.pid; CT_PID=$RUN/ct.pid; PN_PID=$RUN/panel.pid
-DIAG_PID=$RUN/diag.pid; DIAGBIN=$TEST_DIR/no-collector
+DIAG_PID=$RUN/diag.pid; DIAGBIN=/bin/sh
 HU_PID=$RUN/http.pid; HL_PID=$RUN/heal.pid; LM_PID=$RUN/log-maintenance.pid
 TG_PID=$RUN/tg.pid; TG_WD_PID=$RUN/tg-watchdog.pid; DNS_SCHED_PID=$RUN/dns-scheduler.pid
 TG_STATUS=$STATE_DIR/telegram.status; TG_FIREWALL=$TEST_DIR/no-tg-firewall
+TG_STATS_SOCKET=$STATE_DIR/telegram.stats.sock
 BIN=/bin/sh; DPBIN=/bin/sh; PANELBIN=/bin/sh
 HEAL=$TEST_DIR/no-heal; LOG_MAINTENANCE=$TEST_HELPER
 FASTNAT=$TEST_DIR/no-fastnat
@@ -37,15 +38,20 @@ running() { [ -f "$1" ]; }
 fw_up() { :; }; fw_down() { :; }; fw_installed() { :; }
 awk() { printf '123\n'; }
 start_engine
+start_diag
+start_diag
+[ -f "$DIAG_PID" ] || exit 40
 start_panel
 # Engine-only stop must leave the independent maintenance process intact.
 [ -f "$LM_PID" ] || exit 41
 stop_pidfile() { rm -f "$1"; }
 engine_stop
+[ -f "$DIAG_PID" ] || exit 45
 [ -f "$LM_PID" ] || exit 42
 [ -f "$PN_PID" ] || exit 43
 printf '{}' > "$LIVE"
 stop
+[ ! -f "$DIAG_PID" ] || exit 46
 [ ! -f "$LM_PID" ] && [ ! -f "$LIVE" ] || exit 44
 `;
   fs.writeFileSync(path.join(tmp, 'harness'), harness);

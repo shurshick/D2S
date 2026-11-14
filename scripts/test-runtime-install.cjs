@@ -231,7 +231,7 @@ exit 1
   fs.unlinkSync(path.join(tmp, 'opt/etc/init.d/S99d2s'));
   const diagnosticRuntime = runtime + '-diagnostics';
   fs.mkdirSync(diagnosticRuntime);
-  for (const name of ['enabled','report.json','report.new']) fs.writeFileSync(path.join(diagnosticRuntime,name),'stale');
+  for (const name of ['enabled','report.json','report.new','telegram-enabled','telegram.json','telegram.json.new','input.sock','collector.lock']) fs.writeFileSync(path.join(diagnosticRuntime,name),'stale');
   fs.mkdirSync(runtime); fs.writeFileSync(path.join(runtime, 'live.json'), '{}');
   for (const binary of ['d2sd','d2sc','d2spanel','d2stg']) fs.writeFileSync(path.join(runtime, `${binary}.health`), 'stale');
   fs.writeFileSync(path.join(runtime, 'log-tail.ABCDEF'), 'stale');

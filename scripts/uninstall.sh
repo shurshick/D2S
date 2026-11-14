@@ -245,7 +245,9 @@ cleanup_runtime() (
     rm -f "$runtime/live.json" "$runtime/d2sd.health" "$runtime/d2sc.health" \
         "$runtime/d2spanel.health" "$runtime/d2stg.health"
     if [ "$runtime" = /tmp/d2s-diagnostics ]; then
-        rm -f "$runtime/enabled" "$runtime/report.json" "$runtime/report.new"
+        rm -f "$runtime/enabled" "$runtime/report.json" "$runtime/report.new" \
+            "$runtime/telegram-enabled" "$runtime/telegram.json" \
+            "$runtime/telegram.json.new" "$runtime/input.sock" "$runtime/collector.lock"
     fi
     # SIGKILL/power loss can leave an abandoned retained tail.
     for stage in "$runtime"/log-tail.??????; do
