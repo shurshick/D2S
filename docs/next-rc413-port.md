@@ -50,3 +50,8 @@ Telegram/WhatsApp, firewall, автозапуск и подписанные об
 test-verify, test-volume-context; ASan/UBSan для budget/summary; panel test/test-js;
 reviewed-source guard, namespace и полнота CI-shards (78 check / 56 san).
 Полная регрессия и четыре подписанных runtime-пакета проверяются CI выпуска.
+
+Первый полный CI выявил три прежних ожидания CUT в test_verify_http для
+молчания на следующий запрос. Они изменены на NOT_APPLICABLE; сценарий
+реально незавершённого ответа QUIC по-прежнему требует CUT. Это дополнительные
+существующие HTTP-fixture D2S, не удаление проверок.

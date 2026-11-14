@@ -252,8 +252,8 @@
     "reason": "docs/next-rc413-port.md"
   },
   "core/test_verify_http.c": {
-    "sha256": "3d2c157b62711e4aaadc5414171e8e1d36f4db3634d72ed16c3c2e8811833228",
-    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
+    "sha256": "c2609b44d177e3525503f70642f62ac1ac07d8d30d983a2722b222e2e86cc5ba",
+    "reason": "docs/next-rc413-port.md"
   },
   "datapath/d2sd.c": {
     "sha256": "05d4f1118e8625aa490abf70a87422a2d0ef603f13270839a35fb05602477da8",

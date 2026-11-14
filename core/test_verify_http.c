@@ -397,7 +397,8 @@ static int budget_checks(void) {
         r.level = D2S_VER_HANDSHAKE;
         request_page_budget(ka_read, ka_write, &k, "cdn.discordapp.com", 2, NULL,
                             60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        int want = fake_first ? D2S_BUDGET_PASSED : D2S_BUDGET_CUT;
+        /* Silence on a later request cannot distinguish server policy from a cut. */
+        int want = fake_first ? D2S_BUDGET_PASSED : D2S_BUDGET_NOT_APPLICABLE;
         if (r.level != D2S_VER_APPLICATION || r.status != 403 || r.budget != want ||
             r.budget_need != 50 || (fake_first && r.budget_packets < 50) ||
             (!fake_first && (r.budget_packets < 25 || r.budget_packets >= 50)) ||
@@ -521,7 +522,7 @@ static int budget_checks(void) {
         r.level = D2S_VER_HANDSHAKE;
         request_page_budget(ka_read, ka_write, &k, "ordinary.example", 2, NULL,
                             60, 0, &io, D2S_BUDGET_FIELD_PACKETS, &r, err, sizeof err);
-        if (r.budget != (cut ? D2S_BUDGET_CUT : D2S_BUDGET_PASSED) ||
+        if (r.budget != (cut ? D2S_BUDGET_NOT_APPLICABLE : D2S_BUDGET_PASSED) ||
             r.budget_requests < (cut ? 9u : 20u)) {
             fprintf(stderr, "budget 404 cut=%d: budget %d pk %u req %u [%s]\n", cut, r.budget,
                     r.budget_packets, r.budget_requests, r.budget_note); fails++;
@@ -638,7 +639,7 @@ static int budget_checks(void) {
         d2s_ver_result r = {0};
         r.level = D2S_VER_APPLICATION; r.status = 200;
         budget_quic(&io, 50, D2S_BUDGET_FIELD_PACKETS, &r);
-        if (r.budget != (pass ? D2S_BUDGET_PASSED : D2S_BUDGET_CUT) ||
+        if (r.budget != (pass ? D2S_BUDGET_PASSED : D2S_BUDGET_NOT_APPLICABLE) ||
             r.budget_requests < 4 || q.last_sid == 0 || (q.last_sid & 3) != 0) {
             fprintf(stderr, "budget quic pass=%d: budget %d pk %u req %u sid %llu [%s]\n", pass,
                     r.budget, r.budget_packets, r.budget_requests,
