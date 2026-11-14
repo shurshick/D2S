@@ -1,0 +1,51 @@
+{
+  "release": "d2s-v0.5.8",
+  "source": "95d77c97907f77dd266416d3e24c3e7c6f3bfebd",
+  "ci_run": 43532692880,
+  "engine_proof_run": 43529822737,
+  "release_run": 43564914227,
+  "stable_latest": true,
+  "router_deployed": false,
+  "upstream": "cd8841307d9d1514dd1d5ff2b0896863dad147f9",
+  "architectures": [
+    "arm64",
+    "arm",
+    "mipsel",
+    "amd64"
+  ],
+  "checks": [
+    "Exact-source CI integration PASS; unchanged engine proof safely reused from successful full run",
+    "Core diagnostic JSON/runtime, collector lifecycle and TLS absolute-name regressions PASS",
+    "Telegram test and ASan/UBSan PASS, including preserved secret MTProto bridge",
+    "Panel HTTP/CLI/JS and ASan/UBSan PASS",
+    "Keenetic/OpenWrt install and uninstall/keep-state regressions PASS",
+    "Owned collector files cleanup RED before whitelist extension, GREEN after",
+    "Chrome desktop/mobile layout on synthetic status API PASS, no horizontal overflow",
+    "Four architecture static builds and QEMU startup/self-check PASS",
+    "Downloaded complete packages, RAM preflight, source equality, feature/release IDs PASS",
+    "Ed25519 and SHA256SUMS PASS; tag equals tested source; stable/latest API confirmed"
+  ],
+  "local_measurements": {
+    "collector_rss_kib": 2048,
+    "collector_scope": "Short x86_64 Linux fixture with first Telegram history sample, not peak/router proof",
+    "stats_capacity_fixture_bytes": 124833,
+    "stats_capacity_fixture_sessions": 64,
+    "stats_capacity_fixture_events": 384,
+    "stats_capacity_fixture_cooldowns": 256
+  },
+  "limits": [
+    "No router installation or live application verification",
+    "MediaTek driver/GRO and Fallout recovery not established",
+    "DNS modules not imported; network Telegram behavior retained, telemetry fields added",
+    "History is bounded and not restored after collector restart"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "d287d82a88884771ab7f5e82ec30cc9ef5f48c8bc24816d125655a673b4be448",
+    "d2s-arm.tar.gz": "11f5a3c9f8b81de08454fc3c65512524e89a0858376089c6950d5617b887d095",
+    "d2s-arm64.tar.gz": "1c57a2dd1c8acbe211a1e6c57e88be847b657bf51cf3435c754436e10845310e",
+    "d2s-mipsel.tar.gz": "9c0e894e76015f7162c255203030c23a9da3d732c0330234fc53fe408a5364e0",
+    "latest.json": "58764d9371656f0d90d60429a79743bac2b5bf27dff25de904caf93b1ac722ed",
+    "latest.json.sig": "ab3e63e76c91b184e8a97becca75c30b862711536a1d62ad9d6f69ed51ad83ea",
+    "SHA256SUMS": "d9776335926e13101789910df705f6c77b90e522b288f58a95839b5392e4da65"
+  }
+}
