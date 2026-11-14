@@ -252,7 +252,7 @@
     "reason": "docs/next-rc413-port.md"
   },
   "core/test_verify_http.c": {
-    "sha256": "c2609b44d177e3525503f70642f62ac1ac07d8d30d983a2722b222e2e86cc5ba",
+    "sha256": "b722d9a79eac461651fd83190477fad426acb20a2748f0d59eaef4dda1841c3a",
     "reason": "docs/next-rc413-port.md"
   },
   "datapath/d2sd.c": {

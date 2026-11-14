@@ -509,8 +509,9 @@ static int budget_checks(void) {
             fprintf(stderr, "gateway accepted nested op=10 instead of top-level op=9\n"); fails++;
         }
     }
-    /* Ordinary HTTP 404 remains a completed HTTP response: 404 на 933 байта (один сегмент) — повторы по
-       два пакета; коробка режет — CUT, без коробки — PASSED. */
+    /* A completed 404 remains complete. Silence on a later request is
+       NOT_APPLICABLE: the fixture cannot distinguish server policy from DPI.
+       Continued replies reaching the packet budget still give PASSED. */
     for (int cut = 0; cut < 2; cut++) {
         static char r404[1024];
         int o = snprintf(r404, sizeof r404, "HTTP/1.1 404 Not Found\r\nContent-Length: 800\r\n\r\n");
@@ -628,8 +629,8 @@ static int budget_checks(void) {
                     r.budget_uncountable); fails++;
         }
     }
-    /* (6) QUIC: новые потоки той же связи. abc2b3eb (минимальная приманка):
-       режется на 25 датаграммах; 389a3920 (приманки Initial) — проходит. */
+    /* (6) QUIC: new streams on the same connection. Missing replies after
+       25 datagrams are inconclusive; continued replies pass the budget. */
     for (int pass = 0; pass < 2; pass++) {
         q_srv q; memset(&q, 0, sizeof q);
         q.flen = h3_headers_frame(q.frame, 3);
