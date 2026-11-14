@@ -1,0 +1,43 @@
+{
+  "release": "d2s-v0.5.9",
+  "source": "03680c5c9cd10027fecac92a292aec8b47fb40eb",
+  "ci_run": 43639493410,
+  "engine_proof_run": 43639493410,
+  "release_run": 43648011615,
+  "stable_latest": true,
+  "router_deployed": false,
+  "next_source": "1675be150ee4ed8bbf19008d514400e8aaed2cac",
+  "architectures": [
+    "arm64",
+    "arm",
+    "mipsel",
+    "amd64"
+  ],
+  "checks": [
+    "Repeat HTTP silence regression RED on original D2S, GREEN after port",
+    "Legacy HTTP framing/status/limit fixtures updated for inconclusive repeat silence; genuine incomplete QUIC response still requires CUT",
+    "Default 90/180s search limits, voice/parked exemptions, actual pthread cancellation and unchanged confirmed binding PASS",
+    "Local full scheduler and all mode scenarios PASS with explicitly selected inherited lifetime; default policy tested separately",
+    "ASan/UBSan budget, summary and HTTP production reader PASS",
+    "Exact-source GitHub integration and full core/datapath/detect engine regression PASS (no cached engine proof)",
+    "Keenetic/OpenWrt installer regressions, panel, Telegram and namespace/source guards PASS",
+    "Four architecture static builds and workflow QEMU startup checks PASS",
+    "Downloaded packages: source equality, feature/release IDs, all eight runtime binaries, RAM preflight, Ed25519 and SHA256SUMS PASS",
+    "Git tag equals tested source; stable/latest confirmed by GitHub API"
+  ],
+  "limits": [
+    "No router deployment or renewed live site/application verification",
+    "Search limits use cooperative cancellation and may overrun while a bounded network operation finishes",
+    "Historic catalog bindings and recorded learning exclusions are retained; no automatic purge",
+    "HTTP silence after completed replies does not identify DPI or server policy"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "eebb12cf280563af6a4c3789fcbbf44c79b0133d9357d72ea83fe760f3b3c797",
+    "d2s-arm.tar.gz": "e32da49ac0cdd8b1cf6f69f008d008c42d739b2ce27d3a6938b3af1ca0c1ea16",
+    "d2s-arm64.tar.gz": "8973c7e4895aa1a3b5e37376020ba3c057af8deb22dc6e1c9fdcccdb9834862e",
+    "d2s-mipsel.tar.gz": "2429386591855abb3180f7b4b204a15e6b215e1365e28e1510b53ccd930f4024",
+    "latest.json": "082284849f3a3b587267bbd8c2de1c18495391922d3557d0537880bf92a315af",
+    "latest.json.sig": "4821dd9970819dd8cdf60fbb36ec3288b43b7eb041c784e121c0dee7556d0b7f",
+    "SHA256SUMS": "f911e02254debe43b1e06d32bb187d26120a4d68269ff3b8c510768a1ffffc8c"
+  }
+}

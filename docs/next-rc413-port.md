@@ -55,3 +55,12 @@ reviewed-source guard, namespace и полнота CI-shards (78 check / 56 san)
 молчания на следующий запрос. Они изменены на NOT_APPLICABLE; сценарий
 реально незавершённого ответа QUIC по-прежнему требует CUT. Это дополнительные
 существующие HTTP-fixture D2S, не удаление проверок.
+
+## Выпущено
+
+Source 03680c5c9cd10027fecac92a292aec8b47fb40eb, d2s-v0.5.9 stable/latest.
+CI 43639493410: integration и полный core/datapath/detect PASS (без reuse).
+Release 43648011615: ARM64/ARM/MIPSel/amd64 и QEMU PASS. Скачанные пакеты:
+SHA256SUMS, Ed25519, RAM preflight, исходники, версии и наличие новых исправлений
+в каждом d2sc проверены. Квитанция: field/2026-11-15-release-0.5.9.json.
+Роутеры не обновлялись.
