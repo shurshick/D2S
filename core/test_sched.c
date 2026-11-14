@@ -59,6 +59,15 @@
 #include "d2s_tls13.h"
 #include "d2s_meas.h"
 
+/* Existing synthetic-clock scenarios exercise the inherited ten-minute policy.
+ * The default 90/180s policy and actual worker cancellation are tested in summary. */
+static d2s_sched *fixture_sched_new(d2s_catalog *cat,int fd,uint32_t mark) {
+    d2s_sched *s=d2s_sched_new(cat,fd,mark);
+    if(s)d2s_sched_search_limits(s,0,0);
+    return s;
+}
+#define d2s_sched_new fixture_sched_new
+
 /* Что планировщик говорил о себе. Нужен не для красоты: узнавание коробки
    снаружи иначе НЕ отличить от совпадения имени — имя коробки выводится из
    отпечатка, поэтому вторая цель с тем же отпечатком попадёт в ту же запись

@@ -12,20 +12,20 @@
     "reason": "docs/upstream-cd88413.md"
   },
   "core/include/d2s_sched.h": {
-    "sha256": "81df14323728dee5f8bb7f0023d0766f5ebf6e599d24e34549fff44f39d38438",
-    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
+    "sha256": "b5768292138cefe43a0bfc86344e3dbe45ef9f8b1538050f66105f5923ddb5d9",
+    "reason": "docs/next-rc413-port.md"
   },
   "core/sched.c": {
-    "sha256": "cc654c725c6b8b82f8c7d069e793c49d684613be435ca019be4801f4a677dbcb",
-    "reason": "docs/dual-learning-journals.md#reviewed-engine-changes"
+    "sha256": "36cdb93e9c429b0b72d729c08eb03271b718897e86d4388ce7e1f27a467429fa",
+    "reason": "docs/next-rc413-port.md"
   },
   "core/test_diagnostics.c": {
     "sha256": "981975cb3160566a1a3ff2037d397bf7b3d9003127eaa09b24cb51c0e492943b",
     "reason": "docs/upstream-cd88413.md"
   },
   "core/test_sched.c": {
-    "sha256": "267b001162efb4eaa77fb4630cb2c18c2d28a1dcf1b523c221c38b4468f39552",
-    "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
+    "sha256": "ddb11cbdd8fd2dfed48aa052e157bb2a3b5352a9ccf2aac8a2525f4d585c18cc",
+    "reason": "docs/next-rc413-port.md"
   },
   "detect/classify.c": {
     "sha256": "d9ac1d36fb1618e157e9b0a61b80d439066c487e6f4e17cde22a23de4200e534",
@@ -104,8 +104,8 @@
     "reason": "docs/tx-probe-timeout.md"
   },
   "core/verify.c": {
-    "sha256": "3ba2524395fe8e0319ed9ad29f43743695f21ba851c824b68d71f24fea9f8485",
-    "reason": "docs/http-probe-fidelity.md#reviewed-engine-changes"
+    "sha256": "c2d37dca4fd6501b76a12e11d830bfa510f5f1a9821f26c66dd73c8ed97845bc",
+    "reason": "docs/next-rc413-port.md"
   },
   "core/include/d2s_verdict.h": {
     "sha256": "dfd5b4a50e72b6cc406aa8b58c9fce8288e9960faa202461f29ac98a968fd8f4",
@@ -248,8 +248,8 @@
     "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
   },
   "core/test_sched_summary.c": {
-    "sha256": "f363a3eb9cd1159c8501f780497651003c809d92b76e5b9979d1de4de886f942",
-    "reason": "docs/upstream-9b74cdb.md#reviewed-engine-changes"
+    "sha256": "56fac66e32319fdd8f3b28bb36972ce7bd2c23480b0b069effef165eb34dc15c",
+    "reason": "docs/next-rc413-port.md"
   },
   "core/test_verify_http.c": {
     "sha256": "3d2c157b62711e4aaadc5414171e8e1d36f4db3634d72ed16c3c2e8811833228",

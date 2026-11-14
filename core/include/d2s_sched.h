@@ -306,6 +306,10 @@ int d2s_sched_meminfo_parse(const char *text, uint64_t *avail_kb, uint64_t *tota
  * датапатом. Владения ни тем, ни другим НЕ берёт: каталог переживает
  * планировщик (его пишет на диск вызывающий, он же решает когда — см.
  * d2s_catalog_save), связь закрывает тот, кто открыл. */
+/* Optional research policy: defaults 90s classifier / 180s total.
+ * Zero selects the legacy lifetime for that limit; configure before starting.
+ * Limits do not change Wire or catalog data. Negative or >10min is rejected. */
+void d2s_sched_search_limits(d2s_sched *s, int classify_ms, int total_ms);
 d2s_sched *d2s_sched_new(d2s_catalog *cat, int link_fd, uint32_t mark);
 
 /* Ставит датапату планы ВСЕХ подтверждённых привязок каталога.

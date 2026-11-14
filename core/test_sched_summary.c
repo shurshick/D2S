@@ -443,7 +443,80 @@ static int diag_calls;
 static void diag_observe(void *ctx,const d2s_diag_event *e) {
     (void)ctx; CHECK(!strcmp(e->outcome,"failed")); CHECK(e->id==999);diag_calls++;
 }
+static void *deadline_worker(void *arg) {
+    task *t=arg;d2s_sched *s=t->worker_owner;
+    for (;;) {
+        pthread_mutex_lock(&s->mu);int stopped=t->stop;pthread_mutex_unlock(&s->mu);
+        if(stopped)return NULL;
+        struct timespec pause={0,1000000};nanosleep(&pause,NULL);
+    }
+}
+static void bounded_search_clock(void) {
+    d2s_sched *policy=calloc(1,sizeof *policy);CHECK(policy!=NULL);if(!policy)return;
+    policy->classify_budget_ms=90000;policy->search_budget_limit_ms=180000;
+    task t={0}; t.transport=6; t.state=T_ASKING;
+    CHECK(!search_time_expired(policy,&t,999999));
+    t.search_clock_set=1; t.search_budget_ms=1000; t.phase_budget_ms=1000;
+    CHECK(!search_time_expired(policy,&t,90999));
+    CHECK(search_time_expired(policy,&t,91000));
+    t.state=T_VERIFY; t.phase_budget_ms=170000;
+    CHECK(!search_time_expired(policy,&t,180999));
+    CHECK(search_time_expired(policy,&t,181000));
+    /* Resetting the phase/start timestamp must not renew the total budget. */
+    t.started_ms=180999; CHECK(search_time_expired(policy,&t,181000));
+    t.state=T_WATCHING; CHECK(!search_time_expired(policy,&t,999999));
+    t.state=T_ASKING;t.quic_parked=1;CHECK(!search_time_expired(policy,&t,999999));
+    t.quic_parked=0;t.transport=17;t.trigger_shape=0;
+    CHECK(!search_time_expired(policy,&t,999999)); /* voice uses existing lifecycle */
+    t.trigger_shape=D2S_LINK_SHAPE_QUIC;CHECK(search_time_expired(policy,&t,181000));
+    t.state=T_VOICE_TRIAL;CHECK(!search_time_expired(policy,&t,999999));
+    t.state=T_VOICE_WATCH;CHECK(!search_time_expired(policy,&t,999999));
+    t.state=T_VOICE_MEASURE;CHECK(!search_time_expired(policy,&t,999999));
+    free(policy);
+
+    d2s_catalog cat={0};d2s_sched *s=d2s_sched_new(&cat,-1,0x2d);
+    CHECK(s!=NULL);if(!s)return;
+    CHECK(s->classify_budget_ms==90000 && s->search_budget_limit_ms==180000);
+    cat.boxes=calloc(1,sizeof *cat.boxes);CHECK(cat.boxes);if(!cat.boxes){d2s_sched_free(s);return;}
+    cat.n_boxes=1;strcpy(cat.boxes[0].id,"box-preserved");
+    cat.boxes[0].binds=calloc(1,sizeof *cat.boxes[0].binds);
+    CHECK(cat.boxes[0].binds);if(!cat.boxes[0].binds){d2s_sched_free(s);d2s_catalog_free(&cat);return;}
+    cat.boxes[0].n_binds=1;
+    d2s_cat_binding *bd=&cat.boxes[0].binds[0];
+    strcpy(bd->kind,"name");strcpy(bd->target,"summary.example");
+    strcpy(bd->plan_id,"plan-preserved");bd->transport=6;bd->family=4;
+    bd->enabled=1;bd->level=3;bd->confirmed=100;
+    bd->verified_by=D2S_VERBY_REPLAY_HANDSHAKE;
+    CHECK(strstr(binding_level_name(bd),"приложение не проверено"));
+    bd->verified_by=D2S_VERBY_PROBE_HANDSHAKE;
+    CHECK(strstr(binding_level_name(bd),"рукопожатие подтверждено"));
+    bd->verified_by=D2S_VERBY_PROBE;
+    CHECK(!strcmp(binding_level_name(bd),level_name(3)));
+    d2s_cat_binding saved=*bd;
+    d2s_sched_set_say(s,collect,NULL);task *live=fixture(s);
+    live->state=T_ASKING;live->search_clock_set=1;
+    live->search_budget_ms=live->phase_budget_ms=1000;
+    live->started_ms=1000;live->search_started=1;
+    live->worker_owner=s;
+    int spawned=pthread_create(&live->th,NULL,deadline_worker,live)==0;
+    CHECK(spawned);live->th_live=spawned;
+    if(spawned)s->workers_started++;
+    d2s_sched_tick(s,91000);
+    CHECK(!live->th_live && (!spawned || s->workers_joined==1));
+    CHECK(live->state==T_RESTING);CHECK(s->sync_pending);
+    CHECK(strstr(rows,"outcome=inconclusive path=time-limit"));
+    CHECK(!strstr(rows,"outcome=failed"));
+    CHECK(cat.n_boxes==1 && cat.boxes[0].n_binds==1);
+    CHECK(!memcmp(bd,&saved,sizeof saved));
+    d2s_sched_search_limits(s,-1,0);CHECK(s->classify_budget_ms==90000);
+    d2s_sched_search_limits(s,0,0);CHECK(s->classify_budget_ms==0 && s->search_budget_limit_ms==0);
+    t.state=T_ASKING;t.transport=6;CHECK(!search_time_expired(s,&t,999999));
+    d2s_sched_free(s);d2s_catalog_free(&cat);
+
+}
+
 int main(void) {
+    bounded_search_clock();
     d2s_catalog cat = {0};
     d2s_sched *s = d2s_sched_new(&cat, -1, 0x2d);
     CHECK(s != NULL);

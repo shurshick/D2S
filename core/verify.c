@@ -1297,7 +1297,8 @@ static long read_eof(void *ctx, uint8_t *buf, size_t cap, int wait_ms, char *err
 
 /* Тот же запрос на том же потоке, пока поток не перенесёт 2 × бюджет пакетов
    с данными. Каждый ответ обязан прийти целиком: «сервер ответил на каждый
-   запрос». Молчание (тайм-аут без закрытия) — обрыв коробкой; закрытие или
+   запрос». Молчание после повторных запросов не локализует отказ: сервер может
+   ограничивать keep-alive. Ни timeout, ни закрытие или
    сброс сервером раньше порога — «не применимо». Повтор без роста счётчика
    пакетов — тоже «не применимо»: счёт сломан, а не коробка пропустила. */
 static void budget_tcp(read_fn rd, write_fn wr, void *sess, const budget_io *io,
@@ -1359,7 +1360,7 @@ static void budget_tcp(read_fn rd, write_fn wr, void *sess, const budget_io *io,
                            "бюджет не проверен", r->budget_requests,
                            ll ? "наш предел" : "ответ битый или отказ TLS, не молчание", err);
             } else {
-                budget_say(r, D2S_BUDGET_CUT, "сервер замолчал посреди повторов: %u-й запрос, "
+                budget_say(r, D2S_BUDGET_NOT_APPLICABLE, "тайм-аут повторного HTTP-запроса; причина не установлена: %u-й запрос, "
                            "поток перенёс %u пакетов с данными из нужных %u: %.60s",
                            r->budget_requests, r->budget_packets, need, err);
             }
@@ -2106,7 +2107,7 @@ static void budget_quic(const quic_budget_io *io, int deadline_ms, unsigned budg
                 return;
             }
             if (!status) {
-                budget_say(r, D2S_BUDGET_CUT, "сервер замолчал посреди повторов: %u-й запрос HTTP/3, "
+                budget_say(r, D2S_BUDGET_NOT_APPLICABLE, "нет ответа на повторный HTTP/3-запрос; причина не установлена: %u-й запрос, "
                            "связь перенесла %u датаграмм из нужных %u", r->budget_requests,
                            r->budget_packets, need);
                 return;

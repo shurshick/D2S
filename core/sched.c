@@ -151,6 +151,8 @@
 /* Жизнь задачи. Дольше — и задача занимает место, давно перестав быть про
    актуальное состояние линии. */
 #define SCHED_TASK_LIFE_MS (10 * 60 * 1000)
+#define SCHED_SEARCH_BUDGET_MS (180 * 1000)
+#define SCHED_CLASSIFY_BUDGET_MS (90 * 1000)
 /* При чередовании relay сохраняем следующую точку, но не держим её дольше
    двух минут за непроверенным голосовым опытом. */
 #define SCHED_VOICE_PENDING_GRACE_MS (2 * 60 * 1000)
@@ -661,6 +663,8 @@ typedef struct {
     int        probes;
     uint64_t   report_id;
     int        report_closed;
+    int        search_clock_set;
+    int64_t    search_budget_ms, phase_budget_ms;
     int64_t    report_admitted_ms; /* -1 until scheduler time is known */
     int64_t    report_queue_ms;
     int64_t    classify_ms, contact_ms, verify_ms; /* worker wall time, not CPU */
@@ -1378,6 +1382,7 @@ struct d2s_sched {
     size_t       limit_logged;      /* последний названный в журнале предел */
     unsigned     limiter_logged;    /* и причина */
     size_t       meas_limit;
+    int classify_budget_ms, search_budget_limit_ms;
     uint64_t     report_sequence;
     int64_t      last_measurement_done_ms;
     uint64_t     workers_started, workers_joined, worker_start_failures, worker_join_failures;
@@ -3469,6 +3474,11 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
     if (job == JOB_CONTACT) { t->prop_bound_fd = -1; contact_close(t); }
     if (job == JOB_VERIFY) { t->probe_fd = -1; }
     t->job = job;
+    if (!t->search_clock_set) {
+        t->search_clock_set = 1;
+        t->search_budget_ms = s->now_ms;
+    }
+    t->phase_budget_ms = s->now_ms;
     t->worker_owner=s;
     t->worker_started_ms=sched_mono_ms();
     t->worker_executing=0;
@@ -5730,6 +5740,8 @@ d2s_sched *d2s_sched_new(d2s_catalog *cat, int link_fd, uint32_t mark) {
     s->stall_sent[0] = D2S_TCP_STALL_FIELD_BUDGET;
     s->n_stall_sent = 1;
     s->meas_limit = SCHED_DEFAULT_ACTIVE_MEASUREMENTS;
+    s->classify_budget_ms=SCHED_CLASSIFY_BUDGET_MS;
+    s->search_budget_limit_ms=SCHED_SEARCH_BUDGET_MS;
     s->limit_logged = SCHED_DEFAULT_ACTIVE_MEASUREMENTS;
     s->last_measurement_done_ms=-1;
     s->wake[0] = s->wake[1] = -1;
@@ -5813,6 +5825,14 @@ static const char *level_name(int n) {
     default: return "не измерено";
     }
 }
+static const char *binding_level_name(const d2s_cat_binding *bd) {
+    if (bd->verified_by == D2S_VERBY_REPLAY_HANDSHAKE)
+        return "ответ на повтор приветствия; приложение не проверено";
+    if (bd->verified_by == D2S_VERBY_PROBE_HANDSHAKE)
+        return "рукопожатие подтверждено; приложение не проверено";
+    return level_name(bd->level);
+}
+
 
 /* Примета словами. Шаблон панели не должен знать, что 0x88 это ToS, а 54321 —
    идентификатор IP: собирается здесь, как и на Go-стороне. */
@@ -6086,7 +6106,8 @@ int d2s_sched_write_live(d2s_sched *s, const char *path, const char *catalog_pat
                     (unsigned)(bd->transport ? bd->transport : 6), (unsigned)bd->shape);
             fputs(", \"kind\": ", f); json_str(f, bd->kind);
             fprintf(f, ", \"level\": %d, ", bd->level);
-            fputs("\"level_name\": ", f); json_str(f, level_name(bd->level));
+            fputs("\"level_name\": ", f); json_str(f,
+                binding_level_name(bd));
             fprintf(f, ", \"successes\": %d, ", bd->successes);
             fputs("\"confirmed\": ", f); json_time(f, bd->confirmed);
             fprintf(f, ", \"enabled\": %s, \"recheck\": %s}", bd->enabled ? "true" : "false",
@@ -11043,6 +11064,22 @@ static void voice_pending_dispatch(d2s_sched *s) {
 
 #include "optimize.inc"
 
+void d2s_sched_search_limits(d2s_sched *s, int classify_ms, int total_ms) {
+    if (!s || classify_ms < 0 || total_ms < 0 ||
+        classify_ms > SCHED_TASK_LIFE_MS || total_ms > SCHED_TASK_LIFE_MS) return;
+    s->classify_budget_ms=classify_ms;s->search_budget_limit_ms=total_ms;
+}
+
+static int search_time_expired(const d2s_sched *s, const task *t, int64_t now_ms) {
+    return t->search_clock_set && !t->quic_parked &&
+            (t->transport == 6 || (t->transport == 17 && t->trigger_shape == D2S_LINK_SHAPE_QUIC)) &&
+            t->state != T_WATCHING && t->state != T_VOICE_MEASURE &&
+            t->state != T_VOICE_TRIAL && t->state != T_VOICE_WATCH &&
+            ((s->search_budget_limit_ms > 0 && now_ms - t->search_budget_ms >= s->search_budget_limit_ms) ||
+             (s->classify_budget_ms > 0 && t->state == T_ASKING &&
+              now_ms - t->phase_budget_ms >= s->classify_budget_ms));
+}
+
 int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
     if (!s) { return 0; }
     /* Привязка монотонных часов к стенным делается ПО ПЕРВОМУ ТИКУ, а не при
@@ -11060,6 +11097,10 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             task *t = &s->tasks[i];
             if (t->report_id && !t->report_closed && t->report_admitted_ms < 0)
                 t->report_admitted_ms = now_ms;
+            if (t->search_clock_set) {
+                t->search_budget_ms = now_ms;
+                t->phase_budget_ms = now_ms;
+            }
         }
         /* Events may beat the first timer tick. Their local zero timestamp
            is provisional; rebase admission pacing when the clock becomes
@@ -11130,6 +11171,19 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
 
         if (t->state == T_RESTING) {
             if (now_ms >= t->rest_until_ms) { task_done(s, t); moved++; }
+            continue;
+        }
+        /* Bound network discovery across own-plan/full-classifier restarts.
+           Expiration is inconclusive, never negative learning or a packet cut.
+           Voice trials retain their separate client-driven lifetime. */
+        if (search_time_expired(s, t, now_ms)) {
+            if (join_worker(t) != 0) continue;
+            say(s, "по %s предел времени поиска: измерение не завершено; прежние планы сохранены", t->name);
+            search_report(s, t, now_ms, "inconclusive", "time-limit");
+            /* Short rest only; no negative verdict or new QUIC denial. */
+            t->stall_cut = 0;
+            task_fail(s, t, now_ms);
+            moved++;
             continue;
         }
         if (t->started_ms == 0) { t->started_ms = now_ms; }

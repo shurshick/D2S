@@ -17,7 +17,7 @@ for name,expected in manifest.items():
     if name in audited:
         record=audited[name]
         explanation=record["reason"].split("#",1)[0]
-        assert explanation in ("docs/performance-stage1.md","docs/performance-stage2.md","docs/performance-stage3.md","docs/telegram-web.md","docs/diagnostics-8e2c981.md","docs/algorithm-optimizations.md","docs/upstream-9b74cdb.md","docs/upstream-c38da9f.md","docs/upstream-a378e23.md","docs/http-probe-fidelity.md","docs/whatsapp-ech-timestamp.md","docs/learning-journal-recovery.md","docs/dual-learning-journals.md","docs/upstream-91741be.md","docs/nfqueue-offload-safety.md","docs/tx-probe-timeout.md","docs/upstream-cd88413.md") and (root/explanation).is_file(),name+" has no audit explanation"
+        assert explanation in ("docs/performance-stage1.md","docs/performance-stage2.md","docs/performance-stage3.md","docs/telegram-web.md","docs/diagnostics-8e2c981.md","docs/algorithm-optimizations.md","docs/upstream-9b74cdb.md","docs/upstream-c38da9f.md","docs/upstream-a378e23.md","docs/http-probe-fidelity.md","docs/whatsapp-ech-timestamp.md","docs/learning-journal-recovery.md","docs/dual-learning-journals.md","docs/upstream-91741be.md","docs/nfqueue-offload-safety.md","docs/tx-probe-timeout.md","docs/upstream-cd88413.md","docs/next-rc413-port.md") and (root/explanation).is_file(),name+" has no audit explanation"
         assert hashlib.sha256(data).hexdigest()==record["sha256"],name+" differs from its reviewed D2S change"
     else:
         assert hashlib.sha256(original_namespace(data.replace(b"bb5131a8",b"680fbe00") if name == "core/test_probe_plan.c" else data)).hexdigest()==expected,name+" differs from t0fox/d2o fd4e262"

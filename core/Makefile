@@ -1470,3 +1470,11 @@ clean: clean-diag-collector
 check: test-diag-collector
 test-diag-collector:
 	cd .. && python3 scripts/test-diag-collector.py
+
+TESTS += test_verify_budget
+check: test-verify-budget
+.PHONY: test-verify-budget
+test_verify_budget: test_verify_budget.c verify.c tls12.o p256.o quicconn.o quicwire.o h3.o compose.o measured.o hello.o meas.o link.o tls13.o tls13core.o x25519.o crypto.o $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< tls12.o p256.o quicconn.o quicwire.o h3.o compose.o measured.o hello.o meas.o link.o tls13.o tls13core.o x25519.o crypto.o $(TEST_LDFLAGS)
+test-verify-budget: test_verify_budget
+	./test_verify_budget
