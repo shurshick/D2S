@@ -74,6 +74,7 @@
 #include "d2s_plan.h"
 #include "d2s_quicprobe.h"
 #include "d2s_sched.h"
+#include "d2s_outcome.h"
 #include "d2s_voice_discovery.h"
 #include "d2s_verify.h"
 #include "d2s_volume.h"
@@ -479,6 +480,17 @@ d2s_sched_quic_fn d2s_sched_quic_hook = d2s_quic_run;
 d2s_sched_ver_fn  d2s_sched_ver_hook  = verify_default;
 d2s_sched_ver_fn  d2s_sched_rx_ver_hook = verify_rx_default;
 d2s_sched_ver_fn  d2s_sched_rx_gzip_ver_hook = verify_rx_gzip_default;
+/* Matched untreated control only for authenticated HTTP transport witnesses.
+ * The ordinary application-success/QUIC paths retain D2S's existing policy. */
+static d2s_ver_result verify_direct_default(const char *ip,uint16_t port,
+    uint8_t transport,const char *name,int deadline,size_t wire,
+    uint8_t shape,int encoding,uint32_t mark,const char *path,const char *origin) {
+    (void)transport;(void)origin;
+    return d2s_verify_probe_path_on(-1,ip,port,name,deadline,wire,
+        shape==D2S_SHAPE_LEGACY,encoding,mark,path&&*path?path:NULL);
+}
+d2s_sched_direct_ver_fn d2s_sched_direct_ver_hook=verify_direct_default;
+
 d2s_sched_alpn_ver_fn d2s_sched_alpn_ver_hook = d2s_verify_probe_alpn_on;
 
 static d2s_voice_res voice_default(const d2s_voice_opt *opt) {
@@ -777,6 +789,7 @@ typedef struct {
        измерено», а не «плана не было» (§2.4): событие могло потеряться
        (d2s_ctl.h), и это проверяется отдельно по ver_dropped0. */
     d2s_ver_result ver;
+    int direct_comparable, direct_blocked, direct_available, direct_probes;
     uint8_t    ver_plan_id[D2S_PLAN_ID_LEN];
     d2s_flowkey ver_flow;
     /* Bounded early-event cache: IP addresses are part of the proof, not
@@ -1121,6 +1134,15 @@ typedef struct {
     int        c_fd;
     int        c_ok;
 } task;
+static int http_transport_candidate(const task *t,const d2s_ver_result *r) {
+    return t->transport==6&&!t->ech_offer&&!t->vol.rx_cut&&t->vol.verdict!=D2S_VOL_CUT&&
+        d2s_outcome_http_transport_witness(r);
+}
+static int verification_answers_data_cut(const task *t) {
+    return !(t->transport==17&&t->arm.data_cut_seen&&
+             (t->ver.handshake_proof||t->ver.replay_proof));
+}
+
 
 /* ПРОТОКОЛ КЛИЕНТА — НЕ HTTP (задача 37, F3). Снимок TLS 1.3 целиком, и в
    его ALPN явно назван протокол не HTTP (MQTT, XMPP…), без http/1.1 и h2: тогда
@@ -2958,11 +2980,31 @@ static void *worker_body(void *vp) {
                                                (uint8_t)(t->transport == 17
                                                          ? D2S_SHAPE_UNKNOWN
                                                          : d2s_hello_shape(t->trig, t->trig_len)));
+        int direct_comparable=0,direct_blocked=0,direct_available=0,direct_probes=0;
+        if(http_transport_candidate(t,&vr)&&s->measure_mark&&s->measure_mark!=s->mark&&d2s_sched_direct_ver_hook) {
+            int valid=0,blocked=0;
+            int encoding=t->rx_phase==2?1:(t->measure_path[0]?0:2);
+            for(int repeat=0;repeat<2&&!t->stop;repeat++) {
+                d2s_ver_result direct=d2s_sched_direct_ver_hook(t->ip,t->port,
+                    t->transport,t->name,SCHED_VERIFY_STEP_MS,trig.len,
+                    (uint8_t)d2s_hello_shape(trig.bytes,trig.len),encoding,
+                    s->measure_mark,t->measure_path,NULL);
+                direct_probes++;
+                d2s_outcomes observed=d2s_outcome_evaluate(&direct,NULL);
+                int usable=!direct.local_refusal&&!direct.local_limit&&!direct.unsupported&&!direct.replay_proof;
+                if(usable&&observed.transport_outcome>=D2S_TRANSPORT_TLS_REPLY) {valid++;direct_available=1;}
+                else if(usable&&!direct.status&&direct.level==D2S_VER_TRANSPORT) {valid++;blocked++;}
+                d2s_verify_close(&direct);
+            }
+            direct_comparable=valid==2;direct_blocked=direct_comparable&&blocked==2;
+        }
         d2s_verify_budget_set(0);
         d2s_verify_tcp_timestamps_set(-1);
         d2s_verify_quic_form_set(NULL);
         pthread_mutex_lock(&s->mu);
         t->ver = vr;
+        t->direct_comparable=direct_comparable;t->direct_blocked=direct_blocked;
+        t->direct_available=direct_available;t->direct_probes+=direct_probes;
         t->res_ready = 1;
         pthread_mutex_unlock(&s->mu);
         ssize_t ignv = write(s->wake[1], "w", 1);
@@ -3529,14 +3571,25 @@ static int start_worker(d2s_sched *s, task *t, task_job job) {
  * Просьба ПЕРЕД ожиданием, а не после: наоборот — это и есть прежнее
  * поведение, из-за которого цикл вставал на минуты. Флаг не снимается здесь;
  * его обнуляет task_reset, когда задача начинает жизнь заново. */
-static int join_worker(task *t) {
+/* Linux targets (glibc and musl). A pending network call must not block
+ * the main loop/health socket. Storage stays owned until join succeeds. */
+#if defined(__linux__)
+extern int pthread_tryjoin_np(pthread_t, void **);
+#endif
+static int join_worker_mode(task *t, int wait) {
     if (t->th_live) {
         d2s_sched *s=t->worker_owner;
         if(s)pthread_mutex_lock(&s->mu);
         t->stop = 1;
         t->quic_yield_waiting=0;
         if(s){pthread_cond_broadcast(&s->question_cv);pthread_mutex_unlock(&s->mu);}
-        int err=pthread_join(t->th,NULL);
+        int err;
+#if defined(__linux__)
+        err=wait?pthread_join(t->th,NULL):pthread_tryjoin_np(t->th,NULL);
+#else
+        (void)wait;err=pthread_join(t->th,NULL);
+#endif
+        if(err==EBUSY)return 1;
         if(s)pthread_mutex_lock(&s->mu);
         if(err==0) {
             t->th_live=0;t->worker_executing=0;
@@ -3549,6 +3602,8 @@ static int join_worker(task *t) {
     }
     return 0;
 }
+
+static int join_worker(task *t) { return join_worker_mode(t,0); }
 
 /* --------------------------------------------------------------------
  * Каталог: записывается ТОЛЬКО по подтверждённому успеху.
@@ -6141,15 +6196,16 @@ int d2s_sched_write_live(d2s_sched *s, const char *path, const char *catalog_pat
            прогоны измерителя (идущий — по ходу, законченный — его итог);
            вопрос — только пока прогон идёт. Копия под мьютексом: пишет
            рабочий поток. */
-        int ask_probes;
+        int ask_probes,direct_probes;
         char question[sizeof t->ask_question];
         question[0] = '\0';
         pthread_mutex_lock(&s->mu);
         ask_probes = t->ask_probes;
+        direct_probes=t->direct_probes;
         if (t->state == T_ASKING) memcpy(question, t->ask_question, sizeof question);
         pthread_mutex_unlock(&s->mu);
         question[sizeof question - 1] = '\0';
-        fprintf(f, ", \"attempts\": %zu, \"probes\": %d, ", t->next_plan, t->probes + ask_probes);
+        fprintf(f, ", \"attempts\": %zu, \"probes\": %d, ", t->next_plan, t->probes + ask_probes+direct_probes);
         fputs("\"question\": ", f);
         json_str(f, question);
         fputs(", \"candidate\": ", f);
@@ -6232,7 +6288,7 @@ void d2s_sched_free(d2s_sched *s) {
         if (s->tasks[i].addr_probe_identity_valid) {
             (void)addr_probe_remove(s, &s->tasks[i], err, sizeof err);
         }
-        if(join_worker(&s->tasks[i])!=0)return;
+        if(join_worker_mode(&s->tasks[i],1)!=0)return;
         search_report(s, &s->tasks[i], s->now_ms, "shutdown", NULL);
         /* Сокеты обращений закрываем сами: поток к этому моменту уже вернулся,
            а дескриптор принадлежит задаче, а не ему. */
@@ -6275,6 +6331,7 @@ int d2s_sched_wait_ms(const d2s_sched *s, int64_t now_ms, int ceiling_ms) {
         EARLIEST(s->measure_start_seen ? s->last_measure_start_ms + SCHED_START_GAP_MS : now_ms);
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
         const task *t = &s->tasks[i];
+        if(t->th_live && t->stop) EARLIEST(now_ms+10);
         switch (t->state) {
         case T_TRIAL_SETTLE:
             EARLIEST(t->trial_acked ? now_ms : t->trial_until_ms); break;
@@ -6301,8 +6358,9 @@ size_t d2s_sched_active(const d2s_sched *s) {
     size_t n = 0;
     for (size_t i = 0; i < SCHED_MAX_TASKS; i++) {
         task_state st = s->tasks[i].state;
-        if (st == T_QUEUED || st == T_SHAPE_WAIT || st == T_ASKING || st == T_PLANNING ||
-            st == T_VERIFY || st == T_VERIFY_WAIT || st == T_WATCHING) { n++; }
+        /* Contact/settle/voice phases still own a live search. Omitting them
+         * reported idle and let consumers finish before cancellation/sync. */
+        if (st != T_FREE && st != T_RESTING) { n++; }
     }
     return n;
 }
@@ -6509,12 +6567,31 @@ static int own_exact_confirmed(const d2s_catalog *cat, const char *name,
 
 /* Diagnostic paths/origins are proof context, not visible packet fields.
  * Never pick an arbitrary plan when two proofs collide on a wire key. */
+static int group_replay_only(const d2s_catalog *cat,const d2s_domain_group *g){
+    if(g->key.transport!=17)return 0;
+    char names[3][256];size_t n=0;int replay=0;
+    for(size_t bi=0;bi<cat->n_boxes;bi++)for(size_t j=0;j<cat->boxes[bi].n_binds;j++){
+        const d2s_cat_binding *b=&cat->boxes[bi].binds[j];
+        if(!b->enabled||b->recheck_since||b->transport!=17||b->shape!=g->key.shape||
+           (b->family?b->family:4)!=g->key.family||strcmp(b->plan_id,g->plan_id)||
+           strcmp(b->kind,"name")||!d2s_domain_member(b->target,g->suffix))continue;
+        if(b->verified_by==D2S_VERBY_REPLAY_HANDSHAKE){replay=1;continue;}
+        if(b->verified_by!=D2S_VERBY_PROBE||b->level<3||strcmp(b->kind,"name")||
+           !d2s_domain_member(b->target,g->suffix))continue;
+        size_t i;for(i=0;i<n;i++)if(!strcmp(names[i],b->target))break;
+        if(i==n){snprintf(names[n],sizeof names[n],"%s",b->target);if(++n==3)return 0;}
+    }
+    /* Keep old exact bindings/history, but do not install a CDN suffix
+       learned solely from replayed handshakes in earlier versions. */
+    return replay;
+}
 static int desired_area(const d2s_sched *s, size_t index, installed_area *a) {
     const d2s_group_state *g = s->cat->groups;
     if (!g || index >= g->n_groups+g->n_observations) return 0;
     memset(a, 0, sizeof *a);
     if (index < g->n_groups) {
         const d2s_domain_group *v = &g->groups[index];
+        if(group_replay_only(s->cat,v))return 0;
         a->kind = 1; strcpy(a->name, v->suffix); strcpy(a->plan_id, v->plan_id);
         a->transport = v->key.transport; a->shape = v->key.shape; a->family = v->key.family;
         if (!area_plan(s, a)) return 0;
@@ -8876,6 +8953,8 @@ static void remeasure_snapped(d2s_sched *s, task *t, const uint8_t *bytes, size_
        карточке — тоже новый: это новый поиск, а не продолжение прежнего. */
     t->ask_probes = 0;
     t->probes = 0;
+    t->direct_probes=0;
+    t->direct_comparable=t->direct_blocked=t->direct_available=0;
     memset(t->tried, 0, sizeof t->tried);
     t->n_tried = 0;
     t->fb_next = 0;
@@ -9231,6 +9310,10 @@ static void on_shape(d2s_sched *s, const d2s_ev *ev) {
    Только теперь — каталог. */
 static void group_record(d2s_sched *s, const task *t, unsigned evidence,
     const char *plan_id, uint8_t shape, int64_t now_ms) {
+    /* A ServerHello is evidence for this handshake, not application data
+       across an entire CDN. Failed/direct observations still narrow scope. */
+    if(evidence==D2S_GROUP_BLOCKED_CONFIRMED&&
+       (t->ver.replay_proof||t->ver.handshake_proof))return;
     char base[256];
     if (t->by_addr || d2s_domain_base(t->name, base)) return;
     d2s_group_observation o = {0};
@@ -9512,7 +9595,7 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
         pthread_mutex_unlock(&s->mu);
         d2s_diag_event e={.id=t->report_id,.target=t->name,.protocol=proto,
             .family=t->family,.trigger=t->trigger_code,.outcome=outcome,.reason=reason,
-            .elapsed_ms=elapsed,.queue_ms=queued,.probe_units=(int64_t)t->probes+measured,
+            .elapsed_ms=elapsed,.queue_ms=queued,.probe_units=(int64_t)t->probes+measured+t->direct_probes,
             .ip=t->ip,.path=path,.kind=t->by_addr?"addr":"name",.shape=t->trigger_shape,
             .classify_ms=classify_ms,.contact_ms=contact_ms,.verify_ms=verify_ms};
         s->diagnostic(s->diagnostic_ctx,&e);
@@ -9523,13 +9606,34 @@ static void search_report(d2s_sched *s, task *t, int64_t now_ms,
         "outcome=%s path=%s probe_units=%lld accounting=scheduler "
         "elapsed_ms=%lld queue_ms=%lld live=unknown classify_ms=%lld contact_ms=%lld verify_ms=%lld",
         (unsigned long long)t->report_id, t->name, proto,
-        (unsigned)t->family, outcome, path, (long long)t->probes + measured,
+        (unsigned)t->family, outcome, path, (long long)t->probes + measured+t->direct_probes,
         (long long)elapsed, (long long)queued,
         (long long)classify_ms,(long long)contact_ms,(long long)verify_ms);
     s->say_fn(s->say_ctx, line);
 }
 
 static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
+    if(!verification_answers_data_cut(t)) {
+        say(s,"по %s ответ на рукопожатие не доказывает устранение обрыва QUIC-данных — продолжаю кандидатов",t->name);
+        trial_retire(s,t);ver_close(t);t->state=T_PLANNING;return;
+    }
+    int transport_only=http_transport_candidate(t,&t->ver);
+    /* A verified server denial remains a denial when data-cut/challenge guards
+       make it unsuitable even as a transport witness. Never promote it to app success. */
+    if(t->transport==6&&t->ver.name_ok==1&&t->ver.status>=300&&
+       d2s_outcome_evaluate(&t->ver,NULL).application_outcome!=D2S_APPLICATION_SUCCESS&&!transport_only) {
+        search_report(s,t,now_ms,"application-observed",NULL);cooldown_record(s,t,2);
+        trial_retire(s,t);ver_close(t);task_done(s,t);return;
+    }
+    if(transport_only&&(!t->ver_ok||!t->direct_comparable||!t->direct_blocked||t->direct_available)) {
+        say(s,"по %s HTTP %d: сопоставимое восстановление транспорта не подтверждено",t->name,t->ver.status);
+        if(t->direct_available) {
+            search_report(s,t,now_ms,"application-observed",NULL);cooldown_record(s,t,2);
+            trial_retire(s,t);ver_close(t);task_done(s,t);
+        } else {trial_retire(s,t);ver_close(t);t->state=T_PLANNING;}
+        return;
+    }
+
     const char *text = t->plans[t->next_plan - 1];
     char plan_id[40], box_id[40];
     uint8_t wire_id[D2S_PLAN_ID_LEN];
@@ -9690,7 +9794,7 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
                          t->transport, t->family, rec_shape,
                          t->transport == 6 ? t->trigger_tcp_profile : D2S_TCP_PROFILE_UNKNOWN,
                          t->ver.replay_proof ? D2S_VERBY_REPLAY_HANDSHAKE :
-                         t->ver.handshake_proof ? D2S_VERBY_PROBE_HANDSHAKE
+                         (t->ver.handshake_proof||transport_only) ? D2S_VERBY_PROBE_HANDSHAKE
                                                 : D2S_VERBY_PROBE, rec_input,
                          /* Перенос не меняет отпечаток коробки плана: цель
                             этой коробкой не измерялась (задача 32, I1). */
@@ -9699,7 +9803,7 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
     /* Блок доказан полным замером ИЛИ базовым вопросом донора перед своими
        планами (0/3 — рукопожатие режется): оба — опыт для семейства. Без
        второго семейства не учились бы на основном пути (поле 03.10). */
-    if (t->group_block_proven || (t->own_first == 2 && t->res.base_blocked))
+    if (!transport_only && (t->group_block_proven || (t->own_first == 2 && t->res.base_blocked)))
         group_record(s, t, D2S_GROUP_BLOCKED_CONFIRMED, plan_id, rec_shape, now_ms);
     /* Подтверждение повтором (свидетеля нет) не стирает известного раньше
        свидетеля привязки: его HTTPS RR перепроверяется при каждом поиске. */
@@ -9782,7 +9886,7 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
        подтверждённый план пришёл из перебора имён-кандидатов, его приманка и
        есть белое имя сети: записываем в каталог как свойство сети, с меткой
        времени для повторной проверки при деградации. Больше не перебираем. */
-    if (t->net_probing && t->next_plan > 0 && t->net_probe_name[t->next_plan - 1][0]) {
+    if (!transport_only && t->net_probing && t->next_plan > 0 && t->net_probe_name[t->next_plan - 1][0]) {
         d2s_net_whitelist *nw = &s->cat->net;
         snprintf(nw->name, sizeof nw->name, "%s", t->net_probe_name[t->next_plan - 1]);
         /* ДОКАЗАТЕЛЬСТВО СВЯЗЫВАЕТСЯ С ТИПОМ ОБРЫВА (поле 23.10.2026). Подбор
@@ -9815,6 +9919,8 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
                "рукопожатия: %s (путь: %s) — ServerHello под планом (план применён к потоку "
                "зонда); без ключей клиента прикладной уровень не измерен",
             t->name, plan_id, candidate_path(t));
+    else if(transport_only)
+        say(s,"по %s сохранён транспортный TLS-план %s: HTTP %d, применение подтверждено, без стратегии дважды не прошло TLS; доступность ресурса не подтверждена",t->name,plan_id,t->ver.status);
     else if (t->ver.handshake_proof)
         say(s, "по %s (TCP) ПОДТВЕРЖДЕНО собственным зондом на уровне рукопожатия: %s "
                "(путь: %s) — TLS с ALPN клиента завершён (план применён к потоку зонда); "
@@ -9886,11 +9992,11 @@ static void verify_confirm(d2s_sched *s, task *t, int64_t now_ms) {
        по уже свободному порту стояла до LRU, вытесняя подтверждённое. */
     search_report(s, t, now_ms,
                   t->partial_finishing || t->ver.budget == D2S_BUDGET_CUT
-                      ? "probe-partial" : "probe-confirmed", transferred ? "own-plan" : NULL);
+                      ? "probe-partial" : transport_only?"transport-confirmed":"probe-confirmed", transferred ? "own-plan" : NULL);
     trial_retire(s, t);
     ver_close(t);
     t->state = T_WATCHING;
-    t->min_ready = s->optimize && t->transport==6 && !t->by_addr &&
+    t->min_ready = !transport_only && s->optimize && t->transport==6 && !t->by_addr &&
         !t->ech_offer && !t->partial_finishing && !t->vol.rx_cut &&
         !t->ver.replay_proof && !t->ver.handshake_proof &&
         t->ver.level==D2S_VER_APPLICATION && t->ver.budget==D2S_BUDGET_PASSED;
@@ -9959,6 +10065,8 @@ static int partial_finish(d2s_sched *s, task *t, int64_t now_ms) {
            "(~%u пакетов до обрыва)", t->name, t->partial_pk);
     t->partial_finishing = 1;
     verify_confirm(s, t, now_ms);
+    /* An authenticated denial may have ended and reset the task. */
+    if(t->state==T_FREE)return 1;
     t->partial_finishing = 0;
     t->partial_valid = 0;
     cooldown_record(s, t, 2);
@@ -11180,6 +11288,10 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             if (join_worker(t) != 0) continue;
             say(s, "по %s предел времени поиска: измерение не завершено; прежние планы сохранены", t->name);
             search_report(s, t, now_ms, "inconclusive", "time-limit");
+            /* The same endpoint must not burn another full classifier on
+               the next browser retry. New input/manual recheck can still
+               lift the existing endpoint-scoped incomplete cooldown. */
+            cooldown_record(s,t,2);
             /* Short rest only; no negative verdict or new QUIC denial. */
             t->stall_cut = 0;
             task_fail(s, t, now_ms);
@@ -12137,9 +12249,10 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
                ServerHello на те же байты под планом: тоже граница
                рукопожатия, и слабее предыдущей (своё рукопожатие не
                завершено); verify_confirm так его и записывает. */
-            int wire_proof = t->ver.level == D2S_VER_APPLICATION ||
-                ((t->ver.handshake_proof || t->ver.replay_proof) &&
-                 t->ver.level == D2S_VER_HANDSHAKE);
+            int wire_proof = verification_answers_data_cut(t) &&
+                (http_transport_candidate(t,&t->ver) || t->ver.level == D2S_VER_APPLICATION ||
+                 ((t->ver.handshake_proof || t->ver.replay_proof) &&
+                  t->ver.level == D2S_VER_HANDSHAKE));
             if (!wire_proof) {
                 /* СПЕРВА — НАША ЛИ ЭТО НЕУДАЧА. Зонд мог не дойти до
                    приложения просто потому, что воздействия не было: посылка

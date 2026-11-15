@@ -157,6 +157,11 @@ typedef d2s_ver_result (*d2s_sched_ver_fn)(int use_fd, const char *ip, uint16_t 
 extern d2s_sched_ver_fn  d2s_sched_ver_hook;
 extern d2s_sched_ver_fn  d2s_sched_rx_ver_hook;
 extern d2s_sched_ver_fn  d2s_sched_rx_gzip_ver_hook;
+/* Matched own-client control on the untreated mark, used for TLS transport proof. */
+typedef d2s_ver_result (*d2s_sched_direct_ver_fn)(const char *,uint16_t,
+    uint8_t,const char *,int,size_t,uint8_t,int,uint32_t,const char *,const char *);
+extern d2s_sched_direct_ver_fn d2s_sched_direct_ver_hook;
+
 /* Зонд с ALPN КЛИЕНТА для не-HTTP протокола (задача 37, F3): по умолчанию
  * d2s_verify_probe_alpn_on. Зовётся вместо остальных TCP-зондов, когда снимок
  * клиента — TLS 1.3 с ЯВНЫМ не-HTTP ALPN, а замер доказал блок самого

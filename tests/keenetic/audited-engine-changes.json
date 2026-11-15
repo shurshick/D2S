@@ -12,20 +12,20 @@
     "reason": "docs/upstream-cd88413.md"
   },
   "core/include/d2s_sched.h": {
-    "sha256": "b5768292138cefe43a0bfc86344e3dbe45ef9f8b1538050f66105f5923ddb5d9",
-    "reason": "docs/next-rc413-port.md"
+    "sha256": "0a2e70d4fff63526fbce3075fc137417e0a288b157f31701370d85a92c65bf93",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "core/sched.c": {
-    "sha256": "36cdb93e9c429b0b72d729c08eb03271b718897e86d4388ce7e1f27a467429fa",
-    "reason": "docs/next-rc413-port.md"
+    "sha256": "d3d016aff15bca05f7eb8cdb1885966dbd688b4ebd3780d2f888bd8c5bcc0b83",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "core/test_diagnostics.c": {
     "sha256": "981975cb3160566a1a3ff2037d397bf7b3d9003127eaa09b24cb51c0e492943b",
     "reason": "docs/upstream-cd88413.md"
   },
   "core/test_sched.c": {
-    "sha256": "ddb11cbdd8fd2dfed48aa052e157bb2a3b5352a9ccf2aac8a2525f4d585c18cc",
-    "reason": "docs/next-rc413-port.md"
+    "sha256": "27929c2129b29176995de3465307da6fcd26b26a5ffb3578a7b5c068da0e22e5",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "detect/classify.c": {
     "sha256": "d9ac1d36fb1618e157e9b0a61b80d439066c487e6f4e17cde22a23de4200e534",
@@ -212,8 +212,8 @@
     "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
   },
   "datapath/session.c": {
-    "sha256": "96366c5e35fbf2b64bf9c02ea9f654fafa0311310c5a3cb78133c075b99ab8df",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "c5d2b9671bb8c63d80a2237e72db2e2ed5297ae748f3106c9c2eef0c08989219",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "datapath/test_plan_parse.c": {
     "sha256": "bb2ae120d8a98dee509154e175252be10f7b2c646d3101f66bdeefa07ae83076",
@@ -248,16 +248,16 @@
     "reason": "docs/upstream-a378e23.md#reviewed-engine-changes"
   },
   "core/test_sched_summary.c": {
-    "sha256": "56fac66e32319fdd8f3b28bb36972ce7bd2c23480b0b069effef165eb34dc15c",
-    "reason": "docs/next-rc413-port.md"
+    "sha256": "ea19b2f8cfcef5c209ee96a834c480decdadd0d697efabed5bc7d01c84f89e26",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "core/test_verify_http.c": {
     "sha256": "b722d9a79eac461651fd83190477fad426acb20a2748f0d59eaef4dda1841c3a",
     "reason": "docs/next-rc413-port.md"
   },
   "datapath/d2sd.c": {
-    "sha256": "05d4f1118e8625aa490abf70a87422a2d0ef603f13270839a35fb05602477da8",
-    "reason": "docs/nfqueue-offload-safety.md"
+    "sha256": "70bc4e78897311c34524786d17ffe51ca48b9e53cbc5156881aab83d99d79d8b",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "core/groups.c": {
     "sha256": "c3f7561108c80c85a87bcdd7d04268249e441d165444b728716e7c60e07fd1f9",
@@ -296,8 +296,8 @@
     "reason": "docs/whatsapp-ech-timestamp.md#reviewed-engine-changes"
   },
   "datapath/test_session.c": {
-    "sha256": "81f967c0f5c6302a3967cab3e0ca7971705b717f99e0d924c3012d160078fd8e",
-    "reason": "docs/upstream-c38da9f.md#reviewed-engine-changes"
+    "sha256": "6f1a78d4f39312f229376fe096179d49e4ea1854822a589e34a985acc811e31b",
+    "reason": "docs/next-rc414-416-port.md"
   },
   "datapath/ctlsrv.c": {
     "sha256": "fb0f360441b58eac3c5e1372bb3d8e35845945df25286ac63dc741c5b3f084ec",
@@ -346,5 +346,21 @@
   "core/tls13core.c": {
     "sha256": "d33d39d9a1d9fa93d7ce34b08bf5f8adcbcab6a739a65f6b601069fc0314e622",
     "reason": "docs/upstream-cd88413.md"
+  },
+  "core/test_sched_quic_yield.c": {
+    "sha256": "eec3180118154f5b6079eb70f3d2782bed3a25af869d157320d2e7f38a056518",
+    "reason": "docs/next-rc414-416-port.md"
+  },
+  "datapath/hold.c": {
+    "sha256": "77515a75c1b70c614dcc12578b21fce8d53a6279879b65873108c9a816ae31e7",
+    "reason": "docs/next-rc414-416-port.md"
+  },
+  "datapath/include/d2s_hold.h": {
+    "sha256": "88a94d89878b31d10e7720afdaac5b04ea989ed2fb50fc80d4fe2ee2c1f2ade8",
+    "reason": "docs/next-rc414-416-port.md"
+  },
+  "datapath/test_hold.c": {
+    "sha256": "8eeed8a4228c6c0657d731379e1d7b9440cf1fc9a9fce103b5b6d8254e3c280a",
+    "reason": "docs/next-rc414-416-port.md"
   }
 }

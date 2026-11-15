@@ -441,9 +441,13 @@ SANFLAGS = -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=al
 san: $(CORE_DIR)/hello_profiles.inc
 	@set -e; for t in $(TESTS); do \
 		echo "== $$t =="; \
+		srcs="$(SRC)"; \
+		for inc in $$(grep -o '#include "[A-Za-z0-9_]*\.c"' $$t.c | sed 's/#include "//; s/"//'); do \
+			srcs=$$(printf '%s\n' $$srcs | grep -vx "$$inc" || true); \
+		done; \
 		extra=; if [ "$$t" = test_quic_session ] || [ "$$t" = test_stun_session ] || [ "$$t" = test_udp_path ]; then extra="$(CORE_DIR)/quichello.c $(CORE_DIR)/hello.c $(CORE_DIR)/tls13core.c $(CORE_DIR)/x25519.c"; fi; \
 		$(CC) $(SANFLAGS) -o /tmp/d2s-san-$$t $$t.c \
-			$$(echo "$(SRC)" | tr ' ' '\n' | grep -v '^$$') $(CORESRC) $$extra; \
+			$$srcs $(CORESRC) $$extra; \
 		/tmp/d2s-san-$$t; \
 	done
 	@echo "== planlab =="
@@ -557,3 +561,11 @@ test-plan-lookup: test_plans_differential
 	./test_plans_differential > /dev/null
 test_plans_differential: test_plans_differential.c plans.c plan_internal.h plan_parse.o plan_apply.o $(COREOBJ) $(HDR)
 	$(CC) $(CFLAGS) -o $@ $< plan_parse.o plan_apply.o $(COREOBJ) $(LDFLAGS)
+
+TESTS += test_quic_lifetime
+check: test-quic-lifetime
+.PHONY: test-quic-lifetime
+test_quic_lifetime: test_quic_lifetime.c session.c http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $< http80.o hold.o capture.o nat.o ctq.o nl.o track.o tls.o wire.o wire_udp.o journal.o plans.o plan_parse.o plan_apply.o $(COREOBJ) $(LDFLAGS)
+test-quic-lifetime: test_quic_lifetime
+	./test_quic_lifetime

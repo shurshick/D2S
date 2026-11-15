@@ -76,7 +76,8 @@ uint64_t d2s_hold_next(const d2s_hold *h);
    пришёл с другой стороны. Без них «таймаутов=1 (пакетов в них=1)» не
    отличает «второй сегмент до очереди не дошёл» от «дошёл и был отвергнут». */
 typedef struct { uint64_t started, ready, released, full, timed_out, timed_out_pkts,
-                 plan_changed, dropped_all, joined, mismatched, sided;
+                 plan_changed, dropped_all, joined, mismatched, sided,
+                 timeout_single, timeout_multi, timeout_overrun_max_ns;
                  size_t pending; } d2s_hold_stats;
 void d2s_hold_get_stats(const d2s_hold *h, d2s_hold_stats *out);
 /* Try ALL IDs even if one verdict fails. Zero alone acknowledges the

@@ -3522,6 +3522,7 @@ int main(int argc, char **argv) {
             spin(s, 60);
             CHECK(tcp_calls == 1, "незавершённый прямой замер не стартовал");
             skip_ahead(s, 10 * 60 * 1000 + 1);
+            spin(s,20); /* cooperative cancellation completes on later ticks */
             CHECK(tcp_stop_count == 1, "десятиминутный таймаут не остановил замер");
             skip_ahead(s, 2 * 60 * 1000 + 1);
             d2s_ev h2 = ev_hello(6, 40621, "incomplete-cooldown.example");
@@ -8319,6 +8320,7 @@ lifecycle_test:
         skip_ahead(s, 11 * 60 * 1000);
         int closed = 0;
         for (int i = 0; i < 200 && peer >= 0 && !closed; i++) {
+            tick_once(s); /* The production event loop keeps serving health/cleanup. */
             struct pollfd p3; p3.fd = peer; p3.events = POLLIN; p3.revents = 0;
             if (poll(&p3, 1, 10) > 0) {
                 char b[4096];

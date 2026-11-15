@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <openssl/ssl.h>
+#include "tg_limits.h"
 
 typedef struct tg_epoll_proxy tg_epoll_proxy;
 
@@ -109,6 +110,13 @@ typedef struct {
     uint64_t monotonic_time_ms;
     uint32_t route_cooldown_ms;
     size_t max_connections;
+    tg_limit_resources limit_resources;
+    tg_limit_plan limit_plan;
+    unsigned limit_reasons;
+    unsigned last_rejection_reasons;
+    uint64_t limit_changes;
+    size_t previous_connection_limit;
+    uint64_t limit_changed_at;
     size_t active_wss_connections;
     size_t max_wss_connections;
     size_t buffer_bytes_current;
@@ -170,6 +178,7 @@ typedef struct {
     int tls_passthrough;
     /* Direct tg://proxy client accepted on the local listener. */
     int local_proxy;
+    uint8_t repaired_init_first_byte; /* Never changes secret-based local clients. */
 } tg_epoll_route_selection;
 
 typedef int (*tg_epoll_select_route_fn)(
@@ -212,6 +221,7 @@ typedef struct {
 } tg_epoll_proxy_config;
 
 tg_epoll_proxy *tg_epoll_proxy_create(const tg_epoll_proxy_config *config);
+void tg_epoll_proxy_refresh_limits(tg_epoll_proxy *, const tg_limit_resources *);
 /* The caller owns both the current and replacement descriptors. */
 #define TG_EPOLL_REBIND_LISTENER (-2)
 int tg_epoll_proxy_set_listener(tg_epoll_proxy *server, int listener_fd);

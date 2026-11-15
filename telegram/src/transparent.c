@@ -133,7 +133,15 @@ int tg_transparent_select_route(
     if (!destination_allowed(policy, original)) return -1;
     tg_mtproto_init parsed;
     int used_official_secret = 0;
-    if (parse_client_handshake(policy, original, handshake, &parsed,
+    uint8_t repaired_init_first_byte = 0;
+    if (handshake[0] == 0xef) {
+        uint8_t repaired[TG_MTPROTO_HANDSHAKE_LEN];
+        memcpy(repaired, handshake, sizeof repaired);
+        repaired[0] = 1; /* Outside both key/IV ranges. */
+        if (tg_mtproto_parse_obfuscated2(repaired, &parsed) != 0 ||
+            parsed.proto != TG_MTPROTO_ABRIDGED || !parsed.dc_id) return -1;
+        repaired_init_first_byte = repaired[0];
+    } else if (parse_client_handshake(policy, original, handshake, &parsed,
                                &used_official_secret) != 0) {
         /* HTTPS shares Telegram address ranges with MTProto. Preserve the
          * browser's TLS stream, including SNI and certificate verification.
@@ -155,6 +163,8 @@ int tg_transparent_select_route(
     int result = tg_dc_map_store_resolve(policy->map_store, now, original,
                                          parsed.is_media, parsed.dc_id, 1,
                                          &endpoint, &source);
+    if (repaired_init_first_byte &&
+        (result != TG_DC_LOOKUP_OK || endpoint.secret_len)) return -1;
     /* Unknown destinations may only pass through unchanged when no DC hint
      * was supplied. Never grant an arbitrary address a WSS/CF route. */
     if (result != TG_DC_LOOKUP_OK &&
@@ -166,6 +176,7 @@ int tg_transparent_select_route(
     selection->is_media = parsed.is_media ||
         (result == TG_DC_LOOKUP_OK && endpoint.media_only);
     selection->proto = parsed.proto;
+    selection->repaired_init_first_byte = repaired_init_first_byte;
     selection->tcp_only = used_official_secret ||
         result != TG_DC_LOOKUP_OK || endpoint.cdn || endpoint.tcpo_only;
     return 0;

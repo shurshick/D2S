@@ -90,7 +90,7 @@ static void scenario(int selected) {
             quic_yield_tick(s,700250);
             CHECK(q->started_ms>700250-SCHED_TASK_LIFE_MS);
         }
-        join_worker(q);
+        join_worker_mode(q,1);
         CHECK(done);
         if(mode==3)CHECK(probes==1 && result.incomplete);
         q->state=T_FREE;s->tasks[1].state=T_FREE;s->tasks[2].state=T_FREE;
@@ -128,7 +128,7 @@ static void scenario(int selected) {
                 CHECK(q->state==T_ASKING && q->quic_parked);
             }
             if(mode==4){
-                join_worker(q);CHECK(done && probes==1 && result.incomplete);
+                join_worker_mode(q,1);CHECK(done && probes==1 && result.incomplete);
                 q->state=s->tasks[1].state=s->tasks[2].state=T_FREE;
                 d2s_sched_free(s);d2s_catalog_free(&cat);return;
             }
@@ -146,7 +146,7 @@ static void scenario(int selected) {
     }
     pthread_mutex_lock(&test_mu);int finished=done;pthread_mutex_unlock(&test_mu);
     CHECK(finished);CHECK(tcp_started==(mode==2?0:1));CHECK(early_probe==0);
-    join_worker(q);
+    join_worker_mode(q,1);
     CHECK(probes>1 && result.kind==D2S_QA_NOT_FOUND && !result.incomplete);
     CHECK(result.probes==probes*3 && benign_calls==1);
     if(mode==0)paused_result=result;

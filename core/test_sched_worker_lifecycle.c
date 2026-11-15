@@ -25,6 +25,9 @@ static int test_madvise(void *addr,size_t length,int advice);
 static unsigned fail_next_join;
 static int test_pthread_join(pthread_t thread,void **retval);
 static int (*native_pthread_join)(pthread_t,void **)=pthread_join;
+static int test_pthread_tryjoin(pthread_t thread,void **retval);
+static int (*native_pthread_tryjoin)(pthread_t,void **)=pthread_tryjoin_np;
+#define pthread_tryjoin_np test_pthread_tryjoin
 #define pthread_join test_pthread_join
 #include "sched.c"
 #include <assert.h>
@@ -40,6 +43,10 @@ static int (*native_pthread_join)(pthread_t,void **)=pthread_join;
 static int test_pthread_join(pthread_t thread,void **retval) {
     if(fail_next_join) { fail_next_join=0;return EDEADLK; }
     return native_pthread_join(thread,retval);
+}
+static int test_pthread_tryjoin(pthread_t thread,void **retval) {
+    if(fail_next_join) {fail_next_join=0;return EDEADLK;}
+    return native_pthread_tryjoin(thread,retval);
 }
 static unsigned synthetic_calls;
 static int synthetic_delay;
@@ -157,7 +164,10 @@ int main(void) {
         t->skip_volume_once = 1; t->state = T_ASKING;
         synthetic_delay=i==0;
         assert(start_worker(sched, t, JOB_CLASSIFY) == 0);
-        join_worker(t);
+        for(unsigned retry=0;retry<1000 && t->th_live;retry++) {
+            int result=join_worker(t);assert(result>=0);
+            if(result){struct timespec pause={0,1000000};nanosleep(&pause,NULL);}
+        }
         assert(!t->th_live && !t->worker_owner && t->res_ready);
         if(i==0)assert(t->classify_ms>=10); /* retain D2S phase timings */
         task_reset(sched, t);

@@ -3390,6 +3390,15 @@ int main(void) {
                               "assembled modern hello sent unchanged");
                         CHECK(scenario != 1 || r.verdict == D2S_VERDICT_ACCEPT,
                               "legacy hello received modern plan");
+                    } else if(scenario==3){
+                        d2s_session_packet(v,part,pn,2,buf,sizeof buf,&r);
+                        d2s_key fk;
+                        CHECK(!d2s_key_make(&fk,6,part+12,part+16,part+20,part+22),"late version flow key");
+                        CHECK(d2s_session_client_shape(v,&fk)==D2S_PLAN_SHAPE_ANY,"partial extension block guessed TLS version");
+                        pn=build_pkt(part,port,0x18,late+1388,late_len-1388);wr32(part+24,2389);
+                        d2s_session_packet(v,part,pn,3,buf,sizeof buf,&r);
+                        CHECK(d2s_session_client_shape(v,&fk)==D2S_PLAN_SHAPE_MODERN_NO_TS,"completed capture left unknown TLS shape");
+                        CHECK(!d2s_session_applied(v),"capture correction retroactively executed a plan");
                     }
                     d2s_hold_free(vh); d2s_session_free(v);
                 }

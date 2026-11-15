@@ -118,6 +118,7 @@ int main(void) {
     CHECK(nreleased==32 && d2s_hold_next(h)==0);
     d2s_hold_stats stats; d2s_hold_get_stats(h,&stats);
     CHECK(stats.pending==0 && stats.ready==2 && stats.full==2 && stats.timed_out==1);
+    CHECK(stats.timeout_single==1 && stats.timeout_multi==0 && stats.timeout_overrun_max_ns==0);
     /* ПРИЧИНА ОТПУСКАНИЯ НАЗЫВАЕТСЯ, А НЕ УГАДЫВАЕТСЯ. Общее «отпущено» не
        отличает истёкший срок от смены плана и от сброса очереди, а на живой
        линии это три разных диагноза: ждали и не дождались, план переставили
@@ -128,6 +129,12 @@ int main(void) {
     CHECK(stats.sided==0);       /* обратной стороны в этом наборе нет */
     CHECK(stats.plan_changed==1);   /* d2s_hold_flush(h,9,2,...) */
     CHECK(stats.dropped_all==D2S_HOLD_SLOTS); /* завершающий flush all=1 */
+    n=packet(p,5000,1000,hello,100);
+    CHECK(d2s_hold_feed(h,100,p,n,100,2,1,0,0,release,NULL,&batch)==1);
+    CHECK(d2s_hold_feed(h,101,p,n,101,2,0,0,0,release,NULL,&batch)==1);
+    d2s_hold_flush(h,100+D2S_HOLD_WAIT_NS+123000,2,0,release,NULL);
+    d2s_hold_get_stats(h,&stats);
+    CHECK(stats.timeout_multi==1 && stats.timeout_single==1 && stats.timeout_overrun_max_ns==123000);
     /* One failed verdict cannot stop remaining releases or become success. */
     uint32_t ids[]={1,2,3};
     CHECK(d2s_hold_verdicts(ids,3,0,verdict,NULL)==1);

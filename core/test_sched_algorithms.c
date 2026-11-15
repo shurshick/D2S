@@ -24,7 +24,7 @@ static void contact_profile_scope(void) {
         t->trigger_tcp_profile=(uint8_t)profile;
         contact_profile_seen=-99;
         assert(start_worker(s,t,JOB_CONTACT)==0);
-        assert(join_worker(t)==0);
+        assert(join_worker_mode(t,1)==0);
         assert(contact_profile_seen==profile-1 && !t->c_ok && t->res_ready);
     }
     d2s_sched_free(s);
@@ -141,7 +141,7 @@ static void contextual_ranking(void) {
     d2s_diag_memory_snapshot(before);
     assert(!start_worker(s,t,JOB_CLASSIFY));
     b->plans[0].recipe.repeats=13; /* after main-thread snapshot */
-    assert(!join_worker(t) && learned_seen==1 && learned_repeats==7);
+    assert(!join_worker_mode(t,1) && learned_seen==1 && learned_repeats==7);
     d2s_diag_memory_snapshot(after);
     assert(after[0].live_bytes==before[0].live_bytes && after[0].created==before[0].created+2 &&
            after[0].destroyed==before[0].destroyed+2);
@@ -314,6 +314,57 @@ static void full_flight_applicability(void) {
 }
 
 int main(void) {
+    {
+        d2s_catalog c={0};d2s_sched *s=d2s_sched_new(&c,-1,0);assert(s);
+        task *t=&s->tasks[0];task_reset(s,t);t->transport=6;t->family=4;t->state=T_VERIFY;
+        strcpy(t->name,"denied.example");t->ver.fd=-1;t->ver.level=D2S_VER_APPLICATION;
+        t->ver.status=403;t->ver.name_ok=1;t->ver.body_complete=t->ver.body_framing_valid=1;
+        t->vol.rx_cut=1;verify_confirm(s,t,1000);
+        assert(t->state==T_FREE && c.n_boxes==0);
+        task_reset(s,t);t->transport=6;t->family=4;t->port=443;t->state=T_PLANNING;
+        strcpy(t->name,"denied.example");strcpy(t->ip,"127.0.0.1");
+        t->partial_valid=1;t->partial_pk=25;t->partial_ver.fd=-1;
+        t->partial_ver.level=D2S_VER_APPLICATION;t->partial_ver.status=403;t->partial_ver.name_ok=1;
+        t->partial_ver.body_complete=t->partial_ver.body_framing_valid=1;t->vol.rx_cut=1;
+        assert(partial_finish(s,t,1100));
+        assert(t->state==T_FREE && c.n_boxes==0);
+        assert(cooldown_find_endpoint(s,"denied.example",6,4,"127.0.0.1",443));
+        d2s_sched_free(s);d2s_catalog_free(&c);
+    }
+
+    {
+        d2s_catalog c={0};d2s_sched *s=d2s_sched_new(&c,-1,0);assert(s);
+        task *t=&s->tasks[0];task_reset(s,t);t->transport=17;t->family=4;
+        strcpy(t->name,"a.cdn-example.com");t->ver.replay_proof=1;t->arm.data_cut_seen=1;
+        assert(!verification_answers_data_cut(t));
+        t->arm.data_cut_seen=0;assert(verification_answers_data_cut(t));t->arm.data_cut_seen=1;
+        group_record(s,t,D2S_GROUP_BLOCKED_CONFIRMED,"p",D2S_LINK_SHAPE_QUIC,1000);
+        assert(!c.groups||!c.groups->n_observations);
+        t->ver.replay_proof=0;t->ver.handshake_proof=1;
+        assert(!verification_answers_data_cut(t));
+        t->ver.handshake_proof=0;assert(verification_answers_data_cut(t));
+        group_record(s,t,D2S_GROUP_BLOCKED_CONFIRMED,"p",D2S_LINK_SHAPE_QUIC,1000);
+        assert(c.groups&&c.groups->n_observations==1);
+        c.boxes=calloc(1,sizeof *c.boxes);assert(c.boxes);c.n_boxes=1;
+        c.boxes[0].binds=calloc(4,sizeof *c.boxes[0].binds);assert(c.boxes[0].binds);c.boxes[0].n_binds=4;
+        d2s_domain_group g={0};g.key.transport=17;g.key.family=4;g.key.shape=D2S_LINK_SHAPE_QUIC;strcpy(g.suffix,"cdn-example.com");strcpy(g.plan_id,"p");
+        for(size_t i=0;i<4;i++){
+            d2s_cat_binding *b=&c.boxes[0].binds[i];b->enabled=1;b->level=3;b->transport=17;b->family=4;
+            b->shape=D2S_LINK_SHAPE_QUIC;
+            strcpy(b->kind,i?"name":"addr");snprintf(b->target,sizeof b->target,"n%zu.cdn-example.com",i);
+            strcpy(b->plan_id,"p");b->verified_by=D2S_VERBY_REPLAY_HANDSHAKE;
+        }
+        strcpy(g.suffix,"unrelated-example.net");
+        assert(!group_replay_only(&c,&g));
+        strcpy(g.suffix,"cdn-example.com");
+        assert(group_replay_only(&c,&g));
+        c.boxes[0].binds[1].verified_by=D2S_VERBY_PROBE;
+        assert(group_replay_only(&c,&g)); /* one complete exchange cannot promote a CDN */
+        c.boxes[0].binds[2].verified_by=c.boxes[0].binds[3].verified_by=D2S_VERBY_PROBE;
+        assert(!group_replay_only(&c,&g));
+        d2s_sched_free(s);d2s_catalog_free(&c);
+    }
+
     contact_profile_scope();
     full_flight_applicability();
     simplification();
@@ -345,7 +396,7 @@ int main(void) {
     t->seed.repeats = 3; t->seed.fail = 3;
     t->seed_input = seed_input_of(t->trig, t->trig_len, t->ip, t->port);
     assert(start_worker(s, t, JOB_CLASSIFY) == 0);
-    assert(join_worker(t) == 0 && calls == 1 && early_seen);
+    assert(join_worker_mode(t,1) == 0 && calls == 1 && early_seen);
     d2s_vres measured = {.verdict=D2S_V_INCONCLUSIVE, .owns_search=1,
                         .split_measured=1, .split_pos=1, .split_gap_us=1000};
     verdict_to_plans(s, t, &measured);
@@ -363,7 +414,7 @@ int main(void) {
     assert(resume_split_detail(s, t, 1000) == 1);
     assert(t->state == T_ASKING && t->split_detailed && !t->split_pending);
     assert(!t->n_plans && !t->next_plan && !t->exec_refused);
-    assert(join_worker(t) == 0 && calls == 2 && !early_seen);
+    assert(join_worker_mode(t,1) == 0 && calls == 2 && !early_seen);
     assert(!resume_split_detail(s, t, 1001) && calls == 2);
     d2s_sched_free(s); d2s_catalog_free(&cat);
     puts("algorithms: split continuation, contextual quality, cost, restart and refusal guards PASS");

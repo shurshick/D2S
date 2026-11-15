@@ -60,6 +60,9 @@ void d2s_hold_flush(d2s_hold *h, uint64_t now, uint64_t revision, int all,
             else if (now < s->deadline) { h->stats.plan_changed++; }
             if (now >= s->deadline) {
                 h->stats.timed_out++;
+                if(s->count==1)h->stats.timeout_single++;else h->stats.timeout_multi++;
+                uint64_t overrun=now-s->deadline;
+                if(overrun>h->stats.timeout_overrun_max_ns)h->stats.timeout_overrun_max_ns=overrun;
                 /* СКОЛЬКО ПАКЕТОВ ТАК И ОСТАЛОСЬ ЛЕЖАТЬ. Один — второй
                    сегмент до очереди не дошёл; два и больше — дошёл, а разбор
                    приветствия его не собрал. Без этого числа обе причины

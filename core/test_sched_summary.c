@@ -381,18 +381,11 @@ static void tx_ladder_requires_volume_proof(int passed) {
         CHECK(strstr(rows,"outcome=probe-direct") != NULL);
     }
     fprintf(stderr, "исходящий обрыв + короткий 403: бюджет пройден=%d, сеть=%s, поиск=%d\n%s\n", passed, cat.net.name, cat.net.searched, rows);
-    CHECK((cat.net.name[0] != 0) == passed);
-    /* ДОКАЗАТЕЛЬСТВО СВЯЗАНО С ТИПОМ ОБРЫВА (поле 23.10.2026, правка 8ba945d).
-     * Здесь обрыв ИСХОДЯЩЕЙ лестницы, а не RX: имя запоминается — находка для
-     * этой цели настоящая, — но подбор остаётся ОТКРЫТЫМ (`searched == 0`) и
-     * имя помечено `tx_only`. Прежде оба доказательства закрывали подбор, и
-     * цели с ВХОДЯЩИМ обрывом наследовали имя, против их обрыва не
-     * проверенное: семь целей отдавали тела 13–17 КБ при ответе 200.
-     * Поэтому утверждение здесь не «перевёрнуто», а усилено: проверяются и
-     * открытость подбора, и сама пометка. */
-    CHECK(cat.net.searched == 0);
-    CHECK((cat.net.tx_only != 0) == passed);
-    CHECK((strstr(rows, "outcome=probe-confirmed") != NULL) == passed);
+    /* A completed denial cannot promote a target or network-wide decoy,
+       even if this probe exhausted the packet budget successfully. */
+    CHECK(!cat.net.name[0]);CHECK(cat.net.searched == 0);CHECK(!cat.net.tx_only);
+    CHECK(!strstr(rows,"outcome=probe-confirmed"));
+    CHECK(strstr(rows,"outcome=application-observed")!=NULL);
     d2s_sched_free(s); d2s_catalog_free(&cat);
 }
 
@@ -447,7 +440,7 @@ static void *deadline_worker(void *arg) {
     task *t=arg;d2s_sched *s=t->worker_owner;
     for (;;) {
         pthread_mutex_lock(&s->mu);int stopped=t->stop;pthread_mutex_unlock(&s->mu);
-        if(stopped)return NULL;
+        if(stopped){struct timespec blocked={0,500000000};nanosleep(&blocked,NULL);return NULL;}
         struct timespec pause={0,1000000};nanosleep(&pause,NULL);
     }
 }
@@ -477,6 +470,11 @@ static void bounded_search_clock(void) {
     d2s_catalog cat={0};d2s_sched *s=d2s_sched_new(&cat,-1,0x2d);
     CHECK(s!=NULL);if(!s)return;
     CHECK(s->classify_budget_ms==90000 && s->search_budget_limit_ms==180000);
+    for(int state=T_FREE;state<=T_VOICE_WATCH;state++) {
+        s->tasks[0].state=(task_state)state;
+        CHECK(d2s_sched_active(s)==(size_t)(state!=T_FREE && state!=T_RESTING));
+    }
+    s->tasks[0].state=T_FREE;
     cat.boxes=calloc(1,sizeof *cat.boxes);CHECK(cat.boxes);if(!cat.boxes){d2s_sched_free(s);return;}
     cat.n_boxes=1;strcpy(cat.boxes[0].id,"box-preserved");
     cat.boxes[0].binds=calloc(1,sizeof *cat.boxes[0].binds);
@@ -501,10 +499,20 @@ static void bounded_search_clock(void) {
     int spawned=pthread_create(&live->th,NULL,deadline_worker,live)==0;
     CHECK(spawned);live->th_live=spawned;
     if(spawned)s->workers_started++;
+    struct timespec a,b;clock_gettime(CLOCK_MONOTONIC,&a);
     d2s_sched_tick(s,91000);
+    clock_gettime(CLOCK_MONOTONIC,&b);
+    CHECK((b.tv_sec-a.tv_sec)*1000+(b.tv_nsec-a.tv_nsec)/1000000 < 200);
+    CHECK(live->th_live);CHECK(live->stop);
+    for(unsigned retry=0;retry<200 && live->th_live;retry++) {
+        struct timespec nap={0,5000000};nanosleep(&nap,NULL);
+        d2s_sched_tick(s,91000);
+    }
     CHECK(!live->th_live && (!spawned || s->workers_joined==1));
     CHECK(live->state==T_RESTING);CHECK(s->sync_pending);
     CHECK(strstr(rows,"outcome=inconclusive path=time-limit"));
+    target_cooldown *cool=cooldown_find_endpoint(s,live->name,6,4,live->ip,live->port);
+    CHECK(cool&&cool->exhausted&&cool->until_ms==91000+SCHED_INCOMPLETE_BACKOFF_MS);
     CHECK(!strstr(rows,"outcome=failed"));
     CHECK(cat.n_boxes==1 && cat.boxes[0].n_binds==1);
     CHECK(!memcmp(bd,&saved,sizeof saved));

@@ -37,7 +37,6 @@
 #include <unistd.h>
 
 #define TG_BUILD "d2s-tg-0.3"
-#define TG_LOW_MEMORY_ROUTER_BYTES (128u * 1024u * 1024u)
 #define TG_RESOURCE_REFRESH_MS 5000u
 #define TG_DC_REFRESH_SECS (6u * 60u * 60u)
 #define TG_DC_REFRESH_RETRY_SECS (60u * 60u)
@@ -315,13 +314,6 @@ static void stop_dc_refresh(dc_refresh_job *job) {
     job->started = 0;
 }
 
-static int read_memory_resources(size_t *total, size_t *available) {
-    FILE *file = fopen("/proc/meminfo", "r");
-    tg_limits_read_meminfo(file, total, available);
-    if (file) fclose(file);
-    return *total && *available <= *total;
-}
-
 static int run_local_daemon(const char *config_path) {
     static const uint16_t allowed_ports[] = {443, 5222};
     static const char *const allowed_cidrs[] = {
@@ -353,13 +345,13 @@ static int run_local_daemon(const char *config_path) {
         tg_config_clean(&cfg);
         return 0;
     }
-    size_t total_memory, available_memory;
-    (void)read_memory_resources(&total_memory, &available_memory);
-    size_t fd_limit = tg_limits_soft_nofile();
+    tg_limit_resources resources = tg_limits_read_resources();
+    size_t total_memory = resources.total, available_memory = resources.available;
+    size_t fd_limit = resources.fd_limit;
     char resource_note[192];
     size_t configured_limit = cfg.manual_connection_limit ? cfg.connection_limit : 32u;
     size_t max_connections = tg_limits_policy_connections(
-        fd_limit, total_memory, available_memory, configured_limit);
+        fd_limit, total_memory, available_memory, configured_limit < 32u ? configured_limit : 32u);
     if (!max_connections) {
         snprintf(resource_note, sizeof(resource_note),
                  "нет бюджета запуска: RAM %zu/%zu КиБ доступно, FD %zu",
@@ -439,6 +431,11 @@ static int run_local_daemon(const char *config_path) {
     }
     if (tg_stats_socket_open(&stats_socket, cfg.stats_socket_path) != 0)
         log_msg("не удалось открыть локальный read-only socket статистики Telegram");
+    resources = tg_limits_read_resources();
+    tg_epoll_proxy_refresh_limits(proxy, &resources);
+    total_memory = resources.total;
+    available_memory = resources.available;
+    fd_limit = resources.fd_limit;
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_signal;
@@ -457,26 +454,23 @@ static int run_local_daemon(const char *config_path) {
     uint64_t rebind_at_ms = 0;
     unsigned rebind_attempt = 0;
     uint64_t next_resource_refresh = monotonic_ms() + TG_RESOURCE_REFRESH_MS;
+    uint64_t next_limit_log = 0;
+    size_t reported_limit = tg_epoll_proxy_max_connections(proxy);
     while (!stop_requested) {
-        if (total_memory <= TG_LOW_MEMORY_ROUTER_BYTES &&
-            monotonic_ms() >= next_resource_refresh) {
-            next_resource_refresh = monotonic_ms() + TG_RESOURCE_REFRESH_MS;
-            size_t total, available;
-            if (read_memory_resources(&total, &available)) {
-                size_t old_limit = tg_epoll_proxy_max_connections(proxy);
-                tg_epoll_proxy_update_limits(proxy,
-                    tg_limits_policy_admission(tg_limits_soft_nofile(), total,
-                                                available, configured_limit,
-                                                tg_epoll_proxy_active_connections(proxy)),
-                    tg_limits_runtime_memory_budget(total, available),
-                    tg_limits_runtime_memory_budget(total, total));
-                size_t new_limit = tg_epoll_proxy_max_connections(proxy);
-                if (old_limit != new_limit) {
-                    snprintf(resource_note, sizeof(resource_note),
-                             "лимит соединений Telegram %zu → %zu, RAM %zu/%zu КиБ доступно",
-                             old_limit, new_limit, available / 1024u, total / 1024u);
-                    log_msg(resource_note);
-                }
+        uint64_t now_ms = monotonic_ms();
+        if (now_ms >= next_resource_refresh) {
+            next_resource_refresh = now_ms + TG_RESOURCE_REFRESH_MS;
+            resources = tg_limits_read_resources();
+            tg_epoll_proxy_refresh_limits(proxy, &resources);
+            size_t new_limit = tg_epoll_proxy_max_connections(proxy);
+            if (reported_limit != new_limit && (!new_limit || !reported_limit || now_ms >= next_limit_log)) {
+                snprintf(resource_note, sizeof(resource_note),
+                         "лимит соединений Telegram %zu → %zu, RAM %zu/%zu КиБ доступно, RSS %zu КиБ, FD %zu/%zu",
+                         reported_limit, new_limit, resources.available / 1024u,
+                         resources.total / 1024u, resources.rss / 1024u,
+                         resources.fd_count, resources.fd_limit);
+                log_msg(resource_note);
+                reported_limit = new_limit;next_limit_log = now_ms + 60000u;
             }
         }
         if (listener < 0 && monotonic_ms() >= rebind_at_ms) {

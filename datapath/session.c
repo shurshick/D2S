@@ -2214,17 +2214,18 @@ static int session_packet(d2s_session *s, const uint8_t *pkt, size_t len,
                 complete.have_hello_middle && !complete.exts_truncated) {
                 size_t k = shape_slot(6, key.family);
                 s->captured_hellos++;
-                /* Форма головы при оборванном блоке расширений — догадка
-                   быстрого пути (MODERN). Целое приветствие с ECH — факт:
-                   Chrome переставляет расширения, и ECH уезжает во второй
-                   сегмент (поле 17.10.2026). Подозрение несёт форму потока. */
-                if (complete.ech_offer) {
-                    if (fl->client_shape == D2S_PLAN_SHAPE_MODERN)
-                        fl->client_shape = D2S_PLAN_SHAPE_ECH_TCP;
-                    else if (fl->client_shape == D2S_PLAN_SHAPE_MODERN_NO_TS)
-                        fl->client_shape = D2S_PLAN_SHAPE_ECH_NO_TS;
-                    else if (fl->client_shape == D2S_PLAN_SHAPE_MODERN_TS)
-                        fl->client_shape = D2S_PLAN_SHAPE_ECH_TS;
+                /* The completed capture resolves UNKNOWN too, not just a
+                   provisional MODERN -> ECH. supported_versions may arrive
+                   after SNI in the second segment. This updates evidence;
+                   it never executes a plan retroactively on a passed head. */
+                uint8_t profile=tcp_options_timestamp_profile(t+20,doff-20);
+                fl->client_shape=complete.is_tls13?
+                    (complete.ech_offer?D2S_PLAN_SHAPE_ECH_TCP:D2S_PLAN_SHAPE_MODERN):D2S_PLAN_SHAPE_LEGACY;
+                if(profile!=D2S_TCP_PROFILE_UNKNOWN){
+                    fl->client_shape=complete.is_tls13?
+                        (complete.ech_offer?(profile==D2S_TCP_PROFILE_TS?D2S_PLAN_SHAPE_ECH_TS:D2S_PLAN_SHAPE_ECH_NO_TS):
+                         (profile==D2S_TCP_PROFILE_TS?D2S_PLAN_SHAPE_MODERN_TS:D2S_PLAN_SHAPE_MODERN_NO_TS)):
+                        (profile==D2S_TCP_PROFILE_TS?D2S_PLAN_SHAPE_LEGACY_TS:D2S_PLAN_SHAPE_LEGACY_NO_TS);
                 }
                 if (!fl->controller_probe) {
                     memcpy(s->last_hello[k], hello, hello_len);
@@ -3224,6 +3225,12 @@ static void ct_flow(void *ctx, d2s_flow *f) {
     memset(&ci, 0, sizeof ci);
     if (c->s->ct_query(c->s->ct_query_ctx, &t, &ci) != 0) { return; }
     uint64_t orig = ci.orig_pkts, reply = ci.reply_pkts;
+    /* NFQUEUE sees only the initial packet window. Conntrack progress is
+       also real activity: otherwise an ongoing video loses its named flow
+       after the queue's idle timeout and a later seek cannot be observed.
+       Merely finding a live conntrack entry must not pin an idle flow. */
+    if ((!f->ct_known && reply>f->rev_pkts) ||
+        (f->ct_known && reply>f->ct_reply)) f->last_ns=c->now_ns;
     if (!f->ct_known || reply != f->ct_reply) {
         f->ct_known = 1;
         f->ct_reply = reply;

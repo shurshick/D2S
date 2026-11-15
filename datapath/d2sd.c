@@ -916,6 +916,9 @@ static void print_stats(const d2s_session *s, const d2s_sched *sched,
            hs.started, hs.ready, hs.released, hs.timed_out, hs.timed_out_pkts,
            hs.plan_changed, hs.dropped_all, hs.joined, hs.mismatched, hs.sided,
            hs.full, hs.pending);
+    printf("таймауты сборки: один пакет=%" PRIu64 ", несколько=%" PRIu64
+           ", задержка освобождения сверх срока, макс=%" PRIu64 " мкс\n",
+           hs.timeout_single,hs.timeout_multi,hs.timeout_overrun_max_ns/1000u);
     printf("владение приветствием: взято у ядра=%" PRIu64
            " возвращено на провод оригиналов=%" PRIu64 " не возвращено=%" PRIu64 "\n",
            st.hold_owned, st.hold_resent, st.hold_resend_fail);
@@ -934,7 +937,7 @@ static void print_stats(const d2s_session *s, const d2s_sched *sched,
     printf("план подготовлен %" PRIu64 ", ДОИСПОЛНЕН %" PRIu64
            ", выпущено %" PRIu64 ", отложено %" PRIu64
            " (сразу %" PRIu64 ", из очереди %" PRIu64 ")"
-           ", потоков испорчено %" PRIu64 ", отложенных протухло %" PRIu64 ", уведомлений потеряно %" PRIu64 "\n",
+           ", потоков испорчено %" PRIu64 ", отложенных отменено (поток завершён/заменён) %" PRIu64 ", уведомлений потеряно %" PRIu64 "\n",
            d2s_session_applied(s), d2s_session_done(s), st.emitted, st.deferred,
            st.emitted_now, st.emitted_late,
            d2s_session_damaged_count(s), st.stale_deferred, d2s_session_sent_lost(s));
