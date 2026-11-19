@@ -254,6 +254,9 @@ typedef struct {
     int      repeats;
     int      pass, fail;
     char     err[160];
+    /* A direct, unplanned TLS no-reply signal prioritizes measured properties
+       after the full base question confirms failure. It is not a probe result. */
+    int      prior_live_tls_no_reply;
     int      ctl_pass, ctl_fail, ctl_err, ctl_refused, ctl_marked;
     uint32_t rtt_ms;
     uint8_t  ttl_in;

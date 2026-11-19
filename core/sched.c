@@ -891,6 +891,7 @@ typedef struct {
     int        cached_measure_valid; /* preserve measured candidates after box-plan reuse */
     int        split_pending, split_detailed; /* one early cut, then full research */
     uint8_t    trigger_code;   /* signal that admitted this measurement; cooldown key */
+    int trigger_live_tls_no_reply;
     /* Задача 50, раунд 2: обрыв QUIC после рукопожатия воспроизведён своим
        запросом (прогон с arm.data_cut вернул OPAQUE). Неудача такой задачи
        снимает QUIC для имени (quic_deny_install). */
@@ -1134,6 +1135,10 @@ typedef struct {
     int        c_fd;
     int        c_ok;
 } task;
+static int live_tls_seed_eligible(const task *t) {
+    return t->transport==6 && t->trigger_live_tls_no_reply && t->trig_snapped && t->client_opts_known;
+}
+
 static int http_transport_candidate(const task *t,const d2s_ver_result *r) {
     return t->transport==6&&!t->ech_offer&&!t->vol.rx_cut&&t->vol.verdict!=D2S_VOL_CUT&&
         d2s_outcome_http_transport_witness(r);
@@ -3218,7 +3223,7 @@ static void *worker_body(void *vp) {
 
     d2s_vres r;
     /* Ответ базового вопроса (задача 32) — только тем же входом. */
-    const d2s_base_seed *seed = t->seed_use && t->seed.valid &&
+    const d2s_base_seed *seed = t->seed_use && (t->seed.valid || t->seed.prior_live_tls_no_reply) &&
         t->seed_input == seed_input_of(trig.bytes, trig.len, t->ip, t->port) ? &t->seed : NULL;
     d2s_base_seed run_seed;
     if ((seed || a_nlearned) && t->transport == 6) {
@@ -7464,6 +7469,20 @@ static int start_search(d2s_sched *s, task *t) {
         task_reset(s, t);
         return 0;
     }
+    if (live_tls_seed_eligible(t)) {
+        if (!t->seed.valid) {
+            memset(&t->seed, 0, sizeof t->seed);
+            t->seed_input = seed_input_of(t->trig, t->trig_len, t->ip, t->port);
+            t->seed_use = 1;
+        }
+        if (t->seed_use &&
+            t->seed_input == seed_input_of(t->trig, t->trig_len, t->ip, t->port)) {
+            t->seed.prior_live_tls_no_reply = 1;
+            say(s, "по %s на прямом потоке TLS ClientHello остался без ответа; "
+                   "после подтверждения базового отказа сначала проверю измеренные свойства",
+                t->name);
+        }
+    }
     select_resource_path(s, t);
     t->ech_offer = t->transport == 6 && t->trig_snapped && !t->ech_grease &&
                    d2s_hello_ech_offer(t->trig, t->trig_len, NULL) == 1;
@@ -8475,7 +8494,10 @@ static int is_telegram_tunnel_domain(const char *name) {
 }
 
 static int clean_handshake_recent(d2s_sched *s, const char *name, const d2s_ev *ev);
-static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
+static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed, int live_event) {
+    int direct_tls_no_reply = live_event && !replayed && ev->transport == 6 &&
+        (ev->code == D2S_SUSPECT_REPEAT || ev->code == D2S_SUSPECT_SILENT) &&
+        ev->planned == D2S_LINK_PLANNED_NO;
     if (!replayed && s->suspect_events < UINT64_MAX) { s->suspect_events++; }
     s->last_suspect_ms = s->now_ms;
     s->last_suspect_transport = ev->transport;
@@ -8740,6 +8762,10 @@ static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
             d2s_cat_signal sig = signal_of(ev);
             fp_add(&t->fp, &sig);
         }
+        if (direct_tls_no_reply && t->state != T_WATCHING &&
+            ev_matches_flow(ev, &t->trigger_flow)) {
+            t->trigger_live_tls_no_reply = 1;
+        }
         if (t->state != T_WATCHING) { return 0; }
         /* А эта задача уже подтверждена и только смотрела на живой трафик.
            Новое подозрение по той же цели означает, что коробка вмешалась
@@ -8815,6 +8841,7 @@ static int on_suspect(d2s_sched *s, const d2s_ev *ev, int replayed) {
     t->family = ev->family ? ev->family : 4;
     t->by_addr = by_addr;
     t->trigger_code = ev->code;
+    t->trigger_live_tls_no_reply = direct_tls_no_reply;
     t->trigger_planned = ev->planned;
     memcpy(t->trigger_flow.a_ip, ev->low_ip, 16);
     memcpy(t->trigger_flow.b_ip, ev->high_ip, 16);
@@ -10434,7 +10461,7 @@ static void on_refused_unfit(d2s_sched *s, const d2s_ev *ev) {
     suspicion.kind = D2S_EV_SUSPECT;
     suspicion.code = D2S_SUSPECT_REPEAT;
     suspicion.planned = D2S_LINK_PLANNED_NO;
-    (void)on_suspect(s, &suspicion, 0);
+    (void)on_suspect(s, &suspicion, 0, 0);
 }
 
 static void on_refused(d2s_sched *s, const d2s_ev *ev) {
@@ -10529,7 +10556,7 @@ static void on_refused(d2s_sched *s, const d2s_ev *ev) {
                     s->cat->revision++; s->sync_pending = 1;
                 }
                 if (!task_of(s, name, ev->transport, ev->family))
-                    (void)on_suspect(s, &suspicion, 0);
+                    (void)on_suspect(s, &suspicion, 0, 0);
                 break; /* refusal is execution evidence, not a DPI verdict */
             }
         }
@@ -10810,7 +10837,7 @@ int d2s_sched_event(d2s_sched *s, const d2s_ev *ev) {
         }
         return 0;
     case D2S_EV_SUSPECT:
-        return on_suspect(s, ev, 0);
+        return on_suspect(s, ev, 0, 1);
     case D2S_EV_STATS:
         s->dropped_seen = ev->dropped;
         return 0;
@@ -11167,7 +11194,7 @@ static void voice_pending_dispatch(d2s_sched *s) {
     server_of(&ev, ip, sizeof ip, &port);
     say(s, "по %s (голос) завершается текущий опыт — запускаю сохранённую проверку %s:%u",
         D2S_LINK_VOICE_CLASS, ip, (unsigned)port);
-    (void)on_suspect(s, &ev, 1);
+    (void)on_suspect(s, &ev, 1, 0);
 }
 
 #include "optimize.inc"
@@ -11703,6 +11730,7 @@ int d2s_sched_tick(d2s_sched *s, int64_t now_ms) {
             if (t->own_first == 1) {
                 t->own_first = 3;
                 t->seed = r.base;
+                t->seed.prior_live_tls_no_reply = live_tls_seed_eligible(t);
                 t->seed_input = seed_input_of(t->trig, t->trig_len, t->ip, t->port);
                 size_t own = r.base_blocked ? own_first_plans(s, t, 1) : 0;
                 if (own > 0) {

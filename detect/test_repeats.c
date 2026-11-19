@@ -168,6 +168,8 @@ static const char CTL[] = "BENIGN-CONTROL-PAYLOAD";
 static const char *g_ctl_pat = "+"; /* ответ на контрольную нагрузку по вызовам */
 static int g_ctl_calls;
 static int g_srv_fd, g_silent, g_timeout_seed;
+static const char *g_trigger_pat = "-";
+static int g_trigger_calls;
 static void *quiet_connection(void *arg) {
     struct timespec pause={0,450000000};
     nanosleep(&pause,NULL);
@@ -184,11 +186,16 @@ static void *srv_thread(void *arg)
         int c = accept(g_srv_fd, NULL, NULL);
         if (c < 0) { return NULL; }
         n = recv(c, buf, sizeof buf, 0);
-        if (n == (ssize_t)(sizeof(CTL) - 1) && memcmp(buf, CTL, (size_t)n) == 0 &&
+        int is_control = n == (ssize_t)(sizeof(CTL) - 1) && memcmp(buf, CTL, (size_t)n) == 0;
+        if (is_control &&
             pat_rc(g_ctl_pat, g_ctl_calls++) > 0) {
             (void)send(c, "OK", 2, 0);
         }
-        if(g_silent && !(n==(ssize_t)(sizeof CTL-1) && !memcmp(buf,CTL,(size_t)n))) {
+        if (!is_control && pat_rc(g_trigger_pat, g_trigger_calls++) > 0) {
+            static const uint8_t server_hello[] = {0x16, 0x03, 0x03, 0x00, 0x01, 0x02};
+            (void)send(c, server_hello, sizeof server_hello, 0);
+        }
+        if(g_silent && !is_control) {
             pthread_t th; pthread_create(&th,NULL,quiet_connection,(void *)(intptr_t)c);
             pthread_detach(th);
         } else close(c); /* baseline scenarios use immediate close */
@@ -240,7 +247,7 @@ static const d2s_arm *g_learned;
 static size_t g_nlearned;
 static int g_named;
 
-static void run(const scenario *s, d2s_result *res)
+static void run_with_live_tls_no_reply(const scenario *s, d2s_result *res,int live_tls_no_reply)
 {
     d2s_opts opt;
     d2s_trigger t;
@@ -251,6 +258,7 @@ static void run(const scenario *s, d2s_result *res)
     opt.write_gap_ms = 2;
     opt.long_gap_ms = 10;
     opt.early_split = g_early_split;
+    opt.prior_live_tls_no_reply = live_tls_no_reply;
     opt.learned = g_learned; opt.nlearned = g_nlearned;
     opt.control_vouched = s->vouched;
     if(g_timeout_seed) {
@@ -289,6 +297,7 @@ static void run(const scenario *s, d2s_result *res)
     g_selftest = s->selftest ? s->selftest : "+";
     g_ctl_pat = s->ctl ? s->ctl : "+";
     g_ctl_calls = 0;
+    g_trigger_calls = 0;
     g_ack_pat = s->ack ? s->ack : "+";
     g_ack_calls = 0;
     g_res = res;
@@ -296,6 +305,10 @@ static void run(const scenario *s, d2s_result *res)
     g_hs_calls = 0;
     g_poison_calls = 0;
     d2s_classify_run(g_addr, &t, &opt, res);
+}
+
+static void run(const scenario *s,d2s_result *res) {
+    run_with_live_tls_no_reply(s,res,0);
 }
 
 /* Подпись исхода: всё, что уходит наружу, кроме числа зондов и трассы. */
@@ -334,6 +347,9 @@ static script_ent S_FLAKY[] = {
     {"seqovl-1", "+-"}, {"disorder", "-+"}, {"badsum", "++-"},
     {NULL, "++-"}, {NULL, "+"}, {NULL, NULL}};
 static const script_ent S_PROPHIT_L7[] = {{"badsum+hello", "+"}, {NULL, NULL}};
+
+static const script_ent S_REPEAT_HIT[] = {{"seqovl-1", "+"}, {NULL, NULL}};
+static const script_ent S_REPEAT_MISS[] = {{"seqovl-1", "-"}, {NULL, NULL}};
 
 static scenario SC[] = {
     {"youtube", S_YOUTUBE, NULL, NULL, NULL, 0, NULL, 0, 0},
@@ -470,6 +486,15 @@ static const d2s_obs *find_obs(const d2s_result *r, const char *probe)
         if (strcmp(r->trace[i].probe, probe) == 0) { return &r->trace[i]; }
     }
     return NULL;
+}
+
+static int count_obs(const d2s_result *r, const char *probe)
+{
+    int i, n = 0;
+    for (i = 0; i < r->ntrace; i++) {
+        if (strcmp(r->trace[i].probe, probe) == 0) { n++; }
+    }
+    return n;
 }
 
 /* Трасса честна: сумма pass+fail по строкам = число сделанных зондов. */
@@ -692,6 +717,84 @@ static void test_props_fields(void)
     CHECK(r.props.validates_timestamps == D2S_TRI_FALSE, "метка времени: проход не записан");
     CHECK(r.probes == 24, "TS: зондов %d, ждали 24", r.probes);
     CHECK(r.props.counts_duplicates == D2S_TRI_UNSET, "дубликаты записаны без прохода");
+}
+
+static void test_live_tls_no_reply_prioritizes_measured_properties(void)
+{
+    static const scenario blocked = {"live-no-reply-blocked", S_REPEAT_HIT, "-", "+", NULL, 0, NULL, 0, 0};
+    static const scenario misses = {"live-no-reply-misses", S_REPEAT_MISS, "-", "+", NULL, 0, NULL, 0, 0};
+    static const scenario mixed = {"live-no-reply-mixed", S_REPEAT_HIT, "+-", "+", NULL, 0, NULL, 0, 0};
+    static const scenario clear = {"live-no-reply-clear", NULL, "+", "+", NULL, 0, NULL, 0, 0};
+    d2s_result plain, fast, plain_mixed, fast_mixed, plain_miss, fast_miss;
+    int plain_probes, fast_probes;
+
+    g_trigger_pat = "-";
+    fresh_process(); run(&blocked, &plain); plain_probes = plain.probes;
+    fresh_process(); run_with_live_tls_no_reply(&blocked, &fast, 1); fast_probes = fast.probes;
+    CHECK(find_obs(&plain, "whole") && find_obs(&plain, "whole")->fail == 3,
+          "live no-reply baseline: ожидались три самостоятельных отказа");
+    CHECK(find_obs(&fast, "whole") && find_obs(&fast, "whole")->fail == 2 &&
+          find_obs(&fast, "whole")->live_fail == 1 && fast.live_tls_failures == 1,
+          "live no-reply sample not recorded separately from active baseline probes");
+    CHECK(plain.has_hit && fast.has_hit && !strcmp(plain.hit.name, "seqovl-1") &&
+          !strcmp(fast.hit.name, plain.hit.name) && fast.probes < plain.probes,
+          "live no-reply: early measurement did not find the same strategy faster (%d -> %d)",
+          plain_probes, fast_probes);
+
+    fresh_process(); run(&misses, &plain_miss);
+    fresh_process(); run_with_live_tls_no_reply(&misses, &fast_miss, 1);
+    CHECK(fast_miss.verdict == plain_miss.verdict && fast_miss.probes + 1 == plain_miss.probes,
+          "live no-reply: early miss changed outcome or repeated probes (%d -> %d)",
+          plain_miss.probes, fast_miss.probes);
+    CHECK(count_obs(&fast_miss, "свойство:перекрытие слева") == 1 &&
+          find_obs(&fast_miss, "split") != NULL,
+          "live no-reply: early miss repeated an answered question or skipped the normal ladder");
+
+    g_trigger_pat = "-+";
+    fresh_process(); run(&mixed, &plain_mixed);
+    fresh_process(); run_with_live_tls_no_reply(&mixed, &fast_mixed, 1);
+    CHECK(fast_mixed.probes + 1 == plain_mixed.probes && find_obs(&fast_mixed, "whole") &&
+          find_obs(&fast_mixed, "whole")->pass + find_obs(&fast_mixed, "whole")->fail +
+          find_obs(&fast_mixed, "whole")->live_fail == 3 &&
+          fast_mixed.verdict == D2S_DV_FLAKY,
+          "live no-reply: mixed baseline changed (%d -> %d)",
+          plain_mixed.probes, fast_mixed.probes);
+
+    g_trigger_pat = "+";
+    fresh_process(); run_with_live_tls_no_reply(&clear, &fast, 1);
+    CHECK(find_obs(&fast, "whole") && find_obs(&fast, "whole")->pass == 2 &&
+          find_obs(&fast, "whole")->live_fail == 1 && fast.verdict == D2S_DV_FLAKY,
+          "live no-reply plus passing probes must remain mixed (verdict=%s)",
+          d2s_verdict_name(fast.verdict));
+    printf("live TLS no-reply loopback: measured hit probes %d -> %d\n",
+           plain_probes, fast_probes);
+    g_trigger_pat = "-";
+}
+
+static int cold_start_cancelled(void *ctx) { (void)ctx; return 1; }
+static void test_live_tls_no_reply_guards(void) {
+    d2s_opts opt={0};d2s_trigger tr={0};d2s_result r={0};
+    opt.repeats=3;opt.timeout_ms=100;opt.allow_loopback=1;opt.prior_live_tls_no_reply=1;
+    memcpy(tr.payload,PAY,sizeof PAY-1);tr.len=sizeof PAY-1;
+    memcpy(opt.control.payload,CTL,sizeof CTL-1);opt.control.len=sizeof CTL-1;
+    opt.cancel.fn=cold_start_cancelled;
+    d2s_classify_run(g_addr,&tr,&opt,&r);
+    CHECK(r.stopped && !r.has_hit && r.probes==0 && !find_obs(&r,"свойство:перекрытие слева"),
+          "cancelled prior became measured DPI evidence");
+    opt.cancel.fn=NULL;
+    int fd=socket(AF_INET,SOCK_STREAM,0);struct sockaddr_in sa={0};socklen_t sl=sizeof sa;
+    sa.sin_family=AF_INET;sa.sin_addr.s_addr=htonl(0x7f000001u);
+    CHECK(fd>=0 && !bind(fd,(struct sockaddr *)&sa,sizeof sa) && !getsockname(fd,(struct sockaddr *)&sa,&sl),
+          "cold-start transport fixture failed");
+    char closed_endpoint[80];snprintf(closed_endpoint,sizeof closed_endpoint,"127.0.0.1:%u",ntohs(sa.sin_port));
+    d2s_classify_run(closed_endpoint,&tr,&opt,&r);close(fd);
+    CHECK(r.verdict==D2S_DV_UNREACHABLE && !r.has_hit && !r.raw_usable,
+          "pre-TLS connect refusal plus prior became a DPI finding: %s",r.reason);
+    opt.seed_whole=1;opt.seed_repeats=3;opt.seed_fail=3;
+    memset(&r,0,sizeof r);
+    d2s_tally t=measure("unused","443",&tr,&opt,"whole",NULL,0,0,&r,0);
+    CHECK(t.fail==3 && r.probes==0 && r.trace[0].live_fail==0,
+          "reused baseline repeated probes or double-counted its live prior");
 }
 
 /* The real bridge still rejects syndata. This test additionally rejects
@@ -1218,6 +1321,9 @@ static void test_precise_methods(void) {
 
 int main(int argc, char **argv)
 {
+    if(argc==2 && !strcmp(argv[1],"--live-tls-only")) {
+        srv_start();test_live_tls_no_reply_prioritizes_measured_properties();test_live_tls_no_reply_guards();return fails?1:0;
+    }
     if(argc==2 && !strcmp(argv[1],"--precise-only")) {
         srv_start();test_precise_methods();if(!fails)puts("Precise compound questions: proof scope, conversion and fallback PASS");return fails?1:0;
     }
@@ -1260,6 +1366,8 @@ int main(int argc, char **argv)
     test_composite_assembled_for_client_without_ts();
     test_selftest_uses_client_tcp_profile();
     test_syndata_after_misses();
+    test_live_tls_no_reply_prioritizes_measured_properties();
+    test_live_tls_no_reply_guards();
     test_unreachable_axes_not_asked();
     test_props_fields();
     test_sweep_skips_answered();

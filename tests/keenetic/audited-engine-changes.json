@@ -16,8 +16,8 @@
     "reason": "docs/next-rc414-416-port.md"
   },
   "core/sched.c": {
-    "sha256": "d3d016aff15bca05f7eb8cdb1885966dbd688b4ebd3780d2f888bd8c5bcc0b83",
-    "reason": "docs/next-rc414-416-port.md"
+    "sha256": "02a17d68f5a3f1539573aa05a50328eba0fbb95b7c83fcdb2dd666061b883a24",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "core/test_diagnostics.c": {
     "sha256": "981975cb3160566a1a3ff2037d397bf7b3d9003127eaa09b24cb51c0e492943b",
@@ -28,40 +28,40 @@
     "reason": "docs/next-rc414-416-port.md"
   },
   "detect/classify.c": {
-    "sha256": "d9ac1d36fb1618e157e9b0a61b80d439066c487e6f4e17cde22a23de4200e534",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "953b2b6911a855560da1cd4e7ed404c2d5e999fa23b9c1b3fc33afd50d503f8c",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "detect/include/d2s_detect.h": {
-    "sha256": "4d072379a7cb875e57c89c5cb9c8c0cca745134e33565ed9aa1a075d25501dad",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "4b7205fec41d600cad3c24ee3df1a3ee5fa1d71cf49e0787655ff6a88ee26eb9",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "detect/main.c": {
     "sha256": "aa45afc5526f4abdf73b40970199953cfb706355a8d9fcc70750c9b9423d6ad2",
     "reason": "docs/performance-stage3.md#reviewed-engine-changes"
   },
   "detect/props.c": {
-    "sha256": "3e3d46112ce66b1f54c66cb9b96db9d8d7b24c32c3cd361fa908aa7ee9cb9cf2",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "9ad42ddf846af74b1dc9e8de4bf06c5811ebe52865d252f6560983dbb3c5043e",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "detect/response.c": {
     "sha256": "d0f06716ab32d68a18f0df7d5262ab8c73696d3bba5cd6ed413f638b8eda39e9",
     "reason": "docs/performance-stage2.md#reviewed-engine-changes"
   },
   "detect/test_repeats.c": {
-    "sha256": "d995bc456ca663295e537519ea2653e6cdece1c39596ec98cac7c3127f1ad2e0",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "f86f82e3157bab422596b38263e9795b685110230d0056e55ee18b6633003dde",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "files/d2s-tg-firewall.sh": {
     "sha256": "bf837ea8776de86668b344bcfe755aa72fd600a66cd3a530ffcf2be9b892f70e",
     "reason": "docs/telegram-web.md#reviewed-engine-changes"
   },
   "detect/bridge.c": {
-    "sha256": "7b5f0bd9c75c23b62fd73955125ba4abb1138c710b25a137535cec58f9a27706",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "41faec72263cc437374ceffd6978e2833d989bfc88f7663e8c63ce181aa3b0d6",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "detect/test_bridge.c": {
-    "sha256": "44463afa02f41c2e7a009ebc373bb516b5a08a6c0a687dc1fe4fe0ee62ea5f9b",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "15ee8e00043c31b433be1f0a17ae65b3ef7e5e2e01f822dab6a766d4aee483c4",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "core/catalog.c": {
     "sha256": "ca768718bf7e10017b0df7e95937fcdbb977cefa93f13de22514f872611f8279",
@@ -108,8 +108,8 @@
     "reason": "docs/next-rc413-port.md"
   },
   "core/include/d2s_verdict.h": {
-    "sha256": "dfd5b4a50e72b6cc406aa8b58c9fce8288e9960faa202461f29ac98a968fd8f4",
-    "reason": "docs/algorithm-optimizations.md#reviewed-engine-changes"
+    "sha256": "5df27e2c8e238d075e4ef36b5de140c5ae0dbc86f06f154a7ff7f60cdb662bbc",
+    "reason": "docs/next-rc417-cold-start.md"
   },
   "datapath/include/d2s_plan.h": {
     "sha256": "67a52e93aa7514f91f13d77efa00b561ed7ae50ef211f146daf9f3bf5b354861",

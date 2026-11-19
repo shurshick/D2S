@@ -705,7 +705,7 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
 {
     d2s_tally t;
     d2s_obs *obs;
-    int i;
+    int i, first = 0;
     char err[160];
 
     memset(&t, 0, sizeof(t));
@@ -734,11 +734,21 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
     }
 
     uint8_t numeric[16];
-    if (opt->parallel_base && !until_pass && ncuts == 0 && !strcmp(name, "whole") &&
+    if (opt->parallel_base && !opt->prior_live_tls_no_reply && !until_pass && ncuts == 0 && !strcmp(name, "whole") &&
         (inet_pton(AF_INET, host, numeric) == 1 || inet_pton(AF_INET6, host, numeric) == 1))
         return measure_whole(host, port, tr, opt, res, obs);
 
-    for (i = 0; i < opt->repeats; i++) {
+    if (opt->prior_live_tls_no_reply && ncuts == 0 && strcmp(name, "whole") == 0 &&
+        opt->repeats > 1) {
+        /* The direct client flow is one failed whole-handshake sample. Keep
+           the original all-fail threshold, and independently measure the rest. */
+        first = 1;
+        t.fail = 1;
+        obs->live_fail = 1;
+        res->live_tls_failures = 1;
+    }
+
+    for (i = first; i < opt->repeats; i++) {
         int rc;
         if (d2s_detect_stopped(&opt->cancel)) {
             break;
@@ -807,7 +817,7 @@ static d2s_tally measure(const char *host, const char *port, const d2s_trigger *
         }
     }
     obs->pass = t.pass;
-    obs->fail = t.fail;
+    obs->fail = t.fail - obs->live_fail;
     d2s_obs_finish(opt, obs);
     return t;
 }
@@ -988,7 +998,8 @@ static int raw_recheck(const uint8_t *ip, uint8_t family, uint16_t pnum,
  * топологии, потом перебор TTL. TTL идёт последним не только по цене —
  * сработавшее значение попутно называет хоп, на котором стоит коробка. */
 static int sweep_poisons(const char *host, const char *port, const d2s_trigger *tr,
-                         const d2s_opts *opt, d2s_result *res, d2s_poison *hit)
+                         const d2s_opts *opt, d2s_result *res, d2s_poison *hit,
+                         int properties_only)
 {
     struct addrinfo hints, *ai = NULL;
     uint8_t ip4[16] = {0};
@@ -1020,27 +1031,32 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
     if (pnum == 0) {
         return 0;
     }
+    if (res->raw_selftest_failed) {
+        return 0;
+    }
 
     /* САМОПРОВЕРКА СЫРОГО СЛОЯ. Свой TCP — это своё рукопожатие, свои
      * контрольные суммы и придержанное ядро; сломайся любая из этих частей, и
      * ВСЕ зонды дали бы «тишину», а мы прочитали бы её как «отравить не
      * удалось». Поэтому сперва гоняем по тому же пути безобидную нагрузку без
      * всякой отравы. */
-    age = selftest_cached_age(family, d2s_trigger_offers_ts(tr));
-    if (age >= 0) {
-        /* Строка в трассе — чтобы читающий видел, что самопроверку не
-         * пропустили, а взяли из кэша, и что зондов она не стоила. */
-        d2s_obs *obs = d2s_trace_add(res, "raw-selftest:кэш");
-        snprintf(obs->err, sizeof(obs->err),
-                 "прошла %ld с назад в этом процессе, зондов не было", (long)(age / 1000));
-        d2s_obs_finish(opt, obs);
-        res->raw_selftest_cached = 1;
-    } else if (!raw_selftest(ip4, family, pnum, opt, res, d2s_trigger_offers_ts(tr))) {
-        res->raw_usable = 0;
-        res->raw_selftest_failed = 1;
-        return 0;
+    if (!res->raw_usable) {
+        age = selftest_cached_age(family, d2s_trigger_offers_ts(tr));
+        if (age >= 0) {
+            /* Строка в трассе — чтобы читающий видел, что самопроверку не
+             * пропустили, а взяли из кэша, и что зондов она не стоила. */
+            d2s_obs *obs = d2s_trace_add(res, "raw-selftest:кэш");
+            snprintf(obs->err, sizeof(obs->err),
+                     "прошла %ld с назад в этом процессе, зондов не было", (long)(age / 1000));
+            d2s_obs_finish(opt, obs);
+            res->raw_selftest_cached = 1;
+        } else if (!raw_selftest(ip4, family, pnum, opt, res, d2s_trigger_offers_ts(tr))) {
+            res->raw_usable = 0;
+            res->raw_selftest_failed = 1;
+            return 0;
+        }
+        res->raw_usable = 1;
     }
-    res->raw_usable = 1;
 
     /* Если правило подавления ядерного RST не встало, отрицательные исходы
      * сырых зондов ничего не значат: RST мог прилететь от нашего же ядра.
@@ -1065,6 +1081,7 @@ static int sweep_poisons(const char *host, const char *port, const d2s_trigger *
             !raw_recheck(ip4, family, pnum, opt, res, &props0, d2s_trigger_offers_ts(tr))) {
             return 0;
         }
+        if(properties_only)return 0;
         /* Retain cheap measured properties first. Learned compound questions
            precede expensive composition/fallback, never a working property. */
         if (d2s_run_learned_family(ip4, family, pnum, tr, opt, res, hit)) {
@@ -1328,6 +1345,13 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
         }
         goto done;
     }
+    if (base.pass + base.fail != opt->repeats) {
+        res->verdict = D2S_DV_FLAKY;
+        snprintf(res->reason, sizeof res->reason,
+                 "базовый вопрос неполон: измерено %d из %d повторов",
+                 base.pass + base.fail, opt->repeats);
+        goto done;
+    }
     if (base.pass == opt->repeats) {
         /* Запрос проходит. Но это ещё не «обходить нечего»: у TLS 1.2
          * сертификат сервера идёт открытым текстом, и коробка может пропустить
@@ -1382,6 +1406,26 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
         snprintf(res->reason, sizeof(res->reason),
                  "база не воспроизводится: %d прошло из %d", base.pass, opt->repeats);
         goto done;
+    }
+
+    /* Direct same-flow TLS silence/repeat is only an order hint. The full
+       three-sample base must still fail before measured questions run. */
+    if (opt->prior_live_tls_no_reply && !opt->no_raw && d2s_raw_supported()) {
+        d2s_poison hit;
+        memset(&hit, 0, sizeof hit);
+        if (sweep_poisons(host, port, tr, opt, res, &hit, 1)) {
+            res->verdict = D2S_DV_POISONABLE;
+            res->boundary = 0;
+            res->hit = hit;
+            res->has_hit = 1;
+            d2s_strategy_for_poison(&hit, res->strategy, sizeof res->strategy);
+            note_gap_loss(res, &hit);
+            snprintf(res->reason, sizeof res->reason,
+                     "поток пересобирается, но буфер травится: коробка глотает «%s», "
+                     "сервер выбрасывает", hit.name);
+            cross_check_tls12(res, opt, hit.name);
+            goto done;
+        }
     }
 
     /* 2. РЕЗАТЬ ВООБЩЕ ПОМОГАЕТ? Разрез после первого байта — самый агрессивный
@@ -1472,7 +1516,7 @@ void d2s_classify_run(const char *addr, const d2s_trigger *tr,
         }
         memset(&hit, 0, sizeof(hit));
         if (!opt->no_raw && d2s_raw_supported()) {
-            if (sweep_poisons(host, port, tr, opt, res, &hit)) {
+            if (sweep_poisons(host, port, tr, opt, res, &hit, 0)) {
                 res->verdict = D2S_DV_POISONABLE;
                 res->boundary = 0;
                 res->hit = hit;
@@ -1617,6 +1661,13 @@ done:
      * одну. Брошенный замер не выдаётся за измеренный нигде. */
     if (d2s_detect_stopped(&opt->cancel)) {
         res->stopped = 1;
+    }
+    if (res->live_tls_failures && res->ntrace > 0) {
+        const d2s_obs *whole = &res->trace[0];
+        char tail[128];
+        snprintf(tail, sizeof tail, " (база: %d активных повторов + %d отказ живого потока)",
+                 whole->pass + whole->fail, whole->live_fail);
+        strncat(res->reason, tail, sizeof res->reason - strlen(res->reason) - 1);
     }
     res->duration_ms = (long)(d2s_now_ms() - start);
 }

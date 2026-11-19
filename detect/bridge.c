@@ -333,6 +333,7 @@ static d2s_vres sched_tcp(const char *ip, uint16_t port,
                      &tr, &opt, addr, &out) != 0) {
         return out;
     }
+    opt.prior_live_tls_no_reply = seed && seed->prior_live_tls_no_reply;
     if (seed && seed->valid && !retry_base_timeout(seed->err)) {
         opt.seed_whole = 1;
         opt.seed_repeats = seed->repeats;

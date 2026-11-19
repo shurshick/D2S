@@ -196,6 +196,15 @@ static int prop_probes(prop_probe *out, int cap)
     return k <= PROP_QUESTIONS ? k : 0;
 }
 
+static int answered_before(const d2s_result *res, const d2s_poison *p)
+{
+    int i;
+    for (i = 0; i < res->nanswered; i++) {
+        if (d2s_poison_same(&res->answered[i], p)) { return 1; }
+    }
+    return 0;
+}
+
 static void apply_set(d2s_dprops *pr, prop_set s, int ok, const d2s_poison *p)
 {
     switch (s) {
@@ -441,6 +450,9 @@ int d2s_run_properties_family(const uint8_t *ip4, uint8_t family, uint16_t port,
                      pp[i].label);
         } else {
             snprintf(label, sizeof(label), "свойство:%s", pp[i].label);
+        }
+        if (answered_before(res, &p)) {
+            continue;
         }
         obs = d2s_trace_add(res, label);
         obs->delay_ms = p.gap_ms;

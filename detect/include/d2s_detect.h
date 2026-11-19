@@ -236,6 +236,7 @@ typedef struct {
     int  pass;
     int  fail;
     char err[160];
+    int live_fail;
     int64_t started_ms; /* monotonic; internal, zero after completion/reuse */
     int64_t elapsed_ms; /* wall time, including network waits; not CPU */
 } d2s_obs;
@@ -276,6 +277,7 @@ typedef struct {
     int           repeats;
     int           probes;
     long          duration_ms;
+    int           live_tls_failures;
 
     /* Замер БРОШЕН по требованию вызывающего: то, что успели измерить, верно,
      * но дерево пройдено не до конца. Вердикт такого прогона не утверждает
@@ -414,6 +416,7 @@ typedef struct {
     int  seed_repeats;
     int  seed_pass;
     int  seed_fail;
+    int  prior_live_tls_no_reply;
     char seed_err[160];
 } d2s_opts;
 

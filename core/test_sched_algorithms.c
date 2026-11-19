@@ -315,6 +315,15 @@ static void full_flight_applicability(void) {
 
 int main(void) {
     {
+        task t={0};t.transport=6;t.trigger_live_tls_no_reply=1;
+        assert(!live_tls_seed_eligible(&t));
+        t.trig_snapped=1;assert(!live_tls_seed_eligible(&t));
+        t.client_opts_known=1;assert(live_tls_seed_eligible(&t));
+        t.transport=17;assert(!live_tls_seed_eligible(&t));
+        t.transport=6;t.trigger_live_tls_no_reply=0;assert(!live_tls_seed_eligible(&t));
+    }
+
+    {
         d2s_catalog c={0};d2s_sched *s=d2s_sched_new(&c,-1,0);assert(s);
         task *t=&s->tasks[0];task_reset(s,t);t->transport=6;t->family=4;t->state=T_VERIFY;
         strcpy(t->name,"denied.example");t->ver.fd=-1;t->ver.level=D2S_VER_APPLICATION;

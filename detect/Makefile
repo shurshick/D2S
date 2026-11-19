@@ -179,3 +179,10 @@ san-raw:
 		-o /tmp/d2s-detect-san-raw test_raw.c $(filter-out raw.c,$(SRC)) \
 		$(filter-out ../datapath/plan_apply.c,$(SHARED_SRC)) $(LDLIBS)
 	/tmp/d2s-detect-san-raw
+
+# Classifier/property loopback fixtures, including attributed live TLS evidence.
+.PHONY: san-repeats
+san-repeats:
+	$(CC) $(CFLAGS) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+		-o /tmp/d2s-detect-san-repeats test_repeats.c $(filter-out classify.c props.c,$(SRC)) $(SHARED_SRC) $(LDLIBS)
+	/tmp/d2s-detect-san-repeats
