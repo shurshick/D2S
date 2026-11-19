@@ -1,0 +1,50 @@
+{
+  "release": "d2s-v0.5.11",
+  "source": "1558dfa3d627cfab86e374994aac58bbd2d6f8cb",
+  "next_source": "4354909f268551b61744be9d901adf5d0d14d186",
+  "ci_run": 44608043203,
+  "engine_proof_run": 44608043203,
+  "release_run": 44612813328,
+  "stable_latest": true,
+  "router_deployed": false,
+  "wire": 22,
+  "architectures": [
+    "arm64",
+    "arm",
+    "mipsel",
+    "amd64"
+  ],
+  "checks": [
+    "Five new cold-start fixture assertions RED before production changes; GREEN after",
+    "Exact-input scheduler eligibility and bridge propagation guards PASS",
+    "Full detect check including retained learned/precise/long-gap and parallel baseline scenarios PASS",
+    "Cancellation, pre-TLS refusal and reused baseline without extra probes PASS",
+    "Core algorithms, summary, 1500-worker lifecycle and native controller build PASS",
+    "ASan/UBSan full repeats fixture and scheduler algorithms PASS",
+    "Exact-source integration and full engine regression on GitHub PASS",
+    "Four architecture builds and workflow QEMU startup checks PASS",
+    "Downloaded packages: SHA256SUMS, Ed25519, RAM preflight, all eight runtime binaries, source equality and release/feature IDs PASS",
+    "Downloaded d2sc binaries include cold-start provenance and retained HTTPS/QUIC fixes; Telegram MTProto/resource features retained",
+    "Tag equals checked source; stable/latest confirmed by GitHub API"
+  ],
+  "local_fixture_probes": {
+    "baseline": 10,
+    "candidate": 5,
+    "scope": "Controlled loopback same-hit scenario, not a universal router latency or app result"
+  },
+  "limits": [
+    "No router deployment or renewed live site/application verification",
+    "Live TLS observation requires captured input, same-flow TCP options and an untreated real event",
+    "Original baseline threshold retained; mixed/incomplete/cancelled results are not established blocks",
+    "Saved plans, recorded exclusions, Telegram, DNS, firewall and signed update mechanisms retained"
+  ],
+  "sha256": {
+    "d2s-amd64.tar.gz": "a4383e834a9afebbb26b6f69ab7e3220586638cd4031f2595c7be875ef208545",
+    "d2s-arm.tar.gz": "8a791181fdbbc452e99c0b65111e439a4301b09501bc7aebde73c625e0b9ec80",
+    "d2s-arm64.tar.gz": "6835f57c75e997f81f04b7ed3aa29aac47c7f450ef81ee0ed89302519580ea4c",
+    "d2s-mipsel.tar.gz": "1fc64fa0ff046d2a65b61b6b809501dfde6ec0e28dd0de82a664e6db5bd1dd04",
+    "latest.json": "15427ae997a0c4112c7b58099a4f9066710f3037b0ef83717e962106c49d18e4",
+    "latest.json.sig": "71993dba00685b36179d30100031fd89dbeeb9e692bed79d6d02d69cd29092ec",
+    "SHA256SUMS": "6507a6b15e61e0337eddb65a111d48ddc0ea8c54765393a64d8e961226daf00b"
+  }
+}

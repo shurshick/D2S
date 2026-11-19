@@ -58,3 +58,12 @@ Wire 22 и каталог на диске не изменены; новые по
 lifecycle и полная нативная сборка. ASan/UBSan: весь repeats-fixture и scheduler
 algorithms. Namespace, reviewed-source hashes и полнота CI shards PASS.
 Полный CI и подписанные целевые пакеты проверяются отдельно на выпускаемом SHA.
+
+## Выпуск
+
+1558dfa3d627cfab86e374994aac58bbd2d6f8cb -> d2s-v0.5.11 stable/latest.
+CI 44608043203: integration и полный engine proof PASS; release 44612813328:
+ARM64/ARM/MIPSel/amd64 и QEMU PASS. Скачанные комплекты проверены отдельно:
+Ed25519, SHA256SUMS, source equality, RAM preflight, release/feature IDs и наличие
+cold-start исправления в каждом d2sc. Квитанция field/2026-11-19-release-0.5.11.json.
+Роутеры и живые приложения не проверялись.
